@@ -1918,3 +1918,52 @@ post-retraction world, 0 the empty world, and a beyond-head seq the
 current state. No wall marker is captured anywhere in the pin. RED
 archived as `T-58` (exit 101 — "AIKOQL1011: expected time (epoch
 millis or ISO string), got 'JOURNAL'").
+
+## 63. The stdio shutdown hand-off — T-59 (POC-3 P3-010)
+
+P3-010 (LOW): a server closed and respawned ~100 ms later "served
+session_init fine and then exited 0 during the first explain call"; a
+0.5 s settle plus a one-shot respawn-retry in the runner masked it. The
+POC's own fallback offered two paths: investigate the shutdown path and
+make the serve process hand off cleanly, or document a required cooldown
+between shutdown and restart. Both landed.
+
+**The exit-0 model.** The stdio server has exactly one exit-0 path: the
+stdin loop ending. No `exit(0)` call exists anywhere in the mcp crate
+(only `exit(1)`/`exit(2)` startup failures in admin.rs/cli.rs);
+`run_with_timeout` runs on a worker thread and cannot end the process;
+the shutdown flag is only set by the MCP `shutdown` method, which the
+POC runner never sends. The loop ends on EOF (the driver's
+`stdin.close()`), a read error, or that flag. `run_stdio` now logs
+which one fired: `stdio loop ended: eof` / `stdio loop ended: read
+error: {e}` / `stdio loop ended: shutdown flag`.
+
+**The shutdown-time checkpoint race.** The maintainer is attached to
+the server context from a SPAWNED thread (serve setup), while the
+shutdown checkpoint read the attach slot immediately after `run_stdio`
+returned. A rapid close could read the slot before the attach landed —
+skipping the shutdown checkpoint with no trace. The shutdown arm now
+waits for the attach, bounded: up to 5 s at a 10 ms poll, then
+`warn!("shutdown: maintainer not attached within 5s — skipping
+checkpoint")` if it never lands (the honest failure contract — never a
+silent skip). The checkpoint itself logs its elapsed millis
+(`shutdown maintainer checkpoint done`).
+
+**The restart contract.** The race itself was hammered ~150 times —
+100 close→respawn probe cycles plus two full faithful p3_010 runs with
+the runner's settle zeroed, debug and release binaries — with zero
+reproductions, so no crash-fix claim is made. What is now guaranteed is
+that any recurrence is diagnosable: the loop-end reason and the
+checkpoint trace (or its explicit skip warning) are on stderr. The
+operational contract for rapid restarts is documented rather than
+invented: EOF (stdin close) is a clean shutdown by design — the
+checkpoint runs before exit — and a ~0.5 s cooldown between close and
+respawn is the supported rapid-restart pattern (the POC's existing
+settle is exactly that; it was never a mask for a bug we could find).
+
+Pin `t59_stdio_shutdown_handoff_is_observable` (mcp_real_world): a
+stderr-captured client does session_init, `take()`s its stdin handle
+(EOF — the driver's close signal), and asserts a clean exit plus both
+trace lines. RED archived as `T-59` (exit 101 — "missing loop-end
+reason": the loop-end logging was absent, so a clean exit left no
+trace).
