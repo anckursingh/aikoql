@@ -6,10 +6,10 @@ use crate::session::*;
 use crate::{
     info_span, json, AssertionRequest, ConfidenceContext, ConflictResolution,
     ConflictResolutionRequest, ContradictionRequest, ConversationMessage, DeriveRequest, Direction,
-    ExperienceRequest, ForgetMode, GraphEngineApi, InvalidationRequest, Kernel, MergeRequest,
-    MergeStrategy, Metadata, ObservationRequest, RelateRequest, RelationshipRef, RememberRequest,
-    SplitRequest, SummarizeConversationRequest, SupersedeRequest, TraverseQuery,
-    VerificationRequest, J, KOID,
+    ExperienceRequest, ForgetMode, GraphEngineApi, InvalidationRequest, Kernel, KnowledgeObject,
+    MergeRequest, MergeStrategy, Metadata, ObservationRequest, RelateRequest, RelationshipRef,
+    RememberRequest, SplitRequest, SummarizeConversationRequest, SupersedeRequest, TraverseQuery,
+    Value, VerificationRequest, J, KOID,
 };
 pub(crate) fn tool_relate(k: &Kernel, args: &J) -> Result<J, String> {
     let from = args
@@ -152,6 +152,19 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     // v0.3 K1: extensions may be declared at the protocol boundary
     // (epistemic status, authority, scope, canonical evidence).
     req.extensions = parse_extensions(args)?;
+    // T-60 (POC-3 MINOR): remember accepts a top-level `valid_from` — the
+    // observe/assert_knowledge spelling. It lands in the same extension the
+    // kernel honors (EXT_VALID_FROM is deliberately not kernel-managed:
+    // callers declare their own claim's temporal start). The extension wins
+    // when both are given.
+    if !req.extensions.contains_key(KnowledgeObject::EXT_VALID_FROM) {
+        if let Some(vf) = args.get("valid_from").and_then(|v| v.as_u64()) {
+            req.extensions.insert(
+                KnowledgeObject::EXT_VALID_FROM.into(),
+                Value::Int(vf as i64),
+            );
+        }
+    }
     // Parse optional relationships array.
     if let Some(rels) = args.get("relationships").and_then(|r| r.as_array()) {
         for rel in rels {
