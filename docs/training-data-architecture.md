@@ -2044,3 +2044,30 @@ backup → list name → verify BY NAME → destroy → fresh server →
 restore BY NAME → reopen → knowledge reads back. RED archived as
 `T-62` (exit 101 — the pre-fix verify-by-name call died with the exact
 POC error, os error 3).
+
+## 67. Abrupt-close respawn serves every committed row — T-63 (T-53 close-out)
+
+The T-53 close-out carried one open item: during pin work, an
+abrupt-close respawn once served 0 rows on MATCH, and it did not
+reproduce on a fresh KB. POC-side hammering
+(poc3/.stagee-work/probe_reopen_visibility.py, 64 cycles on a
+persistent stream KB carrying a supersede chain) covered the three
+mechanisms a 0-row respawn could come from — plain abrupt kills,
+full-burst kills right after acked remembers, and mid-burst torn-WAL
+kills — with zero reproductions: every acked row survived every
+terminate+respawn, and the first MATCH on the respawned server always
+returned the full count. That matches the design: acked writes are
+WAL-fsynced before the ack, `open_kernel` replays the WAL
+synchronously before serve starts, MATCH reads the kernel (not the
+ANN maintainer, which resumes asynchronously with a torn-pair → full
+replay fallback), and Drop does not flush because recovery is the
+WAL's job.
+
+The contract is pinned at the surface where the anomaly was observed:
+`abrupt_close_respawn_serves_committed_rows` (mcp_real_world) seeds
+12 rows plus a 3-hop supersede chain, closes abruptly (Drop's
+child.kill() — no stdin EOF), respawns on the SAME db, and asserts an
+immediate MATCH returns exactly 12 rows with the successor head and
+the chain invisible. RED archived as `T-63` (exit 101 — with the WAL
+replay temporarily skipped, the respawned MATCH returned
+`{"results":[]}` in exactly the anomaly's shape).
