@@ -100,6 +100,7 @@ impl Default for McpSession {
     }
 }
 pub(crate) fn tool_session_init(args: &J, session: &mut McpSession) -> Result<J, String> {
+    reject_empty_tenant(args)?;
     if session.trust_mode == TrustMode::Tcp {
         // PRR-2: TCP identity is server-assigned from --tcp-token. On the
         // tools/call path tenant/roles arrive already forced to the session's
@@ -160,6 +161,20 @@ pub(crate) fn tool_session_init(args: &J, session: &mut McpSession) -> Result<J,
         "established": true,
         "note": "Session identity established. Subsequent tool calls in this connection inherit this context."
     }))
+}
+
+/// P2c (P3-009 LOW): a tenant that is present but empty is an invisible
+/// namespace — rows land where no scoped reader can ever reach them.
+/// Reject at the boundary: session init and the write entry points
+/// (remember covers tool_batch ops, which resolve through tool_remember).
+pub(crate) fn reject_empty_tenant(args: &J) -> Result<(), String> {
+    if let Some(t) = args.get("tenant") {
+        match t.as_str() {
+            Some(s) if !s.is_empty() => {}
+            _ => return Err("invalid tenant: must be a non-empty string when provided".into()),
+        }
+    }
+    Ok(())
 }
 
 /// Fill identity into one args object and recurse into the `operations`

@@ -114,6 +114,7 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     )
     .entered();
     let subject = subject_of(args);
+    reject_empty_tenant(args)?;
     let type_name = args
         .get("type_name")
         .and_then(|t| t.as_str())

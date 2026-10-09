@@ -140,10 +140,24 @@ impl AuthManager {
                 return Err(access_denied(subject, action, koid));
             }
         }
-        if subject.name == security.owner || subject.is_admin() {
+        let is_admin = subject.is_admin();
+        let principals = self.effective_principals(subject);
+        // T-55 (POC-3 P3-009 MEDIUM): a tenant-less READ is confined to
+        // shared (untenanted) rows — scoped data fails closed instead of
+        // leaking every tenant's head. Only an explicit admin role (direct
+        // or inherited) is the global channel; ownership alone does not
+        // bypass — the tenant pin is the door for an unscoped principal.
+        if action == Action::Read
+            && subject.tenant.is_none()
+            && tenant.is_some()
+            && !is_admin
+            && !principals.contains("admin")
+        {
+            return Err(access_denied(subject, action, koid));
+        }
+        if subject.name == security.owner || is_admin {
             return Ok(());
         }
-        let principals = self.effective_principals(subject);
         if principals.contains("admin") {
             return Ok(());
         }

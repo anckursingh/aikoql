@@ -65,6 +65,7 @@ impl ErrorCode {
     pub fn classify(msg: &str) -> Self {
         let lower = msg.to_lowercase();
         if lower.contains("access denied")
+            || lower.contains("access_denied")
             || lower.contains("unauthorized")
             || lower.contains("login required")
         {
