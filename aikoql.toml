@@ -56,7 +56,8 @@ enabled = false
 # per token on the REST surface (429 with the limit in the message).
 enabled = true
 # Maximum calls per minute per key. Process-local: N instances = N × limit.
-max_calls_per_minute = 120
+# Default is 300 (T-45); this sample pins it explicitly for documentation.
+max_calls_per_minute = 300
 
 [embedding]
 # Embedding provider for MATCH ... USING EMBEDDING queries.
