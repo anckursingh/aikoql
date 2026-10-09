@@ -1716,3 +1716,29 @@ persisted, and that a same-tenant retry replays; the MCP pin
 `MATCH device` under tenant_b returns exactly its v2 row, and a tenant_a
 retry still replays the original. RED archived as `T-52` (exit 101 — both
 tenants received the same koid).
+
+## 57. Superseded generations stay out of plain MATCH — T-53 (verified-shipped)
+
+POC-3 Stage C (HIGH): plain MATCH returned ALL generations of a superseded
+key. After five generations of one device link, `MATCH device WHERE key ==
+"dev_053" RETURN *` and its head `AS_OF` slice both returned all five rows.
+
+Measured against the current kernel, the acceptance is already met by three
+shipped layers: T-47's atomic pair-pin stamps the predecessor Superseded +
+valid_to at the successor's commit instant; T-38's `get_as_of` filters
+`valid_to <= at`, so historical slices never show a closed generation; and
+the v0.3 K2 `valid_at(now)` retain in the Scan arm keeps closed-validity
+rows out of the default MATCH head (temporal plans own their own time
+semantics). The POC symptom came from a pre-T-38/T-47 binary whose
+supersedes never stamped the predecessor at all.
+
+No product change was needed — the milestone lands the missing end-to-end
+pin at the device-identity surface: `superseded_generations_stay_out_of_plain_match`
+(MCP real-world) drives a 4-hop supersede chain and asserts the
+plain MATCH head carries exactly the v5 row, the far-future `AS_OF` head
+slice agrees, and the `AS_OF` slice at gen3's commit instant returns exactly
+v3 — history preserved, the chain invisible. RED archived as `T-53`
+(exit 101 — with the K2 retain temporarily reverted, MATCH leaked all five
+generations in the exact POC row shape). The queued reopen-visibility probe
+(an abrupt-close respawn serving 0 rows on MATCH) does not reproduce on a
+fresh KB and stays open pending POC-side repro details.
