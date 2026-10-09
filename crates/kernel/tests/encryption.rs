@@ -191,7 +191,9 @@ fn e05_field_level_encrypt_remember_decrypt_get() {
     let policy = EncryptionPolicy::new(vec!["salary".to_string(), "ssn".to_string()]);
     k.set_encryption_policy("employee", policy);
 
-    let alice = Subject::new("alice");
+    // T-55 (P3-009): a tenant-less subject can no longer read a tenanted
+    // row — the reader must be scoped to the row's tenant.
+    let alice = Subject::new("alice").in_tenant("acme");
     let mut props = BTreeMap::new();
     props.insert("name".into(), Value::Text("Alice".into()));
     props.insert("salary".into(), Value::Int(150000));

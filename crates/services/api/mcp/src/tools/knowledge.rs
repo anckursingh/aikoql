@@ -494,6 +494,12 @@ pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|r| r.as_str())
         .map(String::from);
     req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    // T-57 (P3-008): per-op idempotency so an ordered replay re-sending a
+    // correction/retraction converges instead of erroring.
+    req.idempotency_key = args
+        .get("idempotency_key")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let r = k.supersede(req).map_err(|e| e.to_string())?;
     Ok(json!({
         "old": r.old.to_hex(),

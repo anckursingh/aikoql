@@ -160,12 +160,21 @@ pub(crate) fn tool_batch(k: &Kernel, args: &J) -> Result<J, String> {
             "remember" => tool_remember(k, &resolved_op),
             "relate" => tool_relate(k, &resolved_op),
             "forget" => tool_forget(k, &resolved_op),
+            // T-57 (P3-008): ordered replay carries corrections/retractions
+            // as supersede ops; per-op idempotency_key makes the whole batch
+            // converge on re-send.
+            "supersede" => tool_supersede(k, &resolved_op),
             _ => Err(format!("unknown batch op: {}", name)),
         };
         match r {
             Ok(result) => {
                 if let Some(koid) = result.get("koid").and_then(|v| v.as_str()) {
                     koids.push(koid.to_string());
+                } else if let Some(k) = result.get("new").and_then(|v| v.as_str()) {
+                    // T-57 (P3-008): a supersede's successor is the next
+                    // handle in an ordered replay — later ops may target it
+                    // as $N.koid (a retraction has none).
+                    koids.push(k.to_string());
                 }
                 results.push(json!({"op": name, "ok": true, "result": result}));
             }

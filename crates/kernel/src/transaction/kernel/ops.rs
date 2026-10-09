@@ -234,6 +234,11 @@ pub struct SupersedeRequest {
     /// empty shell row). Mutually exclusive with `superseded_by` and with
     /// non-empty `properties`.
     pub retract: bool,
+    /// T-57 (P3-008): per-op idempotency for ordered replay. The key is
+    /// scoped by the row's own tenant (T-52) and stored only after the whole
+    /// composition lands, so a replay converges instead of hitting the
+    /// "already superseded" guard.
+    pub idempotency_key: Option<String>,
 }
 
 impl SupersedeRequest {
@@ -253,6 +258,7 @@ impl SupersedeRequest {
             superseded_by: None,
             observed_at_ms: None,
             retract: false,
+            idempotency_key: None,
         }
     }
 }
@@ -1041,6 +1047,25 @@ impl Kernel {
             };
             self.remember_locked(&mut pipe, &rr)?;
         }
+        // T-57 (P3-008): the idempotency row doubles as the completion
+        // marker — written only after the whole composition (transition +
+        // sweep + evidence) landed, so a crash mid-supersede degrades to
+        // today's "already superseded" refusal rather than replaying a
+        // half-done outcome.
+        if let Some(key) = &req.idempotency_key {
+            let old = self
+                .head_object(&req.old)?
+                .ok_or(KError::NotFound(req.old))?;
+            let scoped = idem_scope(old.metadata.tenant.as_deref(), key);
+            let (cell, v) = match result.new {
+                Some(n) => (n, 1u64),
+                None => (result.old, 0u64),
+            };
+            let mut batch = WriteBatch::new();
+            self.repo
+                .put_idem(&mut batch, &scoped, &cell, v, self.clock_now());
+            self.repo.write_batch(&batch)?;
+        }
         Ok(result)
     }
 
@@ -1060,6 +1085,27 @@ impl Kernel {
             .read()
             .unwrap()
             .authorize(&ctx.subject, &old, Action::Write)?;
+        // T-57 (P3-008): an idempotent replay converges instead of tripping
+        // the "already superseded" guard. The key is scoped by the row's own
+        // tenant — the tenant the write carried (T-52/T-50). The stored cell
+        // discriminates by version: 0 = retraction (cell is the old KOID),
+        // >=1 = successor (cell is the new KOID); `old` is the caller's own
+        // argument on replay, so the outcome reconstructs without a graph
+        // walk. Sweep details are omitted on replay — the sweep ran at the
+        // first apply.
+        if let Some(key) = &req.idempotency_key {
+            let scoped = idem_scope(old.metadata.tenant.as_deref(), key);
+            if let Some((cell, v, _ts)) = self.repo.get_idem(&scoped)? {
+                let new = (v != 0).then_some(cell);
+                return Ok(SupersedeResult {
+                    old: req.old,
+                    new,
+                    invalidated_dependents: vec![],
+                    completed: true,
+                    failed: vec![],
+                });
+            }
+        }
         if old.epistemic_status() == EpistemicStatus::Superseded {
             return Err(KError::InvalidObject(
                 "already superseded — supersede the successor instead".into(),
