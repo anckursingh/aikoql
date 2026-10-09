@@ -2019,3 +2019,28 @@ accepted spellings parse through `parse_match` to the exact instants
 fractional+offset form, offset alone, and the fractional+offset form
 inside BETWEEN. RED archived as `T-61` (exit 101 — doc grep for the
 §5.2 heading was absent).
+
+## 66. Backup tools accept the `list_backups` name — T-62 (POC P3-006 LOW)
+
+The three backup tools spoke different dialects for the same object:
+`backup` returned the path, `list_backups` returned entry `name`s, but
+`verify_backup`/`restore` read `{backup}/meta.json` verbatim — a listed
+name resolved against the server CWD and died with "not a valid
+backup: ... (os error 3)" (the restore tool's own schema even said
+"Backup directory name").
+
+`resolve_backup_arg` now accepts both dialects: a bare name (a single
+path component that is not an existing directory) resolves next to the
+db file — the same directory `list_backups` scans — while a path
+(separators, absolute, or an existing dir) passes through unchanged.
+`db_path` threads from both dispatch sites (MCP registry + REST
+router). The verify/restore schemas say "Backup path (as returned by
+`backup`) or entry name from `list_backups`", and `list_backups`'
+description dropped the wrong "current directory" claim (backups land
+next to the db file, not the CWD).
+
+Pin `p3_006_backup_tools_accept_list_backups_name` (mcp_real_world):
+backup → list name → verify BY NAME → destroy → fresh server →
+restore BY NAME → reopen → knowledge reads back. RED archived as
+`T-62` (exit 101 — the pre-fix verify-by-name call died with the exact
+POC error, os error 3).
