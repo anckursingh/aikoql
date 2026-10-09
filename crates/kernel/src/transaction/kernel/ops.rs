@@ -223,6 +223,10 @@ pub struct SupersedeRequest {
     /// old claim (it backs the supersession decision), and the dependent
     /// sweep runs. The successor must exist, be readable, and be current.
     pub superseded_by: Option<KOID>,
+    /// Asserted validity start of the successor (the observation/evidence
+    /// instant). When set, a fresh successor's valid_from is this instant;
+    /// when absent, it falls back to commit time (F7).
+    pub observed_at_ms: Option<u64>,
 }
 
 impl SupersedeRequest {
@@ -240,6 +244,7 @@ impl SupersedeRequest {
             reason: None,
             note: None,
             superseded_by: None,
+            observed_at_ms: None,
         }
     }
 }
@@ -973,84 +978,24 @@ impl Kernel {
         require_evidence(&req.evidence)?;
         let ctx = req.context.clone();
         let mut pipe = self.pipe.lock().unwrap();
-        let old = self
-            .head_object(&req.old)?
-            .ok_or(KError::NotFound(req.old))?;
-        self.auth
-            .read()
-            .unwrap()
-            .authorize(&ctx.subject, &old, Action::Write)?;
-        if old.epistemic_status() == EpistemicStatus::Superseded {
-            return Err(KError::InvalidObject(
-                "already superseded — supersede the successor instead".into(),
-            ));
-        }
-        // Successor: an existing KO named by the caller (superseded_by) or a
-        // fresh generation created right here.
-        let successor = match req.superseded_by {
-            Some(s) => {
-                self.validate_successor(&ctx, s)?;
-                s
-            }
-            None => {
-                let at = self.clock_now();
-                let mut ext = ExtensionMap::new();
-                ext.insert(
-                    KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
-                    Value::Text("asserted".into()),
-                );
-                ext.insert(
-                    KnowledgeObject::EXT_EVIDENCE.into(),
-                    evidence_value(&req.evidence),
-                );
-                ext.insert(
-                    KnowledgeObject::EXT_VALID_FROM.into(),
-                    Value::Int(at as i64),
-                );
-                self.remember_locked(
-                    &mut pipe,
-                    &RememberRequest {
-                        context: ctx.clone(),
-                        koid: None,
-                        expected_version: Some(0),
-                        idempotency_key: None,
-                        metadata: Metadata {
-                            type_name: req.type_name,
-                            tenant: ctx.tenant.clone(),
-                            schema_version: 1,
-                            tags: vec![],
-                        },
-                        properties: req.properties,
-                        semantic: None,
-                        relationships: vec![],
-                        security: None,
-                        extensions: ext,
-                        origin: Origin::Agent(ctx.subject.name.clone()),
-                        note: req.note,
-                        referential_policy: ReferentialPolicy::default(),
-                    },
-                )?
-                .koid
-            }
-        };
-        let reason = req
-            .reason
-            .clone()
-            .unwrap_or_else(|| format!("superseded by {}", successor.to_hex()));
-        self.transition_epistemic_locked(
-            &mut pipe,
-            &ctx,
-            &req.old,
-            EpistemicStatus::Superseded,
-            Origin::Agent(ctx.subject.name.clone()),
-            Some(successor),
-            Some(old.version),
-            Some(reason.clone()),
-        )?;
+        // T-47: pin one HLC instant for the whole composition — the
+        // successor's Created event and the predecessor's Superseded
+        // transition share a commit time, so no AS_OF slice can show both
+        // generations of the same link (device-eval residual 1).
+        pipe.pair_pin = Some(self.snapshot_now());
+        let result = self.supersede_composition(&ctx, &req, &mut pipe);
+        pipe.pair_pin = None;
+        let result = result?;
         // superseded_by path: the evidence backs the supersession decision
         // itself — append it to the old claim so it is never silently dropped
-        // (review P0-1: evidence cannot disappear on a semantic op).
+        // (review P0-1: evidence cannot disappear on a semantic op). Runs
+        // OUTSIDE the pinned instant: a second version of the old KO at the
+        // pair's commit_ts would collide with the transition under MVCC.
         if req.superseded_by.is_some() {
+            let reason = req
+                .reason
+                .clone()
+                .unwrap_or_else(|| format!("superseded by {}", result.new.to_hex()));
             let new_head = self
                 .head_object(&req.old)?
                 .ok_or(KError::NotFound(req.old))?;
@@ -1068,15 +1013,114 @@ impl Kernel {
                 security: None,
                 extensions,
                 origin: Origin::System,
-                note: Some(reason.clone()),
+                note: Some(reason),
                 referential_policy: ReferentialPolicy::default(),
             };
             self.remember_locked(&mut pipe, &rr)?;
         }
+        Ok(result)
+    }
+
+    /// supersede() with the atomic-pair pin armed and the pipe lock held:
+    /// fresh-successor creation (or named-successor validation) +
+    /// supersession transition + dependent sweep, all at one commit instant.
+    fn supersede_composition(
+        &self,
+        ctx: &KnowledgeContext,
+        req: &SupersedeRequest,
+        pipe: &mut Pipeline,
+    ) -> KResult<SupersedeResult> {
+        let old = self
+            .head_object(&req.old)?
+            .ok_or(KError::NotFound(req.old))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &old, Action::Write)?;
+        if old.epistemic_status() == EpistemicStatus::Superseded {
+            return Err(KError::InvalidObject(
+                "already superseded — supersede the successor instead".into(),
+            ));
+        }
+        // Successor: an existing KO named by the caller (superseded_by) or a
+        // fresh generation created right here.
+        let successor = match req.superseded_by {
+            Some(s) => {
+                self.validate_successor(ctx, s)?;
+                s
+            }
+            None => {
+                let at = self.clock_now();
+                let mut ext = ExtensionMap::new();
+                ext.insert(
+                    KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
+                    Value::Text("asserted".into()),
+                );
+                ext.insert(
+                    KnowledgeObject::EXT_EVIDENCE.into(),
+                    evidence_value(&req.evidence),
+                );
+                ext.insert(
+                    KnowledgeObject::EXT_VALID_FROM.into(),
+                    // F7: the successor asserts validity from the observed
+                    // instant when the caller provides one — commit time is
+                    // only the fallback.
+                    Value::Int(req.observed_at_ms.unwrap_or(at) as i64),
+                );
+                // F11: the generation replaces the claim, so it must be
+                // visible wherever the claim was. Inherit scope/authority —
+                // the Origin::Agent defaults (session / agent_derived) would
+                // hide the successor from every cross-session consumer of
+                // the superseded link.
+                for key in ["scope", "authority"] {
+                    if let Some(v) = old.extensions.get(key) {
+                        ext.insert(key.into(), v.clone());
+                    }
+                }
+                self.remember_locked(
+                    pipe,
+                    &RememberRequest {
+                        context: ctx.clone(),
+                        koid: None,
+                        expected_version: Some(0),
+                        idempotency_key: None,
+                        metadata: Metadata {
+                            type_name: req.type_name.clone(),
+                            tenant: ctx.tenant.clone(),
+                            schema_version: 1,
+                            tags: vec![],
+                        },
+                        properties: req.properties.clone(),
+                        semantic: None,
+                        relationships: vec![],
+                        security: None,
+                        extensions: ext,
+                        origin: Origin::Agent(ctx.subject.name.clone()),
+                        note: req.note.clone(),
+                        referential_policy: ReferentialPolicy::default(),
+                    },
+                )?
+                .koid
+            }
+        };
+        let reason = req
+            .reason
+            .clone()
+            .unwrap_or_else(|| format!("superseded by {}", successor.to_hex()));
+        self.transition_epistemic_locked(
+            pipe,
+            ctx,
+            &req.old,
+            EpistemicStatus::Superseded,
+            Origin::Agent(ctx.subject.name.clone()),
+            Some(successor),
+            Some(old.version),
+            Some(reason),
+        )?;
         let roots = self.outbound_edges(&req.old, Some(DERIVED_FROM))?;
         let sweep = self.invalidate_dependents_locked(
-            &mut pipe,
-            &ctx,
+            pipe,
+            ctx,
             roots,
             &format!("premise {} was superseded", req.old.to_hex()),
         )?;
@@ -1757,7 +1801,10 @@ impl Kernel {
         roots: Vec<(String, KOID)>,
         reason: &str,
     ) -> KResult<SweepOutcome> {
-        let at = self.clock_now();
+        let at = pipe
+            .pair_pin
+            .map(|ts| ts >> 16)
+            .unwrap_or_else(|| self.clock_now());
         // Phase 1 — collect: discover the full dependent closure WITHOUT
         // mutating anything (review P1-7: never mutate while discovering the
         // dependency graph). Cycle-safe via the visited set; duplicate edges

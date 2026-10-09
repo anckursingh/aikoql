@@ -604,6 +604,11 @@ pub use crate::knowledge::notify::{EventFilter, SubscriptionRecord};
 pub(crate) struct Pipeline {
     seq: u64,
     audit: [u8; 32],
+    /// T-47 atomic-pair pin: while set, every commit in this pipe reuses the
+    /// pinned instant so a composite op's events share one commit time.
+    /// Armed and cleared by the wrapping op before the lock releases —
+    /// never observable outside it.
+    pair_pin: Option<u64>,
 }
 
 pub struct Kernel {
@@ -717,7 +722,11 @@ impl Kernel {
             clock,
             hlc: Arc::new(Hlc::starting_at(last_ts)),
             idgen: Arc::new(Mutex::new(IdGen::new(id_seed))),
-            pipe: Arc::new(Mutex::new(Pipeline { seq, audit })),
+            pipe: Arc::new(Mutex::new(Pipeline {
+                seq,
+                audit,
+                pair_pin: None,
+            })),
             events: Arc::new(Mutex::new(events)),
             auth: Arc::new(RwLock::new(auth)),
             indexes: Arc::new(RwLock::new(Some(IndexCoordinator::new()))),
@@ -1370,7 +1379,11 @@ impl Kernel {
         prev_rels: Option<&[RelationshipRef]>,
     ) -> KResult<(u64, u64)> {
         ko.validate()?;
-        let commit_ts = self.hlc.now(self.clock.as_ref());
+        // T-47: a composite op may pin one instant for all its events —
+        // the pin is armed only around that op's own commits.
+        let commit_ts = pipe
+            .pair_pin
+            .unwrap_or_else(|| self.hlc.now(self.clock.as_ref()));
         let seq = pipe.seq + 1;
         ko.commit_ts = commit_ts;
         ko.event_refs.push(EventRef {
@@ -1512,6 +1525,65 @@ impl Kernel {
             }
         }
         self.remember_trusted(req)
+    }
+
+    /// Attach a semantic block to an existing KO, mutating ONLY the semantic
+    /// field (device-eval N2). Enrichment must never ride the remember-update
+    /// path: a caller that does not restate its edges has them replaced
+    /// wholesale there (remember() semantics), which silently destroyed the
+    /// relationship graph when the semantic engine's catch-up rewrote the KB.
+    /// Re-attaching the identical block is a no-op so catch-up restarts do
+    /// not churn versions.
+    pub fn attach_semantic(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: KOID,
+        semantic: SemanticBlock,
+        expected_version: Option<u64>,
+    ) -> KResult<Remembered> {
+        let ctx = ctx.into();
+        let mut pipe = self.pipe.lock().unwrap();
+        let head = self.head_object(&koid)?.ok_or(KError::NotFound(koid))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &head, Action::Write)?;
+        let cur_v = head.version;
+        let expected = expected_version.unwrap_or(cur_v);
+        if expected != cur_v {
+            return Err(KError::VersionConflict {
+                koid,
+                expected,
+                found: cur_v,
+            });
+        }
+        if head.semantic.as_ref() == Some(&semantic) {
+            return Ok(Remembered {
+                koid,
+                version: cur_v,
+                commit_ts: head.commit_ts,
+            });
+        }
+        let mut ko = head.clone();
+        ko.version = cur_v + 1;
+        ko.semantic = Some(semantic);
+        // prev_rels = the head's own edges: unchanged, so the relationship
+        // index sees no removals and the graph survives byte-for-byte.
+        let (commit_ts, _seq) = self.commit_version(
+            &mut pipe,
+            ko,
+            EventKind::ClaimAsserted,
+            Origin::SemanticEnrichment,
+            &ctx.subject.name,
+            Some("semantic enrichment".into()),
+            None,
+            Some(&head.relationships),
+        )?;
+        Ok(Remembered {
+            koid,
+            version: cur_v + 1,
+            commit_ts,
+        })
     }
 
     /// Declarative retention (G13 / RET-CHAT-001): commit through the normal
@@ -2714,7 +2786,12 @@ impl Kernel {
                 found: cur_v,
             });
         }
-        let at = self.clock.millis();
+        // T-47: under an atomic-pair pin the close instant is the pair's
+        // instant, not the wall clock — successor and supersession share it.
+        let at = pipe
+            .pair_pin
+            .map(|ts| ts >> 16)
+            .unwrap_or_else(|| self.clock.millis());
         let mut ko = head.clone();
         ko.version = cur_v + 1;
         ko.set_epistemic_status(to);
@@ -2973,8 +3050,11 @@ impl Kernel {
 
     /// Point-in-time (transaction-time) read: the version this kernel had
     /// committed as of wall-clock `at_millis`. Packs to the HLC layout
-    /// (`millis << 16 | counter`) so the MVCC `<= snap` comparison selects
-    /// the newest version committed at or before that instant; `Ok(None)`
+    /// (`millis << 16 | counter`) with the counter filled to 0xFFFF, so
+    /// the MVCC `<= snap` comparison selects the newest version committed
+    /// at ANY point during that wall-clock millisecond — a version whose
+    /// packed timestamp carries counter bits (a same-millis sibling commit)
+    /// is still "at" that instant, and trace()/AS_OF round-trips; `Ok(None)`
     /// when the KO did not exist (or was not yet committed) by then.
     pub fn get_as_of(
         &self,
@@ -2983,10 +3063,20 @@ impl Kernel {
         at_millis: u64,
     ) -> KResult<Option<KnowledgeObject>> {
         let ctx = ctx.into();
-        let snap = at_millis.checked_shl(16).unwrap_or(u64::MAX);
+        let snap = at_millis
+            .checked_shl(16)
+            .map(|s| s | 0xFFFF)
+            .unwrap_or(u64::MAX);
         let Some(ko) = self.object_at(koid, snap)? else {
             return Ok(None);
         };
+        // F12: AS_OF must honor valid-time closure — a KO whose validity
+        // ended at/before the slice instant (e.g. superseded) is not part
+        // of that transaction-time world. Half-open [valid_from, valid_to):
+        // valid_to == at means the interval has already closed.
+        if ko.valid_to().map(|t| t <= at_millis).unwrap_or(false) {
+            return Ok(None);
+        }
         self.auth
             .read()
             .unwrap()
@@ -3481,6 +3571,14 @@ impl Kernel {
     }
 
     pub fn prove(&self, ctx: impl Into<KnowledgeContext>, claim: &KOID) -> KResult<Proof> {
+        // Device-eval N3: the walk scans the event rows snapshot-less and then
+        // compares the chain tail against journal_head — a concurrent append
+        // between the two used to report chain_valid=false on an untampered
+        // chain (the semantic engine's catch-up writes continuously). Hold the
+        // pipe lock so writers block and the walk sees a quiescent journal.
+        // ponytail: writers stall for the full scan (ms at KB scale); shard
+        // the pipe if prove ever sits on a hot path.
+        let _pipe = self.pipe.lock().unwrap();
         let ctx = ctx.into();
         let head = match self.head_object(claim) {
             Ok(Some(h)) => h,

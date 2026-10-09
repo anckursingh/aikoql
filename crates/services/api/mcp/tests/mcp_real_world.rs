@@ -41,15 +41,63 @@ fn tmp_db(suffix: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// The local model store for F13's end-to-end pin: `AIKOQL_TEST_MODEL_DIR`
+/// wins, else the platform default (~/.aikoql/models). Returns the models
+/// ROOT (the serve joins the model slug itself) when all-MiniLM-L6-v2 is
+/// installed there; `None` when the pin must skip.
+fn installed_models_root() -> Option<String> {
+    let root = if let Ok(dir) = std::env::var("AIKOQL_TEST_MODEL_DIR") {
+        std::path::PathBuf::from(dir)
+    } else {
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)?;
+        home.join(".aikoql").join("models")
+    };
+    if root
+        .join(aikoql_semantic::provider::model_slug(
+            aikoql_semantic::provider::DEFAULT_MODEL_ID,
+        ))
+        .is_dir()
+    {
+        Some(root.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
 struct McpClient {
     child: Child,
     stdin: std::process::ChildStdin,
-    reader: BufReader<std::process::ChildStdout>,
+    // Option so `call_bounded` can move the reader onto its deadline thread.
+    reader: Option<BufReader<std::process::ChildStdout>>,
     next_id: u64,
 }
 
 impl McpClient {
     fn start(db_path: &str) -> Self {
+        // Pin the harness to the no-provider mode its assertions assume
+        // (CTX-001 pins semantic:false): an installed local model would
+        // start background enrichment, and its version bumps race
+        // CTX-003's pinned update. An empty model dir is deterministically
+        // unavailable on every machine.
+        let model_dir = tmp_db("ctx-model");
+        std::fs::create_dir_all(&model_dir).expect("create empty model dir");
+        Self::start_inner(db_path, Some(&model_dir), &[])
+    }
+
+    /// Serve against a real model store so background enrichment runs
+    /// (F13 pin: the restart's catch-up must enrich, not destroy).
+    fn start_with_model_dir(db_path: &str, model_dir: &str) -> Self {
+        Self::start_inner(db_path, Some(model_dir), &[])
+    }
+
+    /// Same, with extra env for the child (T-44 park pins).
+    fn start_with_model_dir_env(db_path: &str, model_dir: &str, envs: &[(&str, &str)]) -> Self {
+        Self::start_inner(db_path, Some(model_dir), envs)
+    }
+
+    fn start_inner(db_path: &str, model_dir: Option<&str>, envs: &[(&str, &str)]) -> Self {
         // Find binary relative to workspace root.
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -90,9 +138,14 @@ impl McpClient {
         };
         eprintln!("Using binary: {}", bin.display());
         let mut cmd = Command::new(&bin);
-        cmd.arg("serve")
-            .arg(db_path)
-            .stdin(Stdio::piped())
+        cmd.arg("serve").arg(db_path);
+        if let Some(dir) = model_dir {
+            cmd.arg("--model-dir").arg(dir);
+        }
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit()); // crash output lands in CI logs, not /dev/null
         let mut child = cmd.spawn().expect("start MCP server");
@@ -104,7 +157,7 @@ impl McpClient {
         McpClient {
             child,
             stdin,
-            reader,
+            reader: Some(reader),
             next_id: 1,
         }
     }
@@ -126,7 +179,11 @@ impl McpClient {
         self.stdin.flush().unwrap();
 
         let mut response = String::new();
-        self.reader.read_line(&mut response).unwrap();
+        self.reader
+            .as_mut()
+            .unwrap()
+            .read_line(&mut response)
+            .unwrap();
         let v: J = serde_json::from_str(&response).unwrap_or_else(|e| {
             panic!(
                 "MCP parse failure for {tool}: {e:?} — response={response:?}, child_status={:?}",
@@ -137,6 +194,51 @@ impl McpClient {
             panic!("MCP error for {}: {:?}", tool, err);
         }
         // Parse the content[0].text as JSON.
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        serde_json::from_str(text).unwrap_or_else(|_| json!({"raw": text}))
+    }
+
+    /// `call` with a wall-clock bound on the RESPONSE — the normal `call`
+    /// reads one line unbounded, which would hang a pin whose server parks.
+    /// On timeout the test aborts (the child is killed by Drop).
+    fn call_bounded(&mut self, tool: &str, args: &J, timeout: std::time::Duration) -> J {
+        let id = self.next_id;
+        self.next_id += 1;
+        let req = json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": tool, "arguments": args}
+        });
+        self.stdin
+            .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
+            .unwrap();
+        self.stdin.flush().unwrap();
+        let mut reader = self
+            .reader
+            .take()
+            .expect("call_bounded: reader already taken");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut response = String::new();
+            let r = reader.read_line(&mut response);
+            let _ = tx.send((r, response, reader));
+        });
+        let (r, response, reader_back) = rx.recv_timeout(timeout).unwrap_or_else(|_| {
+            panic!(
+                "{tool} did not respond within {timeout:?} — the request queued behind \
+                 the enrichment worker instead of failing fast"
+            )
+        });
+        self.reader = Some(reader_back);
+        r.unwrap();
+        let v: J = serde_json::from_str(&response).unwrap_or_else(|e| {
+            panic!(
+                "MCP parse failure for {tool}: {e:?} — response={response:?}, child_status={:?}",
+                self.child.try_wait()
+            )
+        });
+        if let Some(err) = v.get("error") {
+            panic!("MCP error for {}: {:?}", tool, err);
+        }
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         serde_json::from_str(text).unwrap_or_else(|_| json!({"raw": text}))
     }
@@ -153,7 +255,11 @@ impl McpClient {
             .unwrap();
         self.stdin.flush().unwrap();
         let mut response = String::new();
-        self.reader.read_line(&mut response).unwrap();
+        self.reader
+            .as_mut()
+            .unwrap()
+            .read_line(&mut response)
+            .unwrap();
         serde_json::from_str(&response).unwrap()
     }
 
@@ -171,7 +277,11 @@ impl McpClient {
             .unwrap();
         self.stdin.flush().unwrap();
         let mut response = String::new();
-        self.reader.read_line(&mut response).unwrap();
+        self.reader
+            .as_mut()
+            .unwrap()
+            .read_line(&mut response)
+            .unwrap();
         serde_json::from_str(&response).unwrap()
     }
 }
@@ -1266,7 +1376,7 @@ fn mcp_ping_and_tools_list() {
         .unwrap();
     c.stdin.flush().unwrap();
     let mut resp = String::new();
-    c.reader.read_line(&mut resp).unwrap();
+    c.reader.as_mut().unwrap().read_line(&mut resp).unwrap();
     let v: J = serde_json::from_str(&resp).unwrap();
     assert_eq!(v["result"], json!({}));
 
@@ -1277,7 +1387,7 @@ fn mcp_ping_and_tools_list() {
         .unwrap();
     c.stdin.flush().unwrap();
     resp.clear();
-    c.reader.read_line(&mut resp).unwrap();
+    c.reader.as_mut().unwrap().read_line(&mut resp).unwrap();
     let v: J = serde_json::from_str(&resp).unwrap();
     let tools = v["result"]["tools"].as_array().unwrap();
     assert!(
@@ -1551,4 +1661,533 @@ fn p3m3_bkp005_backup_restore_route_by_backend() {
         "restored knowledge must read back: {fetched}"
     );
     drop(c);
+}
+
+#[test]
+fn batch_ops_inherit_session_identity() {
+    // F2: batch ops without an explicit subject land as mcp-agent and the
+    // submitting session then hits ACCESS_DENIED on its own KO.
+    let db = tmp_db("batch-ident");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+    let batch = c.call(
+        "batch",
+        &json!({
+            "operations": [{
+                "op": "remember",
+                "type_name": "device",
+                "properties": {"device_id": "d1", "farm": "f07"},
+                "idempotency_key": "batch-ident-d1"
+            }]
+        }),
+    );
+    let koid = batch["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let got = c.call("get", &json!({"koid": &koid}));
+    assert_eq!(
+        got["koid"],
+        json!(koid),
+        "batch op must inherit the submitting session's identity: {got}"
+    );
+
+    // Fill-if-absent, not override: an op with its own subject keeps it.
+    let batch2 = c.call(
+        "batch",
+        &json!({
+            "operations": [{
+                "op": "remember",
+                "type_name": "device",
+                "subject": "another-agent",
+                "properties": {"device_id": "d2"}
+            }]
+        }),
+    );
+    let koid2 = batch2["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let got2 = c.call_raw("get", &json!({"koid": &koid2}));
+    let text2 = got2["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        got2["result"]["isError"] == true && text2.contains("ACCESS_DENIED"),
+        "an explicit op subject must survive injection: {got2}"
+    );
+}
+
+#[test]
+fn replay_relate_through_batch_is_version_idempotent() {
+    // F13: re-applying an identical relate on replay re-versions the source
+    // (device-eval DI-002: 14 d2 edges re-versioned — koid stable, edge set
+    // unchanged, version bumped).
+    let db = tmp_db("relate-replay");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+
+    let mk = |idem: &str, dev: &str| {
+        json!({
+            "op": "remember",
+            "type_name": "device",
+            "properties": {"device_id": dev},
+            "idempotency_key": idem
+        })
+    };
+    let b1 = c.call(
+        "batch",
+        &json!({"operations": [mk("f13-d1", "d1"), mk("f13-d2", "d2")]}),
+    );
+    let d1 = b1["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let d2 = b1["results"][1]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let rel = json!({"op": "relate", "from": &d1, "to": &d2, "rel_type": "linked_to"});
+
+    let first = c.call("batch", &json!({"operations": [rel.clone()]}));
+    let v_first = first["results"][0]["result"]["version"].as_u64().unwrap();
+
+    // Replay: the same remember ops (idempotency keys) + the same relate.
+    let replay = c.call(
+        "batch",
+        &json!({"operations": [mk("f13-d1", "d1"), mk("f13-d2", "d2"), rel]}),
+    );
+    let v_replay = replay["results"][2]["result"]["version"].as_u64().unwrap();
+    assert_eq!(
+        v_replay, v_first,
+        "an identical relate replayed through batch must not re-version the source"
+    );
+    let head = c.call("get", &json!({"koid": &d1}));
+    assert_eq!(
+        head["version"],
+        json!(v_first),
+        "the source head must stay at the first relate's version"
+    );
+}
+
+#[test]
+fn serve_restart_catchup_preserves_edges_for_relate_replay() {
+    // F13 end-to-end (the device-eval DI-002 pipeline): run1 remembers and
+    // relates, run2 restarts the serve — the start-up catch-up enriches
+    // every KO, and pre-T-34 enrichment rode the remember-update path,
+    // wiping caller edges between the relate and its replay. The replay
+    // relate then missed the no-op guard and re-versioned the source.
+    // Needs the local embedding model; skips where none is installed.
+    let Some(models_root) = installed_models_root() else {
+        eprintln!("[SKIP] no local embedding model (run `aikoql model install`)");
+        return;
+    };
+    let db = tmp_db("relate-restart");
+    let mk = |idem: &str, dev: &str| {
+        json!({
+            "op": "remember",
+            "type_name": "device",
+            "properties": {"device_id": dev},
+            "idempotency_key": idem
+        })
+    };
+    // Serve A: no enrichment provider (empty model dir) — remember + relate.
+    let (d1, rel) = {
+        let mut a = McpClient::start(&db);
+        a.session_init("device-identity-eval", "acme");
+        let b1 = a.call(
+            "batch",
+            &json!({"operations": [mk("f13e-d1", "d1"), mk("f13e-d2", "d2")]}),
+        );
+        let d1 = b1["results"][0]["result"]["koid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let d2 = b1["results"][1]["result"]["koid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let rel = json!({"op": "relate", "from": &d1, "to": &d2, "rel_type": "linked_to"});
+        a.call("batch", &json!({"operations": [rel.clone()]}));
+        let head = a.call("get", &json!({"koid": &d1}));
+        assert_eq!(
+            head["relationships"].as_array().map(|r| r.len()),
+            Some(1),
+            "serve A must record the relate edge before the restart"
+        );
+        (d1, rel)
+    }; // drop serve A: child killed and waited, the db dir survives
+
+    // Serve B: real model store — start-up catch-up enriches both devices.
+    let mut b = McpClient::start_with_model_dir(&db, &models_root);
+    b.session_init("device-identity-eval", "acme");
+
+    // PRR-3: the enrichment worker flips health to "ready" only after the
+    // catch-up scan completes.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    loop {
+        let h = b.call("health", &json!({}));
+        let state = h["semantic"]["state"].as_str().unwrap_or("initializing");
+        if state == "ready" {
+            break;
+        }
+        if state == "unavailable" {
+            panic!("enrichment unavailable: {}", h["semantic"]["detail"]);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "catch-up enrichment never reached ready"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    // Wipe tooth: enrichment must not have destroyed the caller edge.
+    let head = b.call("get", &json!({"koid": &d1}));
+    assert!(
+        !head["relationships"].as_array().unwrap().is_empty(),
+        "catch-up enrichment wiped the caller-created edge"
+    );
+    let v_head = head["version"].as_u64().unwrap();
+
+    // Replay: the same remember ops (idempotency keys) + the same relate.
+    let replay = b.call(
+        "batch",
+        &json!({"operations": [mk("f13e-d1", "d1"), mk("f13e-d2", "d2"), rel]}),
+    );
+    assert_eq!(
+        replay["results"][2]["result"]["version"].as_u64().unwrap(),
+        v_head,
+        "the replayed relate must no-op after restart catch-up enrichment"
+    );
+    let after = b.call("get", &json!({"koid": &d1}));
+    assert_eq!(after["version"].as_u64().unwrap(), v_head);
+    assert_eq!(
+        after["relationships"].as_array().map(|r| r.len()),
+        Some(1),
+        "the edge set must survive enrichment and replay unchanged"
+    );
+}
+
+#[test]
+fn query_group_by_count_aggregate_surfaces_through_tool() {
+    // device-eval MINOR-1: "no GROUP BY count aggregate" — the eval's
+    // binary predated T-32 and dropped Grouped rows at the tool layer, so
+    // COUNT(*) looked absent. The compiler/runtime has executed the
+    // aggregate since P5-M2 (count = every row, count(field) = non-null);
+    // this pins the end-to-end tool path the eval drives.
+    let db = tmp_db("cnt");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+    c.session_init("admin", "acme");
+
+    for (name, dept, salary) in [
+        ("Alice Chen", "Engineering", 165_000),
+        ("Bob Ortiz", "Engineering", 152_000),
+        ("Carol Wu", "Sales", 131_000),
+    ] {
+        let _ = c.call(
+            "remember",
+            &json!({
+                "subject": "admin", "type_name": "Employee", "tenant": "acme",
+                "properties": {"name": name, "dept": dept, "salary": salary}
+            }),
+        );
+    }
+
+    // GROUP BY <key>, COUNT(*) — the mixed key/aggregate list.
+    let res = c.call(
+        "aikoql",
+        &json!({"query": "MATCH Employee GROUP BY dept, COUNT(*) RETURN *"}),
+    );
+    let rows = res["results"]
+        .as_array()
+        .expect("grouped rows must surface through the tool");
+    assert_eq!(rows.len(), 2, "two dept groups, got {rows:?}");
+    let eng = rows
+        .iter()
+        .find(|r| r["properties"]["dept"] == "Engineering")
+        .unwrap_or_else(|| panic!("Engineering group missing: {rows:?}"));
+    let sales = rows
+        .iter()
+        .find(|r| r["properties"]["dept"] == "Sales")
+        .unwrap_or_else(|| panic!("Sales group missing: {rows:?}"));
+    assert_eq!(
+        eng["properties"]["count"],
+        json!(2),
+        "COUNT(*) must count every row in the group"
+    );
+    assert_eq!(sales["properties"]["count"], json!(1));
+
+    // Global aggregate (no keys): one row over the whole match set.
+    let res = c.call(
+        "aikoql",
+        &json!({"query": "MATCH Employee GROUP BY COUNT(*) RETURN *"}),
+    );
+    let rows = res["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "one global group, got {rows:?}");
+    assert_eq!(rows[0]["properties"]["count"], json!(3));
+}
+
+#[test]
+fn tool_boundary_emits_plain_epoch_millis_commit_ts() {
+    // device-eval MINOR-2: the commit_ts hybrid encoding leaks through the
+    // API — `epoch_ms << 16 | counter` forced clients to shift right 16
+    // before AS_OF/validity math. The tool boundary emits plain epoch
+    // millis; the counter stays kernel-internal.
+    let db = tmp_db("cts");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+    c.session_init("admin", "acme");
+    let now_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    let before = now_ms();
+    let res = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "Device", "tenant": "acme",
+            "properties": {"mac": "aa:bb:cc:dd:ee:ff"}
+        }),
+    );
+    let after = now_ms();
+    let koid = res["koid"].as_str().unwrap().to_string();
+    let ts = res["commit_ts"]
+        .as_u64()
+        .expect("remember must carry commit_ts");
+    assert!(
+        ts >= before && ts <= after + 60_000,
+        "remember commit_ts must be plain epoch millis inside the commit \
+         window (before={before}, after={after}, ts={ts})"
+    );
+    let got = c.call("get", &json!({"koid": koid}));
+    let gts = got["commit_ts"].as_u64().expect("get must carry commit_ts");
+    assert!(
+        gts >= before && gts <= after + 60_000,
+        "get commit_ts must be plain epoch millis inside the commit window \
+         (ts={gts})"
+    );
+}
+
+// ── T-44: compile_context must never queue behind the enrichment worker ──
+// The device-eval corpus drove compile_context while the enrichment worker
+// held the embedding model lock (one scalar-CPU forward ≈ 3s), and the
+// training client's 5s socket timeout expired mid-catch-up. The pins below
+// park the worker's embed holding the model lock (deterministic contention)
+// and bound the compile response: queueing callers have no answer inside
+// the bound, fail-fast callers answer instantly.
+
+fn t44_snapshot() -> KnowledgeIr {
+    KnowledgeIr {
+        entities: vec![EntityCandidate {
+            name: "PaymentService".into(),
+            type_hint: Some("Struct".into()),
+            mentions: vec!["processes payments".into()],
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        }],
+        facts: vec![FactCandidate {
+            snippet: None,
+            statement: "payments flow through Stripe".into(),
+            entities: vec![],
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        }],
+        ..Default::default()
+    }
+}
+
+/// Park the enrichment worker's Nth embed on the serve provider and wait
+/// for the marker it writes while holding the model lock.
+fn t44_parked_client(
+    db: &str,
+    models_root: &str,
+    park_at: &str,
+) -> (McpClient, std::path::PathBuf) {
+    let marker = std::path::PathBuf::from(db).with_extension("park-marker");
+    let _ = std::fs::remove_file(&marker);
+    let client = McpClient::start_with_model_dir_env(
+        db,
+        models_root,
+        &[
+            ("AIKOQL_EMBED_PARK_AT", park_at),
+            ("AIKOQL_EMBED_PARK_MARKER", marker.to_str().unwrap()),
+        ],
+    );
+    (client, marker)
+}
+
+fn t44_wait_parked(marker: &std::path::Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !marker.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "enrichment worker never entered the park"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn compile_context_stays_bounded_while_enrichment_holds_the_model() {
+    // The corpus shape: a fresh snapshot is remembered, the enrichment
+    // worker starts embedding it (parked here), and compile_context runs
+    // mid-catch-up. It must answer inside the bound — lexically — instead
+    // of queueing its semantic embed behind the worker.
+    let Some(models_root) = installed_models_root() else {
+        eprintln!("[SKIP] no local embedding model (run `aikoql model install`)");
+        return;
+    };
+    let db = tmp_db("cc-park");
+    let (mut c, marker) = t44_parked_client(&db, &models_root, "1");
+    c.session_init("alice", "acme");
+    let doc = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {"ir_json": serde_json::to_string(&t44_snapshot()).unwrap()},
+            "origin": "system"
+        }),
+    );
+    let doc_koid = doc["koid"].as_str().unwrap().to_string();
+    t44_wait_parked(&marker);
+
+    let ctx = c.call_bounded(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments"}),
+        std::time::Duration::from_secs(2),
+    );
+    let names: Vec<&str> = ctx["package"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"PaymentService"),
+        "the lexical package must survive the busy model: {ctx}"
+    );
+    assert_eq!(
+        ctx["semantic"],
+        json!(false),
+        "a queued semantic leg must degrade, not block: {ctx}"
+    );
+}
+
+#[test]
+fn compile_context_fails_fast_when_model_busy_with_stored_embeddings() {
+    // The residual race: the snapshot ALREADY carries entity_embeddings
+    // (ingest wrote them), so the semantic leg runs — but the worker's
+    // next embed parks holding the model lock. The embed must fail fast
+    // (Retryable) instead of queueing on the mutex.
+    let Some(models_root) = installed_models_root() else {
+        eprintln!("[SKIP] no local embedding model (run `aikoql model install`)");
+        return;
+    };
+    let db = tmp_db("cc-busy");
+    let (mut c, marker) = t44_parked_client(&db, &models_root, "2");
+    c.session_init("alice", "acme");
+    let k1 = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {
+                "ir_json": serde_json::to_string(&t44_snapshot()).unwrap(),
+                "entity_embeddings": "{\"d::PaymentService\": [0.1, 0.2]}"
+            },
+            "origin": "system"
+        }),
+    );
+    let k1_koid = k1["koid"].as_str().unwrap().to_string();
+    // The worker's second embed (this KO) parks holding the model lock.
+    let _ = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {"ir_json": serde_json::to_string(&t44_snapshot()).unwrap()},
+            "origin": "system"
+        }),
+    );
+    t44_wait_parked(&marker);
+
+    let ctx = c.call_bounded(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &k1_koid, "task": "process payments"}),
+        std::time::Duration::from_secs(2),
+    );
+    assert!(
+        ctx["package"]["entities"].as_array().unwrap().len() > 0,
+        "the lexical package must survive the busy model: {ctx}"
+    );
+    assert_eq!(
+        ctx["semantic"],
+        json!(false),
+        "a contended embed must fail fast, not queue: {ctx}"
+    );
+}
+
+#[test]
+fn compile_context_skips_semantic_embed_without_stored_embeddings() {
+    // Guard-A tooth: with no entity_embeddings on the snapshot there is
+    // nothing to score the task against, so the semantic leg must not burn
+    // a full forward pass (~3s scalar) inside the caller's socket budget.
+    let Some(models_root) = installed_models_root() else {
+        eprintln!("[SKIP] no local embedding model (run `aikoql model install`)");
+        return;
+    };
+    let db = tmp_db("cc-skip");
+    let mut c = McpClient::start_with_model_dir(&db, &models_root);
+    c.session_init("alice", "acme");
+    let doc = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {"ir_json": serde_json::to_string(&t44_snapshot()).unwrap()},
+            "origin": "system"
+        }),
+    );
+    let doc_koid = doc["koid"].as_str().unwrap().to_string();
+
+    let ctx = c.call_bounded(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments"}),
+        std::time::Duration::from_secs(1),
+    );
+    assert_eq!(
+        ctx["semantic"],
+        json!(false),
+        "no stored embeddings → no embed, no score: {ctx}"
+    );
+}
+
+// ── T-45: the default rate limit serves a batch ingest phase ──
+// The device eval throttles at 115 and takes ~130 batch calls per
+// dataset phase against a default-configured server — the 120/min
+// cap denied the tail of every phase. A legitimate batch phase from
+// one principal must fit the default budget.
+
+#[test]
+fn default_rate_limit_serves_a_batch_ingest_phase() {
+    let db = tmp_db("rl-batch");
+    let mut c = McpClient::start(&db);
+    c.session_init("alice", "acme");
+    let started = std::time::Instant::now();
+    for i in 0..130 {
+        let doc = c.call(
+            "remember",
+            &json!({
+                "subject": "alice", "type_name": "note", "tenant": "acme",
+                "properties": {"body": format!("batch note {i}")},
+                "origin": "system"
+            }),
+        );
+        assert!(
+            doc["koid"].is_string(),
+            "remember #{i} must not trip the default rate limit: {doc}"
+        );
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(50),
+        "the batch phase straddled a window rollover — the pin proves nothing"
+    );
 }

@@ -1,0 +1,8 @@
+{
+  "id": "t-36-similar-projection",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-runtime --test cpl_execution cpl005_projection_applied_after_similarity",
+  "captured_at": "2026-10-07T19:04:09Z",
+  "captured_head": "554ff5d705b18c49428ac48117cfe5d7de65e619",
+  "exit_code": 101
+}

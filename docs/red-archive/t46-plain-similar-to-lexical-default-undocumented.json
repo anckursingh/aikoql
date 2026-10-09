@@ -1,0 +1,8 @@
+{
+  "id": "t46-plain-similar-to-lexical-default-undocumented",
+  "pre_fix_commit": "544f528",
+  "command": "grep -q lexical by default docs/MRFC-0010-AIKOQL-Parser-Architecture-v2.md",
+  "captured_at": "2026-10-08T13:20:38Z",
+  "captured_head": "544f5285342fd4c5f20e2e48f8fea4a01efab754",
+  "exit_code": 1
+}

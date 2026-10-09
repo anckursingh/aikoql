@@ -1,0 +1,27 @@
+﻿
+=================================== ERRORS ====================================
+___________________ ERROR collecting tests/test_splitter.py ___________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_splitter.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+training\tests\test_splitter.py:22: in <module>
+    from aikoql_training.dataset.splitter import assign_splits
+E   ModuleNotFoundError: No module named 'aikoql_training.dataset'
+____________________ ERROR collecting tests/test_writer.py ____________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_writer.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+training\tests\test_writer.py:31: in <module>
+    from aikoql_training.dataset.writer import read_dataset, write_dataset
+E   ModuleNotFoundError: No module named 'aikoql_training.dataset'
+=========================== short test summary info ===========================
+ERROR training\tests\test_splitter.py
+ERROR training\tests\test_writer.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!
+2 errors in 1.24s

@@ -181,7 +181,12 @@ impl IndexCoordinator {
                 }
                 let vscore = match (&q.vector, &rec.embedding) {
                     (Some(qv), Some(emb)) => cosine(qv, emb),
-                    _ => 0.0,
+                    // Device-eval N4: a KO without an embedding has no
+                    // vector score — ranking it at 0.0 fabricates a hit
+                    // (during the semantic catch-up window every KO became
+                    // a zero-score "match"). Only embedded KOs can answer a
+                    // vector query; the caller sees an honest empty.
+                    _ => return Ok(()),
                 };
                 ranked.push((*koid, vscore));
                 Ok(())

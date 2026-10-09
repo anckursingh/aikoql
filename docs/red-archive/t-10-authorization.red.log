@@ -1,0 +1,16 @@
+
+=================================== ERRORS ====================================
+________________ ERROR collecting tests/test_authorization.py _________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_authorization.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_authorization.py:25: in <module>
+    from aikoql_training.scenarios.authorization import authorization_scenarios
+E   ModuleNotFoundError: No module named 'aikoql_training.scenarios.authorization'
+=========================== short test summary info ===========================
+ERROR tests/test_authorization.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 1.00s

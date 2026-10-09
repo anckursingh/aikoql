@@ -1,0 +1,8 @@
+{
+  "id": "t-34-enrichment-wipes-edges",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test transactions enrichment_update_preserves_caller_edges_and_prove_chain",
+  "captured_at": "2026-10-07T18:00:25Z",
+  "captured_head": "ebe7389d4aa091a278eef73f59ed3b6bfe9ff55c",
+  "exit_code": 101
+}

@@ -1,0 +1,8 @@
+{
+  "id": "t-17-schema-v2",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_plan.py training/tests/test_schema.py -q",
+  "captured_at": "2026-10-04T08:53:45Z",
+  "captured_head": "88258f36d1b9d701b9590e4e694345e85302bdc7",
+  "exit_code": 2
+}

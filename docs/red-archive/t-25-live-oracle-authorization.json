@@ -1,0 +1,8 @@
+{
+  "id": "t-25-live-oracle-authorization",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_authorization.py training/tests/test_schema.py training/tests/test_corpus.py -q -k live_verdict or kernel_reason or policy_of_emits or decision_mismatch or without_the_kernel_reason or reason_not_in_the_answer or schema_accepts_authorization_type or verify_authorization_examples or full_decision_metadata or reaches_the_target",
+  "captured_at": "2026-10-04T10:51:56Z",
+  "captured_head": "7f8360ceac6798b860dcf518e89ef1fcd54db64d",
+  "exit_code": 1
+}

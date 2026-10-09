@@ -1,0 +1,8 @@
+{
+  "id": "t44-compile-context-latency",
+  "pre_fix_commit": "69ee77b",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world compile_context_ -- --test-threads=1",
+  "captured_at": "2026-10-08T12:42:07Z",
+  "captured_head": "69ee77bd4adce5f258bb54ee08bc6d0dfe5541ba",
+  "exit_code": 101
+}

@@ -1,0 +1,9 @@
+ARCH: release.yml lacks the training-pypi-publish job (T-31)
+ARCH: training-pypi-publish lacks the trusted-publisher action (T-31)
+ARCH: training-pypi-publish lacks the OIDC id-token permission (T-31)
+ARCH: training/README.md missing — PyPI rejects a readme-less upload (T-31)
+ARCH: training/LICENSE missing — the license metadata must ship the file (T-31)
+ARCH: training pyproject lacks the readme reference (T-31)
+ARCH: training pyproject lacks the license reference (T-31)
+ARCH: training pyproject lacks project urls (T-31)
+EXIT=1

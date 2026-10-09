@@ -1,0 +1,27 @@
+
+=================================== ERRORS ====================================
+___________________ ERROR collecting tests/test_temporal.py ___________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_temporal.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_temporal.py:25: in <module>
+    from aikoql_training.scenarios.temporal import temporal_scenarios
+E   ModuleNotFoundError: No module named 'aikoql_training.scenarios.temporal'
+__________________ ERROR collecting tests/test_provenance.py __________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_provenance.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_provenance.py:22: in <module>
+    from aikoql_training.scenarios.provenance import provenance_scenarios
+E   ModuleNotFoundError: No module named 'aikoql_training.scenarios.provenance'
+=========================== short test summary info ===========================
+ERROR tests/test_temporal.py
+ERROR tests/test_provenance.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!
+2 errors in 1.15s

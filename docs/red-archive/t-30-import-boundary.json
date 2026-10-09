@@ -1,0 +1,8 @@
+{
+  "id": "t-30-import-boundary",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-07T13:17:17Z",
+  "captured_head": "c786db5cdfad6ed397cfea7f541267f99629e474",
+  "exit_code": 1
+}

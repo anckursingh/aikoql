@@ -41,12 +41,13 @@ MRFC-0040 structured errors: the `error.code` string inside a tool result
 | VALIDATION_ERROR | no | "missing", "invalid", "bad" | get without a koid (cl01f) |
 | RATE_LIMITED | yes | "rate", "too many" | rate-limit refusal |
 | TIMEOUT | yes | "timeout", "timed out" | operation timeout |
+| RETRYABLE | yes | "retryable" | kernel retryable error (e.g. similarity during enrichment catch-up) |
 | INTERNAL | no | fallthrough | txn_commit of a never-opened txn (cl01f) |
 | NOT_A_PROGRAM | no | "not a program" | program tool on a non-program KOID |
 | COMPILE_ERROR | no | "compile", "parse", "syntax", "aikoql1" | aikoql parse errors, `AIKOQL1xxx` prefix (cl01f) |
 
-RATE_LIMITED, TIMEOUT, VERSION_CONFLICT and NOT_A_PROGRAM have no dedicated
-producer pin in cli_contract.rs: their producers need config- or
+RATE_LIMITED, TIMEOUT, VERSION_CONFLICT, RETRYABLE and NOT_A_PROGRAM have
+no dedicated producer pin in cli_contract.rs: their producers need config- or
 timing-dependent harnesses. The sv-suite and test_mcp_client.py exercise them
 on the happy paths of their subsystems.
 
@@ -72,6 +73,7 @@ above (e.g. `NOT_FOUND: <koid>` → NOT_FOUND via the "not_found" keyword).
 | JOB_REJECTED | async job refused |
 | STORE | storage engine error |
 | CODEC | serialization error |
+| RETRYABLE | similarity arm: query embedded but no in-scope KO carries an embedding yet |
 
 ## SDK-side codes
 

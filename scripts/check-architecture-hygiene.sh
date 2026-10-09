@@ -837,5 +837,227 @@ if ! grep -q 'def validate_tiers' scripts/artifact_schema.py; then
   fail=1
 fi
 
+# workflow test 32 — test_training_data_estate (T-14, training plan §6):
+# training-data.yml is the dataset engine's CI owner — five PR legs by
+# name (unit / fuzz-estate / determinism / integration / gate-teeth)
+# plus the T-29 nightly leg, path-gated on training/** so the 10K-corpus
+# budget rides only the schedule (tests 33/34 pin the packaging and the
+# nightly split). gate-teeth runs the mutation leg: a mutant that
+# survives is a toothless gate, and determinism rides generate_corpus.py
+# regeneration.
+TRAIN=.github/workflows/training-data.yml
+if [ ! -f "$TRAIN" ]; then
+  echo "ARCH: training-data.yml missing (T-14, training plan §6)" >&2
+  fail=1
+fi
+for job in unit fuzz-estate determinism integration gate-teeth; do
+  if [ -f "$TRAIN" ] && ! grep -q "^  $job:" "$TRAIN"; then
+    echo "ARCH: training-data.yml lost the $job leg (T-14)" >&2
+    fail=1
+  fi
+done
+if [ -f "$TRAIN" ] && ! grep -q 'training/\*\*' "$TRAIN"; then
+  echo "ARCH: training-data.yml is not path-gated on training/** (T-14)" >&2
+  fail=1
+fi
+if [ -f "$TRAIN" ] && \
+   ! sed -n '/^  gate-teeth:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q 'mutation_leg.py'; then
+  echo "ARCH: the gate-teeth leg lost the mutation leg (T-14)" >&2
+  fail=1
+fi
+if [ -f "$TRAIN" ] && \
+   ! sed -n '/^  determinism:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q 'generate_corpus.py'; then
+  echo "ARCH: the determinism leg lost the corpus regeneration cell (T-14)" >&2
+  fail=1
+fi
+
+# workflow test 33 — test_training_packaging (T-29, PR9 §34): the
+# training package is installed, not smuggled in — the pytest
+# pythonpath=src hack in pyproject.toml makes CI tests pass against
+# the source tree instead of the installed package, and any job that
+# runs pytest or a training/scripts entry without
+# `pip install -e training` rides the hack instead of the product.
+if [ -f training/pyproject.toml ] && \
+   grep -qE '^\[tool\.pytest' training/pyproject.toml && \
+   sed -n '/^\[tool\.pytest/,/^\[/p' training/pyproject.toml | grep -q 'pythonpath'; then
+  echo "ARCH: training/pyproject.toml still sets pytest pythonpath=src (PR9 §34)" >&2
+  fail=1
+fi
+if [ -f "$TRAIN" ]; then
+  for _tjob in $(grep -oE '^  [a-z][a-z0-9_-]*:' "$TRAIN" | sed 's/^  //; s/:$//'); do
+    _tblock=$(sed -n "/^  $_tjob:/,/^  [a-z][a-z0-9_-]*:$/p" "$TRAIN")
+    if ! printf '%s\n' "$_tblock" | grep -q 'runs-on:'; then continue; fi
+    if ! printf '%s\n' "$_tblock" | grep -qE 'pip install .*training'; then
+      echo "ARCH: training-data.yml job $_tjob has no pip install -e training (PR9 §34)" >&2
+      fail=1
+    fi
+  done
+fi
+
+# workflow test 34 — test_training_nightly (T-29, PR9 §33): the 10K
+# corpus sweep is a nightly cell, not a PR gate — the integration leg
+# must not carry `--target 10000`, a `nightly` job owns it (plus the
+# artifact upload), guarded by github.event_name so push/PR runs skip
+# it, and the workflow declares a schedule trigger. The fuzz-estate
+# leg runs the WHOLE fuzz estate, not the two files it accreted with.
+if [ -f "$TRAIN" ] && \
+   sed -n '/^  integration:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q -- '--target 10000'; then
+  echo "ARCH: the integration leg still carries the 10K sweep (PR9 §33)" >&2
+  fail=1
+fi
+if [ -f "$TRAIN" ]; then
+  if ! grep -q '^  nightly:' "$TRAIN"; then
+    echo "ARCH: training-data.yml lost the nightly leg (PR9 §33)" >&2
+    fail=1
+  fi
+  _nblock=$(sed -n '/^  nightly:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN")
+  if ! printf '%s\n' "$_nblock" | grep -q -- '--target 10000'; then
+    echo "ARCH: the nightly leg lost the 10K corpus sweep (PR9 §33)" >&2
+    fail=1
+  fi
+  if ! printf '%s\n' "$_nblock" | grep -q 'upload-artifact'; then
+    echo "ARCH: the nightly leg lost the corpus artifact upload (PR9 §33)" >&2
+    fail=1
+  fi
+  if ! printf '%s\n' "$_nblock" | grep -q 'event_name'; then
+    echo "ARCH: the nightly leg is not event-guarded (PR9 §33)" >&2
+    fail=1
+  fi
+  if ! sed -n '/^on:/,/^jobs:/p' "$TRAIN" | grep -q '^  schedule:'; then
+    echo "ARCH: training-data.yml declares no schedule trigger (PR9 §33)" >&2
+    fail=1
+  fi
+  for _fz in test_protocol_fuzz.py test_grounding_fuzz.py; do
+    if ! sed -n '/^  fuzz-estate:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q "$_fz"; then
+      echo "ARCH: the fuzz-estate leg does not run $_fz (PR9 §33)" >&2
+      fail=1
+    fi
+  done
+fi
+
+# workflow test 35 — test_training_import_boundary (T-30, PR9 §35):
+# training code may import only the documented public APIs — the bare
+# `aikoql` top level and `from aikoql import <public name>`; every
+# deeper import (SDK submodules, the native _aikoql module, storage
+# bindings) is private implementation. The boundary file
+# scripts/training-import-boundary.txt is the deny anchor list; the
+# scan fails on any hit, so architectural drift through a private
+# retrieval/compiler import dies here, not in a user deployment.
+TBOUND=scripts/training-import-boundary.txt
+if [ ! -f "$TBOUND" ]; then
+  echo "ARCH: training import boundary file missing (PR9 §35)" >&2
+  fail=1
+else
+  while IFS= read -r _anchor || [ -n "$_anchor" ]; do
+    case "$_anchor" in ''|'#'*) continue ;; esac
+    if _hits=$(grep -rnE "$_anchor" training/src training/scripts \
+               --include='*.py' 2>/dev/null); then
+      echo "ARCH: forbidden training import (PR9 §35, anchor: $_anchor):" >&2
+      echo "$_hits" | sed 's/^/ARCH: /' >&2
+      fail=1
+    fi
+  done < "$TBOUND"
+fi
+
+# workflow test 36 — test_training_pypi_publish (T-31): aikoql-training
+# ships as its OWN PyPI project (not folded into the maturin aikoql
+# wheel — release coupling + build-system friction) through the same
+# OIDC trusted publishing the aikoql job uses: a release.yml job
+# carrying id-token: write and the pypa publish action. The package
+# metadata must be complete before the first upload — PyPI rejects a
+# project without readme/license/urls at publish time, not at PR time.
+if [ -f "$REL" ] && ! grep -q '^  training-pypi-publish:' "$REL"; then
+  echo "ARCH: release.yml lacks the training-pypi-publish job (T-31)" >&2
+  fail=1
+fi
+if [ -f "$REL" ]; then
+  _tpblock=$(sed -n '/^  training-pypi-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL")
+  if ! printf '%s\n' "$_tpblock" | grep -q 'pypa/gh-action-pypi-publish'; then
+    echo "ARCH: training-pypi-publish lacks the trusted-publisher action (T-31)" >&2
+    fail=1
+  fi
+  if ! printf '%s\n' "$_tpblock" | grep -q 'id-token: write'; then
+    echo "ARCH: training-pypi-publish lacks the OIDC id-token permission (T-31)" >&2
+    fail=1
+  fi
+fi
+if [ ! -f training/README.md ]; then
+  echo "ARCH: training/README.md missing — PyPI rejects a readme-less upload (T-31)" >&2
+  fail=1
+fi
+if [ ! -f training/LICENSE ]; then
+  echo "ARCH: training/LICENSE missing — the license metadata must ship the file (T-31)" >&2
+  fail=1
+fi
+if [ -f training/pyproject.toml ]; then
+  grep -q '^readme = "README.md"' training/pyproject.toml || { echo "ARCH: training pyproject lacks the readme reference (T-31)" >&2; fail=1; }
+  grep -q '^license = ' training/pyproject.toml || { echo "ARCH: training pyproject lacks the license reference (T-31)" >&2; fail=1; }
+  grep -q '^\[project.urls\]' training/pyproject.toml || { echo "ARCH: training pyproject lacks project urls (T-31)" >&2; fail=1; }
+fi
+
+# workflow test 6 — no column-1 body lines: a block-scalar body at
+# column 1 (embedded code, heredoc leftovers) silently ends the scalar
+# and GitHub rejects the whole workflow file — every run dies at 0s
+# with "workflow file issue" (training-data.yml first-run class, T-16)
+if bad=$(grep -nE '^[^[:space:]#]' .github/workflows/*.yml |
+         grep -vE ':[[:space:]]' | grep -vE ':[[:space:]]*$'); then
+  echo "ARCH: column-1 line inside a workflow block scalar:" >&2
+  echo "$bad" | sed 's/^/ARCH: /' >&2
+  fail=1
+fi
+
+# workflow test 7 — no bare venv binaries in CI bodies: `export
+# VIRTUAL_ENV` does NOT put .venv/bin on PATH, so a bare `maturin` /
+# `pytest` body command dies at 127 on the fresh runner while the same
+# step works on a laptop where the venv is activated. Scoped to the JOB
+# that creates the venv — release.yml's bare `maturin` runs in a job
+# with no venv, against setup-python's system interpreter, which IS on
+# PATH (training-data.yml first-run class, T-16 — run 37188359354
+# unit/determinism/integration)
+for _wf in .github/workflows/*.yml; do
+  for _job in $(grep -oE '^  [a-z][a-z0-9_-]*:' "$_wf" | sed 's/^  //; s/:$//'); do
+    _block=$(sed -n "/^  $_job:/,/^  [a-z][a-z0-9_-]*:$/p" "$_wf")
+    if ! printf '%s\n' "$_block" | grep -q 'python -m venv'; then continue; fi
+    if bad=$(printf '%s\n' "$_block" | grep -nE '^[[:space:]]+(maturin|pytest) '); then
+      echo "ARCH: bare venv binary in a venv-creating CI job:" >&2
+      echo "$bad" | sed "s|^|ARCH: $_wf $_job:|" >&2
+      fail=1
+    fi
+    # test 7b — a relative .venv path stops resolving after a cd in the
+    # same run block: the maturin call sat after `cd crates/sdk/python`,
+    # so .venv/bin/maturin looked inside the crate (run 37189254003, all
+    # four Install steps, exit 127 again). Per-run-block: each `run:` is
+    # its own shell, so a cd only poisons .venv paths in the SAME block;
+    # $GITHUB_WORKSPACE-anchored paths are always fine.
+    bad=$(printf '%s\n' "$_block" | awk '
+      function flush() { if (bad) printf "%s", buf; inrun = bad = after_cd = 0; buf = "" }
+      /^      - / { flush(); next }
+      /^        run:/ { flush(); inrun = 1; buf = $0 "\n"; next }
+      inrun {
+        buf = buf $0 "\n"
+        if ($0 ~ /^[[:space:]]*cd[[:space:]]/) after_cd = 1
+        if (after_cd && $0 ~ /\.venv\// && $0 !~ /GITHUB_WORKSPACE[^[:space:]]*\.venv\//) bad = 1
+      }
+      END { flush() }')
+    if [ -n "$bad" ]; then
+      echo "ARCH: relative .venv path after a cd in the same run block: $_wf $_job" >&2
+      printf '%s\n' "$bad" | sed 's/^/ARCH: /' >&2
+      fail=1
+    fi
+    # test 7c — a training/scripts entry run with the venv python
+    # must find the installed package (T-29 killed the pytest
+    # pythonpath=src hack, so a bare script dies at import without
+    # it): the corpus sweep died at `from aikoql_training.client
+    # import ...` (run 37190350754, determinism + integration). Any
+    # job that runs such a script must install the package first.
+    if printf '%s\n' "$_block" | grep -qE '^[[:space:]]*\.venv/bin/python[[:space:]]+training/scripts/'; then
+      if ! printf '%s\n' "$_block" | grep -qE 'pip install .*-e[ ]+training'; then
+        echo "ARCH: training/scripts run without a package install: $_wf $_job" >&2
+        fail=1
+      fi
+    fi
+  done
+done
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"

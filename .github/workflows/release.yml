@@ -942,6 +942,62 @@ jobs:
         with:
           packages-dir: dist/
 
+  # ── PyPI publish for aikoql-training (T-31) ────────────────────
+  # aikoql-training is its own PyPI project (not folded into the
+  # maturin aikoql wheel — release coupling + build-system friction)
+  # and versions independently of the aikoql tag: the version truth
+  # is training/pyproject.toml. Trusted publishing (OIDC) like the
+  # SDK job above — the PyPI pending publisher must name project
+  # aikoql-training, repo anckursingh/aikoql, workflow release.yml,
+  # no environment. A training release is a plain re-dispatch; the
+  # skip guard makes it a no-op when the pyproject version is
+  # already on PyPI (rescue over an existing cut). The wheel is
+  # install-checked before upload — the T-29 principle: CI exercises
+  # the shipped artifact, not the source tree.
+  training-pypi-publish:
+    name: Publish aikoql-training to PyPI
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build + install-check the exact wheel
+        working-directory: training
+        run: |
+          set -euo pipefail
+          pip install -q build
+          rm -rf dist  # stale wheels ride the upload glob and PyPI rejects the batch (D-18 lesson)
+          python -m build
+          ver="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)"
+          ls "dist/aikoql_training-${ver}-py3-none-any.whl" >/dev/null || {
+            echo "::error::wheel version does not match pyproject '${ver}'"
+            exit 1
+          }
+          pip install -q "dist/aikoql_training-${ver}-py3-none-any.whl"
+          python -c "import aikoql_training"
+          aikoql-training --help >/dev/null
+      - name: Publish (skip if this version is already published)
+        id: existing
+        run: |
+          published="$(curl -fsS https://pypi.org/pypi/aikoql-training/json 2>/dev/null | python -c 'import sys,json;print(json.load(sys.stdin)["info"]["version"])' || echo '')"
+          ver="$(sed -n 's/^version = "\(.*\)"/\1/p' training/pyproject.toml | head -1)"
+          if [ "$published" = "$ver" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::PyPI aikoql-training@$published already published — skip (rescue over an existing cut)"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        if: steps.existing.outputs.exists != 'true'
+        with:
+          packages-dir: training/dist/
+
   # ── D-18 §27 every-release SDK certification ──────────────────
   # The SDK battery (version parity, conformance, fuzz smoke, real-server
   # integration, install smokes, example, SBOM) runs after the release

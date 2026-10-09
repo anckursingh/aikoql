@@ -1,0 +1,8 @@
+{
+  "id": "t-19-leakage-dims",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_gates.py training/tests/test_splitter.py -q",
+  "captured_at": "2026-10-04T09:39:10Z",
+  "captured_head": "a256395ed0731a26a76c01bb95c3708666d13c5b",
+  "exit_code": 1
+}
