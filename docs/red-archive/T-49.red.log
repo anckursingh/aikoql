@@ -1,0 +1,36 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.47s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+[2m2026-10-09T14:42:14.989403Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-09T14:42:14.989562Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-t49vf-76872 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-09T14:42:14.990272Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-09T14:42:14.996088Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+test supersede_honors_extensions_valid_from ... FAILED
+
+failures:
+
+---- supersede_honors_extensions_valid_from stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'supersede_honors_extensions_valid_from' (74516) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:2227:5:
+assertion `left == right` failed: successor valid_from must honor extensions.valid_from, got: {"koid":"01a1211d5d530000000000000000a9c9","version":1,"commit_ts":1791556934995,"type_name":"note","state":"draft","properties":{"body":"v2"},"extensions":{"authority":"agent_derived","epistemic_status":"asserted","evidence":[{"confidence":0.800000011920929,"method":"runtime_observation","source_artifact":"probe"}],"scope":"session","valid_from":1791556934995},"semantic":null,"relationships":[],"event_refs":1}
+  left: Number(1791556934995)
+ right: 1700000000000
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    supersede_honors_extensions_valid_from
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101
