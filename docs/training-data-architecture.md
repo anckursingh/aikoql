@@ -2149,3 +2149,49 @@ BOTH the closed predecessor and the successor, BETWEEN [6000,9000]
 returns only the successor, AS_OF at the first commit still shows the
 predecessor. The T-54 pin re-passes unchanged. RED archived as `T-65`
 (exit 101 — the straddling window returned only the successor).
+
+## 70. Scoped reads deny tenantless rows — T-66 (POC Issue 2)
+
+The POC's tenant-scoped sessions saw tenantless rows: the 3 s6_end
+scoped head/as_of mismatches are the shared rows (dev0-4, late0-3,
+dup0-2, cora/corb heads) leaking into tenant_a/tenant_b results, while
+the frozen oracle requires strict isolation — a scoped session sees
+ONLY its own tenant's rows. The kernel's documented R9 semantic
+("untenanted objects are shared and stay visible") kept them visible —
+a contract conflict, not an implementation slip. The doc's options:
+(a) the oracle contract is the product requirement → scoped reads
+filter tenantless rows (kernel change), or (b) shared-tenantless is
+the model → frozen-oracle amendment. No middle ground. The kernel
+already fails closed in every adjacent corner (T-55 denies a scoped
+row to an unscoped reader), so option (a) is the one consistent with
+the existing security posture.
+
+T-66 adds the strict-isolation clause to auth.rs R9, right beside the
+cross-tenant deny and BEFORE the owner/admin checks — the corpus's
+scoped sessions are both owner and admin of the shared rows, so any
+carve-out keeps the leak: a tenant-scoped READ of an untenanted row is
+AccessDenied with the same strength as the cross-tenant deny. Writes
+are untouched (a scoped writer's own rows carry its tenant, so nothing
+write-shaped leaks through).
+
+The conformance pins flip to the new contract: `t32` (scoped get of an
+untenanted row denied + scan 0), `t33` (the scoped scan drops the
+shared row, 2→1), `t34` (org sharing now flows through unscoped
+channels — scoped agents denied the untenanted org KO regardless of
+ownership/ACL; the unscoped owner and the ACL-granted unscoped agent
+still read it). P3-009 re-verified compatible: no probe asserts
+scoped-sees-tenantless. RED archived as `T-66` (exit 101 — t32's get
+returned Ok and t33's scan was 2, the exact POC leak shape).
+
+The MCP suite then exposed the same contract on the write side (three
+chatbot/ctx scenarios went red): scoped sessions created rows through
+`assert_knowledge` and `deploy_program` that landed tenantless and
+vanished from their own reads. Two silent tenant-drops fixed:
+`KnowledgeContext::from(Subject)` now copies `subject.tenant` (the
+boundary conversion no longer discards R9's scope — the same value
+`tool_remember` maps explicitly from `args["tenant"]`), and the twelve
+kernel creators that hardcoded `tenant: None` in metadata while
+receiving the caller's subject/context (the nine deploy_* active
+objects, document ingest, derive, and the reason-claim KO) now stamp
+the caller's tenant — a scoped caller's created object is confined to
+its tenant.
