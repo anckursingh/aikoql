@@ -2105,3 +2105,47 @@ JOURNAL at the v2 update's instant returns the row, HISTORICAL lists
 v1+v2, plain MATCH / AS_OF at the tombstone instant / BETWEEN 0..2100
 hide it. RED archived as `T-64` (exit 101 — AS_OF before the
 tombstone returned `{"results":[]}` in the exact POC shape).
+
+## 69. BETWEEN enumerates asserted-closed generations — T-65 (POC B3-1)
+
+The POC eval has two clocks: AS_OF queries map to wall markers, while
+BETWEEN windows use corpus event-time literals. The kernel has ONE
+valid_to per claim — the wall closure a supersede stamps — so a
+corrected row's predecessor generation (~1.79e12) overlaps every
+event-time window; T-54 correctly retires such generations, but then
+BETWEEN can never enumerate them, and the windows straddling a
+correction lost the predecessor (s4_end [5000,5400], s7_end
+[0,9000]/[0,100000]/[9000,9500]). The closure instant must travel on
+the correction itself: the doc's fix options were successor-vf
+closure (3 mismatches by hand-computation), wall closure (3), and
+asserted op-tx closure (0) — the correction's tx is the instant the
+predecessor ceased being true, so the corpus driver asserts it.
+
+T-65 carries that instant without disturbing either clock:
+`extensions.valid_to` on `supersede` maps (MCP tool) to
+`SupersedeRequest.predecessor_valid_to_ms`, and
+`transition_epistemic_locked` stores it on a new extension key,
+`EXT_VALID_TO_ASSERTED` ("valid_to_asserted"), read ONLY by the
+runtime's Between arm. The folded `valid_to()` stays wall-only — AS_OF
+(`get_as_of`), `valid_at`, T-47's atomic pair and T-51's retraction
+closure are untouched. The asserted closure mirrors the
+`close_valid_time` collapse policy: a closure before valid_from
+collapses to a zero-duration interval, never an inverted one.
+
+The Between arm's discrimination becomes three-tier: Deleted heads
+skip (T-64), then Superseded generations retire ONLY when no asserted
+closure is present (T-54 fallback — the supersede-without-valid_to
+pin stays green), then the overlap test runs with
+`vt = valid_to_asserted().or(valid_to())`, skipping zero-duration
+intervals. Every generation whose [vf, vt) overlaps the window is
+emitted — the doc's "walk the version chain per key" resolves to the
+head of each KOID (supersede chains create a KOID per generation, and
+the temporal scan already enumerates all of them).
+
+Pinned end-to-end: `between_enumerates_asserted_closed_generations`
+(mcp_real_world) — supersede with extensions
+`{valid_from: 5050, valid_to: 5700}`; BETWEEN [5000,5400] returns
+BOTH the closed predecessor and the successor, BETWEEN [6000,9000]
+returns only the successor, AS_OF at the first commit still shows the
+predecessor. The T-54 pin re-passes unchanged. RED archived as `T-65`
+(exit 101 — the straddling window returned only the successor).
