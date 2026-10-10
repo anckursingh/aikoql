@@ -3330,3 +3330,144 @@ fn abrupt_close_respawn_serves_committed_rows() {
 
     let _ = std::fs::remove_dir_all(&db);
 }
+
+// T-64 (G-002): a tombstoned row must stay reconstructable — AS_OF slices
+// from before the tombstone show the row and HISTORICAL lists its
+// pre-deletion versions, while plain MATCH and BETWEEN stay tombstone-free.
+// forget(tombstone) commits a Deleted head version; the type scan dropped
+// the koid entirely, so the temporal layer never saw it.
+#[test]
+fn tombstoned_rows_stay_asof_and_historical_reconstructable() {
+    let db = tmp_db("t64g002");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let r = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_tomb", "value": "v1"}
+        }),
+    );
+    let tomb = r["koid"].as_str().unwrap().to_string();
+    let _ = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "koid": tomb, "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_tomb", "value": "v2"}
+        }),
+    );
+    // Journal-seq markers: n2 = the v2 update's instant, n3 = the survivor's.
+    let n2 = c.call("health", &json!({}))["journal_seq"]
+        .as_u64()
+        .unwrap();
+    let _ = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_live", "value": "v1"}
+        }),
+    );
+    let n3 = c.call("health", &json!({}))["journal_seq"]
+        .as_u64()
+        .unwrap();
+    let f = c.call(
+        "forget",
+        &json!({"subject": "admin", "koid": tomb, "mode": "tombstone"}),
+    );
+    assert!(f.get("koid").is_some(), "tombstone must succeed: {f}");
+    let n4 = c.call("health", &json!({}))["journal_seq"]
+        .as_u64()
+        .unwrap();
+    assert!(n4 > n3 && n3 > n2, "the journal must advance per apply");
+
+    let pairs = |m: &J| -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = m["results"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no results array — query failed: {m}"))
+            .iter()
+            .map(|row| {
+                (
+                    row["properties"]["key"].as_str().unwrap().to_string(),
+                    row["properties"]["value"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        v.sort();
+        v
+    };
+
+    // AS_OF at the v2 update's instant: the row existed and was open.
+    let at_n2 = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device AS_OF JOURNAL {n2} RETURN *")
+        }),
+    );
+    assert_eq!(
+        pairs(&at_n2),
+        vec![("dev_tomb".into(), "v2".into())],
+        "AS_OF before the tombstone must reconstruct the open row: {at_n2}"
+    );
+
+    // HISTORICAL: both pre-deletion versions, plus the survivor's.
+    let hist = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device HISTORICAL RETURN *"
+        }),
+    );
+    assert_eq!(
+        pairs(&hist),
+        vec![
+            ("dev_live".into(), "v1".into()),
+            ("dev_tomb".into(), "v1".into()),
+            ("dev_tomb".into(), "v2".into()),
+        ],
+        "HISTORICAL must list the pre-deletion versions: {hist}"
+    );
+
+    // The tombstone itself: current truth hides the row...
+    let plain = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        pairs(&plain),
+        vec![("dev_live".into(), "v1".into())],
+        "plain MATCH must stay tombstone-free: {plain}"
+    );
+    // ...AS_OF at/after it hides it...
+    let at_n4 = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device AS_OF JOURNAL {n4} RETURN *")
+        }),
+    );
+    assert_eq!(
+        pairs(&at_n4),
+        vec![("dev_live".into(), "v1".into())],
+        "AS_OF at/after the tombstone must hide the row: {at_n4}"
+    );
+    // ...and BETWEEN never sees the deleted head (no live row to contribute).
+    let bet = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device BETWEEN 0 AND 4102444800000 RETURN *"
+        }),
+    );
+    assert_eq!(
+        pairs(&bet),
+        vec![("dev_live".into(), "v1".into())],
+        "BETWEEN must not resurrect the tombstoned head: {bet}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
