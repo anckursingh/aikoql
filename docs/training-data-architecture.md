@@ -2238,3 +2238,64 @@ CHANGESET returning exactly [(dev_a, v1b), (dev_a, v2)], and a
 tenant_a-scoped call returning only its own row (T-66 strict
 isolation). The commit_ts boundary values are T-43 plain wall millis
 — no HLC >>16 unpacking.
+
+## 72. Per-op journal_seq — bulk ordered replay with zero polling — T-68 (POC P3-008)
+
+P3-008 is the one FAIL standing between the corpus replay and the
+frozen bar (complexity_reduction >= 0.30): the arm C rewrite — no
+pacing, no koid handle map, wall markers replaced by AS_OF JOURNAL
+(T-58) checkpoints — was architecturally ready but unvalidated,
+because the only per-op journal position available to a driver is
+`health()["journal_seq"]`, which forces a poll (and a sleep for the
+monotonicity floor) between batch calls. A 669-op replay built that
+way is pacing again, just moved.
+
+T-68 puts the journal position on every per-op result. `Remembered`
+and `SupersedeResult` gain `journal_seq: u64`:
+
+- Fresh mints report `pipe.seq` (the seq the just-pushed event
+  occupied); pair-pinned compositions (T-47) report the composition
+  end.
+- Idempotency and replay paths recover the ORIGINAL mint seq from
+  the stored row: `event_refs[version - 1].seq`. Each commit pushes
+  exactly one event ref, ordered by version, so the historical mint
+  position is recoverable with no storage-format change — existing
+  DBs stay valid and already-committed corpora replay with their
+  true seqs.
+- The supersede evidence-append (T-47's out-of-pin block) re-mints
+  the old KO only when the extensions actually changed. Before T-68
+  a re-sent retract or superseded_by op re-ran the append and minted
+  a fresh version + event, churning the journal on every replay — a
+  full-corpus re-send would never converge. The guard
+  (`extensions != new_head.extensions`) makes a re-send a true
+  no-op at the journal level.
+
+Surfaces: the MCP remember/supersede responses emit `journal_seq`;
+the Rust SDK threads it through tools/embedded; the TypeScript SDK
+declares it optional (older-server responses still decode — the
+field is `#[serde(default)]` on the wire model). The recorded
+txn-retry path post-fills seqs from event refs at read time: the txn
+record format predates the field and its strict length check would
+reject extended records in existing DBs, so the recovery happens
+after `decode_txn_record` instead of in it — a recorded retry is the
+byte-for-byte original outcome, keeping the full-struct retry
+equality contract (tx006a/tx007/tx010) intact.
+
+One boundary rule is legitimate, not a bug: a duplicate op's
+idempotency hit returns its HISTORICAL mint seq, which is not
+monotone across a batch. A driver that checkpoints must checkpoint
+from the last op that actually minted (`last_mint`), not the last op
+sent — the pin asserts exactly that.
+
+Pin: `t65b_full_corpus_bulk_replay_converges` (mcp_real_world)
+replays the full 669-op corpus shape — 100 keys, tenant by key
+parity, ingests, chain re-ingests, asserted closures (T-65),
+retracts (T-51), duplicates (5%), late arrivals (5%, 0.15x event
+offset), per-op tenant stamps (T-57/T-66: cross-tenant supersede ops
+carry an explicit `"tenant"` stamp, which the R9 owner clause then
+permits) — through ONE `batch` call, then asserts: every op ok, a
+per-op journal_seq present and monotone across minting ops, 4
+AS_OF JOURNAL checkpoints matching an in-test oracle with zero
+sleeps, a spanning BETWEEN matching, and TWO full re-sends
+converging identically (same koids/versions, same seqs — the second
+re-send proves no journal churn).

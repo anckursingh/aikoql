@@ -1,0 +1,8 @@
+{
+  "id": "T-68",
+  "pre_fix_commit": "d2708c1",
+  "command": "bash -c cargo test -p aikoql-mcp --test mcp_real_world t65b_full_corpus_bulk_replay_converges -- --nocapture",
+  "captured_at": "2026-10-10T20:55:22Z",
+  "captured_head": "d2708c1ae5b9da3adc447786b3e9bec7170ab66f",
+  "exit_code": 101
+}
