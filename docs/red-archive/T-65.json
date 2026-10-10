@@ -1,0 +1,8 @@
+{
+  "id": "T-65",
+  "pre_fix_commit": "3475f6c",
+  "command": "bash -c cargo test -p aikoql-mcp --test mcp_real_world between_enumerates_asserted_closed_generations -- --exact --nocapture",
+  "captured_at": "2026-10-10T07:08:53Z",
+  "captured_head": "3475f6ced7cf0b1af8a81cc0d9b6e168e8389636",
+  "exit_code": 101
+}
