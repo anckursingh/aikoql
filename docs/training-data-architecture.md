@@ -2071,3 +2071,37 @@ immediate MATCH returns exactly 12 rows with the successor head and
 the chain invisible. RED archived as `T-63` (exit 101 — with the WAL
 replay temporarily skipped, the respawned MATCH returned
 `{"results":[]}` in exactly the anomaly's shape).
+
+## 68. Tombstoned rows stay reconstructable — T-64 (G-002)
+
+`forget(mode=tombstone)` commits a new head version with
+`LifecycleState::Deleted` (Erase is the GDPR path — head, type-index
+entry and all versions are removed, so nothing reconstructable
+exists). The type scan dropped Deleted heads at the kernel level
+(`readable_checks`), so the temporal layer — which already filters
+correctly per-version — never saw the KOID: AS_OF slices from before
+the tombstone lost the row, and HISTORICAL listed none of its
+versions. Correction history (supersede) was reachable; retraction
+history was not.
+
+T-64 fixes the asymmetry by enumerating, not by leaking:
+`kernel.scan_by_type_temporal` is `scan_by_type` minus the Deleted
+skip (`readable_checks` gained an `include_deleted` flag — one place,
+both read modes). The runtime feeds temporal plans through it: the
+Scan arm discards the PropertyIndex assist in temporal mode (its koid
+list resolves through the same Deleted-skipping filters and would
+hide tombstoned rows), and each temporal arm applies its own guard —
+AS_OF/AS_OF JOURNAL drop the version whose lifecycle is Deleted at
+the slice instant (pre-tombstone slices reconstruct the open row),
+HISTORICAL keeps `history()`'s existing Deleted-version skip (it
+lists pre-deletion versions), and BETWEEN skips Deleted heads (a
+deleted KO has no live head row to contribute to any window). Plain
+MATCH is untouched: non-temporal plans still scan through
+`scan_by_type`, so tombstones stay invisible in current truth.
+
+Pinned end-to-end: `tombstoned_rows_stay_asof_and_historical_reconstructable`
+(mcp_real_world) — a row updated v1→v2, then tombstoned; AS_OF
+JOURNAL at the v2 update's instant returns the row, HISTORICAL lists
+v1+v2, plain MATCH / AS_OF at the tombstone instant / BETWEEN 0..2100
+hide it. RED archived as `T-64` (exit 101 — AS_OF before the
+tombstone returned `{"results":[]}` in the exact POC shape).
