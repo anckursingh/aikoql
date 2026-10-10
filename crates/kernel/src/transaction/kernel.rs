@@ -3376,6 +3376,31 @@ impl Kernel {
         Ok(out)
     }
 
+    /// T-64 (G-002): the temporal scan — `scan_by_type` minus the Deleted
+    /// skip. AS_OF/HISTORICAL reconstruction needs tombstoned KOIDs yielded:
+    /// the temporal layer filters per-version (AsOf drops the Deleted
+    /// version at/after the tombstone instant, history() skips Deleted
+    /// versions but lists pre-deletion ones). Head-row consumers (plain
+    /// MATCH, BETWEEN) must apply their own Deleted guard — never feed
+    /// this scan to them unfiltered.
+    pub fn scan_by_type_temporal(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+    ) -> KResult<Vec<KnowledgeObject>> {
+        let mut out = Vec::new();
+        for koid in self.repo.scan_type(type_name)? {
+            let Some(ko) = self.head_object(&koid)? else {
+                continue;
+            };
+            let Some(ko) = self.readable_checks(subject, type_name, ko, true)? else {
+                continue;
+            };
+            out.push(ko);
+        }
+        Ok(out)
+    }
+
     /// P5-M7: canonical scan for catalog metadata — walks ko/ heads (the
     /// authority), NOT the derived type index (catalog rows are deliberately
     /// never indexed there; write_type_index guards it). Catalog rows are
@@ -3452,7 +3477,7 @@ impl Kernel {
         let Some(ko) = self.head_object(koid)? else {
             return Ok(None);
         };
-        self.readable_checks(subject, type_name, ko)
+        self.readable_checks(subject, type_name, ko, false)
     }
 
     /// Snapshot read (`object_at`) + the same shared scan filters.
@@ -3466,7 +3491,7 @@ impl Kernel {
         let Some(ko) = self.object_at(koid, snap_ts)? else {
             return Ok(None);
         };
-        self.readable_checks(subject, type_name, ko)
+        self.readable_checks(subject, type_name, ko, false)
     }
 
     /// The shared scan filters — one place, both read modes.
@@ -3475,11 +3500,12 @@ impl Kernel {
         subject: &Subject,
         type_name: &str,
         ko: KnowledgeObject,
+        include_deleted: bool,
     ) -> KResult<Option<KnowledgeObject>> {
         if ko.metadata.type_name != type_name {
             return Ok(None); // stale index entry (type changed after indexing)
         }
-        if ko.lifecycle.state == LifecycleState::Deleted {
+        if ko.lifecycle.state == LifecycleState::Deleted && !include_deleted {
             return Ok(None);
         }
         if self

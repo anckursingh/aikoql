@@ -396,9 +396,20 @@ impl Interpreter {
                 // re-check, Deleted skip, ACL). O(matched), not O(store);
                 // scan_by_type_range walks the type/ index so the koid order
                 // matches the full scan — row-for-row parity (cbo_default_001).
-                let mut kos = match self.assist.take() {
-                    Some(koids) => kernel.scan_by_type_range(&subj, type_name, &koids)?,
-                    None => kernel.scan_by_type(&subj, type_name)?,
+                let mut kos = if self.temporal_mode {
+                    // T-64 (G-002): temporal plans enumerate ALL koids of
+                    // the type — tombstoned rows included — so AS_OF/
+                    // HISTORICAL can reconstruct pre-retraction versions.
+                    // The PropertyIndex assist is discarded here: its koid
+                    // list resolves through the same Deleted-skipping
+                    // readable_checks and would hide tombstoned rows.
+                    let _ = self.assist.take();
+                    kernel.scan_by_type_temporal(&subj, type_name)?
+                } else {
+                    match self.assist.take() {
+                        Some(koids) => kernel.scan_by_type_range(&subj, type_name, &koids)?,
+                        None => kernel.scan_by_type(&subj, type_name)?,
+                    }
                 };
                 // v0.3 K2: default MATCH answers with current truth — facts
                 // not valid at "now" stay out of relational results. Temporal
@@ -695,6 +706,14 @@ impl Interpreter {
                     TemporalOp::Between { from, to } => {
                         let mut out = Vec::new();
                         for ko in kos {
+                            // T-64 (G-002): the temporal scan yields Deleted
+                            // heads so AS_OF/HISTORICAL can reconstruct —
+                            // BETWEEN operates on head rows, and a deleted
+                            // KO has no live head row, so it contributes
+                            // nothing to any window.
+                            if ko.lifecycle.state == LifecycleState::Deleted {
+                                continue;
+                            }
                             if ko.epistemic_status() == EpistemicStatus::Superseded
                                 && !kernel
                                     .outbound_edges(&ko.koid, Some(SUPERSEDES))?
