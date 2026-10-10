@@ -1053,6 +1053,11 @@ impl KnowledgeObject {
     pub const EXT_VALID_FROM: &str = "valid_from";
     /// Extension key for valid_to (epoch millis; absent = unbounded future).
     pub const EXT_VALID_TO: &str = "valid_to";
+    /// Extension key for an asserted closure instant (epoch millis) carried
+    /// by a supersede predecessor (T-65). Read by the BETWEEN arm only:
+    /// the corpus-scale correction tx, distinct from the wall closure in
+    /// EXT_VALID_TO which AS_OF semantics depend on.
+    pub const EXT_VALID_TO_ASSERTED: &str = "valid_to_asserted";
 
     /// Start of the validity interval, epoch millis. None = unbounded past.
     /// Distinct from commit_ts (transaction time) and from `observed_at` —
@@ -1068,6 +1073,16 @@ impl KnowledgeObject {
     /// End of the validity interval (exclusive), epoch millis. None = open.
     pub fn valid_to(&self) -> Option<u64> {
         match self.extensions.get(Self::EXT_VALID_TO) {
+            Some(Value::Int(v)) if *v >= 0 => Some(*v as u64),
+            _ => None,
+        }
+    }
+
+    /// Asserted closure instant (exclusive) for a superseded generation,
+    /// epoch millis. Read by the BETWEEN arm in place of the wall closure;
+    /// never folded into `valid_to()`, which AS_OF/valid_at depend on.
+    pub fn valid_to_asserted(&self) -> Option<u64> {
+        match self.extensions.get(Self::EXT_VALID_TO_ASSERTED) {
             Some(Value::Int(v)) if *v >= 0 => Some(*v as u64),
             _ => None,
         }

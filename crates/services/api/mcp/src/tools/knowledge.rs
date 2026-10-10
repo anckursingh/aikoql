@@ -502,6 +502,13 @@ pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
                 .and_then(|e| e.get("valid_from"))
                 .and_then(|v| v.as_u64())
         });
+    // T-65 (POC-3 Stage B3-1): extensions.valid_to is the asserted closure
+    // instant for the predecessor (the correction op's tx) — the BETWEEN
+    // arm's closure, not the wall valid_to.
+    req.predecessor_valid_to_ms = args
+        .get("extensions")
+        .and_then(|e| e.get("valid_to"))
+        .and_then(|v| v.as_u64());
     req.reason = args
         .get("reason")
         .and_then(|r| r.as_str())

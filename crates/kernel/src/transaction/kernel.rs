@@ -2770,6 +2770,7 @@ impl Kernel {
             superseded_by,
             expected_version,
             reason,
+            None,
         )
     }
 
@@ -2785,6 +2786,7 @@ impl Kernel {
         superseded_by: Option<KOID>,
         expected_version: Option<u64>,
         reason: Option<String>,
+        predecessor_valid_to: Option<u64>,
     ) -> KResult<EpistemicChanged> {
         let head = self.head_object(koid)?.ok_or(KError::NotFound(*koid))?;
         self.auth
@@ -2815,6 +2817,18 @@ impl Kernel {
         ko.set_epistemic_status(to);
         if to == EpistemicStatus::Superseded {
             ko.close_valid_time(at)?;
+            // T-65: an asserted closure instant (the correction op's tx,
+            // corpus scale) lands on its own extension key read only by the
+            // BETWEEN arm. Mirrors the close_valid_time collapse policy: a
+            // closure before valid_from collapses to a zero-duration
+            // interval, never an inverted one.
+            if let Some(t) = predecessor_valid_to {
+                let clamped = ko.valid_from().map(|f| f.max(t)).unwrap_or(t);
+                ko.extensions.insert(
+                    KnowledgeObject::EXT_VALID_TO_ASSERTED.into(),
+                    Value::Int(clamped as i64),
+                );
+            }
             if let Some(target) = superseded_by {
                 if self.head_object(&target)?.is_none() {
                     return Err(KError::InvalidObject(format!(

@@ -702,7 +702,13 @@ impl Interpreter {
                     // the outbound SUPERSEDES edge (created only by
                     // supersede-with-successor): kernel-managed valid-time
                     // closure (no edge) and T-51 retractions stay visible.
-                    // History stays AS_OF-reconstructable; scan-level only.
+                    // T-65 (POC B3-1): a supersede that ASSERTS the closure
+                    // instant (extensions.valid_to = the correction op's tx)
+                    // stores it on EXT_VALID_TO_ASSERTED — then the retired
+                    // generation is enumerated with that closure instead of
+                    // skipped, so windows straddling the correction return
+                    // both generations. History stays AS_OF-reconstructable;
+                    // scan-level only.
                     TemporalOp::Between { from, to } => {
                         let mut out = Vec::new();
                         for ko in kos {
@@ -714,15 +720,23 @@ impl Interpreter {
                             if ko.lifecycle.state == LifecycleState::Deleted {
                                 continue;
                             }
-                            if ko.epistemic_status() == EpistemicStatus::Superseded
+                            let asserted = ko.valid_to_asserted();
+                            if asserted.is_none()
+                                && ko.epistemic_status() == EpistemicStatus::Superseded
                                 && !kernel
                                     .outbound_edges(&ko.koid, Some(SUPERSEDES))?
                                     .is_empty()
                             {
                                 continue;
                             }
+                            let vt = asserted.or_else(|| ko.valid_to());
+                            if let (Some(vf), Some(t)) = (ko.valid_from(), vt) {
+                                if vf >= t {
+                                    continue; // zero-duration: valid at nothing
+                                }
+                            }
                             if ko.valid_from().map(|vf| vf < *to).unwrap_or(true)
-                                && ko.valid_to().map(|t| t > *from).unwrap_or(true)
+                                && vt.map(|t| t > *from).unwrap_or(true)
                             {
                                 out.push(ko);
                             }
@@ -1856,6 +1870,8 @@ mod tests {
                 note: None,
                 superseded_by: None,
                 observed_at_ms: Some(20_000),
+                // T-65: added to SupersedeRequest after this pin was written.
+                predecessor_valid_to_ms: None,
                 retract: false,
                 // T-57: added to SupersedeRequest after this pin was written.
                 idempotency_key: None,

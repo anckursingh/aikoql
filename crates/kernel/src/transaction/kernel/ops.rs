@@ -227,6 +227,11 @@ pub struct SupersedeRequest {
     /// instant). When set, a fresh successor's valid_from is this instant;
     /// when absent, it falls back to commit time (F7).
     pub observed_at_ms: Option<u64>,
+    /// T-65 (POC-3 Stage B3-1): asserted closure instant for the
+    /// predecessor's validity (the correction op's tx, corpus scale).
+    /// Stored on its own extension key read only by the BETWEEN arm;
+    /// the wall closure in valid_to stays untouched (AS_OF semantics).
+    pub predecessor_valid_to_ms: Option<u64>,
     /// B3-3 (POC-3): end validity WITHOUT a successor. The old claim is
     /// stamped Superseded + valid_to=now with no SUPERSEDES edge, the
     /// evidence is appended to the old claim, and the dependent sweep runs —
@@ -257,6 +262,7 @@ impl SupersedeRequest {
             note: None,
             superseded_by: None,
             observed_at_ms: None,
+            predecessor_valid_to_ms: None,
             retract: false,
             idempotency_key: None,
         }
@@ -796,6 +802,7 @@ impl Kernel {
                 None,
                 Some(head.version),
                 reason.clone(),
+                None,
             )?;
             version = changed.version;
             commit_ts = changed.commit_ts;
@@ -1193,6 +1200,7 @@ impl Kernel {
             successor,
             Some(old.version),
             Some(reason),
+            req.predecessor_valid_to_ms,
         )?;
         let roots = self.outbound_edges(&req.old, Some(DERIVED_FROM))?;
         let sweep = self.invalidate_dependents_locked(
@@ -1486,6 +1494,7 @@ impl Kernel {
                 None,
                 Some(head.version),
                 Some(reason.clone()),
+                None,
             )?;
         }
         let new_head = self
@@ -1862,6 +1871,7 @@ impl Kernel {
             superseded_by,
             Some(head.version),
             Some(reason.into()),
+            None,
         )?;
         effects.push((*koid, to));
         Ok(())
