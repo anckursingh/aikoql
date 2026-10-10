@@ -1,0 +1,88 @@
+   Compiling aikoql-compiler v0.2.2 (E:\dreams\Mnemosyne\crates\compiler)
+error[E0599]: no variant named `Changeset` found for enum `ast::TemporalClause`
+    --> crates\compiler\src\parser\parser.rs:1081:34
+     |
+1081 |             Some(TemporalClause::Changeset { from: 5_000, to: 13_000 })
+     |                                  ^^^^^^^^^ variant not found in `ast::TemporalClause`
+     |
+    ::: crates\compiler\src\parser\ast.rs:141:1
+     |
+ 141 | pub enum TemporalClause {
+     | ----------------------- variant `Changeset` not found here
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `aikoql-compiler` (lib test) due to 1 previous error
+   Compiling aikoql-runtime v0.2.2 (E:\dreams\Mnemosyne\crates\runtime)
+error[E0599]: no variant named `Changeset` found for enum `aikoql_kernel::ir::TemporalOp`
+    --> crates\runtime\src\lib.rs:2428:33
+     |
+2428 |                 op: TemporalOp::Changeset { from, to },
+     |                                 ^^^^^^^^^ variant not found in `aikoql_kernel::ir::TemporalOp`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `aikoql-runtime` (lib test) due to 1 previous error
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning (1 duplicate)
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.71s
+     Running unittests src\main.rs (target\debug\deps\aikoql_mcp-20a3986fbfc0d4b9.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 72 filtered out; finished in 0.12s
+
+     Running tests\auth_surface.rs (target\debug\deps\auth_surface-da01bdf49a9ca3df.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests\cli_contract.rs (target\debug\deps\cli_contract-ac64147b0b15b24c.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+     Running tests\connector_certification.rs (target\debug\deps\connector_certification-bab7867b0d22da75.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.00s
+
+     Running tests\index_tool.rs (target\debug\deps\index_tool-44d51c5a2968d446.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+[2m2026-10-10T19:24:09.539210Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-10T19:24:09.539414Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-g001-s8-84196 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-10T19:24:09.546338Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-10T19:24:09.552938Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+test p3_004_shape8_native_changeset ... FAILED
+
+failures:
+
+---- p3_004_shape8_native_changeset stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'p3_004_shape8_native_changeset' (77708) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:3213:28:
+no results array: {"ok":false,"error":{"code":"COMPILE_ERROR","message":"AIKOQL1010: unexpected 'CHANGESET' at line 1, column 14. Hint: expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, SOURCE, LIMIT, ORDER, GROUP, JOIN, or RETURN","retryable":false,"suggestion":"The aikoql query has a syntax error. Check the query and retry"}}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    p3_004_shape8_native_changeset
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.17s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

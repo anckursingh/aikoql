@@ -2384,6 +2384,72 @@ mod tests {
         assert_eq!(versions, vec![1, 2, 3], "ascending commit order");
     }
 
+    // G-001 (POC-3): CHANGESET enumerates the generations MINTED in the
+    // half-open commit window (from, to] — the correction mints a successor
+    // generation, the retraction mints nothing, and a generation minted
+    // exactly at `from` is excluded. The fixture starts at 20_000 (the
+    // catalog bootstrap on open mints at the open-time clock; IdGen is
+    // monotonic) and moves FORWARD — every window sits above the open mint.
+    #[test]
+    fn changeset_enumerates_generations_minted_in_half_open_window() {
+        let (k, clock) = mk_with_clock(); // now = 20_000
+        clock.set(25_000);
+        let a0 = fact_with_validity(&k, &clock, "alice", "a", 1, None); // gen @25_000
+        clock.set(26_000);
+        let mut sr = SupersedeRequest::new(Subject::new("alice"), a0, "fact");
+        let mut props = PropertyMap::new();
+        props.insert("a".into(), Value::Int(2));
+        sr.properties = props;
+        sr.evidence = vec![Evidence {
+            source_artifact: "pin".into(),
+            location: None,
+            revision: None,
+            method: EvidenceMethod::TestObservation,
+            confidence: 1.0,
+        }];
+        let res = k.supersede(sr).unwrap(); // successor gen @26_000
+        assert!(res.new.is_some());
+        clock.set(27_000);
+        let b0 = fact_with_validity(&k, &clock, "alice", "b", 3, None); // gen @27_000
+        clock.set(28_000);
+        let mut rr = SupersedeRequest::new(Subject::new("alice"), b0, "fact");
+        rr.retract = true;
+        rr.evidence = vec![Evidence {
+            source_artifact: "pin".into(),
+            location: None,
+            revision: None,
+            method: EvidenceMethod::TestObservation,
+            confidence: 1.0,
+        }];
+        k.supersede(rr).unwrap(); // mints nothing
+        clock.set(30_000);
+
+        let changeset = |from: u64, to: u64| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::Temporal {
+                op: TemporalOp::Changeset { from, to },
+            });
+            let mut vals: Vec<i64> = objects(Interpreter::execute(&k, &plan).unwrap())
+                .iter()
+                .filter_map(|ko| match ko.properties.iter().next() {
+                    Some((_, Value::Int(v))) => Some(*v),
+                    _ => None,
+                })
+                .collect();
+            vals.sort();
+            vals
+        };
+
+        // (25_000, 26_000]: the predecessor minted exactly at `from` is
+        // excluded; the successor minted exactly at `to` is included.
+        assert_eq!(changeset(25_000, 26_000), vec![2]);
+        // (25_000, 27_000]: both generations of the correction pair.
+        assert_eq!(changeset(25_000, 27_000), vec![2, 3]);
+        // (26_000, 29_000]: the retracted row's own generation still counts —
+        // the retraction mints nothing and removes nothing.
+        assert_eq!(changeset(26_000, 29_000), vec![3]);
+    }
+
     #[test]
     fn epistemic_filter_selects_by_status() {
         let (k, clock) = mk_with_clock();

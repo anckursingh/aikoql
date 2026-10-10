@@ -312,6 +312,8 @@ impl Parser {
 
     /// v0.3 K2: `AS_OF <time>` | `BETWEEN <time> AND <time>` | `HISTORICAL`.
     /// T-58 (P3-008 LOW): `AS_OF JOURNAL <n>` — the journal-seq clock domain.
+    /// G-001 (POC-3): `CHANGESET BETWEEN <a> AND <b>` — generations minted
+    /// in the half-open (a, b] commit window.
     fn parse_temporal_clause(&mut self) -> Result<TemporalClause, ParseError> {
         match self.current {
             Token::AsOf => {
@@ -1069,6 +1071,28 @@ mod tests {
     fn parse_match_historical() {
         let m = parse_match("MATCH Person HISTORICAL RETURN *");
         assert_eq!(m.temporal, Some(TemporalClause::Historical));
+    }
+
+    // G-001 (POC-3): native changeset window — generations minted in the
+    // half-open commit window (from, to].
+    #[test]
+    fn parse_match_changeset_between() {
+        let m = parse_match("MATCH device CHANGESET BETWEEN 5000 AND 13000 RETURN *");
+        assert_eq!(
+            m.temporal,
+            Some(TemporalClause::Changeset {
+                from: 5_000,
+                to: 13_000
+            })
+        );
+    }
+
+    #[test]
+    fn parse_match_changeset_rejects_non_increasing_range() {
+        let e = Parser::new("MATCH device CHANGESET BETWEEN 2000 AND 1000 RETURN *")
+            .parse_statement()
+            .unwrap_err();
+        assert_eq!(e.code, diagnostics::Code::InvalidTemporalRange);
     }
 
     #[test]

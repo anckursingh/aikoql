@@ -3103,6 +3103,166 @@ fn between_enumerates_asserted_closed_generations() {
     let _ = std::fs::remove_dir_all(&db);
 }
 
+// G-001 (POC-3): one native CHANGESET call returns the generation delta of a
+// supersede+retract window — the frozen exp_changeset oracle: ingest/correct
+// ops with unseen idempotency keys committed in (wall_a, wall_b], tenant part
+// of row identity. The left boundary op is excluded (half-open), the dup
+// replay mints nothing, and the retraction removes nothing.
+#[test]
+fn p3_004_shape8_native_changeset() {
+    let db = tmp_db("g001-s8");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+    let now_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    let ev = json!([{"source_artifact": "g001-pin", "method": "human_provided"}]);
+
+    // Left boundary op: the generation minted at this instant must be
+    // EXCLUDED from (wall_a, wall_b] (the oracle's `5000 < tx` bound).
+    let r_a = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_a", "value": "v1"},
+            "idempotency_key": "g001-a-0"
+        }),
+    );
+    let koid_a = r_a["koid"].as_str().unwrap().to_string();
+    // T-43: the MCP boundary emits commit_ts as plain wall millis. The
+    // left-bound generation mints at or before that instant on the same
+    // clock, so `created > wall_a` excludes it — the oracle's `5000 < tx`.
+    let wall_a = r_a["commit_ts"].as_u64().unwrap();
+    // Wait out the millisecond: every later generation mints strictly after
+    // the left bound (created_ms <= commit ms <= the guard's exit instant).
+    while now_ms() <= wall_a {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    // Correction: supersede dev_a -> v1b mints a NEW generation in-window.
+    let r_c = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &koid_a, "type_name": "device",
+            "tenant": "tenant_a",
+            "properties": {"key": "dev_a", "value": "v1b"},
+            "evidence": ev,
+            "idempotency_key": "g001-a-1",
+            "reason": "corpus correction g001-a-1"
+        }),
+    );
+    assert!(r_c["new"].is_string(), "successor must exist: {r_c}");
+    // Tenant is part of row identity: the twin ingest on tenant_b is its own
+    // change, not a replay of tenant_a's.
+    let r_b = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_b",
+            "properties": {"key": "dev_a", "value": "v2"},
+            "idempotency_key": "g001-b-0"
+        }),
+    );
+    let koid_b = r_b["koid"].as_str().unwrap().to_string();
+    // Retraction: mints nothing — contributes no generation to the delta.
+    let r_r = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &koid_b, "type_name": "device",
+            "tenant": "tenant_b", "retract": true,
+            "evidence": ev, "idempotency_key": "g001-b-1",
+            "reason": "corpus retraction g001-b-1"
+        }),
+    );
+    assert!(r_r["new"].is_null(), "a retraction has no successor: {r_r}");
+    // Duplicate replay of the first ingest: the idempotency key makes it a
+    // no-op — the same koid, no new generation.
+    let r_dup = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_a", "value": "v1"},
+            "idempotency_key": "g001-a-0"
+        }),
+    );
+    assert_eq!(
+        r_dup["koid"],
+        json!(koid_a),
+        "dup replay must return the original koid: {r_dup}"
+    );
+    // Right bound strictly after every op above.
+    let mut wall_b = now_ms();
+    while now_ms() <= wall_b {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    wall_b = now_ms();
+
+    // The one-call changeset on the unscoped admin channel sees both
+    // tenants' generations.
+    c.session_init_unscoped_admin("admin");
+    let q = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin",
+            "query": format!(
+                "MATCH device CHANGESET BETWEEN {wall_a} AND {wall_b} RETURN *"
+            )
+        }),
+    );
+    let mut rows: Vec<(String, String)> = q["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results array: {q}"))
+        .iter()
+        .map(|r| {
+            (
+                r["properties"]["key"].as_str().unwrap().to_string(),
+                r["properties"]["value"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ("dev_a".to_string(), "v1b".to_string()),
+            ("dev_a".to_string(), "v2".to_string()),
+        ],
+        "the changeset must be exactly the in-window generations — no boundary predecessor, no dup replay, no retract shell: {q}"
+    );
+
+    // Tenant-scoped reads keep strict isolation: tenant_a's own changeset
+    // never sees tenant_b's twin generation.
+    let qa = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!(
+                "MATCH device CHANGESET BETWEEN {wall_a} AND {wall_b} RETURN *"
+            )
+        }),
+    );
+    let rows_a: Vec<(String, String)> = qa["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results array: {qa}"))
+        .iter()
+        .map(|r| {
+            (
+                r["properties"]["key"].as_str().unwrap().to_string(),
+                r["properties"]["value"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows_a,
+        vec![("dev_a".to_string(), "v1b".to_string())],
+        "a tenant-scoped changeset must hold only that tenant's generations: {qa}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
 // T-55 (POC-3 P3-009 MEDIUM): a session pinned with no tenant sees ALL
 // tenants' rows — the read side fails OPEN when the client forgets the
 // tenant pin. A tenant-less session must see nothing tenant-scoped; only an
