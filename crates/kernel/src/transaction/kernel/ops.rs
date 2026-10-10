@@ -280,6 +280,12 @@ pub struct SupersedeResult {
     pub completed: bool,
     /// Per-dependent stamp failures: the KOID and the error it refused.
     pub failed: Vec<InvalidationFailure>,
+    /// P3-008: the journal seq of this op's last commit event (the
+    /// evidence-append event when one was minted, the transition otherwise).
+    /// An idempotent replay returns the original value from the old row's
+    /// event tail — the sweep stamps of the first apply ride on dependent
+    /// rows, so replay omits them by design.
+    pub journal_seq: u64,
 }
 
 /// Property-folding strategy for merge.
@@ -1020,7 +1026,7 @@ impl Kernel {
         pipe.pair_pin = Some(self.snapshot_now());
         let result = self.supersede_composition(&ctx, &req, &mut pipe);
         pipe.pair_pin = None;
-        let result = result?;
+        let mut result = result?;
         // superseded_by / retract paths: the evidence backs the supersession
         // decision itself — append it to the old claim so it is never
         // silently dropped (review P0-1: evidence cannot disappear on a
@@ -1047,12 +1053,20 @@ impl Kernel {
                 semantic: None,
                 relationships: new_head.relationships.clone(),
                 security: None,
-                extensions,
+                extensions: extensions.clone(),
                 origin: Origin::System,
                 note: Some(reason),
                 referential_policy: ReferentialPolicy::default(),
             };
-            self.remember_locked(&mut pipe, &rr)?;
+            // P3-008: the evidence append is content-deduped, so when the
+            // merged extensions already equal the head's (a re-sent retract
+            // or superseded_by op) minting a version would churn the journal
+            // for nothing — skip the remember, and keep the replay's
+            // original journal_seq.
+            if extensions != new_head.extensions {
+                self.remember_locked(&mut pipe, &rr)?;
+                result.journal_seq = pipe.seq;
+            }
         }
         // T-57 (P3-008): the idempotency row doubles as the completion
         // marker — written only after the whole composition (transition +
@@ -1110,6 +1124,10 @@ impl Kernel {
                     invalidated_dependents: vec![],
                     completed: true,
                     failed: vec![],
+                    // P3-008: replay converges on the ORIGINAL seq — the old
+                    // row's last event ref is this op's terminal event (its
+                    // evidence-append mint).
+                    journal_seq: old.event_refs.last().map(|r| r.seq).unwrap_or(pipe.seq),
                 });
             }
         }
@@ -1215,6 +1233,7 @@ impl Kernel {
             invalidated_dependents: sweep.stamped,
             completed: sweep.completed,
             failed: sweep.failed,
+            journal_seq: pipe.seq,
         })
     }
 

@@ -431,6 +431,12 @@ pub struct Remembered {
     pub koid: KOID,
     pub version: u64,
     pub commit_ts: u64,
+    /// P3-008 (bulk ordered-replay): the journal seq of this op's last
+    /// commit event — the driver checkpoints AS_OF JOURNAL slices from it
+    /// with no sleeps and no marker synthesis. An idempotent replay returns
+    /// the ORIGINAL seq (recovered from the row's event refs, no storage
+    /// change), so a full re-send is a byte-for-byte no-op on the journal.
+    pub journal_seq: u64,
 }
 
 /// v0.3 K3: a first-class derivation request — the anti-CRUD-cosplay form of
@@ -1586,6 +1592,7 @@ impl Kernel {
                 koid,
                 version: cur_v,
                 commit_ts: head.commit_ts,
+                journal_seq: pipe.seq,
             });
         }
         let mut ko = head.clone();
@@ -1593,7 +1600,7 @@ impl Kernel {
         ko.semantic = Some(semantic);
         // prev_rels = the head's own edges: unchanged, so the relationship
         // index sees no removals and the graph survives byte-for-byte.
-        let (commit_ts, _seq) = self.commit_version(
+        let (commit_ts, seq) = self.commit_version(
             &mut pipe,
             ko,
             EventKind::ClaimAsserted,
@@ -1607,6 +1614,7 @@ impl Kernel {
             koid,
             version: cur_v + 1,
             commit_ts,
+            journal_seq: seq,
         })
     }
 
@@ -1679,10 +1687,18 @@ impl Kernel {
             .map(|k| idem_scope(req.metadata.tenant.as_deref(), k));
         if let Some(scoped) = &scoped_idem {
             if let Some((koid, version, commit_ts)) = self.repo.get_idem(scoped)? {
+                // P3-008: replay returns the ORIGINAL mint seq — each commit
+                // pushed exactly one event ref, ordered by version, so the
+                // stored row recovers it without a storage-format change.
+                let journal_seq = self
+                    .head_object(&koid)?
+                    .and_then(|h| h.event_refs.get(version as usize - 1).map(|r| r.seq))
+                    .unwrap_or(pipe.seq);
                 return Ok(Remembered {
                     koid,
                     version,
                     commit_ts,
+                    journal_seq,
                 }); // exact-once replay
             }
         }
@@ -2090,7 +2106,7 @@ impl Kernel {
         };
         let is_auth_meta =
             req.metadata.type_name == ROLE_TYPE || req.metadata.type_name == POLICY_TYPE;
-        let (commit_ts, _seq) = self.commit_version(
+        let (commit_ts, seq) = self.commit_version(
             pipe,
             ko,
             kind,
@@ -2107,6 +2123,7 @@ impl Kernel {
             koid,
             version: cur_v + 1,
             commit_ts,
+            journal_seq: seq,
         })
     }
 
@@ -2194,6 +2211,17 @@ impl Kernel {
                     self.txn_metrics
                         .deduped_retries
                         .fetch_add(1, Ordering::Relaxed);
+                    // P3-008: the txn record predates journal_seq — recover
+                    // each outcome's seq from its row's event refs (the same
+                    // recovery the idem path uses), so a recorded retry is
+                    // the byte-for-byte original outcome.
+                    let mut results = results;
+                    for r in &mut results {
+                        r.journal_seq = self
+                            .head_object(&r.koid)?
+                            .and_then(|h| h.event_refs.get(r.version as usize - 1).map(|e| e.seq))
+                            .unwrap_or(r.journal_seq);
+                    }
                     return Ok((results, true));
                 }
                 return Err(KError::InvalidObject(format!(
@@ -2638,6 +2666,7 @@ impl Kernel {
                 koid,
                 version: cur_v + 1,
                 commit_ts,
+                journal_seq: seq,
             });
         }
         let final_seq = start_seq + events.len() as u64;

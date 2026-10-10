@@ -200,7 +200,10 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     let mut resp = json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": commit_ts_millis(r.commit_ts)
+        "commit_ts": commit_ts_millis(r.commit_ts),
+        // P3-008: per-op journal marker — AS_OF JOURNAL checkpoints need no
+        // client-side wall-clock synthesis.
+        "journal_seq": r.journal_seq
     });
     if embed_requested {
         resp["embed"] = json!({
@@ -537,7 +540,9 @@ pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
             .failed
             .iter()
             .map(|f| json!({"koid": f.koid.to_hex(), "error": f.error}))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
+        // P3-008: per-op journal marker, matching the remember side.
+        "journal_seq": r.journal_seq
     }))
 }
 

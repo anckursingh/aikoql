@@ -2255,8 +2255,9 @@ fn t65b_full_corpus_bulk_replay_converges() {
     let keys: Vec<String> = (0..100).map(|i| format!("dev_{i:03}")).collect();
     let mut states: std::collections::HashMap<String, KeyState> = Default::default();
     let mut ops: Vec<J> = Vec::new();
+    let mut dups: Vec<bool> = Vec::new();
     let mut handles: u64 = 0; // tool_batch's koid-handle ordinal counter
-    // (op_count_after, tenant, key, value) — the corpus timeline
+                              // (op_count_after, tenant, key, value) — the corpus timeline
     let mut change_log: Vec<(usize, String, String, Option<String>)> = Vec::new();
     for i in 0..669usize {
         let key = keys[(rnd.next() * 100.0) as usize].clone();
@@ -2272,11 +2273,13 @@ fn t65b_full_corpus_bulk_replay_converges() {
             // Retraction: T-51 shape, closed at this tx's instant (asserted).
             let op = json!({
                 "op": "supersede", "old": format!("${}.koid", st.handle),
-                "type_name": "device", "retract": true, "evidence": ev.clone(),
+                "type_name": "device", "tenant": tenant, "retract": true,
+                "evidence": ev.clone(),
                 "extensions": {"valid_to": et_now},
                 "idempotency_key": format!("t65b-{i}-retr-{key}"),
                 "reason": format!("corpus retraction {i}")});
             ops.push(op);
+            dups.push(false);
             let g = st.open.unwrap();
             st.gens[g].1 = Some(et_now);
             st.open = None;
@@ -2290,13 +2293,14 @@ fn t65b_full_corpus_bulk_replay_converges() {
             let value = format!("v{}_{key}", st.gen);
             let op = json!({
                 "op": "supersede", "old": format!("${}.koid", st.handle),
-                "type_name": "device",
+                "type_name": "device", "tenant": tenant,
                 "properties": {"key": key, "value": value},
                 "extensions": {"valid_from": et_now, "valid_to": et_now},
                 "evidence": ev.clone(),
                 "idempotency_key": format!("t65b-{i}-corr-{key}"),
                 "reason": format!("corpus correction {i}")});
             ops.push(op);
+            dups.push(false);
             let g = st.open.unwrap();
             st.gens[g].1 = Some(et_now);
             let idx = st.gens.len();
@@ -2309,6 +2313,7 @@ fn t65b_full_corpus_bulk_replay_converges() {
             // Duplicate: verbatim re-delivery of the last ingest (the same
             // idempotency key) — converges, changes nothing.
             ops.push(st.last_op.clone().unwrap());
+            dups.push(true);
             handles += 1; // an idem-hit still returns its koid/new
         } else {
             // Ingest: fresh remember, or a chain supersede of the open head
@@ -2325,7 +2330,7 @@ fn t65b_full_corpus_bulk_replay_converges() {
             let op = if st.open.is_some() {
                 json!({
                     "op": "supersede", "old": format!("${}.koid", st.handle),
-                    "type_name": "device",
+                    "type_name": "device", "tenant": tenant,
                     "properties": {"key": key, "value": value},
                     "extensions": {"valid_from": et},
                     "evidence": ev.clone(),
@@ -2339,6 +2344,7 @@ fn t65b_full_corpus_bulk_replay_converges() {
                     "idempotency_key": idem})
             };
             ops.push(op);
+            dups.push(false);
             if let Some(g) = st.open {
                 st.gens[g].3 = true; // edge-closed by the chain
             }
@@ -2354,9 +2360,16 @@ fn t65b_full_corpus_bulk_replay_converges() {
 
     // One batch call applies the whole corpus.
     let batch = c.call("batch", &json!({"operations": ops.clone()}));
-    assert_eq!(batch["count"], json!(669), "the batch must apply all ops: {batch}");
-    let results = batch["results"].as_array().expect("batch must carry results");
+    assert_eq!(
+        batch["count"],
+        json!(669),
+        "the batch must apply all ops: {batch}"
+    );
+    let results = batch["results"]
+        .as_array()
+        .expect("batch must carry results");
     let mut seqs: Vec<u64> = Vec::new();
+    let mut last_mint: Vec<u64> = Vec::new();
     let mut shapes: Vec<(J, J, J)> = Vec::new(); // (koid, new, old)
     for (i, r) in results.iter().enumerate() {
         assert!(r["ok"] == true, "bulk op {i} must apply, not error: {r}");
@@ -2365,11 +2378,16 @@ fn t65b_full_corpus_bulk_replay_converges() {
             panic!("op {i} must return its journal_seq (P3-008 per-op checkpoints): {res}")
         });
         assert!(seq > 0, "op {i} journal_seq must be positive: {res}");
-        if i > 0 {
+        if !dups[i] {
+            // a duplicate mints nothing and returns its ORIGINAL (historical)
+            // seq, so it legitimately regresses against the previous op
             assert!(
-                seq >= seqs[i - 1],
+                i == 0 || seq >= seqs[i - 1],
                 "journal_seq must never decrease across the batch: op {i}"
             );
+            last_mint.push(seq);
+        } else {
+            last_mint.push(*last_mint.last().unwrap_or(&seq));
         }
         seqs.push(seq);
         shapes.push((res["koid"].clone(), res["new"].clone(), res["old"].clone()));
@@ -2397,7 +2415,9 @@ fn t65b_full_corpus_bulk_replay_converges() {
     let read_all = |c: &mut McpClient, query: &str| -> Vec<(String, String)> {
         let mut all = Vec::new();
         for ten in ["tenant_a", "tenant_b"] {
-            all.extend(proj(&c.call("aikoql", &json!({"query": query, "tenant": ten}))));
+            all.extend(proj(
+                &c.call("aikoql", &json!({"query": query, "tenant": ten})),
+            ));
         }
         all.sort();
         all
@@ -2420,21 +2440,26 @@ fn t65b_full_corpus_bulk_replay_converges() {
         m.into_iter().collect()
     };
 
-    // Per-op journal_seq markers slice the corpus at the right states.
+    // Per-op journal_seq markers slice the corpus at the right states — the
+    // marker of the last op that actually minted (a duplicate mints nothing).
     for ck in [160usize, 335, 550, 669] {
         let got = read_all(
             &mut c,
-            &format!("MATCH device AS_OF JOURNAL {} RETURN *", seqs[ck - 1]),
+            &format!("MATCH device AS_OF JOURNAL {} RETURN *", last_mint[ck - 1]),
         );
         assert_eq!(
             got,
             expected_at(ck),
             "AS_OF JOURNAL checkpoint at op {ck} (seq {}) must slice the corpus state",
-            seqs[ck - 1]
+            last_mint[ck - 1]
         );
     }
     let head = read_all(&mut c, "MATCH device RETURN *");
-    assert_eq!(head, expected_at(669), "the final head must be the checkpoint state");
+    assert_eq!(
+        head,
+        expected_at(669),
+        "the final head must be the checkpoint state"
+    );
     let spanning = read_all(&mut c, "MATCH device BETWEEN 0 AND 7000000 RETURN *");
     let mut expected_span: Vec<(String, String)> = Vec::new();
     for (key, st) in &states {
@@ -2468,16 +2493,28 @@ fn t65b_full_corpus_bulk_replay_converges() {
         what: &str,
     ) {
         let replay = c.call("batch", &json!({"operations": ops}));
-        let rs = replay["results"].as_array().unwrap_or_else(|| {
-            panic!("{what} must carry results: {replay}")
-        });
+        let rs = replay["results"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{what} must carry results: {replay}"));
         assert_eq!(rs.len(), ops.len(), "{what} must apply every op: {replay}");
         for (i, r) in rs.iter().enumerate() {
-            assert!(r["ok"] == true, "{what} op {i} must converge, not error: {r}");
+            assert!(
+                r["ok"] == true,
+                "{what} op {i} must converge, not error: {r}"
+            );
             let res = &r["result"];
-            assert_eq!(res["koid"], shapes[i].0, "{what} op {i} must return the same koid");
-            assert_eq!(res["new"], shapes[i].1, "{what} op {i} must return the same successor");
-            assert_eq!(res["old"], shapes[i].2, "{what} op {i} must return the same target");
+            assert_eq!(
+                res["koid"], shapes[i].0,
+                "{what} op {i} must return the same koid"
+            );
+            assert_eq!(
+                res["new"], shapes[i].1,
+                "{what} op {i} must return the same successor"
+            );
+            assert_eq!(
+                res["old"], shapes[i].2,
+                "{what} op {i} must return the same target"
+            );
             let seq = res["journal_seq"]
                 .as_u64()
                 .unwrap_or_else(|| panic!("{what} op {i} must return journal_seq: {res}"));

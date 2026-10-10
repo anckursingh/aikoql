@@ -38,6 +38,10 @@ pub struct Remembered {
     pub koid: String,
     pub version: u64,
     pub commit_ts: u64,
+    /// P3-008: per-op journal marker (server >= the T-68 kernel); defaulted
+    /// so an older server's response still decodes.
+    #[serde(default)]
+    pub journal_seq: u64,
 }
 
 /// A fetched KO (the wire shape — the canonical subset of the kernel's).

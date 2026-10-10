@@ -64,6 +64,7 @@ impl Embedded {
             koid: rem.koid.to_string(),
             version: rem.version,
             commit_ts: rem.commit_ts,
+            journal_seq: rem.journal_seq,
         })
     }
 

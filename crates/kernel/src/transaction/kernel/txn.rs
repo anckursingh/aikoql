@@ -268,6 +268,9 @@ pub(crate) fn decode_txn_results(bytes: &[u8]) -> Result<Vec<Remembered>, String
                     .unwrap(),
             ),
             commit_ts: u64::from_be_bytes(bytes[off + KOID_LEN + 8..off + per].try_into().unwrap()),
+            // P3-008: the txn wire format predates journal_seq — decoded
+            // results replay with no seq marker (txn replay minted none).
+            journal_seq: 0,
         });
     }
     Ok(out)

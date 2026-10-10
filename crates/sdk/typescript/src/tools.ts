@@ -30,6 +30,8 @@ export interface Remembered {
   koid: string;
   version: number;
   commit_ts: number;
+  /** P3-008: per-op journal marker; 0 on servers that predate it. */
+  journal_seq?: number;
 }
 
 /** A fetched KO (the wire shape — the canonical subset of the kernel's). */
