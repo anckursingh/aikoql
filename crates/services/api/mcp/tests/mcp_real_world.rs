@@ -3008,6 +3008,101 @@ fn between_windows_retire_superseded_generations() {
     let _ = std::fs::remove_dir_all(&db);
 }
 
+// T-65 (POC-3 Stage B3-1, POC-3 post-fix re-run Issue 1): BETWEEN must
+// enumerate closed generations, not just open heads. When a correction
+// asserts the predecessor's closure instant (extensions.valid_to = the
+// correction's op tx), the predecessor generation [vf, vt) must appear in
+// every window it overlaps — the straddling window returns BOTH the closed
+// predecessor and the successor; the window after the closure returns only
+// the successor.
+#[test]
+fn between_enumerates_asserted_closed_generations() {
+    let db = tmp_db("t65cl");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let first = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "extensions": {"valid_from": 5000u64},
+            "properties": {"key": "dev_b3", "value": "old"}
+        }),
+    );
+    let old = first["koid"].as_str().unwrap().to_string();
+    let gen1_ts = first["commit_ts"].as_u64().unwrap();
+
+    let sup = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &old, "type_name": "device",
+            "extensions": {"valid_from": 5050u64, "valid_to": 5700u64},
+            "properties": {"key": "dev_b3", "value": "new"},
+            "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+        }),
+    );
+    assert!(sup["new"].is_string(), "successor must exist: {sup}");
+
+    // The window straddling the asserted closure: both the closed
+    // predecessor generation [5000, 5700) and the successor [5050, ..)
+    // overlap it. Pre-fix the Between arm only yields open heads.
+    let straddle = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_b3\" BETWEEN 5000 AND 5400 RETURN *"
+        }),
+    );
+    let mut vals: Vec<String> = straddle["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results array: {straddle}"))
+        .iter()
+        .map(|r| r["properties"]["value"].as_str().unwrap().to_string())
+        .collect();
+    vals.sort();
+    assert_eq!(
+        vals,
+        vec!["new".to_string(), "old".to_string()],
+        "the window straddling the asserted closure must hold both generations: {straddle}"
+    );
+
+    // The window after the closure: only the successor remains valid.
+    let after = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_b3\" BETWEEN 6000 AND 9000 RETURN *"
+        }),
+    );
+    let rows = after["results"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the window after the asserted closure must hold only the successor: {after}"
+    );
+    assert_eq!(rows[0]["properties"]["value"], json!("new"));
+
+    // History preserved: AS_OF at the first commit instant still shows the
+    // old generation (asserted closure lives on its own key, wall time and
+    // AS_OF semantics are untouched).
+    let past = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device WHERE key == \"dev_b3\" AS_OF {gen1_ts} RETURN *")
+        }),
+    );
+    let pasts = past["results"].as_array().unwrap();
+    assert_eq!(
+        pasts.len(),
+        1,
+        "AS_OF at the first commit must still show the old generation: {past}"
+    );
+    assert_eq!(pasts[0]["properties"]["value"], json!("old"));
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
 // T-55 (POC-3 P3-009 MEDIUM): a session pinned with no tenant sees ALL
 // tenants' rows — the read side fails OPEN when the client forgets the
 // tenant pin. A tenant-less session must see nothing tenant-scoped; only an
