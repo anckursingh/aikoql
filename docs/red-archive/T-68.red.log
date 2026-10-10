@@ -1,0 +1,44 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+   Compiling aikoql-mcp v0.2.2 (E:\dreams\Mnemosyne\crates\services\api\mcp)
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.88s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+[2m2026-10-10T20:55:46.416267Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-10T20:55:46.417024Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-t65b-bulk-80292 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-10T20:55:46.417575Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-10T20:55:46.962406Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-10T20:55:47.134108Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 129
+[2m2026-10-10T20:55:47.152675Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 129
+[2m2026-10-10T20:55:47.152944Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-10T20:55:47.153608Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-10T20:55:47.153863Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-10T20:55:47.272056Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-10T20:55:47.312841Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 214
+[2m2026-10-10T20:55:47.312942Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 214
+[2m2026-10-10T20:55:47.314153Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-10T20:55:47.314775Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-10T20:55:47.314979Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-10T20:55:47.413217Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+
+thread 't65b_full_corpus_bulk_replay_converges' (38028) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:2365:13:
+op 0 must return its journal_seq (P3-008 per-op checkpoints): {"koid":"01a12799b2e80000000000000000a9c9","version":1,"commit_ts":1791665746664}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test t65b_full_corpus_bulk_replay_converges ... FAILED
+
+failures:
+
+failures:
+    t65b_full_corpus_bulk_replay_converges
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 35 filtered out; finished in 1.14s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

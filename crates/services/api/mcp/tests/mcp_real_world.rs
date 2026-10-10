@@ -2211,6 +2211,287 @@ fn t58_asof_journal_domain_slices_between_applies() {
 }
 
 #[test]
+fn t65b_full_corpus_bulk_replay_converges() {
+    // P3-008 MEDIUM (the verdict FAIL): bulk ordered-replay of the FULL
+    // corpus shape — 669 ops (ingests, chain re-ingests, corrections with
+    // T-65 asserted closures, T-51 retractions, duplicates, late arrivals,
+    // per-op tenant stamps) through ONE batch call. Every remember and
+    // supersede result carries its own journal_seq (P3-008): the driver
+    // checkpoints AS_OF JOURNAL slices from per-op markers — no sleeps, no
+    // marker synthesis — and a full re-send converges to the SAME koids AND
+    // the SAME seqs, a true no-op (re-sent retractions must not churn the
+    // journal, so a second re-send converges identically too).
+    let db = tmp_db("t65b-bulk");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+    let ev = json!([{"source_artifact": "t65b-pin", "method": "human_provided"}]);
+
+    // Deterministic LCG corpus mirroring the POC P3-STREAM mix (late 5%,
+    // duplicate 5%, correct 2%, retract 2%) over 100 entities; the tenant
+    // follows key parity, the way stream_run.py stamps it. The temporal
+    // domain is synthetic: event_time = op tx * 10_000, minus a late offset
+    // for the stragglers; corrections and retractions close at their own tx
+    // instant (asserted, T-65) so the synthetic BETWEEN oracle agrees.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> f64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((self.0 >> 33) as f64) / ((1u64 << 31) as f64)
+        }
+    }
+    let mut rnd = Lcg(0x5EED_65B0);
+    #[derive(Default)]
+    struct KeyState {
+        // (valid_from, asserted_close, value, edge_closed) per generation
+        gens: Vec<(u64, Option<u64>, String, bool)>,
+        open: Option<usize>,
+        gen: u32,
+        last_op: Option<J>,
+        handle: u64,
+    }
+    let keys: Vec<String> = (0..100).map(|i| format!("dev_{i:03}")).collect();
+    let mut states: std::collections::HashMap<String, KeyState> = Default::default();
+    let mut ops: Vec<J> = Vec::new();
+    let mut handles: u64 = 0; // tool_batch's koid-handle ordinal counter
+    // (op_count_after, tenant, key, value) — the corpus timeline
+    let mut change_log: Vec<(usize, String, String, Option<String>)> = Vec::new();
+    for i in 0..669usize {
+        let key = keys[(rnd.next() * 100.0) as usize].clone();
+        let tenant = if key[4..].parse::<u32>().unwrap() % 2 == 0 {
+            "tenant_a"
+        } else {
+            "tenant_b"
+        };
+        let st = states.entry(key.clone()).or_default();
+        let et_now = ((i + 1) * 10_000) as u64;
+        let roll = rnd.next();
+        if st.open.is_some() && roll < 0.02 {
+            // Retraction: T-51 shape, closed at this tx's instant (asserted).
+            let op = json!({
+                "op": "supersede", "old": format!("${}.koid", st.handle),
+                "type_name": "device", "retract": true, "evidence": ev.clone(),
+                "extensions": {"valid_to": et_now},
+                "idempotency_key": format!("t65b-{i}-retr-{key}"),
+                "reason": format!("corpus retraction {i}")});
+            ops.push(op);
+            let g = st.open.unwrap();
+            st.gens[g].1 = Some(et_now);
+            st.open = None;
+            change_log.push((i + 1, tenant.to_string(), key.clone(), None));
+            // a retraction yields no koid/new -> the handle ordinal does not
+            // advance
+        } else if st.open.is_some() && roll < 0.04 {
+            // Correction: fresh successor; the predecessor closes at this tx
+            // (asserted) — the T-54 edge-skip does not retire it.
+            st.gen += 1;
+            let value = format!("v{}_{key}", st.gen);
+            let op = json!({
+                "op": "supersede", "old": format!("${}.koid", st.handle),
+                "type_name": "device",
+                "properties": {"key": key, "value": value},
+                "extensions": {"valid_from": et_now, "valid_to": et_now},
+                "evidence": ev.clone(),
+                "idempotency_key": format!("t65b-{i}-corr-{key}"),
+                "reason": format!("corpus correction {i}")});
+            ops.push(op);
+            let g = st.open.unwrap();
+            st.gens[g].1 = Some(et_now);
+            let idx = st.gens.len();
+            st.gens.push((et_now, None, value.clone(), false));
+            st.open = Some(idx);
+            handles += 1;
+            st.handle = handles;
+            change_log.push((i + 1, tenant.to_string(), key.clone(), Some(value)));
+        } else if st.last_op.is_some() && roll < 0.09 {
+            // Duplicate: verbatim re-delivery of the last ingest (the same
+            // idempotency key) — converges, changes nothing.
+            ops.push(st.last_op.clone().unwrap());
+            handles += 1; // an idem-hit still returns its koid/new
+        } else {
+            // Ingest: fresh remember, or a chain supersede of the open head
+            // (edge-closed, no asserted closure — T-54 retires it).
+            st.gen += 1;
+            let late = rnd.next() < 0.05;
+            let et = if late {
+                et_now - (rnd.next() * 0.15 * et_now as f64) as u64
+            } else {
+                et_now
+            };
+            let value = format!("v{}_{key}", st.gen);
+            let idem = format!("t65b-{i}-ing-{key}-g{}", st.gen);
+            let op = if st.open.is_some() {
+                json!({
+                    "op": "supersede", "old": format!("${}.koid", st.handle),
+                    "type_name": "device",
+                    "properties": {"key": key, "value": value},
+                    "extensions": {"valid_from": et},
+                    "evidence": ev.clone(),
+                    "idempotency_key": idem,
+                    "reason": format!("corpus chain ingest {i}")})
+            } else {
+                json!({
+                    "op": "remember", "type_name": "device", "tenant": tenant,
+                    "properties": {"key": key, "value": value},
+                    "extensions": {"valid_from": et},
+                    "idempotency_key": idem})
+            };
+            ops.push(op);
+            if let Some(g) = st.open {
+                st.gens[g].3 = true; // edge-closed by the chain
+            }
+            let idx = st.gens.len();
+            st.gens.push((et, None, value.clone(), false));
+            st.open = Some(idx);
+            st.last_op = Some(ops.last().unwrap().clone());
+            handles += 1;
+            st.handle = handles;
+            change_log.push((i + 1, tenant.to_string(), key.clone(), Some(value)));
+        }
+    }
+
+    // One batch call applies the whole corpus.
+    let batch = c.call("batch", &json!({"operations": ops.clone()}));
+    assert_eq!(batch["count"], json!(669), "the batch must apply all ops: {batch}");
+    let results = batch["results"].as_array().expect("batch must carry results");
+    let mut seqs: Vec<u64> = Vec::new();
+    let mut shapes: Vec<(J, J, J)> = Vec::new(); // (koid, new, old)
+    for (i, r) in results.iter().enumerate() {
+        assert!(r["ok"] == true, "bulk op {i} must apply, not error: {r}");
+        let res = &r["result"];
+        let seq = res["journal_seq"].as_u64().unwrap_or_else(|| {
+            panic!("op {i} must return its journal_seq (P3-008 per-op checkpoints): {res}")
+        });
+        assert!(seq > 0, "op {i} journal_seq must be positive: {res}");
+        if i > 0 {
+            assert!(
+                seq >= seqs[i - 1],
+                "journal_seq must never decrease across the batch: op {i}"
+            );
+        }
+        seqs.push(seq);
+        shapes.push((res["koid"].clone(), res["new"].clone(), res["old"].clone()));
+    }
+
+    // Oracle: per-tenant reads (the corpus rows are tenant_a/tenant_b, and
+    // the scoped session reads them with explicit tenant args, like T-57).
+    let proj = |resp: &J| -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = resp["results"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|r| {
+                        (
+                            r["properties"]["key"].as_str().unwrap_or("").to_string(),
+                            r["properties"]["value"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let read_all = |c: &mut McpClient, query: &str| -> Vec<(String, String)> {
+        let mut all = Vec::new();
+        for ten in ["tenant_a", "tenant_b"] {
+            all.extend(proj(&c.call("aikoql", &json!({"query": query, "tenant": ten}))));
+        }
+        all.sort();
+        all
+    };
+    let expected_at = |idx: usize| -> Vec<(String, String)> {
+        let mut m: std::collections::BTreeMap<String, String> = Default::default();
+        for (i, _ten, key, val) in &change_log {
+            if *i > idx {
+                break;
+            }
+            match val {
+                Some(v) => {
+                    m.insert(key.clone(), v.clone());
+                }
+                None => {
+                    m.remove(key);
+                }
+            }
+        }
+        m.into_iter().collect()
+    };
+
+    // Per-op journal_seq markers slice the corpus at the right states.
+    for ck in [160usize, 335, 550, 669] {
+        let got = read_all(
+            &mut c,
+            &format!("MATCH device AS_OF JOURNAL {} RETURN *", seqs[ck - 1]),
+        );
+        assert_eq!(
+            got,
+            expected_at(ck),
+            "AS_OF JOURNAL checkpoint at op {ck} (seq {}) must slice the corpus state",
+            seqs[ck - 1]
+        );
+    }
+    let head = read_all(&mut c, "MATCH device RETURN *");
+    assert_eq!(head, expected_at(669), "the final head must be the checkpoint state");
+    let spanning = read_all(&mut c, "MATCH device BETWEEN 0 AND 7000000 RETURN *");
+    let mut expected_span: Vec<(String, String)> = Vec::new();
+    for (key, st) in &states {
+        for (vf, close, value, edge_closed) in &st.gens {
+            if *edge_closed && close.is_none() {
+                continue; // T-54: a chain's predecessor is retired by its edge
+            }
+            if let Some(t) = close {
+                if *vf >= *t {
+                    continue; // zero-duration rows never surface
+                }
+            }
+            expected_span.push((key.clone(), value.clone()));
+        }
+    }
+    expected_span.sort();
+    assert_eq!(
+        spanning, expected_span,
+        "the spanning BETWEEN must enumerate every non-retired generation"
+    );
+
+    // A full re-send converges: same koids, same successors, same targets,
+    // same per-op journal_seq — and a second re-send converges identically
+    // (a re-sent retraction must not churn the journal, or its old row's
+    // event tail would move and the third send would see a different seq).
+    fn assert_converges(
+        c: &mut McpClient,
+        ops: &[J],
+        seqs: &[u64],
+        shapes: &[(J, J, J)],
+        what: &str,
+    ) {
+        let replay = c.call("batch", &json!({"operations": ops}));
+        let rs = replay["results"].as_array().unwrap_or_else(|| {
+            panic!("{what} must carry results: {replay}")
+        });
+        assert_eq!(rs.len(), ops.len(), "{what} must apply every op: {replay}");
+        for (i, r) in rs.iter().enumerate() {
+            assert!(r["ok"] == true, "{what} op {i} must converge, not error: {r}");
+            let res = &r["result"];
+            assert_eq!(res["koid"], shapes[i].0, "{what} op {i} must return the same koid");
+            assert_eq!(res["new"], shapes[i].1, "{what} op {i} must return the same successor");
+            assert_eq!(res["old"], shapes[i].2, "{what} op {i} must return the same target");
+            let seq = res["journal_seq"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{what} op {i} must return journal_seq: {res}"));
+            assert_eq!(
+                seq, seqs[i],
+                "{what} op {i} must return the IDENTICAL journal_seq — a true no-op"
+            );
+        }
+    }
+    assert_converges(&mut c, &ops, &seqs, &shapes, "first re-send");
+    assert_converges(&mut c, &ops, &seqs, &shapes, "second re-send");
+}
+
+#[test]
 fn serve_restart_catchup_preserves_edges_for_relate_replay() {
     // F13 end-to-end (the device-eval DI-002 pipeline): run1 remembers and
     // relates, run2 restarts the serve — the start-up catch-up enriches
