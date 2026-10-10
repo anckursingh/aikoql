@@ -132,13 +132,22 @@ impl AuthManager {
         action: Action,
     ) -> KResult<()> {
         // R9: tenant scope confinement. A tenant-scoped subject may only touch
-        // objects in that tenant; untenanted objects are shared and stay
-        // visible. Checked first so not even ownership or admin bypasses it —
-        // an unscoped subject (tenant None) keeps the pre-R9 behavior.
+        // objects in that tenant. Checked first so not even ownership or
+        // admin bypasses it — an unscoped subject (tenant None) keeps the
+        // pre-R9 behavior.
         if let (Some(st), Some(kt)) = (&subject.tenant, tenant) {
             if st != kt {
                 return Err(access_denied(subject, action, koid));
             }
+        }
+        // T-66 (POC-3 post-fix re-run Issue 2): strict isolation — a
+        // tenant-scoped subject reads ONLY its own tenant's rows. An
+        // untenanted row is not confined to that tenant, so a scoped READ
+        // of one fails closed with the same strength as the cross-tenant
+        // deny above (not even ownership or admin bypasses it — the
+        // corpus's scoped sessions are both). Writes are untouched.
+        if action == Action::Read && subject.tenant.is_some() && tenant.is_none() {
+            return Err(access_denied(subject, action, koid));
         }
         let is_admin = subject.is_admin();
         let principals = self.effective_principals(subject);

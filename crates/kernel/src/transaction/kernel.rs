@@ -306,13 +306,25 @@ impl KnowledgeContext {
 
 impl From<Subject> for KnowledgeContext {
     fn from(subject: Subject) -> Self {
-        Self::new(subject)
+        // T-66 follow-through: the Subject carries R9's tenant scope, so the
+        // boundary conversion must not drop it — tools that stamp
+        // metadata.tenant from context.tenant (assert/observe/…) otherwise
+        // write tenantless rows for scoped sessions, which strict isolation
+        // then hides from their own reads. tool_remember maps args["tenant"]
+        // explicitly; this makes every other tool consistent.
+        Self {
+            tenant: subject.tenant.clone(),
+            ..Self::new(subject)
+        }
     }
 }
 
 impl From<&Subject> for KnowledgeContext {
     fn from(subject: &Subject) -> Self {
-        Self::new(subject.clone())
+        Self {
+            tenant: subject.tenant.clone(),
+            ..Self::new(subject.clone())
+        }
     }
 }
 
@@ -3263,11 +3275,14 @@ impl Kernel {
                 }
             }
         };
+        // T-66: a scoped caller's derived object is confined to its tenant
+        // (hoisted — req.context moves into the create below).
+        let caller_tenant = req.context.tenant.clone();
         let mut remember = RememberRequest::create(
             req.context,
             Metadata {
                 type_name: req.type_name,
-                tenant: None,
+                tenant: caller_tenant,
                 schema_version: 1,
                 tags: vec![],
             },
@@ -3858,7 +3873,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-program-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:program".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["program".into(), "active-object".into()],
             },
@@ -3950,7 +3966,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-policy-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:policy".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["policy".into(), "active-object".into()],
             },
@@ -4049,7 +4066,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-workflow-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:workflow".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["workflow".into(), "active-object".into()],
             },
@@ -4091,7 +4109,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-trigger-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:trigger".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["trigger".into(), "active-object".into()],
             },
@@ -4136,7 +4155,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-agent-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:agent".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["agent".into(), "active-object".into()],
             },
@@ -4183,7 +4203,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-connector-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:connector".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["connector".into(), "active-object".into()],
             },
@@ -4230,7 +4251,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-view-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:view".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["view".into(), "active-object".into()],
             },
@@ -4280,7 +4302,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-report-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:report".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["report".into(), "active-object".into()],
             },
@@ -4329,7 +4352,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-benchmark-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:benchmark".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["benchmark".into(), "active-object".into()],
             },
@@ -4388,7 +4412,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-document-{}", sha256)),
             metadata: Metadata {
                 type_name: "aikoql:document".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["document".into(), "ingestion".into()],
             },
@@ -4697,7 +4722,8 @@ impl Kernel {
                     commit_ts: 0,
                     metadata: Metadata {
                         type_name: format!("{}-claim", rule_type),
-                        tenant: None,
+                        /* T-66: a scoped caller's created object is confined to its tenant */
+                        tenant: subject.tenant.clone(),
                         schema_version: 1,
                         tags: vec!["reasoned".into()],
                     },
