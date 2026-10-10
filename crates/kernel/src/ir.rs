@@ -99,12 +99,16 @@ pub enum FuseMode {
 /// T-58 (P3-008 LOW): `AsOfJournal(n)` is the journal-seq clock domain —
 /// the ke/ event at seq n pins the exact commit_ts of the nth apply, so a
 /// corpus replay slices between applies without synthesizing wall markers.
+/// G-001 (POC-3): `Changeset { from, to }` enumerates the generations
+/// MINTED in the half-open (from, to] commit window (KOID created_ms) —
+/// the native one-call change-detection delta.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TemporalOp {
     AsOf(u64),
     AsOfJournal(u64),
     Between { from: u64, to: u64 },
     Historical,
+    Changeset { from: u64, to: u64 },
 }
 
 // ---------------------------------------------------------------------------

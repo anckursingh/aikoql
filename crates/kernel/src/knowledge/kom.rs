@@ -71,6 +71,15 @@ impl KOID {
         &self.0
     }
 
+    /// The wall-clock millis the KOID was minted at (the 48-bit prefix).
+    /// G-001 (POC-3): the generation-CREATION instant — the commit-time
+    /// clock domain (a distinct axis from packed HLC commit_ts).
+    pub fn created_ms(&self) -> u64 {
+        let mut b = [0u8; 8];
+        b[2..8].copy_from_slice(&self.0[0..6]);
+        u64::from_be_bytes(b)
+    }
+
     pub fn to_hex(&self) -> String {
         let mut s = String::with_capacity(KOID_LEN * 2);
         for b in &self.0 {

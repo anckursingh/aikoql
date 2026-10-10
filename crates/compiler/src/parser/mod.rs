@@ -289,6 +289,14 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
         Some(ast::TemporalClause::Historical) => ops.push(IrOp::Temporal {
             op: TemporalOp::Historical,
         }),
+        // G-001 (POC-3): CHANGESET BETWEEN a AND b — generations minted in
+        // the half-open (a, b] commit window.
+        Some(ast::TemporalClause::Changeset { from, to }) => ops.push(IrOp::Temporal {
+            op: TemporalOp::Changeset {
+                from: *from,
+                to: *to,
+            },
+        }),
         None => {}
     }
     if let Some(ref ep) = m.epistemic {

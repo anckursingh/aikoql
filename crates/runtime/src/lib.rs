@@ -754,6 +754,29 @@ impl Interpreter {
                         }
                         out
                     }
+                    // G-001 (POC-3): the generations MINTED in the half-open
+                    // (from, to] commit window — the native one-call
+                    // change-detection delta. The window cuts on the KOID's
+                    // creation millis (the physical commit instant), so a
+                    // correction's successor counts, a retraction (no new
+                    // KOID) and an idempotent replay (same KOID) add nothing,
+                    // and a generation minted exactly at `from` is excluded.
+                    TemporalOp::Changeset { from, to } => {
+                        let mut out = Vec::new();
+                        for ko in &kos {
+                            // T-64 (G-002): the temporal scan yields Deleted
+                            // heads for reconstruction — a deleted KO mints
+                            // nothing new inside any window.
+                            if ko.lifecycle.state == LifecycleState::Deleted {
+                                continue;
+                            }
+                            let c = ko.koid.created_ms();
+                            if c > *from && c <= *to {
+                                out.push(ko.clone());
+                            }
+                        }
+                        out
+                    }
                 };
                 self.cached_objects = Some(out.clone());
                 Ok(RowSet::Objects(out))

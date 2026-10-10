@@ -35,6 +35,9 @@ pub enum Token {
     Journal,
     Between,
     Historical,
+    // G-001 (POC-3): CHANGESET BETWEEN <a> AND <b> — generations minted in
+    // the half-open (a, b] commit window
+    Changeset,
     Epistemic,
     // QL-006: provenance filter (SOURCE "artifact")
     Source,
@@ -202,6 +205,7 @@ impl Lexer {
             "JOURNAL" => Token::Journal,
             "BETWEEN" => Token::Between,
             "HISTORICAL" => Token::Historical,
+            "CHANGESET" => Token::Changeset,
             "EPISTEMIC" => Token::Epistemic,
             "SOURCE" => Token::Source,
             "LIMIT" => Token::Limit,

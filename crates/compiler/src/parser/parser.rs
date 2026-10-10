@@ -52,6 +52,7 @@ fn token_name(t: &Token) -> String {
         Token::Journal => "JOURNAL".into(),
         Token::Between => "BETWEEN".into(),
         Token::Historical => "HISTORICAL".into(),
+        Token::Changeset => "CHANGESET".into(),
         Token::Epistemic => "EPISTEMIC".into(),
         Token::Source => "SOURCE".into(),
         Token::Limit => "LIMIT".into(),
@@ -207,7 +208,8 @@ impl Parser {
                     }
                     trav = Some(TraverseClause { relation, depth });
                 }
-                Token::AsOf | Token::Between | Token::Historical => {
+                Token::AsOf | Token::Between | Token::Historical
+                | Token::Changeset => {
                     if temporal.is_some() {
                         return Err(unexpected(&self.current, self.line, self.col)
                             .with_hint("duplicate temporal clause"));
@@ -303,7 +305,7 @@ impl Parser {
                 }
                 _ => {
                     return Err(unexpected(&self.current, self.line, self.col).with_hint(
-                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, SOURCE, LIMIT, ORDER, GROUP, JOIN, or RETURN",
+                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, CHANGESET, EPISTEMIC, SOURCE, LIMIT, ORDER, GROUP, JOIN, or RETURN",
                     ))
                 }
             }
@@ -338,6 +340,17 @@ impl Parser {
             Token::Historical => {
                 self.advance();
                 Ok(TemporalClause::Historical)
+            }
+            Token::Changeset => {
+                self.advance();
+                self.expect(Token::Between)?;
+                let from = self.parse_time_millis()?;
+                self.expect(Token::And)?;
+                let to = self.parse_time_millis()?;
+                if from >= to {
+                    return Err(diagnostics::invalid_temporal_range(self.line, self.col));
+                }
+                Ok(TemporalClause::Changeset { from, to })
             }
             _ => unreachable!("parse_temporal_clause called on non-temporal token"),
         }
