@@ -1,0 +1,7 @@
+{
+  "name": "streaming_chunks",
+  "operations": [
+    {"op": "remember", "type": "st_row", "properties": {"name": "s1"}},
+    {"op": "query", "query": "MATCH st_row RETURN *", "stream": true, "assert_any": {"path": "chunks.0.results", "match": {"properties.name": "s1"}}}
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "t42-group-by-count-dropped-at-tool",
+  "pre_fix_commit": "af273d5^",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world query_group_by_count_aggregate_surfaces_through_tool",
+  "captured_at": "2026-10-08T11:06:50Z",
+  "captured_head": "0e0b33ef56f1beb4f80c6db3a71afc815bb46076",
+  "exit_code": 101
+}

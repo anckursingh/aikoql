@@ -1,0 +1,8 @@
+{
+  "id": "t-35-embedding-degrade",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-runtime --lib ann_search_",
+  "captured_at": "2026-10-07T18:41:21Z",
+  "captured_head": "9f710f97c65dc29b8c14ff61e7697726a7d3dfe2",
+  "exit_code": 101
+}

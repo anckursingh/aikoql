@@ -211,6 +211,47 @@ Predicate → Knowledge Kernel
 
 Planner combines them into one hybrid execution plan.
 
+## 5.1 Similarity Search Modes (T-46)
+
+Plain `SIMILAR TO` is **lexical by default**. `SIMILAR TO "John"`
+without further clauses means deterministic Jaccard text matching —
+stored embeddings are ignored even when an embedding index exists. The
+modes are additive, never a silent default switch:
+
+| Query | Retrieval |
+|---|---|
+| `SIMILAR TO "x"` | lexical (Jaccard text search) — the backward-compatible, deterministic default |
+| `SIMILAR TO "x" SCORE BM25` | lexical (Tantivy BM25; Jaccard fallback when the maintainer is not attached) |
+| `SIMILAR TO "x" USING EMBEDDING` | vector (embedding index over the query text) |
+| `SIMILAR TO "x" SCORE BM25 USING EMBEDDING` | hybrid fusion — both legs run and are merged with `FUSE` (RRF or Weighted) |
+
+Semantic similarity therefore requires the explicit `USING EMBEDDING`
+clause; asking for it while the store carries no embeddings fails
+retryable rather than silently answering text-side (device-eval N4,
+arch §39). The lexical default keeps existing queries deterministic —
+a hybrid default would re-rank every historical result set.
+
+## 5.2 Temporal Literals (AS_OF / BETWEEN) (T-61)
+
+Every temporal clause (`AS_OF <t>`, `BETWEEN <t> AND <t>`,
+`HISTORICAL <t>`) takes exactly two literal spellings — epoch millis
+integers and strict ISO instants (UTC). There is no third form, and
+the strictness is deliberate: anything else fails at parse time with
+`AIKOQL1011` rather than guessing a timezone or rounding a fraction.
+
+| Spelling | Accepted | Example |
+|---|---|---|
+| Epoch millis | non-negative integer (no fraction) | `AS_OF 1791582896539` |
+| ISO date | `YYYY-MM-DD` (UTC) | `AS_OF "2026-10-09"` |
+| ISO datetime | `YYYY-MM-DDTHH:MM:SS` (UTC) | `AS_OF "2026-10-09T05:15:32"` |
+
+Rejected (parse error, `AIKOQL1011`): fractional seconds
+(`"2026-10-09T05:15:32.488000"`), timezone offsets/suffixes
+(`"…+00:00"`, `"…Z"`), years outside 1970–9999, and out-of-range
+fields (`month 13`, `Feb 30`, `hour 25`). Epoch-millis integers are
+the eval's recommended format — they are also the only spelling the
+client can compute without a date library.
+
 ---
 
 # 6. Document Ingestion Example

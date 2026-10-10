@@ -1,0 +1,9 @@
+{
+  "id": "mut-m7-remove-protected-path",
+  "pre_fix_commit": "25ea8e5",
+  "command": "bash scripts/mutation-harness.sh m7-remove-protected-path",
+  "captured_at": "2026-09-28T22:40:00Z",
+  "captured_head": "d27f4ccb356ceebcaf4727eb1c65f4a54d2754f3",
+  "exit_code": 1,
+  "note": "mutation RED: one CI-06 protected path dropped from the pull_request trigger block only \u2014 the push block kept a whole-file grep green while the per-PR 1M guard died for it; caught after workflow test 7 pins each path in BOTH blocks (count >= 2)"
+}

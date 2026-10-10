@@ -16,14 +16,10 @@ Run: pytest tests/test_version_contract.py -v
 """
 
 import json
-import os
 import re
 import socket
-import subprocess
 import sys
-import tempfile
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -40,17 +36,6 @@ def workspace_version() -> str:
     m = re.search(r'\[workspace\.package\]\s*version = "([^"]+)"', text)
     assert m, "workspace.package version not found in root Cargo.toml"
     return m.group(1)
-
-
-def find_binary():
-    candidates = [
-        ROOT / "target" / "debug" / "aikoql-mcp",
-        ROOT / "target" / "debug" / "aikoql-mcp.exe",
-    ]
-    for c in candidates:
-        if c.exists():
-            return str(c)
-    pytest.skip("aikoql-mcp binary not built. Run: cargo build -p aikoql-mcp")
 
 
 def test_min_server_version_matches_workspace():
@@ -116,38 +101,6 @@ def test_sdk_rejects_old_server():
     finally:
         srv.close()
         t.join(timeout=5)
-
-
-@pytest.fixture
-def mcp_server():
-    """A real aikoql-mcp server (TCP) — the happy path of the contract."""
-    binary = find_binary()
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-
-    fd, db = tempfile.mkstemp(suffix=".redb")
-    os.close(fd)
-    token = "test-token"
-    proc = subprocess.Popen(
-        [binary, "serve", db, "--listen", f"127.0.0.1:{port}", "--tcp-token", f"{token}::admin"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    time.sleep(0.5)  # Wait for server to start.
-
-    yield f"127.0.0.1:{port}", db, token
-
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    try:
-        os.remove(db)
-    except OSError:
-        pass
 
 
 def test_sdk_accepts_current_server(mcp_server):

@@ -1,0 +1,8 @@
+{
+  "id": "v02-ci-ts-channel",
+  "pre_fix_commit": "1017057",
+  "command": "npm view @aikoql/client version",
+  "captured_at": "2026-10-03T08:23:49Z",
+  "captured_head": "1017057ea84470e1f91af7e43defd47fa61083ec",
+  "exit_code": 1
+}

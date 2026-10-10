@@ -1,0 +1,8 @@
+{
+  "id": "f2-batch-session-identity",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world batch_ops_inherit_session_identity -- --nocapture",
+  "captured_at": "2026-10-07T19:52:16Z",
+  "captured_head": "9c87259609fa6b09ea8f05e0e0992d107f7ea0f7",
+  "exit_code": 101
+}

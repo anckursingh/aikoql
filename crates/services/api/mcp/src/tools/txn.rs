@@ -132,7 +132,7 @@ fn txn_commit(
         "results": results.iter().map(|r| json!({
             "koid": r.koid.to_hex(),
             "version": r.version,
-            "commit_ts": r.commit_ts
+            "commit_ts": commit_ts_millis(r.commit_ts)
         })).collect::<Vec<_>>()
     }))
 }

@@ -1,0 +1,8 @@
+{
+  "id": "d18-maven-central",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-02T14:07:21Z",
+  "captured_head": "615a173dcb90a53722f3e86427dafe115bf0aa33",
+  "exit_code": 1
+}

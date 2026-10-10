@@ -1,12 +1,10 @@
 //! Single open path for every subcommand (MRFC-0020): honors [encryption]
 //! settings so no plaintext writer can open an encrypted database — that
-//! would silently corrupt it. Backend selection (PR#2 review SE-01/SE-02,
-//! PR6-005) is owned by the runtime's ONE authoritative module
-//! (aikoql_runtime::backend); the config pipeline (defaults → TOML → env
-//! → CLI) supplies the explicit choice or None for detection. The public
-//! contract and per-backend profiles live in docs/STORAGE-BACKENDS.md.
+//! would silently corrupt it. The storage open is owned by the runtime's
+//! ONE authoritative opener (aikoql_runtime::backend::open_engine — v2-only
+//! since the launch S-02 decommission).
 
-use crate::config::{RuntimeEncryption, StorageBackend};
+use crate::config::RuntimeEncryption;
 use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto};
 use aikoql_kernel::security::envelope::Envelope;
 use aikoql_kernel::security::field_crypto::EncryptionPolicy;
@@ -22,12 +20,9 @@ use std::sync::Arc;
 pub(crate) fn open_kernel(
     db_path: &str,
     enc: &RuntimeEncryption,
-    backend: Option<StorageBackend>,
 ) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
-    // PR6-005 — engine selection + detection live in the runtime's
-    // backend module; every subcommand funnels through this open_kernel.
-    let (engine, admin) =
-        aikoql_runtime::backend::open_engine(std::path::Path::new(db_path), backend)?;
+    // The runtime's ONE opener; every subcommand funnels through here.
+    let (engine, admin) = aikoql_runtime::backend::open_engine(std::path::Path::new(db_path))?;
     if !enc.enabled {
         return Ok((Kernel::open(engine, Arc::new(SystemClock), 0xA9C9)?, admin));
     }
@@ -61,7 +56,7 @@ pub(crate) fn open_kernel_auto(
     db_path: &str,
 ) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
     let cfg = crate::config::load(&[], None, None).map_err(KError::Store)?;
-    open_kernel(db_path, &cfg.encryption, cfg.backend)
+    open_kernel(db_path, &cfg.encryption)
 }
 
 #[cfg(test)]
@@ -69,8 +64,6 @@ mod tests {
     use super::open_kernel_auto;
     use crate::config::ENV_LOCK;
     use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
-    use aikoql_kernel::storage::store_redb::RedbEngine;
-    use std::io::Read;
 
     // Temp db paths written by THIS test thread, swept when the thread exits
     // (the main thread's destructor runs at process exit — statics are NOT
@@ -88,7 +81,7 @@ mod tests {
             for p in &self.paths {
                 let _ = std::fs::remove_file(p);
                 let _ = std::fs::remove_dir_all(p);
-                // Sidecars next to the registered stem (`{stem}.redb.artifacts`).
+                // Sidecars next to the registered stem.
                 let Some(name) = p.file_name() else { continue };
                 if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
                     let prefix = format!("{}.", name.to_string_lossy());
@@ -137,37 +130,24 @@ mod tests {
         p.to_string_lossy().into_owned()
     }
 
-    /// PR6-005 — the ONE detection contract exercised through the MCP
-    /// server startup path (open_kernel_auto = load() + open_kernel, the
-    /// funnel every subcommand uses): an existing redb database opens
-    /// through auto-detection (a v2-defaulted open would fail on the redb
-    /// file — that divergence is exactly what the review forbids), and a
-    /// missing path still creates a fresh v2. The full five-case detection
-    /// matrix lives in aikoql_runtime::backend's tests.
+    /// Launch S-02 — the startup path (open_kernel_auto = load() +
+    /// open_kernel, the funnel every subcommand uses): an existing v2
+    /// database reopens, and a missing path creates a fresh v2 directory.
+    /// A legacy FILE fails closed (pinned in aikoql_runtime::backend).
     #[test]
-    fn mcp_startup_path_autodetects_existing_and_fresh() {
+    fn mcp_startup_path_reopens_existing_and_creates_fresh() {
         let _guard = ENV_LOCK.lock().unwrap(); // serializes with config tests' env windows
-        std::env::remove_var("AIKOQL_BACKEND");
 
-        let path = scratch("startup-redb");
+        let path = scratch("startup-existing");
         {
-            let e = RedbEngine::open(&path).unwrap();
+            let e = aikoql_storage_v2::AikoqlStorageEngineV2::open(&path).unwrap();
             let mut b = WriteBatch::new();
             b.put(b"k".to_vec(), b"v".to_vec());
             e.write_batch(&b).unwrap();
         }
         {
             let (_kernel, _admin) = open_kernel_auto(&path).unwrap();
-        } // redb holds a live file lock — read the head bytes after close
-        let mut head = [0u8; 4];
-        std::fs::File::open(&path)
-            .unwrap()
-            .read_exact(&mut head)
-            .unwrap();
-        assert_ne!(
-            &head, b"AKQL",
-            "the redb file must survive the startup path unrewritten"
-        );
+        }
 
         let fresh = scratch("startup-fresh");
         {

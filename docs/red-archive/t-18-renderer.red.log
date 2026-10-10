@@ -1,0 +1,17 @@
+
+=================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_render.py ____________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_render.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+training\tests\test_render.py:23: in <module>
+    from aikoql_training.generators.query import render_queries
+E   ImportError: cannot import name 'render_queries' from 'aikoql_training.generators.query' (E:\dreams\Mnemosyne\training\src\aikoql_training\generators\query.py)
+=========================== short test summary info ===========================
+ERROR training\tests\test_render.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.88s
+EXIT=2

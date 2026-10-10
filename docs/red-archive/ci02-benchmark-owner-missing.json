@@ -1,0 +1,8 @@
+{
+  "id": "ci02-benchmark-owner-missing",
+  "pre_fix_commit": "ef1a5b1",
+  "command": "sh -c homes=$(grep -lE "export STORAGE_REGRESSION=1m|competitor_bench/scale.py" .github/workflows/*.yml | wc -l); if [ "$homes" -eq 1 ] && [ -f .github/workflows/benchmark.yml ]; then exit 0; fi; echo "the 1M/competitor run legs live in $homes workflow files, benchmark.yml absent — the one benchmark owner does not exist"; exit 1",
+  "captured_at": "2026-09-25T05:12:26Z",
+  "captured_head": "ef1a5b16e503f4c44313c5b3345381705c90f444",
+  "exit_code": 1
+}

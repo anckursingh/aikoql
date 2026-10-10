@@ -1,0 +1,9 @@
+{
+  "id": "shuffle-proof-vs-nonshuffling-harness",
+  "pre_fix_commit": "42f70608ef7c7613d4f54dd4a4914d704a6304c4",
+  "command": "bash scripts/shuffle-proof.sh",
+  "captured_at": "2026-09-28T22:58:37Z",
+  "captured_head": "42f70608ef7c7613d4f54dd4a4914d704a6304c4",
+  "exit_code": 1,
+  "note": "TDD-033 (L-22) RED: the wired nightly command is cargo nextest run --shuffle, but nextest has no --shuffle flag (verified 0.9.146) and stable libtest gates --shuffle behind -Z unstable-options \u2014 the randomized-order run cannot shuffle. The schedule job has never fired on this unpushed branch, so the nightly shuffle has never shuffled. Fix: run-shuffle.sh switches to cargo +nightly test -Z unstable-options --shuffle (pinned nightly in benchmark.yml)."
+}

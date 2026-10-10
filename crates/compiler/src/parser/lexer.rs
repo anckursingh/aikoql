@@ -31,6 +31,8 @@ pub enum Token {
     Explain,
     // v0.3 K2: temporal + epistemic query operators
     AsOf,
+    // T-58 (P3-008 LOW): AS_OF JOURNAL <n> — the journal-seq clock domain
+    Journal,
     Between,
     Historical,
     Epistemic,
@@ -197,6 +199,7 @@ impl Lexer {
             "COMMIT" => Token::Commit,
             "EXPLAIN" => Token::Explain,
             "AS_OF" => Token::AsOf,
+            "JOURNAL" => Token::Journal,
             "BETWEEN" => Token::Between,
             "HISTORICAL" => Token::Historical,
             "EPISTEMIC" => Token::Epistemic,

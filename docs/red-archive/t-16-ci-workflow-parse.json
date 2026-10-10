@@ -1,0 +1,8 @@
+{
+  "id": "t-16-ci-workflow-parse",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-04T08:12:09Z",
+  "captured_head": "c87834317197f94d60d362f0618b8964a5677a6a",
+  "exit_code": 1
+}

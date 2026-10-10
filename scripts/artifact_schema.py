@@ -12,8 +12,10 @@ nature; only the fresh side of a comparison must be stamped at the head
 under test.
 
 Also the CI republish gate: `python scripts/artifact_schema.py <path>`
-validates and freshness-stamps one artifact (baseline-guard's republish
-job runs it on the files it uploads).
+validates and freshness-stamps one artifact (benchmark.yml's guard job
+runs it on the files it uploads). CI-08: the competitor artifact (§13/§18)
+dispatches to validate_competitor — the schema is one contract for every
+artifact family the gates consume.
 """
 import json
 import subprocess
@@ -26,7 +28,7 @@ class SchemaError(Exception):
     def __init__(self, msg, unreadable=False):
         super().__init__(msg)
         # unreadable marks a missing/unopenable file: the perf-smoke checker
-        # appends its "did the run set V2ADOPT_PERF_SMOKE=1?" hint only to
+        # appends its "did the run set STORAGE_PERF_SMOKE=1?" hint only to
         # this class (a schema drift needs the schema hint, not the env one).
         self.unreadable = unreadable
 
@@ -112,11 +114,206 @@ def validate_smoke_cells(path):
     if not isinstance(cells, dict):
         raise SchemaError(f"{path}: missing field: cells")
     out = {}
-    for key in ("w1_ko_get_p50_ns", "w2_head_get_p50_ns", "hot_head_p50_ns"):
+    for key in (
+        "w1_ko_get_p50_ns",
+        "w2_head_get_p50_ns",
+        "write_p50_ns",
+        "scan_p50_ns",
+        "hot_head_p50_ns",
+        "compact_wall_ms",
+        "compact_allocs",
+    ):
         if key not in cells:
             raise SchemaError(f"{path}: missing field: {key} in baseline cells")
         out[key] = _num(cells[key], path, key)
     return out
+
+
+# CI-08 (§13): the competitor artifact's contract — the §13 keys every
+# engine column must carry, plus the §18 digest evidence where measurable.
+# The arch gate (workflow test 9) enforces the pinned tags in benchmark.yml;
+# the schema enforces that whatever the harness measured is complete and
+# fresh. Container cpu/mem/disk probes may be None (runners without docker
+# access) — aikoql's never are (measured in-process).
+
+COMPETITOR_ENGINES = ("aikoql", "postgresql", "neo4j", "qdrant", "mongodb")
+COMPETITOR_WORKLOADS = ("point_read", "point_write", "structured_filter",
+                        "transactions", "graph", "vector_recall",
+                        "knowledge_query")
+ENGINE_METRICS = ("cpu_seconds", "memory_mb", "disk_bytes", "ingest_s")
+
+
+def validate_competitor(path, fresh=False):
+    """Validated matrix rows from the competitor artifact:
+    {(engine, workload): {"p50_ms": float, ...}} — the §13 schema.
+
+    fresh=True additionally enforces the git_sha stamp (the nightly CI
+    artifact is fresh; historical archive copies are not checked).
+    """
+    data = load(path)
+    engines = data.get("engines")
+    if not isinstance(engines, dict) or not engines:
+        raise SchemaError(f"{path}: missing field: engines (non-empty dict)")
+    rows = {}
+    for key in COMPETITOR_ENGINES:
+        where = f"{path}: engines[{key}]"
+        e = engines.get(key)
+        if not isinstance(e, dict):
+            raise SchemaError(f"{where}: missing engine column")
+        for f in ENGINE_METRICS:
+            if f not in e:
+                raise SchemaError(f"{where}: missing field: {f} (§13)")
+        if e["cpu_seconds"] is not None:
+            _num(e["cpu_seconds"], where, "cpu_seconds")
+        if e["memory_mb"] is not None:
+            _num(e["memory_mb"], where, "memory_mb")
+        if e["disk_bytes"] is not None:
+            _num(e["disk_bytes"], where, "disk_bytes")
+        if key == "aikoql" and e["cpu_seconds"] is None:
+            raise SchemaError(
+                f"{where}: cpu_seconds must be measured in-process (§13)")
+        wl = {w.get("name"): w for w in e.get("workloads", []) or []}
+        if not wl:
+            raise SchemaError(f"{where}: missing field: workloads")
+        for name in COMPETITOR_WORKLOADS:
+            w = wl.get(name)
+            wwhere = f"{where}.workloads[{name}]"
+            if not isinstance(w, dict):
+                raise SchemaError(f"{wwhere}: missing workload cell")
+            if w.get("n"):
+                for f in ("p50_ms", "p95_ms", "p99_ms", "throughput_ops_s"):
+                    if f not in w:
+                        raise SchemaError(f"{wwhere}: missing field: {f}")
+                rows[(key, name)] = _num(w["p50_ms"], wwhere, "p50_ms")
+    for f in ("commit", "seed", "config", "dataset"):
+        if f not in data:
+            raise SchemaError(f"{path}: missing field: {f} (§13)")
+    env = data.get("environment")
+    if not isinstance(env, dict):
+        raise SchemaError(f"{path}: missing field: environment (§13)")
+    for f in ("os", "cpu", "ram_mb", "cache_state", "harness_sha"):
+        if not env.get(f):
+            raise SchemaError(f"{path}: missing field: environment.{f} (§13)")
+    _num(env["ram_mb"], path, "environment.ram_mb")
+    # §18: the engine_versions columns — aikoql's SDK version and, where the
+    # measuring host could probe docker, the pinned tag + digest evidence.
+    vers = data.get("engine_versions")
+    if not isinstance(vers, dict):
+        raise SchemaError(f"{path}: missing field: engine_versions (§18)")
+    if not isinstance(vers.get("aikoql"), str) or not vers["aikoql"]:
+        raise SchemaError(f"{path}: engine_versions.aikoql not a version string")
+    for key in ("pg", "neo4j", "qdrant", "mongo"):
+        v = vers.get(key)
+        if v is not None:
+            if not isinstance(v, dict) or not v.get("image") or not v.get("digest"):
+                raise SchemaError(
+                    f"{path}: engine_versions.{key} must be null or carry "
+                    "image + digest (§18)")
+    if fresh:
+        check_fresh(path, data)
+    return rows
+
+
+# D-20 (§30): the tier×transport artifact's contract — the three measured
+# tiers (protocol/serialization/SDK) each with the §30 metric set, the
+# cited tiers (engine/application) named by their covering artifact, REST
+# explicitly N/A, and the honest-labeling pin: an SDK cell whose claim
+# does not say "SDK latency" — or dares to say "engine latency" — is a
+# SchemaError (§30: SDK latency is never presented as engine latency).
+
+MEASURED_TIERS = ("protocol", "serialization", "sdk")
+MEASURED_TRANSPORTS = ("mcp", "native", "embedded", "transportless")
+TIER_OPS = ("remember", "get", "scan", "encode", "decode")
+CELL_METRICS = ("p50_ns", "p95_ns", "p99_ns", "throughput_ops_s",
+                "allocs_per_op", "wire_bytes_req", "wire_bytes_resp",
+                "decodes_per_op", "cpu_seconds", "rss_mb")
+
+
+def validate_tiers(path, fresh=False):
+    """Validated cells from the D-20 tier artifact:
+    {(tier, transport, op): p50_ns} — the §30 schema.
+
+    fresh=True additionally enforces the git_sha stamp (the committed
+    certification artifact is fresh; the checker runs the same dispatch).
+    """
+    data = load(path)
+    tiers = data.get("tiers")
+    if not isinstance(tiers, dict):
+        raise SchemaError(f"{path}: missing field: tiers (§30)")
+    for key, label in (("engine", "engine tier"),
+                       ("application", "application tier")):
+        t = tiers.get(key)
+        if not isinstance(t, dict) or not t.get("covered_by"):
+            raise SchemaError(
+                f"{path}: tiers.{key} must cite its covering artifact "
+                f"(§30: the {label} is covered elsewhere, not re-measured)")
+    if tiers.get("rest", {}).get("status") != "N/A — no REST transport exists":
+        raise SchemaError(f"{path}: tiers.rest must be the explicit N/A")
+    cells = data.get("cells")
+    if not isinstance(cells, list) or not cells:
+        raise SchemaError(f"{path}: missing field: cells (non-empty list)")
+    rows = {}
+    seen = set()
+    for ci, c in enumerate(cells):
+        where = f"{path}: cells[{ci}]"
+        for f in ("tier", "transport", "op"):
+            if not isinstance(c.get(f), str):
+                raise SchemaError(f"{where}: missing field: {f}")
+        if c["tier"] not in MEASURED_TIERS:
+            raise SchemaError(f"{where}: unknown tier {c['tier']!r}")
+        if c["transport"] not in MEASURED_TRANSPORTS:
+            raise SchemaError(f"{where}: unknown transport "
+                              f"{c['transport']!r}")
+        if c["op"] not in TIER_OPS:
+            raise SchemaError(f"{where}: unknown op {c['op']!r}")
+        for f in CELL_METRICS + ("n",):
+            if f not in c:
+                raise SchemaError(f"{where}: missing field: {f} (§30)")
+            _num(c[f], where, f)
+        if c["correct"] is not True:
+            raise SchemaError(
+                f"{where}: correct={c['correct']!r} — an artifact with a "
+                "failed oracle is uncommittable (§30)")
+        if c.get("proc_scope") not in ("server", "harness"):
+            raise SchemaError(f"{where}: proc_scope must name the measured "
+                              "process (§30: CPU/RSS without a scope is "
+                              "an unlabeled number)")
+        claim = c.get("claim")
+        if not isinstance(claim, str) or not claim:
+            raise SchemaError(f"{where}: missing field: claim (§30: every "
+                              "number carries its label)")
+        if c["tier"] == "sdk" and ("SDK latency" not in claim
+                                   or "engine latency" in claim):
+            raise SchemaError(
+                f"{where}: an SDK cell must claim 'SDK latency' and must "
+                "never claim engine latency (§30)")
+        key = (c["tier"], c["transport"], c["op"])
+        if key in seen:
+            raise SchemaError(f"{where}: duplicate cell {key}")
+        seen.add(key)
+        rows[key] = _num(c["p50_ns"], where, "p50_ns")
+    # The certification's shape: every measured tier × transport the
+    # deliverable names must carry cells (REST is N/A by design).
+    for key in (("protocol", "mcp"), ("protocol", "native"),
+                ("serialization", "transportless"),
+                ("sdk", "mcp"), ("sdk", "embedded")):
+        if not any(k[:2] == key for k in seen):
+            raise SchemaError(f"{path}: no cells for {key[0]}×{key[1]} "
+                              "(§30 tier×transport matrix)")
+    for f in ("commit", "seed", "engine_version"):
+        if f not in data:
+            raise SchemaError(f"{path}: missing field: {f} (§13)")
+    env = data.get("environment")
+    if not isinstance(env, dict):
+        raise SchemaError(f"{path}: missing field: environment (§13)")
+    for f in ("os", "cpu", "ram_mb", "cache_state", "git_sha",
+              "harness_sha"):
+        if not env.get(f):
+            raise SchemaError(f"{path}: missing field: environment.{f} (§13)")
+    _num(env["ram_mb"], path, "environment.ram_mb")
+    if fresh:
+        check_fresh(path, data)
+    return rows
 
 
 def main():
@@ -125,7 +322,18 @@ def main():
         sys.exit(2)
     path = sys.argv[1]
     try:
-        rows = validate_1m(path, fresh=True)
+        # CI-08: dispatch on the artifact's own shape — the competitor
+        # matrix (§13) vs the 1M harness rows. D-20 adds the tiers shape.
+        data = load(path)
+        if "engines" in data:
+            rows = validate_competitor(path, fresh=True)
+        elif "backends" in data:
+            rows = validate_1m(path, fresh=True)
+        elif "tiers" in data:
+            rows = validate_tiers(path, fresh=True)
+        else:
+            raise SchemaError(f"{path}: neither engines, backends nor "
+                              "tiers — unknown artifact shape")
     except SchemaError as e:
         print(f"FRESH FAIL: {e}", file=sys.stderr)
         sys.exit(1)

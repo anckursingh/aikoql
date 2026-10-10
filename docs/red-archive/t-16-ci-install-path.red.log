@@ -1,0 +1,7 @@
+ARCH: bare venv binary in a venv-creating CI job:
+ARCH: .github/workflows/training-data.yml unit:15:          maturin develop
+ARCH: bare venv binary in a venv-creating CI job:
+ARCH: .github/workflows/training-data.yml determinism:19:          maturin develop
+ARCH: bare venv binary in a venv-creating CI job:
+ARCH: .github/workflows/training-data.yml integration:19:          maturin develop
+EXIT=1

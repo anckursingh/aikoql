@@ -1,0 +1,2 @@
+ARCH: release.yml loses the frozen crates.io publish chain (D-18)
+EXIT=1

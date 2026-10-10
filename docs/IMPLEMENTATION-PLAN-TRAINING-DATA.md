@@ -1,0 +1,669 @@
+# AikoQL Training Data Engine — implementation plan
+
+Branch: `feature/aikoql-training-data` (created at 271c0e3, the v0.2.2
+re-stamp tip of `feature/aikoql-db-launch`).
+
+Review input consumed: `AIKOQL-Training-Data-Engine-Production-Implementation-Plan.md`
+("the design", 2026-10-03) — analyzed as senior ML architect; this plan is
+the disposition of that analysis. The design's §39 engineering rules 1–10
+are adopted verbatim as implementation laws.
+
+Sibling plan: `docs/TESTING-PLAN-TRAINING-DATA.md`.
+
+## 1. What this is (and is not)
+
+The design proposes a **thin, deterministic Training Data Engine over the
+existing AIKOQL knowledge platform** — AIKOQL ingests, resolves, retrieves,
+compiles and authorizes; the new layer synthesizes validated training
+examples; a small model is instruction-tuned on them to serve as a
+natural-language interface over the knowledge base.
+
+Scope reconciliation with `no-llm-agentic-substrate` (2026-08-25 decision:
+AIKOQL is a knowledge OS *for* agents, not an agentic app): **not reversed**.
+The Tiny LLM is a client of the knowledge base — it emits intents/queries/
+refusals and reads AIKOQL-provided context; it never owns truth, never
+stores enterprise facts in weights, never executes code. AIKOQL remains the
+source of truth. This branch changes nothing in the core; it adds a sibling
+consumer tree.
+
+### Model strategy (senior-ML disposition)
+
+| decision | ruling |
+|---|---|
+| pretrain a model from scratch | **out.** A 10K-example synthetic corpus pretrains nothing; no evidence gate exists. |
+| fine-tune an existing small decoder | **stage 2, experimental (T-15).** LoRA or full FT on a 0.5B–1.5B open model (Qwen2.5-0.5B / SmolLM2-class). Cheap, local, meets "not a frontier model". |
+| frontier API as teacher | **optional, never the truth.** Allowed only for paraphrase/answer polish (§13/§16); AIKOQL wins every disagreement (§31). The POC must ship with zero API calls. |
+| the shipped product of this branch | **the dataset engine + the validated POC corpus + the eval set (T-01..T-14).** Training (T-15) and the serving wrapper (T-16) are experimental follow-ons. |
+
+## 2. What the design gets right (accepted as-is)
+
+- **AIKOQL-as-oracle** (§14, §39 rules 4–5): generated queries are accepted
+  only through compile → plan → execute → scenario-match → auth → evidence.
+  This converts dataset generation from a modeling problem into a
+  verification problem. Non-negotiable.
+- **Determinism first** (§12, §24): template question generation, seeded
+  RNG, content-derived example IDs, no LLM in the critical path.
+- **Snapshot model + knowledge-level splits** (§10, §18): entity/relation/
+  template/multi-hop/temporal holdouts — the leakage discipline is the part
+  toy pipelines get wrong; here it is mandatory.
+- **Security S1–S8** (§20): generation consumes already-filtered, authorized
+  knowledge through the public client; never storage internals, never
+  generate-then-redact.
+- **Non-goals** (§5): no second ingestion/RAG/graph/vector/context/auth
+  implementation; no training in Rust; no model as knowledge store.
+- **Thin Python boundary** (§7, §41): Python owns synthesis/training only,
+  and talks to AIKOQL through the supported client (the Python SDK +
+  MCP), the same surface production agents use.
+
+## 3. Gaps the design leaves open (resolved here)
+
+| gap | resolution |
+|---|---|
+| **Scale honesty** — 10K examples from ~100 AcmePay entities are ~90% template variants of the same facts: they teach *form* and refusal behavior, not generalization. | The POC goal is pinned as form-learning + refusal + query discipline. Breadth comes from a seed sweep (N seeds regenerate the KB scenarios with different question/paraphrase picks); the manifest records the seed. No claim beyond that. |
+| **Serving path missing** — the design stops at training. | T-16 adds a thin inference wrapper reusing the validated pipeline (question → intent/query → AIKOQL → context → grounded answer + refusal paths). That is the "readymade chatbot". |
+| **Evaluation before training** — E1–E9 exist but no scorecard precedes the first run. | T-14 produces the dataset-level eval set (E1–E9 as machine-checkable cases); T-15's first artifact is the scorecard (query_compile_rate, KO recall, groundedness, refusal rate) — no training run without one. |
+| **Teacher cost/rate limits** (§16, §29). | Bounded teacher pool; teacher optional at every stage; fallback = the fine-tuned small model itself for later paraphrase bootstrapping. |
+| **Phase 0 is mandatory** — the design assumes §3 anchors. Verified at this tip: `crates/ingestion/src/{resolution,embedding,secret_filter,context,pipeline,merge,ingest_dir}.rs`, `crates/compiler/src/{parser,planner,semantic}`, Python SDK `{mcp_client,agent,prepared,pool}.py` + embedded-server test hatch all exist. The exact public surface (snapshot/revision exposure, client API shape, KO serialization) is pinned by T-01's recon doc, never guessed. |
+| **Canonical schema detail** (§9). | Add one field: `split_key` (the holdout dimension the example belongs to) — the splitter and the leakage validator both need it; IDs stay content-derived. The `query_target.query` payload is produced against the compiler's real contract (pinned at T-01). |
+
+## 4. Layout
+
+The design's §8 tree is adopted, adjusted to the repo's Python conventions
+(the SDK's pyproject pattern, pytest + hypothesis):
+
+```text
+training/
+├── README.md
+├── pyproject.toml                # aikoql-training; deps: aikoql (the SDK), pyyaml; dev: pytest, hypothesis
+├── src/aikoql_training/
+│   ├── __init__.py  config.py  errors.py  models.py  client.py  snapshot.py
+│   ├── scenarios/                # factual, relation, multi_hop, temporal, provenance,
+│   │   ...                       # contradiction, ambiguity, authorization, unknown
+│   ├── generators/               # question, query, answer, reasoning
+│   ├── context/adapter.py
+│   ├── dataset/                  # writer, manifest, splitter, mixer
+│   ├── validation/               # schema, execution, grounding, leakage
+│   └── cli.py                    # snapshot / generate / validate / stats / export
+├── tests/                        # mirrors src/ one-to-one + test_determinism.py + test_fuzz_estate(_pin).py
+├── datasets/                     # gitignored; manifest+statistics of the POC set committed under artifacts/
+└── scripts/                      # generate_dataset.py  validate_dataset.py  benchmark_dataset.py
+```
+
+Top-level `training/` (not under `crates/`) — it is pure Python, not a Rust
+workspace member. The installed `aikoql` SDK is the only AIKOQL dependency;
+the package must NOT import the SDK source tree (sys.path hacks) — the
+v02-cert-python-native trap in reverse.
+
+## 5. Milestones
+
+One milestone = one commit set (test RED → feat → docs). The design's
+phases are mapped 1:1; ids are T-xx. REDs are archived
+(`docs/red-archive/t-xx-*.red.log`) per the P0-1 mechanism; every stream
+ends with the dogfood re-stamp tip; the user pushes.
+
+### Phase A — deterministic engine over the oracle (design phases 0–15)
+
+| id | milestone (design phase) | RED (against the current tree) | GREEN (after) |
+|---|---|---|---|
+| T-01 | recon + canonical schema (ph 0+1) | `tests/test_schema.py` — required fields, unknown fields, types, stable serialization, content-derived example IDs — fail against the empty package | `models.py` typed models; `docs/training-data-architecture.md` records the *discovered* interfaces (SDK surface, MCP query path, KO serialization, auth flow, fixtures); `split_key` in the schema |
+| T-02 | snapshot adapter (ph 2) | snapshot tests fail: db identity, knowledge revision, config hash, seed captured; same-state ⇒ same snapshot identity | `snapshot.py` + `client.py` over the real SDK/MCP; manifest reproducibility pinned |
+| T-03 | factual + relation scenarios (ph 3+4) | one-KO/one-property/one-question/one-answer; one-hop, inverse, relation-filter, missing-relation tests fail | deterministic generators; expected path stored and validated |
+| T-04 | multi-hop scenarios (ph 5) | A→B→C fixture: generated scenario must carry the exact path; fabricated-edge case fails | graph-path generator; no fabricated edges (assertion over real graph data) |
+| T-05 | query builder + oracle (ph 10) | expected-query tests fail; the builder's output does not compile | builder emits TEXT aikoql against the compiler's real grammar (recon §3); EVERY generated query passes compile → plan → execute → scenario-match (the design's 6-point acceptance) |
+| T-06 | context adapter (ph 11) | context tests fail: required entities/facts/relations + evidence present, no unauthorized/stale data | adapter calls the existing Context Compiler via the client; no Python retrieval logic (arch assertion) |
+| T-07 | grounded answers + grounding validator (ph 12) | unsupported-claim rejection fails | deterministic answer generator; validator enforces claim→context/evidence tracing; 100% of accepted examples grounded |
+| T-08 | temporal + provenance scenarios (ph 6+7) | March/August version questions; evidence-ID expectations fail | temporal generator over real version intervals; provenance examples point at real evidence |
+| T-09 | unknown/ambiguity/contradiction (ph 8) | missing entity/property, ambiguous pair, conflicting-fact fixtures fail | generators emit machine-readable labels; uncertainty never becomes a false positive; contradictions preserve Conflict metadata |
+| T-10 | authorization scenarios (ph 9) | authorized vs unauthorized subject fixtures fail | scenarios run through the real ACL path; unauthorized knowledge never reaches dataset context |
+| T-11 | knowledge-level split + writer (ph 13+14) | near-duplicate questions split apart; JSONL determinism, manifest, checksums, atomicity, interrupted-run cleanup fail | splitter on holdout dimensions; writer with manifest + sha256 + atomic output |
+| T-12 | dataset validator + gates + CLI (ph 15, §26) | validator rejects a poisoned dataset only if each gate is enforced; CLI absent | `aikoql-training snapshot/generate/validate/stats/export`; fail-closed gates: compile < 100%, unauthorized > 0, secrets > 0, invalid schema > 0, leakage > 0 ⇒ publishable=no |
+| T-13 | observability + errors + benchmark (ph 16, §27/28) | metrics/error-category tests fail | typed error model (§28 categories), structured metrics (§27, no sensitive content), `scripts/benchmark_dataset.py` (throughput, rates, size; laptop = quick cells) |
+| T-14 | AcmePay POC corpus + eval set (ph 17, §35–37) | determinism-across-seeds, leakage, security, E1–E9 dataset checks fail | seeded AcmePay KB (§35 counts), 10K-example generation (seed sweep), eval set, artifacts committed; mutation leg: validator mutants are killed |
+
+T-01 shipped 2026-10-03 — `models.py` fail-closed schema validation
+(required/unknown/typed fields, task/difficulty enums, JSON-serializable
+content, forged-ID rejection), canonical sort-keyed `to_json`, and
+content-derived `example_id` (design §24, sha256 over schema_version +
+snapshot + task_type + question + query + scenario_id). RED archived as
+`t-01-schema` (ModuleNotFoundError, 21 tests blocked). The recon doc
+landed with two findings: **query_target is TEXT aikoql** (tool_aikoql →
+`aikoql_compiler::parser::parse`; the design's aikoql-json payload does
+not exist) and **no context-compiler tool exists on the MCP surface** —
+T-06 must compose retrieval primitives or propose a server change (see
+`docs/training-data-architecture.md` §3/§7). (Corrected at T-06:
+`compile_context` **is** on the MCP surface — `tools/agent_knowledge.rs`;
+the adapter calls it directly.) T-05's builder now targets
+the text grammar.
+
+T-02 shipped 2026-10-03 — `snapshot.py` captures the design §10
+DatasetSnapshot record: content-derived `snapshot_id` (database_id +
+knowledge_revision = journal_seq:audit_hash from the public health
+tool), canonical `configuration_hash`/`source_manifest_hash`, recorded
+seed/generator/schema versions, fail-closed on missing identity
+inputs. Acceptance pinned: two captures of the same immutable state
+produce the same identity (created_at is metadata). RED archived as
+`t-02-snapshot` (13 tests blocked). Live cell green over a spawned
+aikoql-mcp server. Recon added two findings: **embedded
+`Agent.health()` is a stub** (journal_seq/audit_hash are MCP-only) and
+**no database identity is exposed** (initialize carries only
+serverInfo) — `database_id` is an explicit operator parameter
+(`docs/training-data-architecture.md` §4).
+
+T-03 shipped 2026-10-03 — `scenarios/` deterministic generators over
+actual knowledge (design §11): `factual_scenarios` (one scenario per
+scalar property; nested/blank/None skipped; sorted koid then property)
+and `relation_scenarios` (forward + inverse per edge; verb map for the
+POC relation types; dangling edges skipped; missing relation → empty).
+Every `Scenario` stores the exact `expected_path` used — validated,
+never invented. RED archived as `t-03-scenarios` (16 tests blocked).
+Live cell green over the spawned MCP server: seeded KOs + DEPENDS_ON
+edges, `scan_edges` recovers the edges through the public traverse
+surface, and every generated answer equals the live property value.
+Recon finding: **the traverse envelope is shape-inconsistent across
+surfaces** (MCP returns `{"hits": [...]}`, embedded returns a flat
+list) and **hits carry direction "outbound"/"inbound"** —
+`scan_edges` normalizes both (`docs/training-data-architecture.md`
+§7/§8).
+
+T-04 shipped 2026-10-03 — `templates.py` (the FZ-T4 template engine:
+refs escape quotes/backslashes, strip control chars, own the verb
+map) and `multi_hop.py` (design Phase 5): every two-edge path
+A→B→C yields one scenario with the exact path in `expected_path` and
+the intermediate as the answer; paths are built only from the scanned
+graph — a fabricated edge never generates. Question grammar pinned by
+the RED: first verb base ("What does A own…"), second verb
+third-person ("…that depends on C?"). RED archived as `t-04-multihop`
+(20 tests blocked). GREEN 63/63: unit + the FZ-T4 hypothesis
+escape-round-trip property + the live 3-KO chain over the spawned MCP
+server.
+
+T-05 shipped 2026-10-03 — `generators/query.py` (`build_queries`) emits
+TEXT aikoql against the compiler's real grammar and
+`validation/execution.py` (`verify_scenario`) is the oracle: every
+generated query passes compile → plan → execute → scenario-match (the
+design's 6-point acceptance; auth and evidence join in T-08/T-10).
+Grammar pins from the recon: string literals are double-quoted with no
+escapes, MATCH predicates address properties only, TRAVERSE is
+outbound-only with one rel_type per clause (same-rel paths compile as
+one DEPTH-n query, mixed-rel paths chain one query per hop), and a
+traverse query must project a field (RETURN * after TRAVERSE comes
+back as `{"results": []}`). Fail-closed rendering: a quote in a value,
+negative/scientific numbers, non-ident or keyword names, or a KO with
+no scalar anchor skips the scenario — a bad query is never emitted, so
+the compile gate stays green. RED archived as `t-05-query-builder`
+(22 tests blocked). GREEN 83/83: the live cell seeds the 3-service KB
+(including a mixed-rel chain) and proves 12/12 generated queries
+compile over the spawned MCP server — compile rate 100%. The conftest
+schema example was fixed to double-quoted literals (the single-quoted
+form does not lex).
+
+T-06 shipped 2026-10-03 — `context/adapter.py` (`compile_context`)
+wraps the server's Context Compiler through the public client:
+`call_tool("compile_context", ...)` maps the envelope into the
+schema's context shape (entities/facts/relations verbatim, evidence =
+deduped fact evidence in package order); server errors
+(ACCESS_DENIED) propagate, never masked as empty rows. No Python
+retrieval logic — the arch assertion holds structurally (the unit fake
+exposes ONLY call_tool). The T-01 recon's §7 "no context-compiler
+tool" finding was **wrong**: `compile_context` has been on the MCP
+surface since MRFC-0070-A6 (`tools/agent_knowledge.rs`) — no server
+change was needed. Two live findings: (1) over TCP every authenticated
+connection gets agent_id "tcp-agent" (`transport.rs`) — the subject
+name is connection-invariant, so the TCP denial boundary is the TENANT
+(`tcp_tenant_isolation_across_tokens`), and the unauthorized cell
+spawns two tokens in different tenants; (2) staleness is the
+IR-version boundary — the compiler reads the live ir_json and its
+5-min cache is fingerprint-keyed (CTX-003: update → new fingerprint →
+old fact gone). RED archived as `t-06-context-adapter` (11 tests
+blocked). GREEN 95/95.
+
+T-07 shipped 2026-10-03 — `generators/answer.py` (`build_answer`)
+certifies the scenario's expected answer against the compiled context:
+the claim must trace to a fact statement (substring match — the
+deterministic ceiling; semantic equivalence is the T-15 model's job)
+and every supporting fact's evidence must be present in the context's
+evidence rows, or the example is REFUSED (None) — an unsupported claim
+is never emitted. `validation/grounding.py` (`validate_grounding`)
+enforces the same claim→context→evidence trace fail-closed in both
+directions of `labels.grounded`, and `expected.evidence_ids` must trace
+exactly to the supporting evidence (identity = the canonical sort-keyed
+JSON of the evidence dict, shared between generator and validator).
+RED archived as `t-07-grounding` (15 tests blocked). GREEN 110/110,
+incl. the hypothesis law "generator accepts ⇒ validator accepts" and a
+live cell proving the answer traces to the compiled evidence over the
+spawned MCP server.
+
+T-08 shipped 2026-10-03 — `scenarios/temporal.py` emits version
+questions over REAL version intervals (design ph 6): one scenario per
+changed property per version, the question names the version's own
+commit month and `as_of` is the real `commit_ts` — March ⇒ v1, August
+⇒ v2; unchanged properties earn no later question and same-month
+label collisions are skipped (first emission wins).
+`scenarios/provenance.py` emits one scenario per scalar property
+citing REAL evidence (design ph 7). Four recon findings: trace
+`commit_ts` is the PACKED HLC (`(millis << 16) | counter`, decode
+with `>> 16` before AS_OF — plain epoch millis at the boundary since
+T-43); kernel evidence confidence is f32
+(fixtures use f32-exact values); evidence is kernel-managed
+(`remember` rejects the extension — `observe` is the seed; `trace` is
+McpClient-surface only, reached via `Agent._backend`); and **evidence
+has two real shapes** — canonical kernel entries
+(source_artifact/method) vs compiled IR Evidence rows
+(document_id/extractor, `extractor` required) — so the provenance
+generator cites the COMPILED shape and skips canonical entries
+(fail-closed seam: an accepted example's evidence_ids must trace to
+context rows). RED archived as `t-08-temporal-provenance` (28 tests
+blocked). GREEN 138/138, incl. both hypothesis laws and live cells
+for real version intervals and both evidence surfaces over the
+spawned MCP server.
+
+T-09 shipped 2026-10-03 — the uncertainty family (design ph 8), three
+generators over one shared answer-format module
+(`scenarios/answer_formats.py`, no local imports): UNKNOWN: refusals
+(`scenarios/unknown.py`), AMBIGUOUS enumerations
+(`scenarios/ambiguity.py`) and CONTRADICTED answers
+(`scenarios/contradiction.py`). The existing labels block
+{grounded, answerable, ambiguous, contradictory} is the
+machine-readable label carrier — `build_answer` now returns `labels`
+on every family (the T-07/T-08 exact-dict assertions were extended,
+not weakened). Uncertainty never becomes a false positive at four
+layers: generation (an existing name/property is never "unknown";
+ambiguous pairs need distinct values and parse-safe ones;
+contradiction input must match the kernel's Conflict record), the
+answer generator (unknown refuses when the context actually knows the
+missing name; ambiguity/contradiction refuse unless EVERY candidate
+value fully traces), the oracle (`verify_scenario` proves absence —
+no row carries the property — or recovers both sides), and the
+validator (label semantics; the contradiction branch rejects answers
+that dropped the conflict metadata). Contradictions preserve the
+kernel's Conflict metadata verbatim: both claim koids plus the
+conflict koid and its resolution state (read from the live envelope's
+`extensions` or the operator-shaped record), never picking a side.
+Two new task types (`ambiguity`, `contradiction`) join TASK_TYPES.
+RED archived as `t-09-uncertainty` (3 collection errors, exit 2 —
+the modules were missing). GREEN 183/183, incl. the ambiguity
+hypothesis law, three live cells (real absence, a real same-name
+pair, a real `contradict` Conflict), and the unit/live seam for the
+conflict envelope.
+
+T-10 shipped 2026-10-03 — authorization scenarios (design ph 9)
+through the real ACL path. `authorization_scenarios(kos, decisions)`
+(`scenarios/authorization.py`) consumes the kernel's own policy
+evaluations — records of (principal, action, resource_type) with the
+live verdict and, for denials, the kernel's reason — and pairs each
+decision with every KO of its resource type: the question names the
+object ("May reader read the service whose name is settlement?"), the
+answer is the machine-readable verdict (ALLOWED:/DENIED: prefix)
+preserving the reason verbatim (`"Denied by policy: KOID"`). The
+engine never re-derives a verdict: `verify_scenario`'s authorization
+branch recovers the anchor KO and re-evaluates policies live
+(`evaluate_policies`), asserting the verdict prefix agrees — and
+malformed decisions, unknown actions, denials without a reason,
+decisions over types with no KOs and anchors that would corrupt the
+question are skipped. `validate_grounding`'s authorization branch
+requires the verdict prefix, the `policy.authorization_required`
+flag, verdict-shaped labels and the generic grounded trace — plus the
+leak rule: a DENIED example's context may carry the decision fact and
+nothing else that names the denied object, so unauthorized knowledge
+never reaches the dataset context. `Scenario` gains `subject`/
+`action` (additive, defaulted); `build_queries` routes authorization
+through the anchored-match helper; `build_answer` needs no branch.
+Two live seams found and pinned: **policy KOs store `action` in the
+enum's Debug spelling** ("Read"/"Write"/... — `evaluate_policies`
+compares against `format!("{:?}", action)`, so a lowercase deployment
+never matches) and **the default is deny** — with no matching policy
+the reason is "No matching policy found" and `allowed` is false, so an
+ALLOWED verdict requires an explicit Allow policy
+(`docs/training-data-architecture.md` §14). RED archived as
+`t-10-authorization` (1 collection error). GREEN 198/198, incl. the
+live cell: a real Deny policy + a real Allow policy deployed, the
+kernel's own evaluations denied and allowed, scenarios emitted from
+those verdicts, the oracle re-checking the live engine, and the leak
+rule proven against a denied object.
+
+T-11 shipped 2026-10-03 — knowledge-level splitter + canonical dataset
+writer (design ph 13+14). `assign_splits(examples, seed, ratios)`
+(`dataset/splitter.py`) assigns every example to train/val/test by its
+`split_key` alone — a seeded stable hash of the key — so
+near-duplicate questions (template variants of the same fact) sharing
+a key can never straddle a holdout under any seed or input order
+(FZ-T7), and assignment is a pure function of (split_key, seed):
+reordering or re-shuffling the example list cannot move an example
+(determinism law 3). The splitter also reports cross-holdout
+violations: example pairs in different splits sharing any
+`expected.koid` (recorded, not raised — the §26 leakage gate counts
+them at T-12). `write_dataset`/`read_dataset`
+(`dataset/writer.py`) are the publication boundary: canonical
+single-line `to_json` sorted by example_id per split, temp-file +
+`os.replace` atomicity (a reader never sees a half-written file),
+stale temp files from an interrupted run swept at start, and
+manifest.json written LAST — its presence is dataset visibility —
+carrying per-split count/file/sha256 plus example_count and the
+identity fields; `created_at` is an explicit operator parameter so
+the same inputs regenerate byte-identical output. `read_dataset`
+verifies manifest + per-file sha256 + counts and refuses any
+tampered/truncated dataset via a new `DatasetError` (fail-closed,
+FZ-T2). FZ-T6 found a real seam: `str.splitlines()` splits on
+U+0085/U+2028/U+2029, which `ensure_ascii=False` JSON emits raw
+inside strings — the reader splits on `"\n"` only. RED archived as
+`t-11-split-writer` (2 collection errors). GREEN 219/219.
+
+T-12 shipped 2026-10-03 — dataset validator + gates + CLI (design ph
+15, §26). `validate_dataset` (`dataset/gates.py`) enforces all eleven
+§5 gates fail-closed; `publishable` is True only when every EVALUATED
+gate passes — skipped (no db: compiler/execution/scenario_match; no
+reference: determinism) and disabled (secret_scan: false) gates never
+veto. Static gates: schema (models.validate), grounding + evidence
+coverage (one `validate_grounding` pass, two counts), authorization
+(flag-mismatch XOR tooth), secrets (fixed local pattern set — the
+ingestion secret-filter binds at corpus time, T-14 — with the FZ-T3
+config rule: absent `secret_scan` means ON, explicit `false` is the
+only way off), leakage (the split assignment is RECOMPUTED from the
+manifest seed — recorded placement must agree AND cross-holdout koid
+pairs must be zero), duplicates (rate bound from the config). Live
+gates run with `db`/`token`: compiler = raised aikoql, execution = no
+`results`, scenario_match follows the ORACLE's rule — hop TARGETS
+recovered, because a TRAVERSE result never carries the source KO
+(RowSet::Traversal, probe-pinned against the spawned server). The
+config parser (`dataset/config.py`, FZ-T3) merges one YAML/JSON file
+over fail-closed defaults; unknown keys, wrong types, non-positive
+ratios and non-bool `secret_scan` raise `DatasetError`. The CLI
+(`cli.py`, `[project.scripts] aikoql-training`): `snapshot` /
+`generate` / `validate` / `stats` / `export`; generate is the
+end-to-end pipeline on a live fixture DB — seed two services + a
+DEPENDS_ON edge, capture the snapshot, factual + relation scenarios,
+every query proven through the oracle, context compiled per question
+through the server Context Compiler over a mocked-ir
+KnowledgeSnapshot, answers certified (refused examples are never
+emitted), examples split by **koid-component keys** (the sorted koid
+set — any two examples sharing a koid share a bucket, so cross-holdout
+pairs are impossible by construction and the leakage gate verifies
+it), written canonically, re-run to a scratch dir to prove
+byte-identical regeneration, validated — exit 0 iff publishable. The
+leakage gate earned its keep during development: the first generate
+run grouped relation examples by `koids[0]`, splitting the
+settlement→checkout component across holdouts — the gate caught it,
+the key rule fixed it. §6's training-data.yml promise stays deferred
+to the T-14 corpus (its legs need the POC artifact set; a red gate
+never enters CI — CI-04). RED archived as `t-12-gates-cli` (3
+collection errors). GREEN 256/256.
+
+T-13 shipped 2026-10-03 — observability + errors + benchmark (design
+ph 16, §27/28). The §28 typed error model: `TrainingDataError` grows
+four optional category fields (stage/scenario/code/example_id) with a
+JSON-serializable `to_info()`; pipeline raises carry the ones their
+stage knows (oracle_failed carries stage+scenario+code, split_leakage
+stage+code) while the schema raises carry none — the categories are
+the pipeline's observability surface, not retrofit noise. The §27
+`Metrics` accumulator (counts + derived rates; an undefined rate is
+None, not zero) is wired through generate with a `--metrics` file;
+the no-sensitive-content rule is structural — every leaf value of a
+metrics dict is a number under a fixed key name, so no question,
+answer, fact statement or KO text can land in one.
+`scripts/benchmark_dataset.py` runs the full generate pipeline
+against a live server and reports the three cells as one JSON object:
+throughput (wall seconds, examples, examples/second), rates (the
+pipeline's derived rates) and size (dataset bytes, per-split counts)
+— laptop scale by design, the corpus-scale cell arrives with T-14.
+
+**The new tests caught a real hole in the T-12 split-key rule.** The
+koid-set join gives factual `{s}` and relation `{s,c}` DIFFERENT
+keys for the same knowledge component — fresh HLC koids drew
+straddling buckets on live runs (2 cross-holdout pairs under seed 0;
+the T-12 greens were bucket-lottery luck, a flake-by-construction the
+T-13 additions surfaced). Fixed at the root: `component_ids`
+(union-find over the edges, root = the component's min koid) in the
+splitter; the builder stamps the component root as the split_key, so
+every example touching a knowledge component shares ONE key and
+cross-holdout pairs are impossible under every seed. The regression
+pins both sides: component keys are violation-free across a 50-seed
+sweep; the old set-join keys straddle some seed (the gate's teeth,
+again). The T-12 paragraph's "the key rule fixed it" claim is
+corrected by this paragraph. RED archived as
+`t-13-observability-errors-benchmark`. GREEN 270/270.
+
+T-14 shipped 2026-10-03 — AcmePay POC corpus + eval set + mutation leg
+(design ph 17, §35–37). `scripts/generate_corpus.py` seeds the §35
+AcmePay graph per slice — 24 services, 6 teams, 12 persons, 8 accounts,
+4 regions; edges OWNS 24, DEPENDS_ON 23, WORKS_IN 12, IN 8 — then runs
+the scenario families over the live graph: factual, relation,
+multi-hop, temporal (three services versioned on the same KOID after a
+real-time gap so AS_OF can distinguish the versions), unknown,
+ambiguity, contradiction (one service contradicted through the raw MCP
+tool, preserving the Conflict KO), authorization, provenance. The
+oracle gate refuses anything the live server cannot answer; the target
+is reached in seed 0 alone (~507 examples/slice); determinism is pinned
+koid-free (question multiset + task-type histogram equal across two
+independent servers), so the 10K seed sweep is CI work. The eval set
+(`validation/eval_set.py`, E1–E9 as machine-checkable cases) rides the
+corpus, and `scripts/mutation_leg.py` kills validator mutants (the §37
+leg: tampered manifest, planted secrets, dropped facts, forged ids —
+each must fail its gate and leave `publishable=false`).
+
+**Three traps, all fixed at the root.** (1) `remember()`-with-koid
+replaces caller-created edges wholesale (kernel semantics) — seeding
+must link AFTER any versioned re-remember or the relationship index
+silently orphans the edges and TRAVERSE goes empty; the corpus orders
+the slice accordingly. (2) The test fixture fed server stderr into an
+undrained pipe: the tantivy commit storm after seeding fills it, the
+next handler blocks on its own log write before ever answering
+initialize, and the validator's connect times out — logs now go to a
+file (no backpressure, CI-15 diagnostic kept). (3) The manifest sha256
+check raised out of the validator, so a tampered dataset produced no
+report at all — integrity is now a gate and the other gates
+(secret_scan included) still run over the tampered content, so the
+security test's planted secret is caught and reported. Multi-hop emits
+same-rel paths only: the example contract stores ONE query, and a
+mixed-rel path's per-hop queries could never satisfy the
+scenario_match gate's koid recovery. RED archived as
+`t-14-corpus-eval-mutation`. GREEN: corpus 5/5, full training suite
+288/288, arch hygiene OK. The §6 CI wiring (`training-data.yml`,
+fast-exit per the CI-03 pattern) lands with this commit set — the
+"lands at T-12" note above is superseded: the workflow needs the
+corpus scripts it runs.
+
+T-15 shipped 2026-10-04 — fine-tune run + scorecard (design ph 18–19,
+§32/33/34). `src/aikoql_training/scorecard.py` computes the six
+metrics over a split from `scripts/finetune.py predict` records —
+query_compile_rate (the live `compiled` flag wins over the E3 static
+head check), ko_recall / ko_precision (the oracle targets rule:
+`koids[1:]` for TRAVERSE), groundedness (the predicted answer re-run
+through `validate_grounding` — the T-07 deterministic ceiling),
+refusal_rate (UNKNOWN: prefix, false refusals counted in detail),
+secret_leak_rate (the gates' `_SECRET_PATTERNS`, never a second list);
+an example with no prediction record fails everywhere.
+`src/aikoql_training/inference.py` is the §40 prompt/parse seam — two
+skills per example (question → `QUERY:` aikoql, question+context →
+answer or `UNKNOWN:` refusal), completion-only labels with -100
+prompt masking. `scripts/finetune.py` LoRA-tunes
+Qwen2.5-0.5B-Instruct (r=4, all-linear, fp32 — the 1650's 4 GB holds
+the 0.5B base, `--device` defaults to cuda when torch sees the GPU)
+and
+predicts live against the corpus server (each query compiled+executed
+for real retrieval numbers); `scripts/scorecard.py` writes the
+artifacts under `training/artifacts/scorecards/` — the design law is
+enforced as code: `train` refuses to start without a scorecard
+artifact. Baseline (raw model, live): compile 0.00, recall 0.00,
+precision 0.00, groundedness 0.33, refusal 0.00, leak 0.00 over 24
+test examples; finetuned (600 rows, one epoch, live): compile 0.46,
+recall 0.375, precision 1.0, groundedness 0.33, refusal 0.00, leak
+0.00 — the model learned the query format, retrieval is exact when
+it compiles, and the refusal skill needs more data (a 600-row POC
+ceiling, not a design gap).
+
+**Three traps, all fixed at the root.** (1) A one-slice corpus can
+hash every component key into the train bucket under the pinned
+split seed — the test split is empty, predict writes zero records
+and the scorecard never forms; the laptop POC seeds three slices
+(18 component keys → 24/24/1802), and the CI 10K sweep was never at
+risk. (2) A stale Hugging Face OAuth token poisons every download —
+an expired `refresh_token` turns even public model repos into 401
+"Repository Not Found"; `huggingface_hub.logout()` clears it and
+anonymous access works. (3) A `+cpu` torch wheel leaves a present
+GPU invisible (`torch.cuda.is_available()` false) and pip skips the
+same-version swap — `--force-reinstall --no-deps` against the cu126
+index is the fix, and the first CPU training attempt (0 steps in 20
+minutes) made the GPU the only sane path. RED archived as
+`t-15-scorecard`. GREEN: training suite 294/294.
+
+T-16 shipped 2026-10-04 — the inference wrapper (design §40
+end-state). `src/aikoql_training/chat.py` is the thin
+question → query → context → answer path, seam-for-seam over the
+validated pipeline: the two model skills run through the §40
+prompt/parse contract (`build_query_prompt` / `build_answer_prompt` /
+`parse_model_reply`) around ONE live `aikoql()` call — the context
+statements come from the query results only, so no retrieval can
+bypass the oracle. Both seams (`generate`, `run_query`) are
+injectable, which is what makes the path testable without a model;
+`scripts/chat.py` is the POC chatbot wiring the real model
+(T-15 base + LoRA adapter, `--device` cuda default), a live server
+and an interactive loop. Every refusal is fail-closed and
+machine-readable (the T-09 UNKNOWN: format): no query produced,
+query failed to compile/execute (the exception path), query returned
+no results, and the model's own UNKNOWN: refusal passes through.
+Live smoke on the seeded corpus server: a grounded question
+compiled, retrieved and answered end-to-end; an out-of-knowledge
+question hallucinated a query, the compile failed and the wrapper
+refused — the exact fail-closed behavior the RED column demands.
+RED archived as `t-16-chat`. GREEN: training suite 302/302.
+
+First CI round (post-push): every `training-data.yml` run died at 0 s
+with "workflow file issue" — the inline Python wait-loops inside the
+two corpus jobs sat at column 1, which ends a YAML block scalar and
+makes GitHub reject the whole file; the workflow had never parsed,
+let alone run. Fixed at the root (bodies indented under the block
+scalar) plus a gate tooth: arch-hygiene workflow test 6 rejects any
+column-1 line inside a workflow body (RED archived as
+`t-16-ci-workflow-parse`), so the class cannot recur silently. The
+first genuinely executed run is the T-16 push that carries the fix.
+
+Second CI round (run 37188359354): the first real run failed on the
+fresh-runner install class. unit/determinism/integration died at the
+Install step with exit 127 — `export VIRTUAL_ENV` does not put
+`.venv/bin` on PATH, so the bare `maturin develop` command was never
+found (it works on a laptop only because the venv is activated);
+fuzz-estate never installed the SDK at all, so `test_scenarios.py`
+died at `from aikoql import Agent`. gate-teeth passed — the mutation
+leg only needs the pure-Python package. Fixed by calling
+`.venv/bin/maturin develop` in all four Install steps and adding the
+SDK install to fuzz-estate, plus a gate tooth: arch-hygiene workflow
+test 7 rejects a bare `maturin`/`pytest` body command inside any
+venv-creating job, scoped per job so release.yml's legitimate system-
+python `maturin build` is untouched (RED archived as
+`t-16-ci-install-path`).
+
+Third CI round (run 37189254003): the install-path fix itself had the
+same class one level down — the corrected steps said
+`.venv/bin/maturin develop` *after* `cd crates/sdk/python`, and a
+relative path stops resolving after a `cd`, so all four Install steps
+died at exit 127 again with "No such file or directory". Fixed by
+anchoring the call to `"$GITHUB_WORKSPACE/.venv/bin/maturin"`, plus a
+gate tooth: arch-hygiene workflow test 7b rejects a relative `.venv/`
+path after a `cd` in the same run block, per block (each `run:` is its
+own shell, so a `cd` only poisons the block it lives in), with
+`$GITHUB_WORKSPACE`-anchored paths always allowed (RED archived as
+`t-16-ci-relative-venv`). The RED run also exposed a harness bug: the
+7b check tested `if bad=$(... | awk ...)`, which is true whenever awk
+exits 0 — even with no output — so every venv-creating job was flagged
+with an empty block; fixed to capture-then-test (`[ -n "$bad" ]`).
+
+Fourth CI round (run 37190350754): unit/fuzz-estate/gate-teeth green —
+the install class is closed. determinism/integration died one step
+later, in the corpus cells: `training/scripts/generate_corpus.py` runs
+with the venv python and imports `aikoql_training`, which pytest finds
+via `pythonpath = ["src"]` but a bare script never does (the laptop
+venv had the editable install all along, the fresh runner does not).
+Fixed by `pip install -q -e training` in every Install step whose job
+runs a training/scripts entry, plus a gate tooth: arch-hygiene
+workflow test 7c requires the package install in exactly those jobs
+(RED archived as `t-16-ci-missing-package`).
+
+### Phase B — model experiments (design phases 18–19)
+
+| id | milestone | RED | GREEN |
+|---|---|---|---|
+| T-15 | fine-tune run + scorecard (§32/33/34) | scorecard metrics absent | LoRA/FT script for a 0.5B-class open model; eval harness computes query_compile_rate, KO recall/precision, groundedness, refusal rate, secret-leak rate; results committed as artifacts |
+| T-16 | inference wrapper (§40 end-state) | question→query→context→answer path fails against the eval set | thin `chat.py`: model (intent/query) → AIKOQL → context → model (grounded answer); refusal/unknown paths; the POC chatbot |
+
+### Phase C — PR9 review gaps (P0.2/TDD-01 + the metric/coverage estate)
+
+| id | milestone | RED | GREEN |
+|---|---|---|---|
+| T-17 | schema v2: structured semantic target (P0.2/TDD-01) | intent is an opaque string, no plan anywhere | `plan_of`/`policy_of` derivations: (intent, entities, requirements, plan) with closed role/op sets, temporal as_of, policy ACL pair; assemblers share one code path |
+| T-18 | plan→renderer seam | query text built inline with plan derivation | a renderer turns the semantic plan into the query_target aikoql text; plan derivation and rendering testable apart |
+| T-19 | leakage dimensions | split_key straddles component boundaries (mixed-cardinality koid sets) | component-level split key + ambiguity group union; hard canonical-question tooth; identifier/normalized/answer/relation-pattern reported as diagnostics (arch §23) |
+| T-20 | structured JSON model protocol | model speaks free text, parseable only by brittle prefixes | shipped: query/answer JSON shapes, raw_decode+strict schema, ModelOutputError fail-closed, refusal/grounding as fields; bare-prose fallback killed; finetune emits JSON completions (arch §24) |
+| T-21 | model-output fuzz | parser accepts garbage silently | shipped: FZ-10 family pins + arbitrary-text properties over both parsers and the chat seam; duplicate keys/missing fields/deep nesting now typed refusals (arch §25) |
+| T-22 | claim-level grounding | grounding checked once per answer | shipped: build_answer emits one claim per supporting fact, expected.claims schema-optional, validate_grounding walks claims (dangling/forged/uncovered/union-mismatch all fail); examples without claims keep the answer-level trace (arch §26) |
+| T-23 | grounding mutation fuzz | grounding validator never sees adversarial inputs | shipped: FZ-07 mutant matrix over a valid claims-carrying example — every claim/evidence-breaking mutation fails (forged ids, dropped evidence, swapped facts, dangling claims, label flips incl. answerable/ambiguous on grounded), grounding-external fields stay accepted (boundary pins), answer/statement mutation properties (arch §27) |
+| T-24 | unknown precision/recall | UNKNOWN: refusals unmeasured | shipped: refusal trio replaces refusal_rate — unknown_recall (refused/unknown), unknown_precision (refused over all UNKNOWN: answers), false_refusal_rate (over answerable), each None when its denominator is absent from the split; committed artifacts migrated, artifact test accepts None (arch §28) |
+| T-25 | live-oracle authorization | authorization scenarios never run against the live server | shipped: policy carries the machine-readable verdict (subject/action/resource/decision/reason), schema fails closed on it, grounding cross-checks verdict⇔decision + preserved denial reason, and `verify_authorization_examples` re-proves every committed example against the live `evaluate_policies` — corpus aborts fail-loud on disagreement; mutation leg registers the four §26 authorization mutants per (file, suite) (arch §29) |
+| T-26 | per-capability scorecard | six aggregate metrics hide capability failures | shipped: compute_scorecard gains by_task (task.type) and by_difficulty cells — same shape as the aggregate, present capabilities only, §27 None-convention per cell; per-example loop extracted as _cell, the artifact script picks the breakdown up via **score (arch §30) |
+| T-27 | multi-domain | AcmePay-only corpus can't show schema generalization | shipped: a second synthetic org (NovaEnergy, utilities schema — operator/uptime_pct/site/head/specialty/credit/tariff/grid_code) seeds alongside AcmePay via _DOMAINS per sweep seed; _domain_of discriminates by the disjoint property schema and prefixes per-KO/group/conflict doc ids; org vocabularies disjoint by construction (a shared stem would leak one domain's anchor into the other's denied-object check); temporal/provenance stay acmepay (arch §31) |
+| T-28 | held-out orgs | train/test share component keys | shipped: novaenergy is the held-out org — examples carry an org stamp (schema-optional), assign_splits hashes held-out orgs into val/test only, the manifest declares held_out_orgs and the leakage gate recomputes with it (a held-out example in train is misplaced); unknown scenarios anchor on a training org's service and policy docs are per-(principal, action, verdict, domain) so no train context names a held-out entity; 2 §26 mutants (force disarmed / declaration ignored) die in test_gates; temporal/provenance stay acmepay (documented ceiling) (arch §32) |
+| T-29 | CI reshape | legs were accreted one failure-class at a time | shipped: the pytest pythonpath=src smuggling is gone — every training-data leg installs `pip install -e training` and the tests exercise the installed package (clean-venv proof: 403/403 with aikoql pulled from PyPI); production scripts (chat.py, benchmark_dataset.py) no longer inject PYTHONPATH; the 10K corpus sweep moved from integration to an event-guarded nightly leg with a weekly cron + the artifact upload; fuzz-estate runs the whole fuzz estate; leakage/security gates stay in the unit leg by design (arch §33) |
+| T-30 | architecture hygiene | training code may import private SDK internals without a reviewer noticing | shipped: the deny-anchor boundary file (`scripts/training-import-boundary.txt`) + workflow test 35 pin the import surface — deeper-than-top-level `aikoql.<sub>` imports, underscore-private names pulled through the top level, and storage bindings (redb/rocksdb/rocksdict) all fail the hygiene scan; bare `import aikoql` / `from aikoql import <public name>` stay allowed (arch §34) |
+| T-31 | PyPI publish wiring | aikoql-training exists only as a source tree | shipped: metadata complete (readme/license/classifiers/urls — PyPI rejects incomplete uploads), `training-pypi-publish` job in release.yml via the same OIDC trusted publishing as the SDK job; version truth = training/pyproject.toml (versions independently of the aikoql tag, plain re-dispatch = the release, skip guard = rescue); wheel install-checked before upload; hygiene test 36 pins job + metadata teeth (arch §35) |
+| T-32 | query-layer breaks from DI-006 re-verification | numeric predicates read empty on Float-stored properties and GROUP BY returns empty through the MCP tool | shipped: runtime `compare_values` promotes Int/Float (the kernel helper's rule) and Eq/Neq route through `values_equal` (derived equality kept for List/Map/Bytes); both MCP tool conversion paths surface Traversal/Grouped/Joined rows the way http/shell already did — the interpreter was computing both correctly, the tool layer dropped them via a catch-all empty arm (arch §36) |
+| T-33 | PR #9 CI: corpus generation crashes with StopIteration | `AS_OF (commit_ts >> 16)` drops a version whose HLC counter bits are set | shipped: `get_as_of` filled the packed snapshot's counter field (0xFFFF), so `AS_OF T` selects the newest version committed at any point during wall-clock millis T — the trace()/AS_OF round-trip now holds for same-millis commits (CI runners hit the race, the laptop did not); deterministic kernel pin via ManualClock (arch §37) |
+| T-34 | device-eval N2+N3 — the semantic-enrichment write path | enrichment catch-up wipes caller-created edges (N2: remember-update restates no relationships, the kernel replaces them wholesale) and `prove` reports chain_valid:false on an untampered superseded claim (N3) | shipped: dedicated `attach_semantic` kernel path mutates ONLY the semantic field — the enricher never enters the edge-replacement path, so the graph survives catch-up; identical re-attach is a no-op (no version churn on restart); `prove` holds the pipe lock so its event walk sees a quiescent journal (N3 was the walk racing the enricher's appends — the superseded-vs-not symptom was pure timing); pins: edge-preservation + boundary sweep in kernel tests, SlowScanEngine widening the scan window to make the prove race deterministic (arch §38) |
+| T-35 | device-eval N4 — enrichment catch-up silently degrades queries to text-side | every head without an embedding scored 0.0 in the vector leg, so during catch-up a vector query "matched" the whole store | shipped: two-layer fix — the coordinator's slim vector leg skips unembedded KOs (a KO without an embedding has no vector score; no fabricated zero-score hits), and the runtime's AnnSearch arm fails closed with `KError::Retryable` when the query vector embeds but no in-scope KO carries one (silent text-side fusion would masquerade as vector results — retry once semantic.state == "ready"); hybrid fusions fail retryable over silent partial by design (arch §39) |
+| T-36 | device-eval N1 — SIMILAR TO field projection | `SIMILAR TO "x" RETURN body` errored "Project requires Object input" — the similarity leg produces Scored rows and the Project arm only accepted Objects/Traversal | shipped: the Project arm gains a Scored branch that loads the KO each row refers to (mirroring the Traversal branch), so RETURN <field> and RETURN * work over SIMILAR TO and USING EMBEDDING legs; runtime-only — the compiler keeps returning Scored plans, and cert Q_H1/H1 plan-shape pins are untouched (arch §40) |
+| T-37 | device-eval F2 — batch ops drop the session identity | a session creating a KO via `tool_batch` then reading it hits ACCESS_DENIED — ops without an explicit subject defaulted to `mcp-agent` | shipped: the identity injection recurses into the `operations[]` array via one shared `fill_identity` walk — stdio still fills-if-absent (an op with its own subject keeps it), TCP still overrides (batch ops cannot smuggle subject/tenant either); pin `batch_ops_inherit_session_identity` covers both the inheritance and the fill-if-absent halves (arch §41) |
+| T-38 | device-eval F12 — `AS_OF` ignores `valid_to` | a post-supersede AS_OF slice returns both generations (kb=[1, 2], oracle=[2]) — reconstruction was transaction-time only | shipped: `get_as_of` filters the reconstructed KO on valid-time closure — a KO whose `valid_to` is at/before the slice instant is not part of that transaction-time world (half-open `[valid_from, valid_to)`: `valid_to == at` is already closed); the kernel choke point covers the runtime's `TemporalOp::AsOf` arm and every tool surface; pin `as_of_slice_hides_a_superseded_generation` (pre-supersede slice still sees gen-1, post-supersede and boundary slices do not) (arch §42) |
+| T-39 | device-eval F7 — `supersede` stamps the successor's `valid_from` at commit time | a fresh generation's `valid_from` is the commit instant, not the asserted/observed validity start — DI-004 works around temporal windows with `observed_at_ms` | shipped: `SupersedeRequest` gains `observed_at_ms` (kernel + MCP tool arg); a fresh successor's `EXT_VALID_FROM` is the asserted instant when provided, commit time only as the fallback; pin `supersede_stamps_successor_valid_from_from_asserted_start` covers both the asserted-start stamp and the fallback (arch §43) |
+| T-40 | device-eval F13 — relate replay not version-idempotent | a replayed identical relate re-versioned the source (14 d2 edges, koid stable, edge set unchanged, version bumped) — the relate no-op guard was missing because T-34's pre-fix enrichment wipe had emptied the edge set between the relate and its replay | shipped: root cause is N2 (T-34, `a8ed67c`) — the eval ran a pre-fix binary; the graph engine's identical-edge no-op guard was always correct. T-40 lands the end-to-end pin `serve_restart_catchup_preserves_edges_for_relate_replay` (serve A remember+relate without enrichment, serve B restart whose catch-up enriches, replay through batch — version and edge set must be stable), plus the model-independent `replay_relate_through_batch_is_version_idempotent`; the restart pin skips (`[SKIP]`) where no local embedding model is installed and takes `AIKOQL_TEST_MODEL_DIR` (arch §44) |
+| T-41 | device-eval F11 — scope/authority asymmetry between `observe` and `supersede` | `supersede`-created generations land scope `session` / authority `agent_derived` while `observe` KOs land `global` / `organization_policy` — a cross-session consumer of a superseded link sees only the old generation | shipped: a fresh supersede generation inherits the replaced claim's `scope` and `authority` extensions (the `Origin::Agent` creation defaults only apply when the replaced KO carries none); pin `supersede_generation_inherits_scope_and_authority` covers both the observed→global/organization_policy leg and the asserted→session/source_code mirror (arch §45) |
+| T-42 | device-eval MINOR-1 — "no GROUP BY count aggregate" | the eval saw `MATCH ... GROUP BY dept, COUNT(*)` return nothing, but the compiler/runtime have executed the aggregate since P5-M2 — the eval's binary predated T-32, whose tool layer still dropped `RowSet::Grouped` rows via a catch-all `_ => vec![]` | verified shipped (not a product bug on this build): RED replay against pre-T-32 `tools/query.rs` reproduces the symptom (0 rows), the current build returns grouped `properties.count` rows; the estate gap was the end-to-end tool path itself — zero aggregate coverage in MCP tests. Pin `query_group_by_count_aggregate_surfaces_through_tool` (COUNT(*) per dept group = 2/1, global COUNT(*) = 3) (arch §46) |
+| T-43 | device-eval MINOR-2 — `commit_ts` hybrid encoding leaks through the API | every tool response emitted the packed HLC `epoch_ms << 16 \| counter`, forcing clients to shift right 16 before AS_OF/validity math | shipped: one boundary helper `commit_ts_millis` (helpers.rs) decodes at every MCP response site (remember/get/relate/forget/evolve/derive/verify/assert_knowledge/verify_knowledge/merge/record_experience, ko_json/ke_json, trace versions + event_refs + provenance text, txn results, audit report, REST create, ingest status); the counter stays kernel-internal (memory TTL math still uses the packed value); training consumers stop shifting (`generate_corpus.py`, `test_temporal.py`); pin `tool_boundary_emits_plain_epoch_millis_commit_ts` (remember + get inside the wall-clock window) (arch §47) |
+| T-44 | training-suite regression — 14 live tests hang in `compile_context` | a latency race, not a bug: one scalar-CPU forward ≈3s on a laptop, and the enrichment worker holds the model mutex one forward per stored KO during catch-up — a compile request queueing behind it plus its own forward exceeds the training client's 5s socket timeout; the embed was also pure waste because remembered snapshots carry no `entity_embeddings` (ingest alone writes them) | shipped: the tool skips the embed when the snapshot has nothing to score against (`entity_embeddings` absent → lexical with no forward pass); `CandleEmbedding::embed` `try_lock`s the model and returns `KError::Retryable` on contention (callers degrade via the existing fallback arm instead of queueing); the enrichment live loop retries Retryable in place (250ms × 10s) so a query's forward can't starve a KO's enrichment; pins `compile_context_stays_bounded_while_enrichment_holds_the_model` / `compile_context_fails_fast_when_model_busy_with_stored_embeddings` / `compile_context_skips_semantic_embed_without_stored_embeddings` (park hook holds the model deterministically, bounded responses via call_bounded) (arch §48) |
+| T-45 | device-eval MINOR-3 — 120 calls/min default rate limit blocks batch ingest | the eval throttles at 115 and takes ~130 batch calls per dataset phase against a default-configured server — the 120/min cap denied the tail of every phase (the `[rate_limit]` TOML knob existed but the default binary never carried it) | shipped: the default budget rises to 300 calls/min (fits a phase with headroom; `max_calls_per_minute` stays the knob for anything stricter); pin `default_rate_limit_serves_a_batch_ingest_phase` (130 remembers through a default-config stdio server inside one window, with a 50s anti-rollover guard) (arch §49) |
+| T-46 | device-eval MINOR-4 — plain `SIMILAR TO` is text-only by default and the eval report flags the silence | the eval discovered the behavior empirically; a silent hybrid default would re-rank every historical result set, and the plan's Stage-5 hybrid planner is deferred post-1.0 — so this is fixed by documenting loudly, not by flipping the default | shipped: MRFC-0010 §5.1 pins the four modes (plain = lexical Jaccard deterministic default; `SCORE BM25` = BM25 with Jaccard fallback; `USING EMBEDDING` = vector; both = `FUSE`); runtime pin `plain_similar_to_stays_lexical_when_embeddings_exist` plants two stored KOs whose text ranks disagree with their vectors and asserts the Jaccard order wins (a vector/hybrid default would rank the wrong KO first); RED = the doc grep `t46-plain-similar-to-lexical-default-undocumented` (arch §50) |
+| T-47 | device-eval residual 1 — supersede writes two journal events (~19ms apart), so an `AS_OF` slice between them shows both generations of the superseded link | the successor's `Created` event and the predecessor's Superseded transition are two separate HLC allocations inside one lock — the wall clock can advance between them, opening a slice where the old claim still reads as valid | shipped: `Pipeline` gains an atomic-pair pin (`pair_pin`) armed around the whole supersede composition — successor creation, supersession transition and the dependent sweep all commit at ONE HLC instant, and the transition's `valid_to` close time is that instant's millis (`ts >> 16`), so no `AS_OF` slice can show both generations; the superseded_by evidence append runs OUTSIDE the pin (a second version of the old KO at the pair's commit_ts would collide under MVCC); pin `supersede_is_atomic_at_the_successors_instant` drives a ticking clock (each `millis()` call advances — a frozen ManualClock would hide the tear) and asserts the old claim is already absent at the successor's own commit instant, with the successor absent one tick before; residual 2 (enrichment settle drift) is not kernel code — the version bump on `attach_semantic` is correct content-addressing, documented as a settle rule (wait for `semantic.state == "ready"` before capturing versions) in the eval doc; RED archived as `t47-supersede-atomic-pair` (exit 101) (arch §51) |
+| T-48 | Java SDK namespace drift — the Java package is `io.aikoql.client` while the Maven groupId `com.aikoql:aikoql-client` is Sonatype-verified against aikoql.com (io.aikoql needs aikoql.io, which nobody owns) | D-14's "Java package names stay io.aikoql.client" was recorded when the groupId was still io.aikoql; the 2026-10-03 groupId rename to com.aikoql never propagated into the Java sources, so the published artifact would claim a namespace backed by no domain | shipped: all 10 main + 20 test sources move `src/{main,test}/java/io/aikoql/client/` → `com/aikoql/client/` with package/import declarations rewritten (git mv + sed); the filtered resource `version.properties` moves `src/main/resources/io/aikoql/client/` → `com/aikoql/client/` — the build-version pin reads it package-relative, so the move is part of the fix and the GREEN run caught the missed path; `FuzzEstatePinTest`'s hardcoded DIR literal (slash-separated, dodging the dotted-pattern sed) and the README/jazzer-smoke.sh/sdk-conformance.sh class references follow; D-14's launch-plan row records the namespace unification; pin `publicPackageMatchesVerifiedMavenNamespace` asserts `AikoqlClient.class.getPackageName()` is com.aikoql.client; RED archived as `t48-java-namespace-com-aikoql` (exit 1 — mvn BUILD FAILURE); GREEN: mvn test 39/39 BUILD SUCCESS (arch §52) |
+| T-52 | POC-3 P3-009 (HIGH) — the idempotency key namespace is global: tenant_b remembering with tenant_a's key replays tenant_a's commit, receives the foreign koid (which then reads ACCESS_DENIED) and its own write silently vanishes | `remember_locked` looks up `repo.get_idem(key)` on the bare key and `commit_version` stores it bare, so every tenant's writes share one `idem/` namespace | shipped: the stored key is namespaced by the write's `metadata.tenant` (`idem_scope` composes `tenant\u{0}key`; tenant-less writes like ingest-dir keep the global namespace), and every tenant-aware resolver is scoped the same way — `resolve_idempotency_scoped` used by the split replay, `get_by_idem` and `execute_program`'s execution-record replay; same-tenant retry stays exact-once; pins `t06g_idempotency_key_is_tenant_scoped` (kernel: same key, two tenants → distinct koids, both versions persist) + `idempotency_key_is_tenant_scoped` (MCP: tenant_b gets its own koid, `MATCH device` under tenant_b returns exactly the v2 row, tenant_a retry replays the original); RED archived as `T-52` (exit 101 — both tenants received the same koid) (arch §56) |
+| T-62 | POC P3-006 (LOW) — `verify_backup`/`restore` take the backup PATH, not the `list_backups` name: `backup` returns `{"backup": "<full path>"}` and `list_backups` returns entry `name`s, but passing a listed name fails with "not a valid backup: os error 3" (and the restore tool's own description said "Backup directory name") | the three tools spoke different dialects for the same object; the tools read `{backup}/meta.json` verbatim, so a bare name resolved against the server CWD | shipped: `resolve_backup_arg` — a bare name (single path component, not an existing directory) resolves next to the db file, the same directory `list_backups` scans; a path (separators/absolute/existing dir) passes through unchanged; both tools thread `db_path` from the two dispatch sites (MCP registry + REST router); the verify/restore schemas now say "Backup path (as returned by `backup`) or entry name from `list_backups`", and `list_backups`' description dropped the wrong "current directory" claim; pin `p3_006_backup_tools_accept_list_backups_name` (mcp_real_world: backup → list name → verify BY NAME → destroy → fresh server → restore BY NAME → reopen → knowledge reads back); RED archived as `T-62` (exit 101 — the pre-fix verify-by-name call died with the exact POC error "The system cannot find the path specified. (os error 3)") (arch §66) |
+| T-66 | POC-3 post-fix re-run Issue 2 (CONTRACT DECISION) — tenant-scoped sessions see tenantless rows: the 3 s6_end scoped head/as_of mismatches are the shared tenantless rows (dev0-4, late0-3, dup0-2, cora/corb heads) leaking into tenant_a/tenant_b results, while the frozen oracle requires strict isolation (a scoped session sees ONLY its own tenant's rows) | the kernel's documented R9 semantic ("untenanted objects are shared and stay visible") deliberately keeps tenantless rows visible to scoped subjects — a contract conflict, not an implementation slip; the doc's options: (a) oracle contract is the product requirement → scoped reads filter tenantless rows (kernel change), or (b) shared-tenantless is the model → frozen-oracle amendment; "no middle ground" | shipped: option (a) — auth.rs R9 gains the strict-isolation clause right beside the cross-tenant deny, BEFORE the owner/admin checks (the corpus's scoped sessions are both owner and admin, so any carve-out keeps the leak): a tenant-scoped READ of an untenanted row is AccessDenied with the same strength as the cross-tenant deny; writes are untouched; the conformance pins flip to the new contract — `t32_scoped_subjects_cannot_read_untenanted_rows` (get denied + scan 0), t33's scoped scan drops the shared row (len 2→1), and t34's org-sharing flips to unscoped channels (scoped agents denied the untenanted org KO regardless of ownership/ACL; the unscoped owner and the ACL-granted unscoped agent still read it); P3-009 verified compatible (no probe asserts scoped-sees-tenantless); RED archived as `T-66` (exit 101 — t32 get returned Ok + t33 scan len 2, the exact POC leak shape) (arch §70) |
+| T-65 | POC-3 post-fix re-run Issue 1 (B3-1, OPEN) â€” BETWEEN does not enumerate closed generations: the 4 s4/s7 window mismatches (s4_end [5000,5400], s7_end [0,9000]/[0,100000]/[9000,9500]) are predecessor generations the correction closed at a corpus-scale instant that the kernel never receives â€” successors carry `valid_from` (T-39) but corrections drop the op tx, so the predecessor's only closure is the wall stamp (~1.79e12), which overlaps every event-time window (and T-54 correctly retires it) | the kernel has ONE valid_to per claim and the eval has two clocks â€” AS_OF queries map to wall markers, BETWEEN windows use corpus literals â€” so the closure instant must travel on the correction itself: the doc's own fix ("BETWEEN should walk the version chain per key and emit every generation whose [vf, vt) overlaps the window â€¦ decide and document the closure instant") resolves to asserted op-tx closure (verified by hand-computation against a fresh replay: successor-vf closure leaves 3 mismatches, wall closure leaves 3, only asserted op-tx gives 0) | shipped: `extensions.valid_to` on `supersede` is the asserted predecessor closure â€” the MCP tool maps it to `SupersedeRequest.predecessor_valid_to_ms`, and `transition_epistemic_locked` stores it on a NEW extension key `EXT_VALID_TO_ASSERTED` read ONLY by the BETWEEN arm (the folded `valid_to()` stays wall-only so AS_OF/valid_at semantics and the T-47/T-51/T-38 pins are untouched); the closure mirrors the `close_valid_time` collapse policy (a closure before valid_from collapses to zero-duration, never inverted); the runtime Between arm keeps the T-64 Deleted-head skip, retires Superseded generations only when no asserted closure is present (T-54 fallback â€” the existing pin stays green), takes `valid_to_asserted().or(valid_to())` as vt, skips zero-duration intervals, and emits every generation whose [vf, vt) overlaps the window; pins `between_enumerates_asserted_closed_generations` (MCP: supersede with extensions `{valid_from: 5050, valid_to: 5700}` â†’ BETWEEN [5000,5400] returns BOTH the closed predecessor and the successor, BETWEEN [6000,9000] returns only the successor, AS_OF at the first commit still shows the predecessor) + the T-54 pin re-passed unchanged (supersede without valid_to still retires the predecessor); RED archived as `T-65` (exit 101 â€” the straddling window returned only the successor) (arch Â§69) |
+| T-64 | POC-3 Stage B G-002 (MEDIUM) â€” tombstoned KOs leave the MATCH scan: retraction history is unreachable via AS_OF/HISTORICAL (AS_OF slices from before the tombstone lose the row, HISTORICAL returns none of its versions; get/trace by KOID still work â€” correction history is reachable, retraction history is not) | the MATCH scan enumerates head KOs and excludes Deleted-lifecycle KOs, so the temporal layer (which filters correctly per-version) never sees the KOID | shipped: `kernel.scan_by_type_temporal` â€” `scan_by_type` minus the Deleted skip (`readable_checks` gained an `include_deleted` flag); the runtime's temporal plans scan through it (the Scan arm discards the PropertyIndex assist in temporal mode â€” its koid list resolves through the same Deleted-skipping filters) and the per-arm guards filter: AS_OF/AS_OF JOURNAL drop the Deleted version at/after the tombstone instant (pre-tombstone slices reconstruct the open row), HISTORICAL skips Deleted versions but lists pre-deletion ones, BETWEEN skips Deleted heads (a deleted KO has no live head row), and plain MATCH still answers through the regular scan â€” tombstones stay invisible in current truth; pin `tombstoned_rows_stay_asof_and_historical_reconstructable` (MCP: v1â†’v2 update â†’ forget(tombstone) â†’ AS_OF JOURNAL at the v2 instant returns the row, HISTORICAL lists v1+v2, plain MATCH / AS_OF at the tombstone instant / BETWEEN hide it); RED archived as `T-64` (exit 101 â€” AS_OF before the tombstone returned `{"results":[]}` in the exact POC shape) (arch Â§68) |
+| T-63 | POC-3 T-53 close-out (reopen-visibility anomaly) — an abrupt-close respawn served 0 rows on MATCH once during T-53 pin work, did not reproduce on a fresh KB, and stayed open pending POC-side repro details | POC-side hammering (probe_reopen_visibility.py, 64 cycles on a persistent stream KB with a supersede chain: plain abrupt kills, full-burst kills right after acked remembers, and mid-burst torn-WAL kills) found zero reproductions — every acked row survived every terminate+respawn, and the first MATCH on the respawned server always returned the full count | verified-shipped (pin-only, no product change): the open item closes with a pin at the surface where the anomaly was observed — `abrupt_close_respawn_serves_committed_rows` (MCP: 12 rows + a 3-hop supersede chain, abrupt close via Drop's child.kill() with no stdin EOF, respawn on the SAME db, immediate MATCH returns exactly 12 rows with the successor head and the chain invisible); RED archived as `T-63` (exit 101 — WAL replay temporarily skipped, the respawned MATCH returned `{"results":[]}` in exactly the anomaly's shape) (arch §67) |
+| T-61 | POC-3 (MINOR/doc) — `BETWEEN` literal formats are undocumented: the compiler accepts epoch-millis integers and ISO `YYYY-MM-DD` / `YYYY-MM-DDTHH:MM:SS` (UTC) but the accepted/rejected surface appears nowhere a client reads, so the eval hit `AIKOQL1011: expected ISO instant … got "2026-10-09T05:15:32.488000+00:00"` by surprise | the parser behavior is strict and already partially pinned (bad-ISO + fractional-epoch rejections), but the accepted forms had no end-to-end pin and the spec (MRFC-0010) had no temporal-literal section | shipped: MRFC-0010 §5.2 "Temporal Literals (AS_OF / BETWEEN)" — the two spellings table (epoch millis integer / ISO date / ISO datetime, UTC), the deliberate rejections (fractional seconds, offsets/suffixes, years outside 1970–9999, out-of-range fields) and the epoch-millis-int recommendation (the only spelling computable without a date library); pin `parse_time_millis_t61_literal_surface` (compiler: the three accepted spellings parse to the exact instants — AS_OF + BETWEEN — and the POC's exact shapes reject: fractional+offset, offset alone, fractional+offset inside BETWEEN); RED archived as `T-61` (exit 101 — doc grep "Temporal Literals (AS_OF / BETWEEN)" absent) (arch §65) |
+| T-60 | POC-3 (MINOR) — `remember` silently ignores a top-level `valid_from`: `tool_remember` reads `valid_from` only from `extensions`, while the top-level arg is parsed by `observe`/`assert_knowledge` only — passing it top-level to `remember` succeeds and silently drops the validity claim (probe-verified: the row lands with no `valid_from` extension) | the kernel already honors `extensions.valid_from` on the remember path (EXT_VALID_FROM is deliberately absent from KERNEL_MANAGED_EXTENSIONS — callers declare their own claim's temporal start, and the create path validates `valid_from <= valid_to`), so the gap is purely the tool boundary | shipped: `tool_remember` maps a top-level `valid_from` into the same extension the kernel reads, when the extension is absent — the extension wins when both spellings are given (the T-49 precedence); the remember inputSchema declares the arg; pin `t60_remember_accepts_top_level_valid_from` (MCP: remember with top-level `valid_from` → get shows the exact instant in `extensions.valid_from`; remember with BOTH spellings → the extension wins); RED archived as `T-60` (exit 101 — the row landed with no `valid_from` extension, the exact POC shape) (arch §64) |
+| T-59 | POC-3 P3-010 (LOW) — close→rapid-respawn: a server closed and respawned ~100ms later "served session_init fine and then exited 0 during the first explain call" (a 0.5s settle + one-shot respawn-retry in the runner masked it — 61 explain+prove pairs, 0 crashes with the workaround); the crash leaves no trace | the stdio process has exactly one exit-0 path — the stdin loop ending (EOF / read error / shutdown flag; no exit(0) call exists in the mcp crate), and the shutdown-time maintainer checkpoint reads the attach slot immediately: the maintainer is attached from a SPAWNED thread, so a rapid EOF can read the slot before the attach lands and skip the checkpoint entirely | shipped: the shutdown hand-off is made observable and deterministic — `run_stdio` logs the loop-end reason (`eof` / `read error: {e}` / `shutdown flag`), the shutdown arm waits up to 5s for the maintainer attach (10ms poll; warn + skip if never attached — the honest failure contract), and the checkpoint logs its elapsed time; the close→respawn race itself was hammered ~150× (100 probe cycles + 2 full faithful p3_010 runs with the settle zeroed, debug + release binaries) with zero reproductions, so per the POC doc's own fallback the contract is documented: EOF is a clean shutdown by design, and a ~0.5s cooldown between close and respawn is the supported rapid-restart pattern; pin `t59_stdio_shutdown_handoff_is_observable` (MCP: capture stderr, take() stdin → EOF, assert exit 0 + "stdio loop ended: eof" + "shutdown maintainer checkpoint done"); RED archived as `T-59` (exit 101 — "missing loop-end reason") (arch §63) |
+| T-53 | POC-3 Stage C (HIGH) — plain MATCH returns ALL generations of a superseded key: after a 5-generation supersede chain, both `MATCH device WHERE key == ...` and the head `AS_OF` slice returned every generation | the POC probe ran against a pre-T-38/T-47 binary, so the predecessors were never stamped (no valid_to, still `asserted`); against the current kernel the load-bearing machinery already exists end-to-end — T-47's pair-pin stamps Superseded + valid_to at the successor's instant, T-38's `get_as_of` filters `valid_to <= at`, and the v0.3 K2 `valid_at(now)` retain keeps closed generations out of the default MATCH head | verified-shipped (pin-only, no product change): the missing piece was an end-to-end pin at the device-identity surface — `superseded_generations_stay_out_of_plain_match` (MCP: 4 supersede hops over dev_053 → plain MATCH under tenant_a returns exactly the v5 row, the far-future `AS_OF` head slice agrees, and the `AS_OF` slice at gen3's commit instant returns exactly v3 — history preserved, chain invisible); the queued reopen-visibility probe (abrupt-close respawn serving 0 rows) does not reproduce on a fresh KB and stays open pending POC-side repro details; RED archived as `T-53` (exit 101 — K2 retain temporarily reverted, MATCH leaked all 5 generations with the exact POC row shape) (arch §57) |
+| T-56 | POC-3 P3-005 (MEDIUM) — the server-side 300-calls/min rate cap is per-principal but silent in the CLI help: a burst fails at call ~300 with -32000 and neither `--help` nor `serve --help` mentions the cap, and no knob is named anywhere a CLI user looks | the cap and its `[rate_limit]` TOML knob only ever appeared in config internals; the root sample `aikoql.toml` still showed the pre-T-45 value (`max_calls_per_minute = 120`) while the shipped default is 300, so the sample misdocumented the default | shipped: `print_usage` gains a "Limits:" block — MCP tool calls are rate-limited per principal (subject or session identity), 300 calls per 60s window by default, tuned with `[rate_limit]` in aikoql.toml (`enabled` / `max_calls_per_minute`), and bulk loads should use `import <SOURCE>` or `ingest-dir` rather than paced MCP writes; the root sample `aikoql.toml` pins 300 with a T-45 note; pin `cl05_help_documents_rate_cap` (cli_contract: both `--help` and `serve --help` carry "300 calls", "per principal", "max_calls_per_minute", "[rate_limit]"); RED archived as `T-56` (exit 101 — "300 calls" missing from the help) (arch §60) |
+| T-57 | POC-3 P3-008 (MEDIUM) — no validated bulk ordered-replay path: the P3-007 replay arm drove 1284 paced MCP round trips (302.5s vs 3.5s PostgreSQL); the `batch` tool carries multiple remembers, but ordered replay needs per-op idempotency keys, per-op koid returns (a retraction must target the koid of a specific prior op) and per-op tenant stamps — all unvalidated in batch form | remember already returns per-op koids and honors per-op idempotency keys (T-52-scoped), but batch had no `supersede` dispatch (the one op shape that RETRACTS prior ops), and the kernel supersede path had no idempotency resolution at all — a replayed correction/retraction trips the "already superseded" guard instead of converging | shipped: `tool_batch` gains the `supersede` arm and captures the successor koid as the next `$N.koid` handle (a retraction returns none); `SupersedeRequest` gains `idempotency_key` — resolved at the top of `supersede_composition` (after authz, before the already-superseded guard), scoped by the row's own tenant (T-52), and stored only AFTER the whole composition lands as the completion marker (stored cell version 0 = retract, ≥1 = successor; replay reconstructs `{old, new}` from the caller's own arguments without a graph walk; sweep details omitted on replay; a crash mid-supersede degrades to today's refusal semantics, never a half-done replay); pin `t57_ordered_replay_through_batch_converges` (MCP: a two-batch device corpus with per-op tenant + per-op keys + a retraction targeting batch A's returned handle — both batches replay to the same koids, and the AS_OF oracle slices/heads match the corpus timeline under both tenants); collateral: the e05 kernel encryption pin scopes alice to acme (T-55's fail-closed R9 made the old unscoped read AccessDenied — surfaced only now by the full-suite gate); RED archived as `T-57` (exit 101 — "unknown batch op: supersede") (arch §61) |
+| T-58 | POC-3 P3-008 (LOW) — `AS_OF` is wall-clock-only: a client replaying a synthetic corpus must synthesize wall markers (strictly-increasing marker + monotonicity sleep loop; collision/drift footgun) | the transaction journal seq is already monotonic and exact per apply — the POC doc's own suggested fix — but no query spelling exists for it: the parser accepts only epoch millis/ISO after `AS_OF` | shipped: `AS_OF JOURNAL <n>` — the lexer gains a `JOURNAL` keyword, `TemporalClause`/`TemporalOp` gain `AsOfJournal(n)`, and the kernel gains `get_as_of_journal`: the `ke/` event at seq n pins the EXACT packed commit instant of the nth apply (no 0xFFFF fill — the event IS the apply, so a later same-millis sibling commit must not leak in), reconstructed via `object_at` + the same F12 half-open `valid_to <= wall` filter as `get_as_of` (wall = the event's `commit_ts >> 16`), with Read authz; seq 0 = the empty world before the first apply (None), seq beyond the journal head = current state (u64::MAX snap, now wall); the pair-pinned compositions collapse into their instant (T-47 reinforced — the successor-creation and supersession events share a commit_ts, so both seqs slice identically); restart-safe because `ke/` persists seq→commit_ts; pin `t58_asof_journal_domain_slices_between_applies` (MCP: remember/correct/retract a device row, capture health()["journal_seq"] after each apply — strictly advancing — and assert `AS_OF JOURNAL s1` = v0, s2 = v0b, s3 = retracted-empty, 0 = empty, beyond-head = current); RED archived as `T-58` (exit 101 — "AIKOQL1011: expected time ... got 'JOURNAL'") (arch §62) |
+| T-55 | POC-3 P3-009 (tenant gaps) — (MEDIUM) a session with no tenant reads ALL tenants' rows; (LOW P2c) `tenant: ""` is accepted and the row lands in an invisible "" namespace; (LOW P5) foreign-row ACCESS_DENIED surfaces as `error.code: INTERNAL` with "unexpected error" | the auth R9 rule only compares tenants when BOTH are set — an unscoped subject's tenant is None, so the pin never fires and the default-open path admits every tenant's head (even when the unscoped agent IS the row owner); "" is a string, so every tenant validation passes and no scoped reader can ever resolve it; the KError Display writes `ACCESS_DENIED: ...` (underscore form) but classify() only matches "access denied" with a space | shipped: (1) kernel R9 gains a Read-only fail-closed rule — an unscoped subject reading a tenanted row is denied UNLESS it carries an explicit admin role (direct or inherited); ownership alone does not bypass (the unscoped agent could be the row owner — the POC threat itself), and writes are untouched (tool write paths self-scope the subject from the tenant arg); (2) `reject_empty_tenant` at the tool boundary — session_init and remember reject a present-but-empty/non-string tenant (remember covers tool_batch ops, which resolve through tool_remember); (3) classify() matches `access_denied` → ACCESS_DENIED code/retryable=false with the access suggestion; pins `t33_unscoped_subject_sees_only_shared_rows` (kernel: owner-unscoped scan sees ONLY the shared row, point-read on the scoped row is AccessDenied, admin-role scan sees both) + `tenantless_session_sees_nothing_scoped` / `remember_rejects_empty_tenant` / `foreign_access_denied_is_not_internal` (MCP: unscoped MATCH returns 0 rows even for the row owner, admin-role sees both; `tenant:""` remember → VALIDATION_ERROR and session_init → -32602; get/explain/prove/trace across tenants → code ACCESS_DENIED, retryable false); RED archived as `T-55` (exit 101 — kernel 1 + MCP 3 pins failed) (arch §59) |
+| T-54 | POC-3 Stage B3-2 (HIGH) — superseded predecessors stay visible in BETWEEN windows: the device stream superseded `cora`/`corb` with `extensions.valid_from`-anchored successors, then `BETWEEN 0 AND 100000` still answered with the stale generations | the predecessor's valid_to is the WALL supersession instant (~1.79e12), so its valid-time span overlaps every event-time window the eval queries — the BETWEEN arm's half-open overlap check alone cannot retire it | shipped: the runtime Between arm skips rows that are Superseded AND carry an outbound SUPERSEDES edge (created only by supersede-with-successor — `transition_epistemic_locked`), then applies the unchanged overlap; kernel-managed valid-time closure (the runtime fixture's `fact_with_open_validity`, no edge) and T-51 retractions (no edge) stay visible in BETWEEN; history stays AS_OF-reconstructable (scan-level filter, no storage change); pin `between_windows_retire_superseded_generations` (MCP: a superseded device link answers exactly the successor in an event-time window, 0 rows before its valid_from, `AS_OF` at the predecessor's commit instant still reconstructs the old value); RED archived as `T-54` (exit 101 — the window returned both generations) (arch §58) |
+| T-51 | POC-3 Stage B3-3 (MEDIUM-HIGH) — "supersede without successor" is inexpressible: the G-002 workaround shape (supersede with no properties) mints an empty shell KO (`properties: {}`, open validity) that every MATCH head and AS_OF slice then returns — retracted device links leave dangling rows | the MCP tool always routes through the fresh-successor arm (the kernel's None-successor transition exists only as `admin_transition_epistemic`, without the sweep/evidence/pair-pin machinery), so "end validity, create nothing" has no protocol spelling | shipped: `SupersedeRequest.retract` + `SupersedeResult.new: Option<KOID>` — retraction stamps Superseded + valid_to with no SUPERSEDES edge, appends the evidence to the old claim, runs the dependent sweep, and creates nothing; conflicting shapes (retract + superseded_by, retract + properties) are rejected instead of silently dropped; tool arg `retract: true`, `new` renders null; pins `supersede_retract_leaves_no_shell_successor` (MCP: retract leaves MATCH head empty) + `supersede_retract_ends_validity_without_a_successor` (kernel: None result, valid_to stamped, no edge, evidence appended, both rejections); RED archived as `T-51` (exit 101 — shell successor koid created) (arch §55) |
+| T-50 | POC-3 Stage B3-4 (HIGH) — a supersede successor loses the replaced row's tenant: the successor is created untenanted, and the ACL's R9 rule treats untenanted objects as shared, so a device row corrected inside tenant_a becomes visible to every other tenant's scans (cross-tenant leak) | the successor create path stamps `tenant: ctx.tenant.clone()` — but the MCP layer never sets the context tenant (only remember maps the tenant ARG into metadata), so the successor is always untenanted at the tool boundary | shipped: the successor inherits `old.metadata.tenant` with `ctx.tenant` only as the fallback — the generation replaces the claim, so it must stay inside the claim's tenant (same reasoning as F11's scope/authority inheritance); pin `supersede_successor_inherits_tenant` remembers a device in tenant_a, supersedes it, and asserts a tenant_b-scoped `MATCH device RETURN *` sees 0 rows; RED archived as `T-50` (exit 101 — tenant_b saw the successor v2) (arch §54) |
+| T-49 | POC-3 Stage B3-1 (HIGH) — supersede ignores the caller's `extensions.valid_from`: the successor asserts validity from the commit instant, so the device stream's back-dated corrections land "in the future" and AS_OF reconstruction of the device timeline breaks | tool_supersede reads only `observed_at_ms` — the kernel honors it (F7), but the remember-compatible `extensions.valid_from` spelling is never mapped, so the stream's per-call extension is silently dropped at the tool boundary | shipped: tool_supersede maps `extensions.valid_from` → `observed_at_ms` when the explicit arg is absent (commit time stays the F7 fallback; a negative/non-integer extension is rejected by the kernel's existing `valid_from >= 0` guard); pin `supersede_honors_extensions_valid_from` supersedes with `extensions.valid_from = 1_700_000_000_000` and asserts the successor's get shows exactly that instant; RED archived as `T-49` (exit 101 — successor stamped 1791556921768) (arch §53) |
+
+Execution order is the table order — the oracle (T-05) lands before
+probabilistic generation anywhere, exactly as the design's §38 prescribes.
+
+## 6. CI integration (when, not now)
+
+`training-data.yml` (fast-exit on `training/**` + workflow paths, per the
+CI-03 pattern): unit, fuzz-estate, determinism, integration legs. It lands
+**at T-12**, and only after its legs are green locally — a red gate never
+enters CI (CI-04 lesson); the arch-gate pins (workflow tests) are registered
+in the same commit set. Until then: local-only `pytest` runs.
+
+## 7. Traps (anticipated; T-01 recon validates each)
+
+- SDK import discipline: use the installed `aikoql` package, never a
+  `sys.path` insert to the source tree (the v02 cert trap in reverse).
+- Windows server lifecycle: embedded/MCP spawn-kill patterns from the SDK's
+  `test_agent_embedded.py`; never blanket-kill processes.
+- Determinism: dict/set iteration and float formatting — canonical
+  serialization (`sort_keys`, stable encodings) everywhere content-derived
+  IDs touch.
+- Hypothesis: fixed profile / `derandomize` in CI legs; no unseeded RNG in
+  tests (the repo's test-env-hygiene rule, Python edition).
+- Console encoding: cp1252 kills Python CLI output on Windows — the CLI
+  writes UTF-8 explicitly.
+- Snapshot drift: dataset regeneration must pin `schema_version` +
+  `knowledge_revision` + `generator_version`; a question is never a cache
+  key (§30).

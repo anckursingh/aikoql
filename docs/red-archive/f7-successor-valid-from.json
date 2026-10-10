@@ -1,0 +1,8 @@
+{
+  "id": "f7-successor-valid-from",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test transactions supersede_stamps_successor_valid_from_from_asserted_start",
+  "captured_at": "2026-10-07T20:40:27Z",
+  "captured_head": "9da2c5a68b2bf6625a6ccf7ff5583fd6f5521a63",
+  "exit_code": 101
+}

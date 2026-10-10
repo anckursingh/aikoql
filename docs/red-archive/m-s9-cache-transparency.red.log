@@ -1,0 +1,16 @@
+failures:
+
+---- cache_never_changes_answers stdout ----
+
+thread 'cache_never_changes_answers' (30324) panicked at crates\storage\aikoql-v2\tests\cache.rs:111:48:
+called `Result::unwrap()` on an `Err` value: Corrupt("truncated: need 8 bytes at offset 331, 4 remain")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cache_never_changes_answers
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.28s
+
+error: test failed, to rerun pass `--test cache`
+EXIT=101

@@ -337,8 +337,9 @@ fn snp003_concurrent_checkpoint_prune_skips_pinned_files() {
     // gen g0 with a SURVIVING identity log: put_object queues the identity
     // record, the flush publishes IDENTITY-g0.log, and no checkpoint
     // trigger fires, so nothing prunes it yet.
-    db.put_object(ObjectId::from_bytes([0xA1; 16]), b"k", b"v")
-        .unwrap();
+    let oa = ObjectId::from_bytes([0xA1; 16]);
+    let ob = ObjectId::from_bytes([0xB2; 16]);
+    db.put_object(oa, b"k", b"v").unwrap();
     db.flush().unwrap();
     let g0 = Current::read(&d.join("CURRENT"))
         .unwrap()
@@ -347,7 +348,6 @@ fn snp003_concurrent_checkpoint_prune_skips_pinned_files() {
         d.join(format!("IDENTITY-{g0:06}.log")).exists(),
         "the baseline identity log survives its flush"
     );
-    let before = walk(&db);
     let db = Arc::new(db);
 
     // Park the snapshot mid-copy (pins IDENTITY-g0); the interleave bumps
@@ -358,8 +358,7 @@ fn snp003_concurrent_checkpoint_prune_skips_pinned_files() {
     let (info, completed) = interleave_completed_while_parked(&db, &snap, {
         let db = Arc::clone(&db);
         move || {
-            db.put_object(ObjectId::from_bytes([0xB2; 16]), b"k2", b"v2")
-                .unwrap();
+            db.put_object(ob, b"k2", b"v2").unwrap();
             db.flush().unwrap();
             db.checkpoint_now().unwrap();
         }
@@ -392,15 +391,24 @@ fn snp003_concurrent_checkpoint_prune_skips_pinned_files() {
     );
     let restored = restore_from(&snap, dir("snp003-target")).unwrap();
     assert_eq!(
-        walk(&restored),
-        before,
+        restored.get_object(oa, b"k").unwrap().as_deref(),
+        Some(b"v".as_slice()),
         "the pinned generation restores byte-exact"
     );
-    let mut expected_live = before.clone();
-    expected_live.insert(b"k2".to_vec(), b"v2".to_vec());
+    // The rows are OBJECT rows (the identity machinery is the fixture) —
+    // the byte surface never answers them (stor006), so the row checks
+    // go through the object surface.
+    assert!(
+        walk(&db).is_empty(),
+        "object rows never leak into a byte scan"
+    );
     assert_eq!(
-        walk(&db),
-        expected_live,
+        db.get_object(oa, b"k").unwrap().as_deref(),
+        Some(b"v".as_slice()),
         "the checkpoint changed no rows beyond the put"
+    );
+    assert_eq!(
+        db.get_object(ob, b"k2").unwrap().as_deref(),
+        Some(b"v2".as_slice())
     );
 }

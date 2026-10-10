@@ -1,0 +1,8 @@
+{
+  "id": "t48-java-namespace-com-aikoql",
+  "pre_fix_commit": "c6c1efc",
+  "command": "mvn -f crates/sdk/java/pom.xml test -Dtest=VersionIdentityTest#publicPackageMatchesVerifiedMavenNamespace",
+  "captured_at": "2026-10-08T16:11:59Z",
+  "captured_head": "c6c1efca7c325f82cf67cde9a5dae58dacb3cf68",
+  "exit_code": 1
+}

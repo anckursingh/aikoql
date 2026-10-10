@@ -1,0 +1,51 @@
+   Compiling aikoql-storage-v2 v0.1.19 (E:\dreams\Mnemosyne\crates\storage\aikoql-v2)
+warning: calls to `std::mem::drop` with a reference instead of an owned value does nothing
+    --> crates\storage\aikoql-v2\src\db.rs:1074:13
+     |
+1074 |             drop(&frame);
+     |             ^^^^^------^
+     |                  |
+     |                  argument has type `&Vec<u8>`
+     |
+     = note: `#[warn(dropping_references)]` on by default
+help: use `let _ = ...` to ignore the expression or result
+     |
+1074 -             drop(&frame);
+1074 +             let _ = &frame;
+     |
+
+   Compiling aikoql-scheduler v0.1.19 (E:\dreams\Mnemosyne\crates\engines\scheduler)
+   Compiling aikoql-runtime v0.1.19 (E:\dreams\Mnemosyne\crates\runtime)
+   Compiling aikoql-semantic v0.1.19 (E:\dreams\Mnemosyne\crates\engines\semantic)
+warning: `aikoql-storage-v2` (lib) generated 1 warning
+   Compiling aikoql-mcp v0.1.19 (E:\dreams\Mnemosyne\crates\services\api\mcp)
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.97s
+     Running tests\mcp_stdio.rs (target\debug\deps\mcp_stdio-1669dc5bfa99b97c.exe)
+
+running 1 test
+test m_abrupt_kill_preserves_acked_writes ... SUCCESS: The process with PID 332 (child process of PID 46120) has been terminated.
+FAILED
+
+failures:
+
+---- m_abrupt_kill_preserves_acked_writes stdout ----
+
+thread 'm_abrupt_kill_preserves_acked_writes' (51576) panicked at crates\services\api\mcp\tests\mcp_stdio.rs:122:9:
+assertion `left == right` failed: tool error: {"content":[{"type":"text","text":"{\"ok\":false,\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"NOT_FOUND: 01a0ec5b2bfc0000000000000000a9c9\",\"retryable\":false,\"suggestion\":\"Verify the KOID exists. Use discover_schema to check available types\"}}"}],"isError":true}
+  left: Some(true)
+ right: Some(false)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    m_abrupt_kill_preserves_acked_writes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 24 filtered out; finished in 4.46s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_stdio`
+EXIT=101

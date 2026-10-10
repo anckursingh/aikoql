@@ -4,12 +4,7 @@ Requires: aikoql-mcp binary built (cargo build -p aikoql-mcp).
 Run: pytest tests/test_mcp_client.py -v
 """
 
-import json
-import os
-import subprocess
 import sys
-import tempfile
-import time
 from pathlib import Path
 
 import pytest
@@ -17,55 +12,6 @@ import pytest
 # Ensure the package is importable.
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 from aikoql import Agent, McpClient, McpError
-
-
-def find_binary():
-    """Find the aikoql-mcp binary."""
-    candidates = [
-        Path(__file__).parent.parent.parent.parent.parent / "target" / "debug" / "aikoql-mcp",
-        Path(__file__).parent.parent.parent.parent.parent / "target" / "debug" / "aikoql-mcp.exe",
-    ]
-    for c in candidates:
-        if c.exists():
-            return str(c)
-    pytest.skip("aikoql-mcp binary not built. Run: cargo build -p aikoql-mcp")
-
-
-@pytest.fixture
-def mcp_server():
-    """Start a temporary aikoql-mcp server on a free port."""
-    import socket
-    binary = find_binary()
-    # Find a free port.
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-
-    # CodeQL py/insecure-temporary-file: mkstemp → non-guessable name, 0600.
-    fd, db = tempfile.mkstemp(suffix=".redb")
-    os.close(fd)
-    # P3-M1: TCP mode requires --tcp-token TOKEN[:TENANT[:ROLES]]; the bare
-    # token rides initialize params, the spec's roles come from the server side.
-    token = "test-token"
-    proc = subprocess.Popen(
-        [binary, "serve", db, "--listen", f"127.0.0.1:{port}", "--tcp-token", f"{token}::admin"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    time.sleep(0.5)  # Wait for server to start.
-
-    yield f"127.0.0.1:{port}", db, token
-
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    try:
-        os.remove(db)
-    except OSError:
-        pass
 
 
 class TestMcpClient:

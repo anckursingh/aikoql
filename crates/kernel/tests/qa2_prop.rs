@@ -10,6 +10,7 @@
 //! would add a strategy layer without new coverage here.
 
 use aikoql_kernel::*;
+use aikoql_storage_v2::engine::StorageAdminApi;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -193,7 +194,11 @@ fn create_op(k: &Kernel, m: &mut Model, seq: u64, strict: bool) {
 #[test]
 fn w2_prop_001_random_ko_lifecycle_all_invariants_hold() {
     const SEED: u64 = 0xC0FFEE;
-    let engine = Arc::new(MemoryEngine::new());
+    // Launch S-02: the durable v2 engine replaces MemoryEngine here so the
+    // restore cadence exercises the real snapshot machinery.
+    let db_dir = std::env::temp_dir().join(format!("qa2_prop_001_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&db_dir);
+    let engine = Arc::new(aikoql_storage_v2::AikoqlStorageEngineV2::open(&db_dir).unwrap());
     let clock = Arc::new(ManualClock::new(10_000));
     let k = Kernel::open(engine.clone(), clock.clone(), SEED).unwrap();
     let mut rng = Rng(SEED);
@@ -204,14 +209,17 @@ fn w2_prop_001_random_ko_lifecycle_all_invariants_hold() {
     for op in 0..400usize {
         // "restore": a snapshot/restore cycle at a fixed cadence — the model
         // rolls back to the checkpoint, then keeps mutating. Uses the real
-        // engine snapshot/restore machinery (kernel-level restore).
+        // engine snapshot/restore machinery (engine-native restore).
         if op % 97 == 96 {
-            let path = std::env::temp_dir().join("qa2_prop_001_snap.redb");
+            let snap =
+                std::env::temp_dir().join(format!("qa2_prop_001_snap_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&snap);
             let checkpoint = m.clone();
-            engine.snapshot_to(&path).unwrap();
-            k.restore_store_from(&path).unwrap();
+            engine.snapshot_to(&snap).unwrap();
+            engine.restore_from(&snap).unwrap();
             m = checkpoint;
             check(&k, &m, SEED, op);
+            let _ = std::fs::remove_dir_all(&snap);
             continue;
         }
 
@@ -290,13 +298,14 @@ fn w2_prop_001_random_ko_lifecycle_all_invariants_hold() {
             req.properties = props(seq);
             req.evidence = vec![ev()];
             let res = k.supersede(req).unwrap();
+            let new = res.new.expect("fresh successor");
             let old = m.kos.get_mut(&koid).unwrap();
             old.version += 1;
             old.superseded = true;
-            old.rels.push(("supersedes".into(), res.new));
-            m.keys.push(res.new);
+            old.rels.push(("supersedes".into(), new));
+            m.keys.push(new);
             m.kos.insert(
-                res.new,
+                new,
                 MKo {
                     version: 1,
                     props: props(seq),
@@ -591,13 +600,14 @@ fn w2_prop_003_random_temporal_ops_keep_temporal_invariants() {
             seq += 1;
             // clean rejection is a valid outcome; state must be unchanged
             if let Ok(res) = k.supersede(req) {
+                let new = res.new.expect("fresh successor");
                 let old = m.kos.get_mut(&koid).unwrap();
                 old.version += 1;
                 old.superseded = true;
-                old.rels.push(("supersedes".into(), res.new));
-                m.keys.push(res.new);
+                old.rels.push(("supersedes".into(), new));
+                m.keys.push(new);
                 m.kos.insert(
-                    res.new,
+                    new,
                     MKo {
                         version: 1,
                         props: sprops,

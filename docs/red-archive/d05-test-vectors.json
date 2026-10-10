@@ -1,0 +1,8 @@
+{
+  "id": "d05-test-vectors",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-sdk-compat.sh",
+  "captured_at": "2026-10-01T14:13:03Z",
+  "captured_head": "b611db35a7f34a04045f14ffc62a5ff15488ac0d",
+  "exit_code": 1
+}

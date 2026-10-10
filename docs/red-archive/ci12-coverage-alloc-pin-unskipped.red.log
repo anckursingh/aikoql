@@ -1,0 +1,2 @@
+ARCH: check-coverage-floor.sh must skip the alloc-budget pin under instrumentation (CI-12)
+EXIT=1

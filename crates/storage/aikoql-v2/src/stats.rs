@@ -56,12 +56,23 @@ pub struct ReadPathStats {
     pub bytes_read: u64,
     pub entries_decoded: u64,
     pub lock_wait_ns: u64,
+    /// L-27 (release round 6) — the state-guard HOLD inside `Db::get`
+    /// (elapsed from acquisition to drop: memtable probes + arc clone
+    /// only, by the SE2-M10 construction). The stall pin's structural
+    /// counterpart to `lock_wait_ns`: a get that holds the guard across
+    /// its disk read inflates the hold by the whole read, on any machine.
+    pub lock_hold_ns: u64,
     pub bloom_probe_ns: u64,
     pub get_wall_ns: u64,
     /// P5-M42 — Σ remaining.len() at each get_many retain (the elements
     /// examined): the per-resolution retain made it O(B²) worst case;
     /// the per-pass compaction makes it O(B).
     pub batch_retain_scans: u64,
+    /// L-13 (TDD-008) — RestartIndex::parse invocations that found the
+    /// DataBlock's OnceLock empty. The parse-once property: sequential
+    /// cold == 1 then reuse == 0; a simultaneous cold storm lands inside
+    /// [1, N] — the documented benign race (segment.rs, block_get_v2).
+    pub restart_parses: u64,
 }
 
 /// The live counters — one per field, relaxed atomics (~ns overhead).
@@ -84,9 +95,11 @@ pub(crate) struct Stats {
     pub(crate) bytes_read: AtomicU64,
     pub(crate) entries_decoded: AtomicU64,
     pub(crate) lock_wait_ns: AtomicU64,
+    pub(crate) lock_hold_ns: AtomicU64,
     pub(crate) bloom_probe_ns: AtomicU64,
     pub(crate) get_wall_ns: AtomicU64,
     pub(crate) batch_retain_scans: AtomicU64,
+    pub(crate) restart_parses: AtomicU64,
 }
 
 impl Stats {
@@ -109,9 +122,11 @@ impl Stats {
             bytes_read: self.bytes_read.load(Ordering::Relaxed),
             entries_decoded: self.entries_decoded.load(Ordering::Relaxed),
             lock_wait_ns: self.lock_wait_ns.load(Ordering::Relaxed),
+            lock_hold_ns: self.lock_hold_ns.load(Ordering::Relaxed),
             bloom_probe_ns: self.bloom_probe_ns.load(Ordering::Relaxed),
             get_wall_ns: self.get_wall_ns.load(Ordering::Relaxed),
             batch_retain_scans: self.batch_retain_scans.load(Ordering::Relaxed),
+            restart_parses: self.restart_parses.load(Ordering::Relaxed),
         }
     }
 }

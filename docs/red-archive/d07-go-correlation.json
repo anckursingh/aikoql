@@ -1,0 +1,8 @@
+{
+  "id": "d07-go-correlation",
+  "pre_fix_commit": "HEAD",
+  "command": "go -C crates/sdk/go test ./...",
+  "captured_at": "2026-10-01T14:36:37Z",
+  "captured_head": "e580e4dd071fabf229805b8ed49c2b23f0bf7235",
+  "exit_code": 1
+}

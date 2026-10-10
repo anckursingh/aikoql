@@ -1,0 +1,137 @@
+--- FAIL: TestDefaultClientIdentityIsNotAFakePin (0.00s)
+    client_test.go:260: the default client identity must be the honest dev marker, got "0.1.0"
+FAIL
+FAIL	github.com/anckursingh/aikoql/sdk/go	1.279s
+?   	github.com/anckursingh/aikoql/sdk/go/cmd/sdk-conformance	[no test files]
+?   	github.com/anckursingh/aikoql/sdk/go/examples/web-service	[no test files]
+FAIL
+
+> @aikoql/client@0.2.1 test
+> node --test "tests/**/*.test.ts"
+
+AIKOQL_MCP_BIN not set — real-server conformance skipped
+✔ sdk-conformance --language typescript (3.8944ms)
+✔ the §16 corpus pin (7.2578ms)
+✔ fault matrix: drop-request (616.2339ms)
+✔ fault matrix: drop-response (513.7716ms)
+✔ fault matrix: delay-response (1216.8376ms)
+✔ fault matrix: duplicate-response (268.1679ms)
+✔ fault matrix: reorder-response (476.1495ms)
+✔ fault matrix: truncate-response (512.9208ms)
+✔ fault matrix: corrupt-response (470.6382ms)
+✔ fault matrix: inject-notification (302.4893ms)
+✔ fault matrix: inject-stale-response (303.5269ms)
+✔ fault matrix: close-after (302.9645ms)
+✔ fault matrix: half-close-after (253.4391ms)
+✔ fault matrix: slow-server (499.46ms)
+✔ fault matrix: oversized-response (308.5931ms)
+✔ the fuzz-estate pin (4.0476ms)
+✔ the version-parse property (19.1534ms)
+✔ the error-mapping property (11.1234ms)
+✔ the id-correlation property (3.8928ms)
+✔ the frame-cap property (10678.4097ms)
+✔ the envelope property (337.2802ms)
+✔ the §17 command model (138.5702ms)
+✖ the default client identity is the package version (74.8846ms)
+✔ exhaustion waits then RESOURCE_EXHAUSTED; a freed connection goes to a waiter (334.3073ms)
+✔ release rolls back the open transaction and the next borrower starts clean (12.8255ms)
+✔ the connection is reusable after a cancelled call (7.1587ms)
+✔ fillMinIdle dials to the floor (8.9827ms)
+﹣ reconnects after a server restart (0.1378ms) # AIKOQL_MCP_BIN not set — real-server integration test skipped
+✔ initialize sends the handshake (72.102ms)
+✔ skips stale and id-less frames (10.5158ms)
+✔ protocol error on a foreign id (7.4784ms)
+✔ rpc error envelope (7.0467ms)
+✔ noise frames are skipped (8.109ms)
+✔ a deadline maps to the retryable TIMEOUT (209.4964ms)
+✔ a closed client is UNAVAILABLE (5.8451ms)
+✔ a too-old server fails fast with VERSION_MISMATCH (5.9785ms)
+✔ a single-chunk stream (total_chunks 1) yields the head and ends (6.8759ms)
+✔ a multi-chunk stream ends on done (5.3083ms)
+✔ an aborted stream releases the connection (5.6294ms)
+✔ a closed transaction handle refuses further use (6.3136ms)
+✔ a late response after a timeout is skipped (self-healing) (311.7466ms)
+ℹ tests 41
+ℹ suites 0
+ℹ pass 39
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 26853.0856
+
+✖ failing tests:
+
+test at tests\identity.test.ts:11:1
+✖ the default client identity is the package version (74.8846ms)
+  AssertionError [ERR_ASSERTION]: the default identity must be the manifest version
+  
+  '' !== '0.2.1'
+  
+      at TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/identity.test.ts:25:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '',
+    expected: '0.2.1',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+F                                                                        [100%]
+================================== FAILURES ===================================
+______________ test_default_client_identity_is_not_the_stale_pin ______________
+
+    def test_default_client_identity_is_not_the_stale_pin():
+        sent = {}
+    
+        def respond(req):
+            sent["version"] = req["params"]["clientInfo"]["version"]
+            return [{"jsonrpc": "2.0", "id": req["id"],
+                     "result": {"serverInfo": {"name": "aikoql-mcp",
+                                               "version": MIN_SERVER_VERSION}}}]
+    
+        with ScriptedServer(respond=respond) as srv:
+            c = McpClient("127.0.0.1", srv.port).connect()
+            try:
+                c.initialize()
+            finally:
+                c.close()
+>       assert sent["version"] != "0.1.0", "the default identity must not be the stale fake pin"
+E       AssertionError: the default identity must not be the stale fake pin
+E       assert '0.1.0' != '0.1.0'
+
+tests\test_default_identity.py:35: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_default_identity.py::test_default_client_identity_is_not_the_stale_pin
+1 failed in 0.66s
+AIKOQL_MCP_BIN not set � real-server conformance skipped
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.018 s <<< FAILURE! -- in io.aikoql.client.VersionIdentityTest
+[ERROR] io.aikoql.client.VersionIdentityTest.versionComesFromTheBuildArtifact -- Time elapsed: 0.012 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: version.properties must be filtered into the classes dir by Maven ==> expected: not <null>
+	at org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:152)
+	at org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+	at org.junit.jupiter.api.AssertNotNull.failNull(AssertNotNull.java:49)
+	at org.junit.jupiter.api.AssertNotNull.assertNotNull(AssertNotNull.java:35)
+	at org.junit.jupiter.api.Assertions.assertNotNull(Assertions.java:312)
+	at io.aikoql.client.VersionIdentityTest.versionComesFromTheBuildArtifact(VersionIdentityTest.java:24)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] Failures: 
+[ERROR]   VersionIdentityTest.versionComesFromTheBuildArtifact:24 version.properties must be filtered into the classes dir by Maven ==> expected: not <null>
+[ERROR] Tests run: 38, Failures: 1, Errors: 0, Skipped: 0
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.2:test (default-test) on project aikoql-client: There are test failures.
+[ERROR] 
+[ERROR] See E:\dreams\Mnemosyne\crates\sdk\java\target\surefire-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+EXIT=1

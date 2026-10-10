@@ -1,0 +1,8 @@
+{
+  "id": "d18-crates-io",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-02T13:58:10Z",
+  "captured_head": "59c0d554282e62ff6aabd9744c6f2ad8513fb89f",
+  "exit_code": 1
+}

@@ -1,0 +1,17 @@
+
+=================================== ERRORS ====================================
+___________________ ERROR collecting tests/test_prepared.py ___________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\crates\sdk\python\tests\test_prepared.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_prepared.py:17: in <module>
+    from aikoql import McpError, PreparedStatement
+E   ImportError: cannot import name 'PreparedStatement' from 'aikoql' (E:\dreams\Mnemosyne\crates\sdk\python\python\aikoql\__init__.py)
+=========================== short test summary info ===========================
+ERROR crates\sdk\python\tests\test_prepared.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.43s
+EXIT=2

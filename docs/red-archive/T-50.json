@@ -1,0 +1,8 @@
+{
+  "id": "T-50",
+  "pre_fix_commit": "45b2e34",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world supersede_successor_inherits_tenant",
+  "captured_at": "2026-10-09T14:56:30Z",
+  "captured_head": "45b2e34668d12bddab43febddb8cdac86fa7e365",
+  "exit_code": 101
+}

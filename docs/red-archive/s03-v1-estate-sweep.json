@@ -1,0 +1,8 @@
+{
+  "id": "s03-v1-estate-sweep",
+  "pre_fix_commit": "b1e90e2",
+  "command": "env V2ADOPT_BACKEND=aikoql V2ADOPT_NIGHTLY=1 cargo test -p aikoql-storage-v2 --test kse_m7_v2_workloads v2_m7_workloads",
+  "captured_at": "2026-09-24T21:44:52Z",
+  "captured_head": "b1e90e265ec43b41786cfea7bf583a8444346825",
+  "exit_code": 101
+}

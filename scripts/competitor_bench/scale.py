@@ -56,12 +56,16 @@ def hits_of(out):
 
 def scale_run(n_notes, n_ops):
     ds = gen_dataset(n_notes=n_notes, n_events=n_notes // 2)
-    kb = Path(tempfile.mkdtemp(prefix=f"aikoql-scale-{n_notes}-"))
+    # S-02 fail-closed: the store refuses a PRE-EXISTING path, so the db
+    # must be a non-existent child of a mkdtemp parent (the matrix's
+    # bench.py pattern) — this leg first ran on CI at the v0.2.0 tag push.
+    kb_parent = Path(tempfile.mkdtemp(prefix=f"aikoql-scale-{n_notes}-"))
+    kb = kb_parent / "kb"
     print(f"aikoql embedded {n_notes} notes: ingest + cells ...", flush=True)
     res = B.bench_aikoql(ds, kb, n=n_ops)
     res["n_notes"] = n_notes
     res["n_events"] = n_notes // 2
-    shutil.rmtree(kb, ignore_errors=True)
+    shutil.rmtree(kb_parent, ignore_errors=True)
     print(f"  done: ingest {res['ingest_s']}s, rss {res['rss_kb']} KiB", flush=True)
     return res
 
@@ -72,13 +76,12 @@ def start_server(db_dir):
     exe = REPO / "target" / "release" / \
         ("aikoql-mcp.exe" if os.name == "nt" else "aikoql-mcp")
     # Bench config: the default 120 calls/min limit is far below ingest rate.
-    cfg = db_dir / "aikoql.toml"
+    cfg = db_dir.parent / "aikoql.toml"  # beside the db: the server refuses a pre-existing db dir, and the config must not live inside it
     cfg.write_text("[rate_limit]\nmax_calls_per_minute = 10000000\n")
-    env = dict(os.environ, AIKOQL_BACKEND="aikoql-v2")
     proc = subprocess.Popen(
         [str(exe), "serve", "--listen", f"{MCP_ADDR[0]}:{MCP_ADDR[1]}",
          "--tcp-token", f"{TOKEN}::bench", "--config", str(cfg), str(db_dir)],
-        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(120):
         if proc.poll() is not None:
             raise RuntimeError("aikoql-mcp exited during startup")
@@ -272,8 +275,15 @@ def mcp_column(ds, server, db_dir, n_ops):
 
     def build_vector(agent):
         def op():
+            # The MCP path is eventually consistent by design (P5-M27): a
+            # query right after ingest answers from a lagging ANN unless the
+            # client asks for freshness. The oracle needs the caught-up
+            # index — the wait is the client's bound, and the first cold op
+            # absorbs it (run 36617743360: the lagging index flunked this
+            # cell on the 2-core runner).
             hits = agent.find_similar(vector=QUERY_VEC, k=10,
-                                      fusion="vector_only")
+                                      fusion="vector_only",
+                                      wait_for_freshness_ms=10_000)
             return (len(hits) == 10
                     and all(h["koid"] in cats_set for h in hits))
 
@@ -298,6 +308,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true",
                     help="smoke run: 1000 notes, n=10 cells")
+    ap.add_argument("--no-1m", action="store_true",
+                    help="skip the 1M embedded leg (the CI release path: "
+                         "its cells cannot fit a 360-minute job on the "
+                         "2-core public runner — L-27 release round 3)")
     ap.add_argument("--out", default=None, help="result path override")
     args = ap.parse_args()
 
@@ -312,12 +326,14 @@ def main():
 
     # (a) scale — embedded aikoql.
     sizes = [(1000, "1k")] if args.quick \
-        else [(100_000, "100k"), (1_000_000, "1m")]
+        else [(100_000, "100k")] + ([] if args.no_1m else [(1_000_000, "1m")])
     result["scale"] = {tag: scale_run(n_notes, n_ops)
                        for n_notes, tag in sizes}
 
-    # (b) + (c) — one aikoql-mcp server instance.
-    mcp_dir = Path(tempfile.mkdtemp(prefix="aikoql-mcp-bench-"))
+    # (b) + (c) — one aikoql-mcp server instance; the db dir must not
+    # pre-exist (S-02 fail-closed — same fix as scale_run).
+    mcp_parent = Path(tempfile.mkdtemp(prefix="aikoql-mcp-bench-"))
+    mcp_dir = mcp_parent / "db"
     server = start_server(mcp_dir)
     try:
         result["mcp_mode"] = mcp_column(gen_dataset(), server, mcp_dir, n_ops)
@@ -325,7 +341,7 @@ def main():
     finally:
         server.terminate()
         server.wait()
-        shutil.rmtree(mcp_dir, ignore_errors=True)
+        shutil.rmtree(mcp_parent, ignore_errors=True)
         # mcp audit.rs derives `{db_path}.audit.log` BESIDE the db dir — the
         # rmtree above never reaches it.
         Path(f"{mcp_dir}.audit.log").unlink(missing_ok=True)

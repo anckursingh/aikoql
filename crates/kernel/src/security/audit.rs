@@ -184,7 +184,7 @@ impl KeyAuditLog {
     /// Returns events ordered by timestamp (oldest first).
     pub fn scan(&self, label_prefix: Option<&str>, limit: usize) -> Result<Vec<KeyEvent>, String> {
         let prefix = b"__audit__/keys/";
-        // ponytail: naive scan — O(n) over audit log. Fine until millions of
+        // ponytail: naive linear scan over the audit log. Fine until millions of
         // events; add time-range partitioning when audit exceeds 100k records.
         let all = self
             .store

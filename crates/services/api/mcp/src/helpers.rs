@@ -203,6 +203,13 @@ pub(crate) fn parse_vector(args: &J) -> Result<Option<Vec<f32>>, String> {
     }
 }
 
+pub(crate) fn commit_ts_millis(ts: u64) -> u64 {
+    // The HLC packs `epoch_ms << 16 | counter`; the tool boundary emits
+    // plain epoch millis (device-eval MINOR-2) — the counter is
+    // kernel-internal and never crosses the API.
+    ts >> 16
+}
+
 pub(crate) fn ko_json(ko: &KnowledgeObject) -> J {
     let mut props = serde_json::Map::new();
     for (k, v) in &ko.properties {
@@ -218,7 +225,7 @@ pub(crate) fn ko_json(ko: &KnowledgeObject) -> J {
     json!({
         "koid": ko.koid.to_hex(),
         "version": ko.version,
-        "commit_ts": ko.commit_ts,
+        "commit_ts": commit_ts_millis(ko.commit_ts),
         "type_name": ko.metadata.type_name,
         "state": ko.lifecycle.state.to_string(),
         "properties": J::Object(props),
@@ -246,7 +253,7 @@ pub(crate) fn ke_json(ke: &KnowledgeEvent) -> J {
         "version": ke.version,
         "kind": format!("{:?}", ke.kind),
         "actor": ke.actor,
-        "commit_ts": ke.commit_ts,
+        "commit_ts": commit_ts_millis(ke.commit_ts),
         "note": ke.note
     })
 }

@@ -7,7 +7,7 @@
 //! ## Key layout (R6 remediation)
 //!
 //! All persistent state lives in a flat keyspace with namespace prefixes.
-//! BTree `range()` scans are naturally prefix-bounded — O(log N + matches).
+//! BTree `range()` scans are naturally prefix-scoped (log N + matches).
 //!
 //! | Prefix    | Key format                          | Purpose                  |
 //! |-----------|-------------------------------------|--------------------------|
@@ -24,7 +24,7 @@
 //! | `meta/`   | `meta/type_index`                   | Type-index backfill marker|
 //!
 //! R9: `scan_by_type` walks `type/<type_name>/` instead of the whole `head/`
-//! space (O(log N + per-type) instead of O(N)). The index is a candidate set —
+//! space (log N + per-type instead of N). The index is a candidate set —
 //! readers still verify the payload's `type_name` so stale entries from type
 //! changes are harmless.
 
@@ -400,7 +400,7 @@ impl KnowledgeRepository {
     }
 
     // -----------------------------------------------------------------------
-    // Type index (R9: O(log N + per-type) scoped scans)
+    // Type index (R9: scoped scans)
     // -----------------------------------------------------------------------
 
     /// Put one `type/<type_name>/<koid>` entry. Idempotent at the KV level.
@@ -449,7 +449,7 @@ impl KnowledgeRepository {
     /// recomputed as their exact image and the symmetric difference is
     /// applied in ONE batch (disjoint put/del key sets, so the engine's
     /// puts-before-dels order cannot cross a del with a put).
-    /// ponytail: O(derived-index) memory for the two key sets — rebuild is a
+    /// ponytail: derived-index-sized memory for the two key sets — rebuild is a
     /// repair op, not a hot path.
     pub fn rebuild_derived_indexes(&self) -> KResult<DerivedIndexRebuild> {
         let mut old: HashSet<Vec<u8>> = HashSet::new();

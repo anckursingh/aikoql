@@ -1,0 +1,149 @@
+F..............F..FFFF..FF                                               [100%]
+================================== FAILURES ===================================
+____________________ test_answer_grounds_on_evidenced_fact ____________________
+
+    def test_answer_grounds_on_evidenced_fact():
+        ctx = _context(
+            [_fact("The settlement service is owned by the Payments Team", _EV)],
+            [_EV],
+        )
+        out = build_answer(_scenario(), ctx)
+>       assert out == {"answer": "Payments Team",
+                       "evidence_ids": [evidence_id(_EV)],
+                       "claims": [{"statement":
+                                   "The settlement service is owned by "
+                                   "the Payments Team",
+                                   "evidence_ids": [evidence_id(_EV)]}],
+                       "labels": {"grounded": True, "answerable": True,
+                                  "ambiguous": False, "contradictory": False}}
+E       assert {'answer': 'P...tory': False}} == {'answer': 'P...tory': False}}
+E         
+E         Omitting 3 identical items, use -vv to show
+E         Right contains 1 more item:
+E         {'claims': [{'evidence_ids': ['{"confidence": 0.9, "document_id": '
+E                                       '"acmepay.md", "extractor": "mock-v1"}'],
+E                      'statement': 'The settlement service is owned by the Payments '
+E                                   'Team'}]}
+E         Use -v to get more diff
+
+training\tests\test_grounding.py:64: AssertionError
+_______________ test_answer_emits_one_claim_per_supporting_fact _______________
+
+    def test_answer_emits_one_claim_per_supporting_fact():
+        ctx = _context(
+            [_fact("The settlement service is owned by the Payments Team", _EV),
+             _fact("Payments Team runs the settlement service", _EV2)],
+            [_EV, _EV2],
+        )
+        out = build_answer(_scenario(), ctx)
+>       assert out["claims"] == [_claim(), _claim(
+               ^^^^^^^^^^^^^
+            "Payments Team runs the settlement service", _EV2)]
+E       KeyError: 'claims'
+
+training\tests\test_grounding.py:303: KeyError
+____________________ test_validator_rejects_dangling_claim ____________________
+
+    def test_validator_rejects_dangling_claim():
+        out = validate_grounding(_claims_example(
+            [_claim("Settlement batches nightly")]))
+>       assert not out["ok"]
+E       assert not True
+
+training\tests\test_grounding.py:325: AssertionError
+__________________ test_validator_rejects_forged_evidence_id __________________
+
+    def test_validator_rejects_forged_evidence_id():
+        out = validate_grounding(_claims_example(
+            [_claim(evidence=_EV2)]))  # _EV2 is not this fact's evidence
+>       assert not out["ok"]
+E       assert not True
+
+training\tests\test_grounding.py:332: AssertionError
+______________ test_validator_rejects_claim_without_evidence_ids ______________
+
+    def test_validator_rejects_claim_without_evidence_ids():
+        out = validate_grounding(_claims_example(
+            [{"statement": _claim()["statement"], "evidence_ids": []}]))
+>       assert not out["ok"]
+E       assert not True
+
+training\tests\test_grounding.py:339: AssertionError
+___________ test_validator_rejects_supporting_fact_no_claim_covers ____________
+
+    def test_validator_rejects_supporting_fact_no_claim_covers():
+        # Two supporting facts, one claim: the uncovered fact is dangling
+        # evidence the decomposition hid.
+        ex = _claims_example([_claim()])
+        ex["context"] = _context(
+            [_fact("The settlement service is owned by the Payments Team", _EV),
+             _fact("Payments Team runs the settlement service", _EV2)],
+            [_EV, _EV2])
+        ex["expected"]["evidence_ids"] = [evidence_id(_EV), evidence_id(_EV2)]
+        out = validate_grounding(ex)
+>       assert not out["ok"]
+E       assert not True
+
+training\tests\test_grounding.py:352: AssertionError
+___________ test_validator_rejects_empty_claims_on_grounded_example ___________
+
+    def test_validator_rejects_empty_claims_on_grounded_example():
+        # claims: [] on a grounded answer = no decomposition = dangling.
+        out = validate_grounding(_claims_example([]))
+>       assert not out["ok"]
+E       assert not True
+
+training\tests\test_grounding.py:371: AssertionError
+_________________________ test_schema_accepts_claims __________________________
+
+    def test_schema_accepts_claims():
+        from aikoql_training.models import validate
+        from conftest import make_example
+    
+        ex = make_example(expected={"answer": "Payments Team", "koids": [],
+                                    "evidence_ids": [evidence_id(_EV)],
+                                    "claims": [_claim()]})
+>       validate(ex)  # must not raise SchemaError
+        ^^^^^^^^^^^^
+
+training\tests\test_grounding.py:381: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+example = {'schema_version': '2', 'generator_version': '0.2.0', 'source': {'database_id': 'acmepay', 'snapshot_id': 'snap-1', 'k...enario_id': 'factual:policy:p-01', ...}, 'task': {'type': 'grounded_qa', 'difficulty': 'factual', 'requires': []}, ...}
+
+    def validate(example: Dict[str, Any]) -> None:
+        """Fail-closed schema validation. Raises SchemaError; returns None."""
+        if not isinstance(example, dict):
+            raise SchemaError("example must be an object")
+        for field, typ in _SPEC.items():
+            if field not in example:
+                raise SchemaError(f"missing required field: {field}")
+            if not isinstance(example[field], typ):
+                raise SchemaError(f"{field}: expected {typ.__name__}")
+        for field in example:
+            if field not in _SPEC:
+                raise SchemaError(f"unknown field: {field}")
+        for section, fields in _NESTED.items():
+            sub = example[section]
+            for field, typ in fields.items():
+                if field not in sub:
+                    raise SchemaError(f"{section}: missing required field: {field}")
+                if not isinstance(sub[field], typ):
+                    raise SchemaError(f"{section}.{field}: expected {typ.__name__}")
+            for field in sub:
+                if field not in fields and field not in _OPTIONAL.get(section, {}):
+>                   raise SchemaError(f"unknown field: {section}.{field}")
+E                   aikoql_training.errors.SchemaError: unknown field: expected.claims
+
+training\src\aikoql_training\models.py:122: SchemaError
+=========================== short test summary info ===========================
+FAILED training\tests\test_grounding.py::test_answer_grounds_on_evidenced_fact
+FAILED training\tests\test_grounding.py::test_answer_emits_one_claim_per_supporting_fact
+FAILED training\tests\test_grounding.py::test_validator_rejects_dangling_claim
+FAILED training\tests\test_grounding.py::test_validator_rejects_forged_evidence_id
+FAILED training\tests\test_grounding.py::test_validator_rejects_claim_without_evidence_ids
+FAILED training\tests\test_grounding.py::test_validator_rejects_supporting_fact_no_claim_covers
+FAILED training\tests\test_grounding.py::test_validator_rejects_empty_claims_on_grounded_example
+FAILED training\tests\test_grounding.py::test_schema_accepts_claims - aikoql_...
+8 failed, 18 passed in 5.96s
+EXIT=1

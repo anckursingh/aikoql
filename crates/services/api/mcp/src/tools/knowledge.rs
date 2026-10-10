@@ -6,10 +6,10 @@ use crate::session::*;
 use crate::{
     info_span, json, AssertionRequest, ConfidenceContext, ConflictResolution,
     ConflictResolutionRequest, ContradictionRequest, ConversationMessage, DeriveRequest, Direction,
-    ExperienceRequest, ForgetMode, GraphEngineApi, InvalidationRequest, Kernel, MergeRequest,
-    MergeStrategy, Metadata, ObservationRequest, RelateRequest, RelationshipRef, RememberRequest,
-    SplitRequest, SummarizeConversationRequest, SupersedeRequest, TraverseQuery,
-    VerificationRequest, J, KOID,
+    ExperienceRequest, ForgetMode, GraphEngineApi, InvalidationRequest, Kernel, KnowledgeObject,
+    MergeRequest, MergeStrategy, Metadata, ObservationRequest, RelateRequest, RelationshipRef,
+    RememberRequest, SplitRequest, SummarizeConversationRequest, SupersedeRequest, TraverseQuery,
+    Value, VerificationRequest, J, KOID,
 };
 pub(crate) fn tool_relate(k: &Kernel, args: &J) -> Result<J, String> {
     let from = args
@@ -34,7 +34,7 @@ pub(crate) fn tool_relate(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 
@@ -114,6 +114,7 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     )
     .entered();
     let subject = subject_of(args);
+    reject_empty_tenant(args)?;
     let type_name = args
         .get("type_name")
         .and_then(|t| t.as_str())
@@ -151,6 +152,19 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     // v0.3 K1: extensions may be declared at the protocol boundary
     // (epistemic status, authority, scope, canonical evidence).
     req.extensions = parse_extensions(args)?;
+    // T-60 (POC-3 MINOR): remember accepts a top-level `valid_from` — the
+    // observe/assert_knowledge spelling. It lands in the same extension the
+    // kernel honors (EXT_VALID_FROM is deliberately not kernel-managed:
+    // callers declare their own claim's temporal start). The extension wins
+    // when both are given.
+    if !req.extensions.contains_key(KnowledgeObject::EXT_VALID_FROM) {
+        if let Some(vf) = args.get("valid_from").and_then(|v| v.as_u64()) {
+            req.extensions.insert(
+                KnowledgeObject::EXT_VALID_FROM.into(),
+                Value::Int(vf as i64),
+            );
+        }
+    }
     // Parse optional relationships array.
     if let Some(rels) = args.get("relationships").and_then(|r| r.as_array()) {
         for rel in rels {
@@ -186,7 +200,7 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     let mut resp = json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     });
     if embed_requested {
         resp["embed"] = json!({
@@ -271,7 +285,9 @@ pub(crate) fn tool_forget(k: &Kernel, args: &J) -> Result<J, String> {
             args.get("note").and_then(|n| n.as_str()).map(String::from),
         )
         .map_err(|e| e.to_string())?;
-    Ok(json!({"koid": f.koid.to_hex(), "version": f.version, "commit_ts": f.commit_ts}))
+    Ok(
+        json!({"koid": f.koid.to_hex(), "version": f.version, "commit_ts": commit_ts_millis(f.commit_ts)}),
+    )
 }
 
 pub(crate) fn tool_evolve(k: &Kernel, args: &J) -> Result<J, String> {
@@ -288,7 +304,7 @@ pub(crate) fn tool_evolve(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": e.koid.to_hex(),
         "version": e.version,
-        "commit_ts": e.commit_ts,
+        "commit_ts": commit_ts_millis(e.commit_ts),
         "state": e.state.to_string()
     }))
 }
@@ -343,7 +359,7 @@ pub(crate) fn tool_derive(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 
@@ -373,7 +389,7 @@ pub(crate) fn tool_observe(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 
@@ -395,7 +411,7 @@ pub(crate) fn tool_assert_knowledge(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 
@@ -411,7 +427,7 @@ pub(crate) fn tool_verify_knowledge(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts,
+        "commit_ts": commit_ts_millis(r.commit_ts),
         "status": r.status.as_str(),
         "confirmations": r.confirmations,
         "last_verified": r.last_verified
@@ -469,17 +485,46 @@ pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
         type_name,
     );
     req.superseded_by = superseded_by;
+    req.retract = args
+        .get("retract")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     req.properties = parse_properties(args)?;
     req.evidence = parse_evidence(args)?;
+    req.observed_at_ms = args
+        .get("observed_at_ms")
+        .and_then(|v| v.as_u64())
+        // B3-1 (POC-3): extensions.valid_from is the remember-compatible
+        // spelling of the successor's asserted validity start — honor it
+        // exactly as remember does; commit time stays the fallback (F7).
+        .or_else(|| {
+            args.get("extensions")
+                .and_then(|e| e.get("valid_from"))
+                .and_then(|v| v.as_u64())
+        });
+    // T-65 (POC-3 Stage B3-1): extensions.valid_to is the asserted closure
+    // instant for the predecessor (the correction op's tx) — the BETWEEN
+    // arm's closure, not the wall valid_to.
+    req.predecessor_valid_to_ms = args
+        .get("extensions")
+        .and_then(|e| e.get("valid_to"))
+        .and_then(|v| v.as_u64());
     req.reason = args
         .get("reason")
         .and_then(|r| r.as_str())
         .map(String::from);
     req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    // T-57 (P3-008): per-op idempotency so an ordered replay re-sending a
+    // correction/retraction converges instead of erroring.
+    req.idempotency_key = args
+        .get("idempotency_key")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let r = k.supersede(req).map_err(|e| e.to_string())?;
     Ok(json!({
         "old": r.old.to_hex(),
-        "new": r.new.to_hex(),
+        // B3-3: null for a retraction — no successor was created.
+        "new": r.new.map(|k| k.to_hex()),
         "invalidated_dependents": r
             .invalidated_dependents
             .iter()
@@ -536,7 +581,7 @@ pub(crate) fn tool_merge(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 
@@ -641,6 +686,27 @@ pub(crate) fn tool_get(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(ko_json(&ko))
 }
 
+/// Dogfood (EI ingest, 2026-09-29): the adapter's external-id lookup ran a
+/// full MATCH scan of ExternalIDIndex per object — ~600 ms at 150K objects,
+/// O(n) and growing. The idempotency key is already an O(1) engine lookup
+/// (get_idem); this exposes it read-only. A miss classifies to NOT_FOUND.
+pub(crate) fn tool_get_by_idem(k: &Kernel, args: &J) -> Result<J, String> {
+    let key = args
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or("missing argument: key")?;
+    match k
+        .resolve_idempotency_scoped(subject_of(args).tenant.as_deref(), key)
+        .map_err(|e| format!("idempotency lookup: {e}"))?
+    {
+        Some((koid, _, _)) => {
+            let ko = k.get(subject_of(args), &koid).map_err(|e| e.to_string())?;
+            Ok(ko_json(&ko))
+        }
+        None => Err(format!("not found: idempotency key '{key}'")),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // v0.3 K5 — Agent Experience
 // ---------------------------------------------------------------------------
@@ -698,7 +764,7 @@ pub(crate) fn tool_record_experience(k: &Kernel, args: &J) -> Result<J, String> 
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 

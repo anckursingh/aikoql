@@ -1,0 +1,8 @@
+{
+  "id": "t-15-scorecard",
+  "pre_fix_commit": "7b5eae3",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_scorecard.py -q",
+  "captured_at": "2026-10-03T21:43:00Z",
+  "captured_head": "7b5eae3cdd3673e17a0d45ef020bb94315ab53b3",
+  "exit_code": 2
+}

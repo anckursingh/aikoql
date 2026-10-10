@@ -1,0 +1,2 @@
+ARCH: the tier3-scale job must run the scale harness with --no-1m (the 1M leg cannot fit a 360m CI job, L-27 round 3)
+EXIT=1

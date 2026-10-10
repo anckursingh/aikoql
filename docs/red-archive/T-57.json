@@ -1,0 +1,8 @@
+{
+  "id": "T-57",
+  "pre_fix_commit": "c1a58e7",
+  "command": "bash -c cargo test -p aikoql-mcp --test mcp_real_world t57_ordered_replay_through_batch_converges",
+  "captured_at": "2026-10-09T19:20:08Z",
+  "captured_head": "c1a58e77f9b536a1758650e578f55f218055e86a",
+  "exit_code": 101
+}

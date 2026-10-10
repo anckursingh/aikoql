@@ -1,0 +1,4 @@
+ARCH: ci.yml lost the ts-sdk job (D-19)
+ARCH: ci.yml lost the java-sdk job (D-19)
+ARCH: ci.yml lost the rust-sdk job (D-19)
+EXIT=1

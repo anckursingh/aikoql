@@ -1,0 +1,3 @@
+ARCH: scripts/bench-tiers.py missing (D-20)
+ARCH: artifact_schema.py lost the validate_tiers arm (D-20)
+EXIT=1

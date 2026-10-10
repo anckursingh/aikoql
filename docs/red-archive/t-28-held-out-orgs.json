@@ -1,0 +1,8 @@
+{
+  "id": "t-28-held-out-orgs",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_corpus.py::test_held_out_org_never_leaks_into_train training/tests/test_gates.py::test_held_out_declaration_keeps_eval_orgs_out_of_train -q",
+  "captured_at": "2026-10-04T11:47:03Z",
+  "captured_head": "480ce7304d215551d7d07fc38ec3f4ac3c350be9",
+  "exit_code": 1
+}

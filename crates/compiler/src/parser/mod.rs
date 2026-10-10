@@ -276,6 +276,10 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
         Some(ast::TemporalClause::AsOf(at)) => ops.push(IrOp::Temporal {
             op: TemporalOp::AsOf(*at),
         }),
+        // T-58 (P3-008 LOW): AS_OF JOURNAL <n> — journal-seq clock domain.
+        Some(ast::TemporalClause::AsOfJournal(n)) => ops.push(IrOp::Temporal {
+            op: TemporalOp::AsOfJournal(*n),
+        }),
         Some(ast::TemporalClause::Between { from, to }) => ops.push(IrOp::Temporal {
             op: TemporalOp::Between {
                 from: *from,

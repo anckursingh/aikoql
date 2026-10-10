@@ -10,6 +10,10 @@ use serde::Deserialize;
 pub(crate) struct RuntimeConfig {
     pub db_path: String,
     pub listen_addr: Option<String>,
+    /// D-15: the framed native protocol listener (§5/§6, ECO-2). Same
+    /// loopback-only + token rules as the MCP TCP listener; CLI-only for
+    /// now (add a [server] TOML key when someone asks).
+    pub native_port: Option<String>,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -41,13 +45,6 @@ pub(crate) struct RuntimeConfig {
     /// [encryption] — encryption-at-rest (MRFC-0020), wired in serve + all
     /// store-opening subcommands via engine::open_kernel.
     pub encryption: RuntimeEncryption,
-    /// Backend selection (PR#2 review SE-02, PR6-005): `None` = auto-detect
-    /// at open through the one authoritative path
-    /// (`aikoql_runtime::backend::detect_backend` — a redb file stays redb,
-    /// a native WAL stays aikoql, a v2 directory stays v2, a missing path
-    /// creates v2). Any of TOML / env / CLI naming a backend resolves to
-    /// `Some` here, so the detection never overrides an explicit choice.
-    pub backend: Option<StorageBackend>,
     /// P5-M11 (ND-11): KOQL request timeout in seconds — a query running
     /// longer is cancelled and answered -32002.
     pub request_timeout_secs: u64,
@@ -57,12 +54,6 @@ pub(crate) struct RuntimeConfig {
     /// The TOML path that took effect (for diagnostics).
     pub config_path: Option<String>,
 }
-
-/// The storage backends the server can open (docs/STORAGE-BACKENDS.md).
-/// PR6-005 — owned by the runtime's one authoritative backend module
-/// (aikoql_runtime::backend): parsing, detection and opening all live
-/// there; this alias keeps the config pipeline typed against it.
-pub(crate) use aikoql_runtime::backend::Backend as StorageBackend;
 
 /// Merged encryption settings (MRFC-0020). Disabled by default.
 #[derive(Clone, Debug, Default)]
@@ -105,7 +96,9 @@ struct TomlConfig {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct TomlStorage {
-    backend: Option<String>,
+    // Launch S-02: `backend` is deleted — storage V2 is the only engine
+    // (the launch plan §S-02). Any TOML [storage].backend now fails the
+    // deny_unknown_fields gate, which is the honest post-decommission error.
     path: Option<String>,
 }
 
@@ -240,9 +233,8 @@ fn apply_toml_encryption(enc: &mut RuntimeEncryption, e: TomlEncryption) {
 }
 
 /// The one canonical default database path (P1-21): a fresh default is the
-/// v2 DIRECTORY, named honestly — every verb that used to fall back to a
-/// file named `./aikoql.redb` now falls back to this. A legacy redb file is
-/// opened by passing its path (or `--backend redb`) explicitly.
+/// v2 DIRECTORY, named honestly. A legacy single-file database is migrated
+/// by path with the WAL migrator (launch S-02), never auto-opened.
 pub(crate) const DEFAULT_DB_PATH: &str = "./aikoql-v2";
 
 /// Layering: defaults → TOML → env → CLI. `subcmd == Some("serve")` skips
@@ -256,6 +248,7 @@ pub(crate) fn load(
     let mut cfg = RuntimeConfig {
         db_path: DEFAULT_DB_PATH.into(),
         listen_addr: None,
+        native_port: None,
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -271,12 +264,15 @@ pub(crate) fn load(
         log_level: "info".into(),
         log_format: "text".into(),
         rate_enabled: true,
-        rate_max_calls_per_minute: 120,
+        // T-45: 120 denied the tail of a legitimate batch phase (~130
+        // tool calls per dataset slice at the device eval's 115/min
+        // throttle). 300 fits a phase with headroom; [rate_limit]
+        // max_calls_per_minute stays the knob for anything stricter.
+        rate_max_calls_per_minute: 300,
         encryption: RuntimeEncryption {
             key_path: "./aikoql.key".into(),
             ..Default::default()
         },
-        backend: None,
         request_timeout_secs: 30,
         max_connections: 64,
         config_path: None,
@@ -290,15 +286,6 @@ pub(crate) fn load(
         cfg.config_path = Some(path.clone());
 
         if let Some(s) = t.storage {
-            if let Some(backend) = s.backend {
-                // PR#2 review SE-02: [storage].backend selects the engine
-                // through the one pipeline (was rejected unless "redb" —
-                // a dead config path).
-                cfg.backend = Some(
-                    StorageBackend::parse(&backend)
-                        .map_err(|m| format!("config {path}: storage.backend {m}"))?,
-                );
-            }
             if let Some(p) = s.path {
                 cfg.db_path = p;
             }
@@ -386,9 +373,6 @@ pub(crate) fn load(
     if let Some(v) = env_opt("AIKOQL_DB") {
         cfg.db_path = v;
     }
-    if let Some(v) = env_opt("AIKOQL_BACKEND") {
-        cfg.backend = Some(StorageBackend::parse(&v).map_err(|m| format!("AIKOQL_BACKEND: {m}"))?);
-    }
     if let Some(v) = env_opt("AIKOQL_LISTEN") {
         cfg.listen_addr = Some(v);
     }
@@ -468,6 +452,14 @@ pub(crate) fn load(
                 );
                 i += 2;
             }
+            "--native-port" => {
+                cfg.native_port = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .unwrap_or_else(|| "127.0.0.1:9070".into()),
+                );
+                i += 2;
+            }
             "--tcp-token" => match args.get(i + 1) {
                 Some(v) => {
                     cli_tcp_tokens.push(v.clone());
@@ -524,14 +516,6 @@ pub(crate) fn load(
                 }
                 i += 2;
             }
-            "--backend" => match args.get(i + 1) {
-                Some(v) => {
-                    cfg.backend =
-                        Some(StorageBackend::parse(v).map_err(|m| format!("--backend: {m}"))?);
-                    i += 2;
-                }
-                None => return Err("--backend requires a value: redb|aikoql|aikoql-v2".into()),
-            },
             "--config" => {
                 // Consumed by find_toml above; skip its value here.
                 i += 2;
@@ -648,62 +632,6 @@ mod tests {
         std::fs::write(&p, content).unwrap();
         TEMP_FILES.with(|t| t.borrow_mut().paths.push(p.clone()));
         p.to_string_lossy().into_owned()
-    }
-
-    /// PR#2 review SE-02 — the backend flows through the one pipeline with
-    /// the same precedence as every other knob: default(auto) → TOML → env
-    /// → CLI. The review's chain: TOML aikoql, env aikoql-v2, CLI redb ⇒
-    /// redb.
-    #[test]
-    fn backend_precedence_toml_env_cli() {
-        // load() directly: load_bare/load_t would deadlock on load_with_env's guard.
-        load_with_env(|| {
-            let toml_path = tmp_toml("[storage]\nbackend = \"aikoql\"\n");
-
-            std::env::remove_var("AIKOQL_BACKEND");
-            let cfg = load(&argv(&["aikoql-mcp", "--config", &toml_path]), None, None).unwrap();
-            assert_eq!(cfg.backend, Some(StorageBackend::Aikoql)); // TOML beats default
-
-            std::env::set_var("AIKOQL_BACKEND", "aikoql-v2");
-            let cfg = load(&argv(&["aikoql-mcp", "--config", &toml_path]), None, None).unwrap();
-            assert_eq!(cfg.backend, Some(StorageBackend::AikoqlV2)); // env beats TOML
-
-            let args = argv(&["aikoql-mcp", "--config", &toml_path, "--backend", "redb"]);
-            let cfg = load(&args, None, None).unwrap();
-            std::env::remove_var("AIKOQL_BACKEND");
-            assert_eq!(cfg.backend, Some(StorageBackend::Redb)); // CLI beats env
-            Ok(cfg)
-        })
-        .unwrap();
-    }
-
-    /// SE-02 — the default is auto-detection (None), and a mistyped backend
-    /// at any layer fails closed, never silently opens a fresh store.
-    #[test]
-    fn backend_default_auto_and_unknown_fails_closed() {
-        load_with_env(|| {
-            std::env::remove_var("AIKOQL_BACKEND");
-            let default_cfg = load(&argv(&["aikoql-mcp"]), None, None).unwrap();
-            assert_eq!(default_cfg.backend, None);
-
-            std::env::set_var("AIKOQL_BACKEND", "nope");
-            let env_err = load(&argv(&["aikoql-mcp"]), None, None).unwrap_err();
-            std::env::remove_var("AIKOQL_BACKEND");
-            assert!(
-                env_err.contains("unknown storage backend"),
-                "got: {env_err}"
-            );
-
-            let toml_path = tmp_toml("[storage]\nbackend = \"nope\"\n");
-            let toml_err =
-                load(&argv(&["aikoql-mcp", "--config", &toml_path]), None, None).unwrap_err();
-            assert!(
-                toml_err.contains("unknown storage backend"),
-                "got: {toml_err}"
-            );
-            Ok(default_cfg)
-        })
-        .unwrap();
     }
 
     #[test]
@@ -962,13 +890,6 @@ level = "debug"
     }
 
     #[test]
-    fn rocksdb_backend_rejected() {
-        let p = tmp_toml("[storage]\nbackend = \"rocksdb\"\n");
-        let err = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap_err();
-        assert!(err.contains("rocksdb"), "got: {err}");
-    }
-
-    #[test]
     fn encryption_defaults_disabled() {
         let cfg = load_bare(&argv(&["aikoql-mcp"])).unwrap();
         assert!(!cfg.encryption.enabled);
@@ -1073,7 +994,7 @@ employee = ["salary", "ssn"]
 
     #[test]
     fn positional_db_path_still_works() {
-        let cfg = load_bare(&argv(&["aikoql-mcp", "./my.redb"])).unwrap();
-        assert_eq!(cfg.db_path, "./my.redb");
+        let cfg = load_bare(&argv(&["aikoql-mcp", "./my-kb"])).unwrap();
+        assert_eq!(cfg.db_path, "./my-kb");
     }
 }

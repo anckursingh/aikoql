@@ -267,7 +267,7 @@ fn cl01b_error_code_source_completeness() {
     }
     assert_eq!(
         envelope.len(),
-        9,
+        10,
         "envelope extraction drifted: {envelope:?}"
     );
     for code in &envelope {
@@ -305,7 +305,7 @@ fn cl01b_error_code_source_completeness() {
             tags.push(tag);
         }
     }
-    assert_eq!(tags.len(), 14, "kernel-tag extraction drifted: {tags:?}");
+    assert_eq!(tags.len(), 15, "kernel-tag extraction drifted: {tags:?}");
     for tag in &tags {
         assert!(
             doc.contains(tag),
@@ -555,6 +555,33 @@ fn cl03g_usage_errors_exit_2() {
         Some(2),
         "explain without a koid is a usage error"
     );
+}
+
+// --- cl05 — the serve help documents the rate cap (P3-005 MEDIUM) --------------
+
+/// P3-005: the per-principal 300-calls/min cap was invisible — neither
+/// `--help` nor `serve --help` mentioned it and no knob was named, so a
+/// burst failed at call ~300 with -32000 and no documented remedy. Pin:
+/// both help spellings name the cap (300 calls / 60s window), its
+/// per-principal scope, the [rate_limit] max_calls_per_minute TOML knob,
+/// and the bulk-load alternative (import / ingest-dir).
+#[test]
+fn cl05_help_documents_rate_cap() {
+    for args in [&["--help"][..], &["serve", "--help"][..]] {
+        let (st, out, _err) = run_bin(args);
+        assert!(st.success(), "{args:?} must exit 0: {st}");
+        for needle in [
+            "300 calls",
+            "per principal",
+            "max_calls_per_minute",
+            "[rate_limit]",
+        ] {
+            assert!(
+                out.contains(needle),
+                "help must document the rate cap (missing {needle:?}): {out}"
+            );
+        }
+    }
 }
 
 // --- cl04 — the shell's fresh default is an honest v2 directory (PR6 P1-21) ------

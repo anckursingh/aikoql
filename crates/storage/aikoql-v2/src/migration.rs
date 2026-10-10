@@ -5,9 +5,9 @@
 //! modified or deleted: the operator's retention policy decides, the
 //! migrator reports.
 //!
-//! PR#2 review SE-04: the migration streams — frames are read in bounded
+//! PR#2 review SE-04: the migration streams — frames are read in fixed-size
 //! chunks, decoded one at a time, applied to the destination and verified
-//! against it immediately, then discarded. Memory is O(chunk + largest
+//! against it immediately, then discarded. Memory is one chunk plus the largest
 //! frame), never the complete WAL, all decoded batches, or a full
 //! expected-state map. (A corrupted header claiming a huge payload still
 //! grows the carry buffer until EOF fails closed — no worse than the
@@ -19,22 +19,23 @@
 //! post-state), and a state fingerprint taken before close and after reopen
 //! pins the flush/reopen round-trip.
 //!
-//! The envelope parser is v1's own validated reader (`envelope::parse_at` —
-//! magic/version/type/checksum); only the frozen payload codec is
-//! re-implemented here (v1's `decode_batch` is private, and this crate
-//! stays decoupled from v1's internals).
+//! The envelope parser is the vendored v1 reader (`legacy_envelope` — frozen
+//! when the v1 crate was deleted, launch S-02: magic/version/type/checksum);
+//! only the frozen payload codec is re-implemented here (v1's `decode_batch`
+//! is private, and this crate stays decoupled from v1's internals).
 
 use crate::db::{Config, Db};
 use crate::format::FormatError;
+use crate::legacy_envelope as envelope;
+use crate::legacy_envelope::ParseOutcome;
 use crate::wal::Op;
-use aikoql_storage::envelope::{self, ParseOutcome};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// Read-ahead for the streaming pass: memory is bounded by this plus one
+/// Read-ahead for the streaming pass: memory is this buffer plus one
 /// frame (a larger frame grows the carry until it completes or EOF fails
 /// closed — see the module doc).
 const CHUNK: usize = 8 * 1024 * 1024;
@@ -111,7 +112,7 @@ fn decode_legacy_batch(payload: &[u8]) -> Result<Vec<Op>, FormatError> {
 /// scan errs in the safe direction: a false positive needs a whole valid
 /// record to hide inside the tail (~2^-64 per candidate checksum), and it
 /// would fail closed where recovery could have proceeded — never the reverse.
-/// ponytail: O(remaining bytes), once per migration, only when a torn tail
+/// ponytail: linear in the remaining bytes, once per migration, only when a torn tail
 /// exists.
 fn valid_record_after(bytes: &[u8], pos: usize) -> bool {
     (pos + 1..bytes.len()).any(|off| {
@@ -236,10 +237,10 @@ pub fn migrate_v1_wal(source: &Path, config: Config) -> Result<MigrationReport, 
                     buf.extend_from_slice(&chunk[..n]);
                 }
             }
-            // v1 reports corruption/incompatibility as KError::Store; every
-            // reachable case here is damage (the format version is frozen
-            // at 1, so an unknown version would need a forged checksum too).
-            Err(e) => return Err(FormatError::Corrupt(e.to_string())),
+            // The vendored parser reports classified errors directly; an
+            // unsupported version is passed through as Unsupported (the
+            // format is frozen at 1, so it needs a forged checksum too).
+            Err(e) => return Err(e),
         }
     }
     drop(file);

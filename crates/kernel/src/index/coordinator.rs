@@ -76,7 +76,7 @@ impl IndexCoordinator {
         // R9: a type-scoped query walks the type index instead of all heads.
         // The per-KO type filter below stays — it guards stale index entries.
         // M18: computed lazily — the ANN path ranks the index's own
-        // candidates and never needs this O(store) scan.
+        // candidates and never needs this store-wide scan.
         let heads = || -> KResult<Vec<(KOID, u64, u64, LifecycleState)>> {
             Ok(
                 match q.filter.as_ref().and_then(|f| f.type_name.as_deref()) {
@@ -181,7 +181,12 @@ impl IndexCoordinator {
                 }
                 let vscore = match (&q.vector, &rec.embedding) {
                     (Some(qv), Some(emb)) => cosine(qv, emb),
-                    _ => 0.0,
+                    // Device-eval N4: a KO without an embedding has no
+                    // vector score — ranking it at 0.0 fabricates a hit
+                    // (during the semantic catch-up window every KO became
+                    // a zero-score "match"). Only embedded KOs can answer a
+                    // vector query; the caller sees an honest empty.
+                    _ => return Ok(()),
                 };
                 ranked.push((*koid, vscore));
                 Ok(())

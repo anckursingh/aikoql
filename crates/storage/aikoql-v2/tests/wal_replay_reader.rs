@@ -39,7 +39,7 @@ unsafe impl GlobalAlloc for LiveCounting {
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         if ARMED.load(Ordering::Relaxed) == 1 {
-            LIVE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+            LIVE.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
                 Some((v - layout.size() as i64).max(0))
             })
             .ok();

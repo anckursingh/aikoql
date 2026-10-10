@@ -134,6 +134,18 @@ impl Hlc {
 }
 
 // ---------------------------------------------------------------------------
+// Idempotency key namespacing (T-52, POC P3-009): the replay key is scoped
+// by the write's tenant so tenant_b can never replay tenant_a's commit.
+// Tenant-less writes (ingest-dir, catalog) keep the bare global namespace.
+// ---------------------------------------------------------------------------
+fn idem_scope(tenant: Option<&str>, key: &str) -> String {
+    match tenant.filter(|t| !t.is_empty()) {
+        Some(t) => format!("{}\u{0}{}", t, key),
+        None => key.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Audit-chain preimage: covers every field an attacker might flip.
 // ---------------------------------------------------------------------------
 fn audit_hash_of(
@@ -294,13 +306,25 @@ impl KnowledgeContext {
 
 impl From<Subject> for KnowledgeContext {
     fn from(subject: Subject) -> Self {
-        Self::new(subject)
+        // T-66 follow-through: the Subject carries R9's tenant scope, so the
+        // boundary conversion must not drop it — tools that stamp
+        // metadata.tenant from context.tenant (assert/observe/…) otherwise
+        // write tenantless rows for scoped sessions, which strict isolation
+        // then hides from their own reads. tool_remember maps args["tenant"]
+        // explicitly; this makes every other tool consistent.
+        Self {
+            tenant: subject.tenant.clone(),
+            ..Self::new(subject)
+        }
     }
 }
 
 impl From<&Subject> for KnowledgeContext {
     fn from(subject: &Subject) -> Self {
-        Self::new(subject.clone())
+        Self {
+            tenant: subject.tenant.clone(),
+            ..Self::new(subject.clone())
+        }
     }
 }
 
@@ -604,6 +628,11 @@ pub use crate::knowledge::notify::{EventFilter, SubscriptionRecord};
 pub(crate) struct Pipeline {
     seq: u64,
     audit: [u8; 32],
+    /// T-47 atomic-pair pin: while set, every commit in this pipe reuses the
+    /// pinned instant so a composite op's events share one commit time.
+    /// Armed and cleared by the wrapping op before the lock releases —
+    /// never observable outside it.
+    pair_pin: Option<u64>,
 }
 
 pub struct Kernel {
@@ -717,7 +746,11 @@ impl Kernel {
             clock,
             hlc: Arc::new(Hlc::starting_at(last_ts)),
             idgen: Arc::new(Mutex::new(IdGen::new(id_seed))),
-            pipe: Arc::new(Mutex::new(Pipeline { seq, audit })),
+            pipe: Arc::new(Mutex::new(Pipeline {
+                seq,
+                audit,
+                pair_pin: None,
+            })),
             events: Arc::new(Mutex::new(events)),
             auth: Arc::new(RwLock::new(auth)),
             indexes: Arc::new(RwLock::new(Some(IndexCoordinator::new()))),
@@ -981,7 +1014,7 @@ impl Kernel {
     ///
     /// Scans all committed objects of `new_schema.type_name` and runs every
     /// constraint (domain, check, unique) against each one.  Returns violations
-    /// Record detected violations on the bounded in-memory diagnostics ring
+    /// Record detected violations on the in-memory diagnostics ring
     /// (MRFC-0060 §32; P3-M5 M5a — oldest evicted past 256 entries).
     fn record_events<I>(&self, events: I)
     where
@@ -1370,7 +1403,11 @@ impl Kernel {
         prev_rels: Option<&[RelationshipRef]>,
     ) -> KResult<(u64, u64)> {
         ko.validate()?;
-        let commit_ts = self.hlc.now(self.clock.as_ref());
+        // T-47: a composite op may pin one instant for all its events —
+        // the pin is armed only around that op's own commits.
+        let commit_ts = pipe
+            .pair_pin
+            .unwrap_or_else(|| self.hlc.now(self.clock.as_ref()));
         let seq = pipe.seq + 1;
         ko.commit_ts = commit_ts;
         ko.event_refs.push(EventRef {
@@ -1514,6 +1551,65 @@ impl Kernel {
         self.remember_trusted(req)
     }
 
+    /// Attach a semantic block to an existing KO, mutating ONLY the semantic
+    /// field (device-eval N2). Enrichment must never ride the remember-update
+    /// path: a caller that does not restate its edges has them replaced
+    /// wholesale there (remember() semantics), which silently destroyed the
+    /// relationship graph when the semantic engine's catch-up rewrote the KB.
+    /// Re-attaching the identical block is a no-op so catch-up restarts do
+    /// not churn versions.
+    pub fn attach_semantic(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: KOID,
+        semantic: SemanticBlock,
+        expected_version: Option<u64>,
+    ) -> KResult<Remembered> {
+        let ctx = ctx.into();
+        let mut pipe = self.pipe.lock().unwrap();
+        let head = self.head_object(&koid)?.ok_or(KError::NotFound(koid))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &head, Action::Write)?;
+        let cur_v = head.version;
+        let expected = expected_version.unwrap_or(cur_v);
+        if expected != cur_v {
+            return Err(KError::VersionConflict {
+                koid,
+                expected,
+                found: cur_v,
+            });
+        }
+        if head.semantic.as_ref() == Some(&semantic) {
+            return Ok(Remembered {
+                koid,
+                version: cur_v,
+                commit_ts: head.commit_ts,
+            });
+        }
+        let mut ko = head.clone();
+        ko.version = cur_v + 1;
+        ko.semantic = Some(semantic);
+        // prev_rels = the head's own edges: unchanged, so the relationship
+        // index sees no removals and the graph survives byte-for-byte.
+        let (commit_ts, _seq) = self.commit_version(
+            &mut pipe,
+            ko,
+            EventKind::ClaimAsserted,
+            Origin::SemanticEnrichment,
+            &ctx.subject.name,
+            Some("semantic enrichment".into()),
+            None,
+            Some(&head.relationships),
+        )?;
+        Ok(Remembered {
+            koid,
+            version: cur_v + 1,
+            commit_ts,
+        })
+    }
+
     /// Declarative retention (G13 / RET-CHAT-001): commit through the normal
     /// write path with an automatic expiry horizon. The kernel computes
     /// `valid_to = clock_now() + retention_ms` from its own clock, so callers
@@ -1575,8 +1671,14 @@ impl Kernel {
         pipe: &mut Pipeline,
         req: &RememberRequest,
     ) -> KResult<Remembered> {
-        if let Some(k) = &req.idempotency_key {
-            if let Some((koid, version, commit_ts)) = self.repo.get_idem(k)? {
+        // T-52 (POC P3-009): the replay key is namespaced by the write's
+        // tenant — a foreign tenant must not receive this commit's koid.
+        let scoped_idem: Option<String> = req
+            .idempotency_key
+            .as_deref()
+            .map(|k| idem_scope(req.metadata.tenant.as_deref(), k));
+        if let Some(scoped) = &scoped_idem {
+            if let Some((koid, version, commit_ts)) = self.repo.get_idem(scoped)? {
                 return Ok(Remembered {
                     koid,
                     version,
@@ -1995,7 +2097,7 @@ impl Kernel {
             req.origin.clone(),
             &req.context.subject.name,
             req.note.clone(),
-            req.idempotency_key.as_deref(),
+            scoped_idem.as_deref(),
             head.as_ref().map(|h| h.relationships.as_slice()),
         )?;
         if is_auth_meta {
@@ -2680,6 +2782,7 @@ impl Kernel {
             superseded_by,
             expected_version,
             reason,
+            None,
         )
     }
 
@@ -2695,6 +2798,7 @@ impl Kernel {
         superseded_by: Option<KOID>,
         expected_version: Option<u64>,
         reason: Option<String>,
+        predecessor_valid_to: Option<u64>,
     ) -> KResult<EpistemicChanged> {
         let head = self.head_object(koid)?.ok_or(KError::NotFound(*koid))?;
         self.auth
@@ -2714,12 +2818,29 @@ impl Kernel {
                 found: cur_v,
             });
         }
-        let at = self.clock.millis();
+        // T-47: under an atomic-pair pin the close instant is the pair's
+        // instant, not the wall clock — successor and supersession share it.
+        let at = pipe
+            .pair_pin
+            .map(|ts| ts >> 16)
+            .unwrap_or_else(|| self.clock.millis());
         let mut ko = head.clone();
         ko.version = cur_v + 1;
         ko.set_epistemic_status(to);
         if to == EpistemicStatus::Superseded {
             ko.close_valid_time(at)?;
+            // T-65: an asserted closure instant (the correction op's tx,
+            // corpus scale) lands on its own extension key read only by the
+            // BETWEEN arm. Mirrors the close_valid_time collapse policy: a
+            // closure before valid_from collapses to a zero-duration
+            // interval, never an inverted one.
+            if let Some(t) = predecessor_valid_to {
+                let clamped = ko.valid_from().map(|f| f.max(t)).unwrap_or(t);
+                ko.extensions.insert(
+                    KnowledgeObject::EXT_VALID_TO_ASSERTED.into(),
+                    Value::Int(clamped as i64),
+                );
+            }
             if let Some(target) = superseded_by {
                 if self.head_object(&target)?.is_none() {
                     return Err(KError::InvalidObject(format!(
@@ -2880,8 +3001,22 @@ impl Kernel {
     /// `remember` with an existing idempotency key replays the old write
     /// without storing anything, so an updater must resolve the key first and
     /// remember with an explicit `koid` instead.
+    ///
+    /// Resolves in the global namespace (tenant-less writes). Tenant-scoped
+    /// callers must use [`Self::resolve_idempotency_scoped`] with the tenant
+    /// the write carried — the two namespaces never collide (POC P3-009).
     pub fn resolve_idempotency(&self, key: &str) -> KResult<Option<(KOID, u64, u64)>> {
-        self.repo.get_idem(key)
+        self.resolve_idempotency_scoped(None, key)
+    }
+
+    /// Tenant-scoped idempotency resolution (T-52). The scope must match the
+    /// `metadata.tenant` of the write that stored the key.
+    pub fn resolve_idempotency_scoped(
+        &self,
+        tenant: Option<&str>,
+        key: &str,
+    ) -> KResult<Option<(KOID, u64, u64)>> {
+        self.repo.get_idem(&idem_scope(tenant, key))
     }
 
     pub fn get(&self, ctx: impl Into<KnowledgeContext>, koid: &KOID) -> KResult<KnowledgeObject> {
@@ -2973,8 +3108,11 @@ impl Kernel {
 
     /// Point-in-time (transaction-time) read: the version this kernel had
     /// committed as of wall-clock `at_millis`. Packs to the HLC layout
-    /// (`millis << 16 | counter`) so the MVCC `<= snap` comparison selects
-    /// the newest version committed at or before that instant; `Ok(None)`
+    /// (`millis << 16 | counter`) with the counter filled to 0xFFFF, so
+    /// the MVCC `<= snap` comparison selects the newest version committed
+    /// at ANY point during that wall-clock millisecond — a version whose
+    /// packed timestamp carries counter bits (a same-millis sibling commit)
+    /// is still "at" that instant, and trace()/AS_OF round-trips; `Ok(None)`
     /// when the KO did not exist (or was not yet committed) by then.
     pub fn get_as_of(
         &self,
@@ -2983,10 +3121,58 @@ impl Kernel {
         at_millis: u64,
     ) -> KResult<Option<KnowledgeObject>> {
         let ctx = ctx.into();
-        let snap = at_millis.checked_shl(16).unwrap_or(u64::MAX);
+        let snap = at_millis
+            .checked_shl(16)
+            .map(|s| s | 0xFFFF)
+            .unwrap_or(u64::MAX);
         let Some(ko) = self.object_at(koid, snap)? else {
             return Ok(None);
         };
+        // F12: AS_OF must honor valid-time closure — a KO whose validity
+        // ended at/before the slice instant (e.g. superseded) is not part
+        // of that transaction-time world. Half-open [valid_from, valid_to):
+        // valid_to == at means the interval has already closed.
+        if ko.valid_to().map(|t| t <= at_millis).unwrap_or(false) {
+            return Ok(None);
+        }
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &ko, Action::Read)?;
+        Ok(Some(ko))
+    }
+
+    /// T-58 (P3-008 LOW): the journal-seq clock domain. The ke/ event at
+    /// seq `n` pins the exact packed commit instant of the nth apply —
+    /// `object_at` at that instant reconstructs the state a client reading
+    /// health()["journal_seq"] right after the apply saw, with no wall-clock
+    /// marker synthesis (no sleep loops, no collision footgun) and
+    /// restart-safe (ke/ persists seq -> commit_ts). Seq 0 names the empty
+    /// world before the first apply; a seq beyond the journal head names
+    /// the current state.
+    pub fn get_as_of_journal(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+        n: u64,
+    ) -> KResult<Option<KnowledgeObject>> {
+        let ctx = ctx.into();
+        if n == 0 {
+            return Ok(None);
+        }
+        let (snap, wall) = match self.repo.get_event(n)? {
+            Some(ev) => (ev.commit_ts, ev.commit_ts >> 16),
+            None if self.repo.journal_head()?.is_some() => (u64::MAX, self.snapshot_now() >> 16),
+            None => return Ok(None),
+        };
+        let Some(ko) = self.object_at(koid, snap)? else {
+            return Ok(None);
+        };
+        // F12, the same half-open rule as get_as_of: a row whose validity
+        // ended at/before the slice instant is not part of that world.
+        if ko.valid_to().map(|t| t <= wall).unwrap_or(false) {
+            return Ok(None);
+        }
         self.auth
             .read()
             .unwrap()
@@ -3089,11 +3275,14 @@ impl Kernel {
                 }
             }
         };
+        // T-66: a scoped caller's derived object is confined to its tenant
+        // (hoisted — req.context moves into the create below).
+        let caller_tenant = req.context.tenant.clone();
         let mut remember = RememberRequest::create(
             req.context,
             Metadata {
                 type_name: req.type_name,
-                tenant: None,
+                tenant: caller_tenant,
                 schema_version: 1,
                 tags: vec![],
             },
@@ -3182,7 +3371,7 @@ impl Kernel {
     // ---- type scanning ---------------------------------------------------
 
     /// Return all readable KOs of a given type (ACL-filtered).
-    /// R9: walks the `type/` secondary index (O(log N + per-type)) instead of
+    /// R9: walks the `type/` secondary index instead of
     /// the whole head space; the payload type re-check guards against stale
     /// index entries from type changes.
     pub fn scan_by_type(
@@ -3216,10 +3405,35 @@ impl Kernel {
         Ok(out)
     }
 
+    /// T-64 (G-002): the temporal scan — `scan_by_type` minus the Deleted
+    /// skip. AS_OF/HISTORICAL reconstruction needs tombstoned KOIDs yielded:
+    /// the temporal layer filters per-version (AsOf drops the Deleted
+    /// version at/after the tombstone instant, history() skips Deleted
+    /// versions but lists pre-deletion ones). Head-row consumers (plain
+    /// MATCH, BETWEEN) must apply their own Deleted guard — never feed
+    /// this scan to them unfiltered.
+    pub fn scan_by_type_temporal(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+    ) -> KResult<Vec<KnowledgeObject>> {
+        let mut out = Vec::new();
+        for koid in self.repo.scan_type(type_name)? {
+            let Some(ko) = self.head_object(&koid)? else {
+                continue;
+            };
+            let Some(ko) = self.readable_checks(subject, type_name, ko, true)? else {
+                continue;
+            };
+            out.push(ko);
+        }
+        Ok(out)
+    }
+
     /// P5-M7: canonical scan for catalog metadata — walks ko/ heads (the
     /// authority), NOT the derived type index (catalog rows are deliberately
     /// never indexed there; write_type_index guards it). Catalog rows are
-    /// few and metadata ops are rare, so the O(heads) walk is fine.
+    /// few and metadata ops are rare, so the heads walk is fine.
     pub(crate) fn scan_catalog_rows(&self) -> KResult<Vec<KnowledgeObject>> {
         let mut out = Vec::new();
         for (koid, _version, ts, state) in self.repo.scan_heads()? {
@@ -3237,7 +3451,7 @@ impl Kernel {
 
     /// The index-backed koid list for a type, unfiltered — the streaming
     /// scan's snapshot-at-open (P5-M4, ND-04): payload batches resolve from
-    /// this list via `scan_by_type_range`, so memory is bounded by the batch
+    /// this list via `scan_by_type_range`, so memory follows the batch
     /// size, not the result cardinality.
     pub fn type_koids(&self, type_name: &str) -> KResult<Vec<KOID>> {
         self.repo.scan_type(type_name)
@@ -3292,7 +3506,7 @@ impl Kernel {
         let Some(ko) = self.head_object(koid)? else {
             return Ok(None);
         };
-        self.readable_checks(subject, type_name, ko)
+        self.readable_checks(subject, type_name, ko, false)
     }
 
     /// Snapshot read (`object_at`) + the same shared scan filters.
@@ -3306,7 +3520,7 @@ impl Kernel {
         let Some(ko) = self.object_at(koid, snap_ts)? else {
             return Ok(None);
         };
-        self.readable_checks(subject, type_name, ko)
+        self.readable_checks(subject, type_name, ko, false)
     }
 
     /// The shared scan filters — one place, both read modes.
@@ -3315,11 +3529,12 @@ impl Kernel {
         subject: &Subject,
         type_name: &str,
         ko: KnowledgeObject,
+        include_deleted: bool,
     ) -> KResult<Option<KnowledgeObject>> {
         if ko.metadata.type_name != type_name {
             return Ok(None); // stale index entry (type changed after indexing)
         }
-        if ko.lifecycle.state == LifecycleState::Deleted {
+        if ko.lifecycle.state == LifecycleState::Deleted && !include_deleted {
             return Ok(None);
         }
         if self
@@ -3334,7 +3549,7 @@ impl Kernel {
         Ok(Some(ko))
     }
 
-    /// Return all distinct type names from head objects. O(n) scan;
+    /// Return all distinct type names from head objects. Linear scan;
     /// ponytail: add a type-name index if enumeration becomes frequent.
     pub fn list_types(&self) -> KResult<Vec<String>> {
         let mut types = std::collections::BTreeSet::new();
@@ -3481,6 +3696,14 @@ impl Kernel {
     }
 
     pub fn prove(&self, ctx: impl Into<KnowledgeContext>, claim: &KOID) -> KResult<Proof> {
+        // Device-eval N3: the walk scans the event rows snapshot-less and then
+        // compares the chain tail against journal_head — a concurrent append
+        // between the two used to report chain_valid=false on an untampered
+        // chain (the semantic engine's catch-up writes continuously). Hold the
+        // pipe lock so writers block and the walk sees a quiescent journal.
+        // ponytail: writers stall for the full scan (ms at KB scale); shard
+        // the pipe if prove ever sits on a hot path.
+        let _pipe = self.pipe.lock().unwrap();
         let ctx = ctx.into();
         let head = match self.head_object(claim) {
             Ok(Some(h)) => h,
@@ -3619,20 +3842,6 @@ impl Kernel {
         }
     }
 
-    /// REC-002: write a durable snapshot of the store into a fresh database
-    /// file at `path` (live backup — works while the kernel holds the store).
-    pub fn backup_store_to(&self, path: &std::path::Path) -> KResult<()> {
-        self.store.snapshot_to(path)
-    }
-
-    /// REC-002: replace the store contents with the snapshot at `path`
-    /// (point-in-time restore). In-memory derived state (semantic status,
-    /// enrichment indexes) stays stale until the next kernel open — restart
-    /// after restore.
-    pub fn restore_store_from(&self, path: &std::path::Path) -> KResult<()> {
-        self.store.restore_from(path)
-    }
-
     /// KSE-10: rebuild the derived indexes (relo/reli/type) from canonical
     /// ko/ heads. Repair op — repairs stale, missing, or corrupt derived
     /// rows in one atomic batch; canonical knowledge is never touched.
@@ -3664,7 +3873,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-program-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:program".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["program".into(), "active-object".into()],
             },
@@ -3756,7 +3966,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-policy-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:policy".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["policy".into(), "active-object".into()],
             },
@@ -3855,7 +4066,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-workflow-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:workflow".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["workflow".into(), "active-object".into()],
             },
@@ -3897,7 +4109,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-trigger-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:trigger".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["trigger".into(), "active-object".into()],
             },
@@ -3942,7 +4155,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-agent-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:agent".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["agent".into(), "active-object".into()],
             },
@@ -3989,7 +4203,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-connector-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:connector".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["connector".into(), "active-object".into()],
             },
@@ -4036,7 +4251,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-view-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:view".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["view".into(), "active-object".into()],
             },
@@ -4086,7 +4302,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-report-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:report".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["report".into(), "active-object".into()],
             },
@@ -4135,7 +4352,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-benchmark-{}", name)),
             metadata: Metadata {
                 type_name: "aikoql:benchmark".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["benchmark".into(), "active-object".into()],
             },
@@ -4194,7 +4412,8 @@ impl Kernel {
             idempotency_key: Some(format!("deploy-document-{}", sha256)),
             metadata: Metadata {
                 type_name: "aikoql:document".into(),
-                tenant: None,
+                /* T-66: a scoped caller's created object is confined to its tenant */
+                tenant: subject.tenant.clone(),
                 schema_version: 1,
                 tags: vec!["document".into(), "ingestion".into()],
             },
@@ -4503,7 +4722,8 @@ impl Kernel {
                     commit_ts: 0,
                     metadata: Metadata {
                         type_name: format!("{}-claim", rule_type),
-                        tenant: None,
+                        /* T-66: a scoped caller's created object is confined to its tenant */
+                        tenant: subject.tenant.clone(),
                         schema_version: 1,
                         tags: vec!["reasoned".into()],
                     },
@@ -4608,7 +4828,6 @@ pub(crate) use crate::knowledge::scoring::{cosine, jaccard, tokenize};
 mod tests {
     use super::*;
     use crate::storage::store::MemoryEngine;
-    use crate::storage::store_redb::RedbEngine;
     use std::collections::BTreeMap;
 
     fn kernel() -> (Kernel, Arc<ManualClock>) {
@@ -4807,53 +5026,6 @@ mod tests {
 
         k.unsubscribe("s1").unwrap();
         assert!(k.replay("s1").is_err());
-    }
-
-    #[test]
-    fn durable_subscription_survives_reopen() {
-        let dir = std::env::temp_dir();
-        // The path is pid-only: a killed run's corpse is never removed by
-        // a different pid's start-remove — sweep stale siblings (>1 day,
-        // so a concurrent live run is untouched) instead.
-        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
-        if let Ok(rd) = std::fs::read_dir(&dir) {
-            for e in rd.flatten() {
-                let name = e.file_name();
-                let name = name.to_string_lossy();
-                let stale = name.starts_with("aikoql_sub_reopen_")
-                    && e.metadata()
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .is_some_and(|t| t < cutoff);
-                if stale {
-                    let _ = std::fs::remove_file(e.path());
-                    let _ = std::fs::remove_dir_all(e.path());
-                }
-            }
-        }
-        let path = dir.join(format!("aikoql_sub_reopen_{}.redb", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-
-        let clock = Arc::new(ManualClock::new(1_000));
-        let engine = Arc::new(RedbEngine::open(path.to_str().unwrap()).unwrap());
-        let k = Kernel::open(engine.clone(), clock.clone(), 42).unwrap();
-        let alice = Subject::new("alice");
-
-        let _rx = k.subscribe("s1".into(), EventFilter::default()).unwrap();
-        let r = k
-            .remember(RememberRequest::create(alice.clone(), meta("fact")))
-            .unwrap();
-        // do not ack — subscription must replay after reopen
-        drop(k);
-
-        let k2 = Kernel::open(engine, clock, 42).unwrap();
-        let replay = k2.replay("s1").unwrap();
-        assert_eq!(replay.len(), 1);
-        assert_eq!(replay[0].koid, r.koid);
-
-        drop(k2); // redb holds a live file lock — release before cleanup
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir_all(format!("{}.artifacts", path.display()));
     }
 
     #[test]

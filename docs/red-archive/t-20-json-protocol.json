@@ -1,0 +1,8 @@
+{
+  "id": "t-20-json-protocol",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_protocol.py training/tests/test_chat.py training/tests/test_scorecard.py -q",
+  "captured_at": "2026-10-04T09:49:29Z",
+  "captured_head": "2ea20430f3b4c622a8f40a630f9687e88a80f154",
+  "exit_code": 2
+}

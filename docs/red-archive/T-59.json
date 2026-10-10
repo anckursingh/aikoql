@@ -1,0 +1,8 @@
+{
+  "id": "T-59",
+  "pre_fix_commit": "HEAD",
+  "command": "bash -c cargo test -p aikoql-mcp --test mcp_real_world t59_stdio_shutdown_handoff_is_observable",
+  "captured_at": "2026-10-09T21:20:59Z",
+  "captured_head": "c943c8d0ff68051aed25c5200dc5ae027ea44f2f",
+  "exit_code": 101
+}

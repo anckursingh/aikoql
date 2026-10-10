@@ -1,0 +1,193 @@
+name: training-data
+
+on:
+  push:
+    paths:
+      - "training/**"
+      - ".github/workflows/training-data.yml"
+  pull_request:
+    paths:
+      - "training/**"
+      - ".github/workflows/training-data.yml"
+  workflow_dispatch:
+  # T-29 (PR9 §33): the 10K corpus sweep rides the weekly schedule,
+  # not every training push (its PR-time budget now belongs to the
+  # nightly leg below).
+  schedule:
+    - cron: "17 3 * * 0"
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+          .venv/bin/pip install -q -e training
+          cd crates/sdk/python
+          "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
+      - name: Unit suite (no corpus, no mutation leg)
+        run: |
+          .venv/bin/python -m pytest training/tests -q \
+            --ignore=training/tests/test_corpus.py \
+            --ignore=training/tests/test_mutation_leg.py
+
+  fuzz-estate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q pytest hypothesis maturin
+          .venv/bin/pip install -q -e training
+          cd crates/sdk/python
+          "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
+      - name: Hypothesis estates (the whole fuzz estate)
+        run: |
+          .venv/bin/python -m pytest training/tests/test_schema_fuzz.py \
+            training/tests/test_scenarios.py \
+            training/tests/test_protocol_fuzz.py \
+            training/tests/test_grounding_fuzz.py -q
+
+  determinism:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the server
+        run: cargo build --bin aikoql-mcp
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+          .venv/bin/pip install -q -e training
+          cd crates/sdk/python
+          "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
+      - name: Corpus regeneration (determinism cell)
+        run: |
+          printf '[rate_limit]\nenabled = false\n' > "$RUNNER_TEMP/rate.toml"
+          ./target/debug/aikoql-mcp --config "$RUNNER_TEMP/rate.toml" serve \
+            "$RUNNER_TEMP/kb.redb" \
+            --listen 127.0.0.1:18763 --tcp-token ci::admin &
+          .venv/bin/python -c "
+          import socket, time
+          for _ in range(60):
+              try:
+                  socket.create_connection(('127.0.0.1', 18763), timeout=0.5).close()
+                  break
+              except OSError:
+                  time.sleep(0.5)
+          "
+          .venv/bin/python training/scripts/generate_corpus.py \
+            --db 127.0.0.1:18763 --token ci \
+            --out "$RUNNER_TEMP/corpus" --target 40 --seeds 1 \
+            --artifacts "$RUNNER_TEMP/corpus-artifacts"
+          kill %1
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the server
+        run: cargo build --bin aikoql-mcp
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+          .venv/bin/pip install -q -e training
+          cd crates/sdk/python
+          "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
+      - name: Full suite including the corpus contract
+        run: |
+          .venv/bin/python -m pytest training/tests -q \
+            --ignore=training/tests/test_mutation_leg.py
+
+  # T-29 (PR9 §33): the 10K corpus sweep is a nightly cell — schedule
+  # or a deliberate manual dispatch only, never a push/PR gate.
+  nightly:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the server
+        run: cargo build --bin aikoql-mcp
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+          .venv/bin/pip install -q -e training
+          cd crates/sdk/python
+          "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
+      - name: 10K corpus sweep
+        run: |
+          printf '[rate_limit]\nenabled = false\n' > "$RUNNER_TEMP/rate.toml"
+          ./target/debug/aikoql-mcp --config "$RUNNER_TEMP/rate.toml" serve \
+            "$RUNNER_TEMP/kb10k.redb" \
+            --listen 127.0.0.1:18764 --tcp-token ci::admin &
+          .venv/bin/python -c "
+          import socket, time
+          for _ in range(60):
+              try:
+                  socket.create_connection(('127.0.0.1', 18764), timeout=0.5).close()
+                  break
+              except OSError:
+                  time.sleep(0.5)
+          "
+          .venv/bin/python training/scripts/generate_corpus.py \
+            --db 127.0.0.1:18764 --token ci \
+            --out "$RUNNER_TEMP/corpus-10k" --target 10000 --seeds 16 \
+            --artifacts "$RUNNER_TEMP/corpus-10k-artifacts"
+          kill %1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acmepay-corpus
+          path: |
+            ${{ runner.temp }}/corpus-10k
+            ${{ runner.temp }}/corpus-10k-artifacts
+          if-no-files-found: error
+
+  gate-teeth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q pytest
+          .venv/bin/pip install -q -e training
+      - name: Mutation leg
+        run: |
+          .venv/bin/python training/scripts/mutation_leg.py \
+            --workdir "$RUNNER_TEMP/mutants"

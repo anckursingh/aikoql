@@ -34,9 +34,24 @@ fn compare_values(a: Option<&Value>, b: Option<&Value>) -> Option<Ordering> {
     match (a, b) {
         (Value::Int(ai), Value::Int(bi)) => ai.partial_cmp(bi),
         (Value::Float(af), Value::Float(bf)) => af.partial_cmp(bf),
+        // T-32: promote across the Int/Float boundary (same rule as the
+        // kernel's compare_values) — JSON floats stored via remember vs
+        // integral query literals must compare, not fail closed on type.
+        (Value::Int(ai), Value::Float(bf)) => (*ai as f64).partial_cmp(bf),
+        (Value::Float(af), Value::Int(bi)) => af.partial_cmp(&(*bi as f64)),
         (Value::Text(at), Value::Text(bt)) => Some(at.cmp(bt)),
         (Value::Bool(ab), Value::Bool(bb)) => Some(ab.cmp(bb)),
         _ => None, // type mismatch
+    }
+}
+
+/// Equality with the same numeric promotion as `compare_values`; falls back
+/// to derived `PartialEq` for shapes comparison does not order (List, Map,
+/// Bytes). Keeps Neq the exact negation of Eq on every pair.
+fn values_equal(a: Option<&Value>, b: Option<&Value>) -> bool {
+    match compare_values(a, b) {
+        Some(o) => o == Ordering::Equal,
+        None => a == b,
     }
 }
 
@@ -53,8 +68,8 @@ pub(crate) fn row_matches(ko: &KnowledgeObject, predicates: &[Predicate]) -> boo
     predicates.iter().all(|p| {
         let val = ko.properties.get(&p.property);
         match p.op {
-            PredOp::Eq => val == Some(&p.value),
-            PredOp::Neq => val != Some(&p.value),
+            PredOp::Eq => values_equal(val, Some(&p.value)),
+            PredOp::Neq => !values_equal(val, Some(&p.value)),
             PredOp::Gt => compare_values(val, Some(&p.value)) == Some(Ordering::Greater),
             PredOp::Lt => compare_values(val, Some(&p.value)) == Some(Ordering::Less),
             PredOp::Gte => matches!(
@@ -381,9 +396,20 @@ impl Interpreter {
                 // re-check, Deleted skip, ACL). O(matched), not O(store);
                 // scan_by_type_range walks the type/ index so the koid order
                 // matches the full scan — row-for-row parity (cbo_default_001).
-                let mut kos = match self.assist.take() {
-                    Some(koids) => kernel.scan_by_type_range(&subj, type_name, &koids)?,
-                    None => kernel.scan_by_type(&subj, type_name)?,
+                let mut kos = if self.temporal_mode {
+                    // T-64 (G-002): temporal plans enumerate ALL koids of
+                    // the type — tombstoned rows included — so AS_OF/
+                    // HISTORICAL can reconstruct pre-retraction versions.
+                    // The PropertyIndex assist is discarded here: its koid
+                    // list resolves through the same Deleted-skipping
+                    // readable_checks and would hide tombstoned rows.
+                    let _ = self.assist.take();
+                    kernel.scan_by_type_temporal(&subj, type_name)?
+                } else {
+                    match self.assist.take() {
+                        Some(koids) => kernel.scan_by_type_range(&subj, type_name, &koids)?,
+                        None => kernel.scan_by_type(&subj, type_name)?,
+                    }
                 };
                 // v0.3 K2: default MATCH answers with current truth — facts
                 // not valid at "now" stay out of relational results. Temporal
@@ -574,6 +600,18 @@ impl Interpreter {
                         ))
                     })
                     .collect();
+                if scored.is_empty() && !kos.is_empty() {
+                    // Device-eval N4: the query vector embedded but no KO in
+                    // scope carries one — the semantic catch-up is still
+                    // running (or the population was never enriched). Fail
+                    // closed: fused text-side scores would masquerade as
+                    // vector results. Retry once health reports ready.
+                    return Err(KError::Retryable(
+                        "semantic enrichment not ready: no KO in scope carries \
+                         an embedding — retry after semantic.state == \"ready\""
+                            .into(),
+                    ));
+                }
                 scored.sort_by(|a, b| {
                     b.1.partial_cmp(&a.1)
                         // justified: NaN score ties deterministically
@@ -638,17 +676,73 @@ impl Interpreter {
                         }
                         out
                     }
+                    // T-58 (P3-008 LOW): journal-seq clock domain — the ke/
+                    // event at seq `n` pins the exact commit instant of the
+                    // nth apply, so a corpus replay slices between applies
+                    // without synthesizing wall markers.
+                    TemporalOp::AsOfJournal(n) => {
+                        let mut out = Vec::new();
+                        for ko in &kos {
+                            if let Some(v) = kernel.get_as_of_journal(&subj, &ko.koid, *n)? {
+                                if v.lifecycle.state != LifecycleState::Deleted {
+                                    out.push(v);
+                                }
+                            }
+                        }
+                        out
+                    }
                     // Valid-time overlap with [from, to): half-open. None
                     // bounds are unbounded (None valid_from = -inf, None
                     // valid_to = +inf) — `0` is NOT the semantic representation
-                    // of the unbounded past (review P0-2).
-                    TemporalOp::Between { from, to } => kos
-                        .into_iter()
-                        .filter(|ko| {
-                            ko.valid_from().map(|vf| vf < *to).unwrap_or(true)
-                                && ko.valid_to().map(|t| t > *from).unwrap_or(true)
-                        })
-                        .collect(),
+                    // of the unbounded past (review P0-2). T-54 (POC B3-2):
+                    // a generation retired BY A SUCCESSOR is excluded — its
+                    // wall-time valid_to (~1.79e12) overlaps every event-time
+                    // window the eval queries, so BETWEEN would keep
+                    // answering with the stale value. The discriminator is
+                    // the outbound SUPERSEDES edge (created only by
+                    // supersede-with-successor): kernel-managed valid-time
+                    // closure (no edge) and T-51 retractions stay visible.
+                    // T-65 (POC B3-1): a supersede that ASSERTS the closure
+                    // instant (extensions.valid_to = the correction op's tx)
+                    // stores it on EXT_VALID_TO_ASSERTED — then the retired
+                    // generation is enumerated with that closure instead of
+                    // skipped, so windows straddling the correction return
+                    // both generations. History stays AS_OF-reconstructable;
+                    // scan-level only.
+                    TemporalOp::Between { from, to } => {
+                        let mut out = Vec::new();
+                        for ko in kos {
+                            // T-64 (G-002): the temporal scan yields Deleted
+                            // heads so AS_OF/HISTORICAL can reconstruct —
+                            // BETWEEN operates on head rows, and a deleted
+                            // KO has no live head row, so it contributes
+                            // nothing to any window.
+                            if ko.lifecycle.state == LifecycleState::Deleted {
+                                continue;
+                            }
+                            let asserted = ko.valid_to_asserted();
+                            if asserted.is_none()
+                                && ko.epistemic_status() == EpistemicStatus::Superseded
+                                && !kernel
+                                    .outbound_edges(&ko.koid, Some(SUPERSEDES))?
+                                    .is_empty()
+                            {
+                                continue;
+                            }
+                            let vt = asserted.or_else(|| ko.valid_to());
+                            if let (Some(vf), Some(t)) = (ko.valid_from(), vt) {
+                                if vf >= t {
+                                    continue; // zero-duration: valid at nothing
+                                }
+                            }
+                            if ko.valid_from().map(|vf| vf < *to).unwrap_or(true)
+                                && vt.map(|t| t > *from).unwrap_or(true)
+                            {
+                                out.push(ko);
+                            }
+                        }
+                        out
+                    }
                     // Historical reconstruction: every committed version of
                     // every scanned KOID, ascending commit order.
                     TemporalOp::Historical => {
@@ -736,6 +830,21 @@ impl Interpreter {
                             .unwrap_or_else(|| Subject::new("system"));
                         let mut out = Vec::with_capacity(t.len());
                         for (koid, _, _) in &t {
+                            out.push(kernel.get(KnowledgeContext::new(subj.clone()), koid)?);
+                        }
+                        out
+                    }
+                    // Device-eval N1: similarity legs (SIMILAR TO / USING
+                    // EMBEDDING) produce Scored rows — projection loads the
+                    // KO each row refers to, so RETURN <field> works over
+                    // both paths.
+                    RowSet::Scored(s) => {
+                        let subj = self
+                            .cached_subject
+                            .clone()
+                            .unwrap_or_else(|| Subject::new("system"));
+                        let mut out = Vec::with_capacity(s.len());
+                        for (koid, ..) in &s {
                             out.push(kernel.get(KnowledgeContext::new(subj.clone()), koid)?);
                         }
                         out
@@ -1147,12 +1256,33 @@ mod tests {
     use super::*;
     use aikoql_kernel::{
         Clock, DeriveRequest, Evidence, EvidenceMethod, ManualClock, MemoryEngine, Metadata,
-        RememberRequest, SemanticBlock,
+        RememberRequest, SemanticBlock, SupersedeRequest,
     };
     use std::sync::Arc;
 
     fn mk() -> Kernel {
         let clock = Arc::new(ManualClock::new(20_000));
+        Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xCAFE).unwrap()
+    }
+
+    /// Auto-advancing clock: models the real wall clock moving between the
+    /// two events of one supersede call (unlike ManualClock, which freezes
+    /// and would hide the tear the pin must catch).
+    struct TickingClock {
+        now: std::sync::Mutex<u64>,
+    }
+    impl Clock for TickingClock {
+        fn millis(&self) -> u64 {
+            let mut n = self.now.lock().unwrap();
+            *n += 1;
+            *n
+        }
+    }
+
+    fn mk_ticking() -> Kernel {
+        let clock = Arc::new(TickingClock {
+            now: std::sync::Mutex::new(20_000),
+        });
         Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xCAFE).unwrap()
     }
 
@@ -1298,6 +1428,64 @@ mod tests {
         ]);
         let r = Interpreter::execute(&k, &plan).unwrap();
         assert_eq!(r.object_count(), 2);
+    }
+
+    #[test]
+    fn filter_numeric_predicates_promote_int_float() {
+        // T-32 (DI-006 re-verification): JSON floats land as Value::Float via
+        // remember, integral query literals arrive as Value::Int — numeric
+        // predicates must promote across the boundary, not fail closed on it.
+        let k = mk();
+        let alice = Subject::new("alice");
+
+        let mut props = PropertyMap::new();
+        props.insert("ts".into(), Value::Float(1.0));
+        create_ko(&k, &alice, "event", props, None);
+        let mut props = PropertyMap::new();
+        props.insert("ts".into(), Value::Float(2.0));
+        create_ko(&k, &alice, "event", props, None);
+        let mut props = PropertyMap::new();
+        props.insert("ts".into(), Value::Float(2.5));
+        create_ko(&k, &alice, "event", props, None);
+        let mut props = PropertyMap::new();
+        props.insert("ts".into(), Value::Int(1));
+        create_ko(&k, &alice, "event", props, None);
+
+        let run = |pred: Predicate| {
+            let plan = IrPlan::new(vec![
+                IrOp::Scan {
+                    type_name: "event".into(),
+                    subject: "alice".into(),
+                    roles: vec![],
+                    tenant: None,
+                },
+                IrOp::Filter {
+                    predicates: vec![pred],
+                },
+            ]);
+            Interpreter::execute(&k, &plan).unwrap().object_count()
+        };
+
+        assert_eq!(
+            run(Predicate::eq("ts", Value::Int(1))),
+            2,
+            "Float 1.0 == Int 1"
+        );
+        assert_eq!(
+            run(Predicate::lt("ts", Value::Int(2))),
+            2,
+            "Float 1.0 < Int 2"
+        );
+        assert_eq!(
+            run(Predicate::gte("ts", Value::Int(2))),
+            2,
+            "Float 2.0/2.5 >= Int 2"
+        );
+        assert_eq!(
+            run(Predicate::eq("ts", Value::Float(1.0))),
+            2,
+            "Int 1 == Float 1.0"
+        );
     }
 
     #[test]
@@ -1586,6 +1774,130 @@ mod tests {
     }
 
     #[test]
+    fn plain_similar_to_stays_lexical_when_embeddings_exist() {
+        let k = mk();
+        let alice = Subject::new("alice");
+
+        // A: text-matches the query, but its stored vector is far from it.
+        let mut pa = PropertyMap::new();
+        pa.insert("body".into(), Value::Text("cats are wonderful".into()));
+        let koid_a = create_ko(
+            &k,
+            &alice,
+            "note",
+            pa,
+            Some(SemanticBlock {
+                embedding: Some(vec![0.1; 128]),
+                embedding_model: Some("test-model".into()),
+                summary: Some("about cats".into()),
+                confidence: None,
+                source: None,
+            }),
+        );
+
+        // B: zero text overlap, but its stored vector equals the query
+        // vector — a hybrid/vector default would rank B first.
+        let mut pb = PropertyMap::new();
+        pb.insert("body".into(), Value::Text("unrelated fish".into()));
+        let _koid_b = create_ko(
+            &k,
+            &alice,
+            "note",
+            pb,
+            Some(SemanticBlock {
+                embedding: Some(vec![0.5; 128]),
+                embedding_model: Some("test-model".into()),
+                summary: Some("about fish".into()),
+                confidence: None,
+                source: None,
+            }),
+        );
+
+        // Plain SIMILAR TO (no USING EMBEDDING) is lexical by contract —
+        // deterministic Jaccard, embeddings ignored even when present.
+        let plan = IrPlan::new(vec![
+            IrOp::Scan {
+                type_name: "note".into(),
+                subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
+            },
+            IrOp::TextSearch {
+                query: "cats are great".into(),
+                k: 5,
+                scoring: None,
+            },
+        ]);
+
+        let result = Interpreter::execute(&k, &plan).unwrap();
+        match result {
+            RowSet::Scored(scored) => {
+                assert!(!scored.is_empty(), "plain SIMILAR TO should return results");
+                assert_eq!(
+                    scored[0].0, koid_a,
+                    "plain SIMILAR TO must rank by text (Jaccard), not by stored vectors"
+                );
+            }
+            _ => panic!("expected Scored"),
+        }
+    }
+
+    #[test]
+    fn supersede_is_atomic_at_the_successors_instant() {
+        let k = mk_ticking();
+        let alice = Subject::new("alice");
+
+        let mut p1 = PropertyMap::new();
+        p1.insert("generation".into(), Value::Int(1));
+        let old = create_ko(&k, &alice, "identity_link", p1, None);
+
+        let mut p2 = PropertyMap::new();
+        p2.insert("generation".into(), Value::Int(2));
+        let res = k
+            .supersede(SupersedeRequest {
+                context: (&alice).into(),
+                old,
+                type_name: "identity_link".into(),
+                properties: p2,
+                evidence: vec![Evidence {
+                    source_artifact: "datasets/d1/links.csv".into(),
+                    location: Some("lnk_d11".into()),
+                    revision: None,
+                    method: EvidenceMethod::RuntimeObservation,
+                    confidence: 0.99,
+                }],
+                reason: None,
+                note: None,
+                superseded_by: None,
+                observed_at_ms: Some(20_000),
+                // T-65: added to SupersedeRequest after this pin was written.
+                predecessor_valid_to_ms: None,
+                retract: false,
+                // T-57: added to SupersedeRequest after this pin was written.
+                idempotency_key: None,
+            })
+            .unwrap();
+
+        // The successor's own commit instant is the pivot: at that instant
+        // the predecessor must already be closed — no AS_OF slice may show
+        // both generations of the same link (device-eval residual 1).
+        let new = res
+            .new
+            .expect("fresh-successor supersede returns a successor");
+        let at = k.get(&alice, &new).unwrap().commit_ts >> 16;
+        assert!(
+            k.get_as_of(&alice, &res.old, at).unwrap().is_none(),
+            "superseded generation still visible at the successor's instant"
+        );
+        assert!(k.get_as_of(&alice, &new, at).unwrap().is_some());
+
+        // One tick before: the old world only — the successor's Created
+        // event must not precede its own instant.
+        assert!(k.get_as_of(&alice, &res.old, at - 1).unwrap().is_some());
+        assert!(k.get_as_of(&alice, &new, at - 1).unwrap().is_none());
+    }
+
+    #[test]
     fn ann_search_with_provider_uses_real_embedding() {
         use aikoql_semantic::provider::MockEmbeddingProvider;
         use std::sync::Arc;
@@ -1654,6 +1966,100 @@ mod tests {
                 );
             }
             _ => panic!("expected Scored from AnnSearch with provider"),
+        }
+    }
+
+    // ---- N4 (device-eval): USING EMBEDDING must not silently degrade ----
+
+    fn ann_plan(query: &str) -> IrPlan {
+        IrPlan::new(vec![
+            IrOp::Scan {
+                type_name: "note".into(),
+                subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
+            },
+            IrOp::AnnSearch {
+                vector: vec![],
+                query_text: Some(query.into()),
+                embedding_model: None,
+                k: 5,
+            },
+        ])
+    }
+
+    fn mk_with_provider() -> Kernel {
+        use aikoql_semantic::provider::MockEmbeddingProvider;
+        let clock = Arc::new(ManualClock::new(20_000));
+        Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xCAFE)
+            .unwrap()
+            .with_embedding_provider(Arc::new(MockEmbeddingProvider::with_dim(3)))
+    }
+
+    fn unenriched_note(k: &Kernel, alice: &Subject, body: &str) {
+        let mut p = PropertyMap::new();
+        p.insert("body".into(), Value::Text(body.into()));
+        create_ko(k, alice, "note", p, None);
+    }
+
+    #[test]
+    fn ann_search_errors_when_no_ko_in_scope_has_an_embedding() {
+        // N4: the query vector embeds fine (provider attached) but every KO
+        // in scope lacks an embedding — the catch-up window. Text-side
+        // scores would silently masquerade as vector results, so the query
+        // must fail retryable instead.
+        let k = mk_with_provider();
+        let alice = Subject::new("alice");
+        unenriched_note(&k, &alice, "cats are great");
+        unenriched_note(&k, &alice, "unrelated fish");
+
+        match Interpreter::execute(&k, &ann_plan("cats")) {
+            Err(KError::Retryable(_)) => {}
+            other => panic!("expected Retryable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ann_search_readiness_sweep() {
+        // Matrix pin over population shapes — the guard fires exactly when
+        // the vector side has nothing to answer from, and never otherwise.
+        let alice = Subject::new("alice");
+
+        // (provider, enriched, expected): Err = Retryable, Ok = non-empty Scored.
+        let cases: Vec<(bool, usize, bool)> = vec![
+            (true, 0, true),   // catch-up window: fail closed
+            (true, 1, false),  // partial: embedded subset answers
+            (true, 2, false),  // ready: full vector answer
+            (false, 0, false), // no provider: Jaccard degrade (pre-existing pin)
+            (false, 2, false), // no provider: Jaccard degrade
+        ];
+
+        for (i, (provider, enriched, expect_err)) in cases.into_iter().enumerate() {
+            let k = if provider { mk_with_provider() } else { mk() };
+            for n in 0..2 {
+                let mut p = PropertyMap::new();
+                p.insert("body".into(), Value::Text(format!("note {n}")));
+                let sem = if n < enriched {
+                    Some(SemanticBlock {
+                        embedding: Some(vec![0.1; 3]),
+                        embedding_model: None,
+                        summary: None,
+                        confidence: None,
+                        source: None,
+                    })
+                } else {
+                    None
+                };
+                create_ko(&k, &alice, "note", p, sem);
+            }
+            let result = Interpreter::execute(&k, &ann_plan("note 0"));
+            match (result, expect_err) {
+                (Err(KError::Retryable(_)), true) => {}
+                (Ok(RowSet::Scored(s)), false) => {
+                    assert!(!s.is_empty(), "case {i}: degraded to empty");
+                }
+                other => panic!("case {i}: expected err={expect_err}, got {other:?}"),
+            }
         }
     }
 

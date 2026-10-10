@@ -1,0 +1,8 @@
+{
+  "id": "T-54",
+  "pre_fix_commit": "5d817f8",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world between_windows_retire_superseded_generations -- --exact",
+  "captured_at": "2026-10-09T17:51:28Z",
+  "captured_head": "5d817f8d6f0ff4550cad0553f80e828fe90b927f",
+  "exit_code": 101
+}

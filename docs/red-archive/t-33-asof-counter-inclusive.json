@@ -1,0 +1,8 @@
+{
+  "id": "t-33-asof-counter-inclusive",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test temporal as_of_sees_versions_committed_within_the_same_millisecond",
+  "captured_at": "2026-10-07T14:50:36Z",
+  "captured_head": "9dff7c49e0f74a19577500cdbe9ea93ec5e514d4",
+  "exit_code": 101
+}

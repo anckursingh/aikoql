@@ -25,9 +25,10 @@ as sdk001's version parity test.
 
 | SDK `MIN_SERVER_VERSION` | Server `serverInfo.version` | Result |
 |--------------------------|-----------------------------|--------|
-| `0.1.19` | `0.1.19` (current workspace) | accepted |
+| `0.1.19` | `0.1.19` | accepted |
 | `0.1.19` | `0.0.1` | refused: `VERSION_MISMATCH`, fail-fast |
 | `0.1.19` | `0.2.0` | accepted (forward-compatible optimism) |
+| `0.2.1` | `0.2.1` (current workspace) | accepted |
 
 ## Enforcement
 

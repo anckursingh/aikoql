@@ -22,7 +22,7 @@ aikoql-mcp shell
 
 From there, serve it to agents:
 
-- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql-mcp@0.1.19 serve ./kb`
+- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql-mcp@0.2.2 serve ./kb`
 - **TCP + Studio UI:** `aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091` → open http://127.0.0.1:9091/studio (login `admin` / `admin`)
 
 ## Usage Modes
@@ -285,15 +285,15 @@ embedded ACID storage — no external database server required.
 Release images are multi-arch (linux/amd64 + linux/arm64) and published on every release tag alongside the binaries:
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.1.19   # pin the immutable release tag
+docker pull ghcr.io/anckursingh/aikoql:0.2.2   # pin the immutable release tag
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=TOKEN::admin \
   -p 9090:9090 -p 9091:9091 \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.1.19
+  ghcr.io/anckursingh/aikoql:0.2.2
 ```
 
-Container contract: config at `/etc/aikoql/aikoql.toml`; all state under the `/data` volume — `/data/aikoql.redb`, `memory/`, and the local embedding model store (`/data/models`, installable with `docker exec aikoql aikoql model install`). The image is stateless: upgrades are pull + recreate, the knowledge base survives in the volume. TCP auth is fail-closed — the container refuses to listen without a token (and a token without roles exits 2). Health check: `curl http://127.0.0.1:9091/health`. Compose variant: `AIKOQL_VERSION=0.1.19 AIKOQL_TCP_TOKEN=TOKEN::admin docker compose -f docker-compose.release.yml up -d`.
+Container contract: config at `/etc/aikoql/aikoql.toml`; all state under the `/data` volume — `/data/aikoql.redb`, `memory/`, and the local embedding model store (`/data/models`, installable with `docker exec aikoql aikoql model install`). The image is stateless: upgrades are pull + recreate, the knowledge base survives in the volume. TCP auth is fail-closed — the container refuses to listen without a token (and a token without roles exits 2). Health check: `curl http://127.0.0.1:9091/health`. Compose variant: `AIKOQL_VERSION=0.2.2 AIKOQL_TCP_TOKEN=TOKEN::admin docker compose -f docker-compose.release.yml up -d`.
 
 ## Platform Support
 

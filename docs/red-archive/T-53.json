@@ -1,0 +1,8 @@
+{
+  "id": "T-53",
+  "pre_fix_commit": "28a4fd0",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world superseded_generations_stay_out_of_plain_match -- --exact",
+  "captured_at": "2026-10-09T17:32:13Z",
+  "captured_head": "28a4fd01a382293ed70d8e95d43909744626ce33",
+  "exit_code": 101
+}

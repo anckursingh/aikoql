@@ -11,6 +11,7 @@ aikoql-compiler = { path = "../crates/compiler" }
 aikoql-graph = { path = "../crates/engines/graph" }
 aikoql-kernel = { path = "../crates/kernel" }
 aikoql-runtime = { path = "../crates/runtime" }
+aikoql-storage-v2 = { path = "../crates/storage/aikoql-v2" }
 aikoql-vector = { path = "../crates/engines/vector" }
 aikoql-scheduler = { path = "../crates/engines/scheduler" }
 

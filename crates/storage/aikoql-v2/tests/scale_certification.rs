@@ -12,9 +12,9 @@
 //!    cache hit rate, segments touched, fsync count; the QA gates as report
 //!    verdicts (cold point ≤ 100 µs, warm ≤ 50 µs, hot head ≤ 20 µs,
 //!    fanout F=10/100/1000 ≤ 1/10/50 ms, hot context ≤ 100 µs, group commit
-//!    cited from SE2-M13); redb parity rows; RSS via a loader child; the
+//!    cited from SE2-M13); RSS via a loader child; the
 //!    V2-Adopt matrix re-runs on the same harness as a child
-//!    (`V2ADOPT_NIGHTLY=1`, regenerating workloads.md).
+//!    (`STORAGE_REGRESSION=1`, regenerating workloads.md).
 //!
 //! Artifact: artifacts/storage-engine-v2/scale-certification.md. Perf
 //! numbers are report cells, never asserts — the pins are answer
@@ -811,103 +811,6 @@ fn matrix(dir: &Path, b: &Built, sz: Size) -> Vec<Row> {
     rows
 }
 
-/// redb parity rows — first pass / second pass on the same open (redb has
-/// no block-cache knob). Parity reference only: the gates are v2's, redb
-/// gets no verdict.
-fn redb_rows(dir: &Path, b: &Built, sz: Size) -> Vec<Row> {
-    use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
-    use aikoql_kernel::storage::store_redb::RedbEngine;
-
-    let engine = RedbEngine::open(dir).unwrap();
-    for i in 0..sz.n {
-        let mut batch = WriteBatch::new();
-        for ts in 1..=sz.versions as u64 {
-            batch.put(obj_key(&b.koids[i], ts), version_value(i, ts));
-        }
-        batch.put(head_key(&b.koids[i]), head_value(i));
-        batch.put(type_key(i % N_TYPES, &b.koids[i]), b"1".to_vec());
-        for r in 1..=RING {
-            batch.put(
-                rel_out_key(&b.koids[i], "links", &b.koids[(i + r) % sz.n]),
-                b"1".to_vec(),
-            );
-            batch.put(
-                rel_in_key(&b.koids[(i + r) % sz.n], "links", &b.koids[i]),
-                b"1".to_vec(),
-            );
-        }
-        engine.write_batch(&batch).unwrap();
-    }
-    for (h, f) in [(1usize, b.fans[1]), (2, b.fans[2])] {
-        let mut batch = WriteBatch::new();
-        for t in 0..f {
-            let dst = &b.koids[(t * 7919 + 13) % sz.n];
-            batch.put(rel_out_key(&b.hubs[h], "fan", dst), b"1".to_vec());
-            batch.put(rel_in_key(dst, "fan", &b.hubs[h]), b"1".to_vec());
-        }
-        engine.write_batch(&batch).unwrap();
-    }
-
-    let mut rows = Vec::new();
-    let sample = sample_indices(sz);
-    for label in ["head get · cold", "head get · warm"] {
-        let t0 = Instant::now();
-        let mut lats = Vec::with_capacity(sample.len());
-        for &i in &sample {
-            let s = Instant::now();
-            assert_eq!(
-                engine.get(&head_key(&b.koids[i])).unwrap(),
-                Some(head_value(i)),
-                "redb head diverged"
-            );
-            lats.push(s.elapsed().as_nanos());
-        }
-        let ops = lats.len() as u64;
-        let (p50, p95, p99) = percentiles(lats);
-        rows.push(Row {
-            label: label.into(),
-            ops,
-            wall_ms: t0.elapsed().as_secs_f64() * 1000.0,
-            p50: p50 as u64,
-            p95: p95 as u64,
-            p99: p99 as u64,
-            cells: Cells::default(),
-        });
-    }
-    let f = b.fans[2];
-    for label in ["cold", "warm"] {
-        let t0 = Instant::now();
-        let mut lats = Vec::with_capacity(4);
-        for _ in 0..4 {
-            let s = Instant::now();
-            let out = engine
-                .scan(&rel_prefix(b"relo", &b.hubs[2], "fan"))
-                .unwrap();
-            assert_eq!(out.len(), f, "redb fanout drifted");
-            for (k, _) in &out {
-                let dst: [u8; 16] = k[k.len() - 16..].try_into().unwrap();
-                assert!(
-                    engine.get(&head_key(&dst)).unwrap().is_some(),
-                    "redb fanout target missing"
-                );
-            }
-            lats.push(s.elapsed().as_nanos());
-        }
-        let ops = lats.len() as u64;
-        let (p50, p95, p99) = percentiles(lats);
-        rows.push(Row {
-            label: format!("fanout F={f} · {label}"),
-            ops,
-            wall_ms: t0.elapsed().as_secs_f64() * 1000.0,
-            p50: p50 as u64,
-            p95: p95 as u64,
-            p99: p99 as u64,
-            cells: Cells::default(),
-        });
-    }
-    rows
-}
-
 /// RSS: Windows WorkingSet64 poll on a loader child re-seeding the same
 /// dataset (peak is a lower bound — the kse19 pattern).
 fn measure_rss(sz: Size) -> Option<u64> {
@@ -974,7 +877,7 @@ fn rerun_adoption_matrix() {
     let status = Command::new(&exe)
         .arg("--exact")
         .arg("v2_m7_workloads")
-        .env("V2ADOPT_NIGHTLY", "1")
+        .env("STORAGE_REGRESSION", "1")
         .status()
         .unwrap();
     assert!(status.success(), "adoption matrix child failed");
@@ -1042,14 +945,11 @@ fn find<'a>(rows: &'a [Row], label: &str) -> &'a Row {
         .unwrap_or_else(|| panic!("missing row {label}"))
 }
 
-fn gate_line(rows: &[Row], redb: &[Row], name: &str, label: &str, gate_ns: u128) -> String {
+fn gate_line(rows: &[Row], name: &str, label: &str, gate_ns: u128) -> String {
     let r = find(rows, label);
-    let b = redb.iter().find(|x| x.label == label);
     format!(
-        "| {name} | {label} | {:.1} µs | {} | {:.0} µs | {} |\n",
+        "| {name} | {label} | {:.1} µs | {:.0} µs | {} |\n",
         r.p50 as f64 / 1000.0,
-        b.map(|x| format!("{:.1} µs", x.p50 as f64 / 1000.0))
-            .unwrap_or_else(|| "—".into()),
         gate_ns as f64 / 1000.0,
         verdict(r.p50, gate_ns),
     )
@@ -1105,7 +1005,6 @@ struct Section {
     sz: Size,
     built: Built,
     rows: Vec<Row>,
-    redb: Vec<Row>,
     rss: Option<u64>,
     segs: usize,
 }
@@ -1120,15 +1019,11 @@ fn run_dataset(dir: &Path, sz: Size) -> Section {
         .filter(|e| e.file_name().to_string_lossy().starts_with("SEGMENT-"))
         .count();
     let rss = measure_rss(sz);
-    let redb_dir = tmp(&format!("m14-redb-{}", sz.label));
-    let redb = redb_rows(&redb_dir, &built, sz);
-    cleanup(&redb_dir);
     cleanup(dir);
     Section {
         sz,
         built,
         rows,
-        redb,
         rss,
         segs,
     }
@@ -1184,27 +1079,25 @@ fn write_report(sections: &[Section], m: Mode) {
     s.push_str("\n## QA M8 gates — DS-PERF-M\n\n");
     s.push_str(
         "Gate verdicts are machine-relative (machine spec above) — the QA doc's\n\
-         rule. Verdict on the v2 row; redb is the parity reference, no verdict.\n\n\
-         | gate | row | v2 P50 | redb P50 | threshold | verdict |\n\
-         |---|---|---|---|---|---|\n",
+         rule. S-03 redefines these as self-regression (v2 vs the recorded\n\
+         baseline); until then the verdicts ride the v2 row alone.\n\n\
+         | gate | row | v2 P50 | threshold | verdict |\n\
+         |---|---|---|---|---|\n",
     );
     s.push_str(&gate_line(
         &sec.rows,
-        &sec.redb,
         "cold point",
         "head get · cold",
         COLD_GATE_NS,
     ));
     s.push_str(&gate_line(
         &sec.rows,
-        &sec.redb,
         "warm point",
         "head get · warm",
         WARM_GATE_NS,
     ));
     s.push_str(&gate_line(
         &sec.rows,
-        &sec.redb,
         "hot head",
         "head get · hot",
         HOT_HEAD_GATE_NS,
@@ -1216,7 +1109,6 @@ fn write_report(sections: &[Section], m: Mode) {
     ] {
         s.push_str(&gate_line(
             &sec.rows,
-            &sec.redb,
             &format!("fanout F={f}"),
             &format!("fanout F={f} · warm"),
             gate,
@@ -1224,7 +1116,6 @@ fn write_report(sections: &[Section], m: Mode) {
     }
     s.push_str(&gate_line(
         &sec.rows,
-        &sec.redb,
         "hot context",
         "context · hot",
         HOT_CONTEXT_GATE_NS,
@@ -1235,16 +1126,15 @@ fn write_report(sections: &[Section], m: Mode) {
     for sec in sections {
         s.push_str(&format!("\n## Matrix — {}\n\n", sec.sz.label));
         s.push_str(&matrix_table(&sec.rows));
-        s.push_str("\nredb parity rows (— = redb exposes no block stats):\n\n");
-        s.push_str(&matrix_table(&sec.redb));
     }
     s.push_str("\n## Adoption matrix re-run\n\n");
     s.push_str(
-        "`v2_m7_workloads` child with `V2ADOPT_NIGHTLY=1` — the same harness;\n\
+        "`v2_m7_workloads` child with `STORAGE_REGRESSION=1` — the same harness;\n\
          `workloads.md` regenerated this run, child exit 0 (asserted). The §26\n\
          verdict stays per `adoption-decision.md`; the ≤2×-of-v1 bound stays\n\
          out of scope (RAM-vs-disk physics, priced in by the 2026-09-01\n\
-         verdict) — the comparison that matters is the redb parity above.\n",
+         verdict) — the parity reference is gone post-S-02; S-03 landed the\n\
+         self-regression baseline.\n",
     );
     s.push_str("\n## Honest metric mapping\n\n");
     s.push_str(
@@ -1271,8 +1161,6 @@ fn write_report(sections: &[Section], m: Mode) {
            M14 finding, not a hidden knob).\n\
          - W8 mixed = one warm row; its write leg lands in the active memtable\n\
            and runs last (nothing after it reads the mutated heads).\n\
-         - redb parity = first pass / second pass on the same open (redb has no\n\
-           block-cache knob).\n\
          - RSS = Windows WorkingSet64 poll on a loader child re-seeding the same\n\
            dataset (peak is a lower bound); NOT_SAMPLED elsewhere.\n\
          - CPU = seed wall, single-threaded (wall ≈ CPU); fsync count = the\n\

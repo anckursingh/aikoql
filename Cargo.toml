@@ -14,26 +14,43 @@ members = [
     "crates/engines/reasoning",
     "crates/runtime",
     "crates/compiler",
+    "crates/protocol/native",
     "benchmarks",
     "crates/services/api/mcp",
     "crates/sdk/python",
+    "crates/sdk/rust",
+    "crates/sdk/fault-proxy",
     "crates/ingestion",
     "crates/providers/sdk",
     "crates/providers/postgres",
     "crates/providers/sqlite",
     "crates/providers/mongodb",
     "crates/providers/neo4j",
-    "crates/storage/rocksdb",
-    "crates/storage/aikoql",
     "crates/storage/aikoql-v2",
     "crates/certification",
 ]
 
 [workspace.package]
-version = "0.1.19"
+version = "0.2.2"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/anckursingh/aikoql"
+
+# D-18 — the crates.io publish closure: every aikoql-* dependency of a
+# published crate carries a concrete version here so `cargo publish`
+# accepts it (path-only deps are rejected). Members take these via
+# `{ workspace = true }`; the path is dropped from the packaged manifest.
+# Keep the version in lock-step with [workspace.package] (L-26 bump list).
+[workspace.dependencies]
+aikoql-native = { path = "crates/protocol/native", version = "0.2.0" }
+aikoql-kernel = { path = "crates/kernel", version = "0.2.0" }
+aikoql-storage-v2 = { path = "crates/storage/aikoql-v2", version = "0.2.0" }
+aikoql-graph = { path = "crates/engines/graph", version = "0.2.0" }
+aikoql-vector = { path = "crates/engines/vector", version = "0.2.0" }
+aikoql-scheduler = { path = "crates/engines/scheduler", version = "0.2.0" }
+aikoql-semantic = { path = "crates/engines/semantic", version = "0.2.0" }
+aikoql-compiler = { path = "crates/compiler", version = "0.2.0" }
+aikoql-runtime = { path = "crates/runtime", version = "0.2.0" }
 
 [profile.dev]
 # Faster incremental builds for the conformance loop.

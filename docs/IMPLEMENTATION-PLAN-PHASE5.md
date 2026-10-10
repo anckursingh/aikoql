@@ -1,5 +1,7 @@
 # AIKOQL Phase 5 — Implementation Plan (Database 1.0)
 
+> HISTORICAL (S-04, 2026-09-25): pre-launch plan record — kept for reference, not updated.
+
 Source: `AIKOQL_Next_Level_Database_TDD_Roadmap.md` (architect-agent program, ND-00..ND-14) reviewed 2026-09-13 as Chief Architect against the shipped Phase 3/4 ledger (P3-M0..M9 + P4-M1..M7 all SHIPPED — see `docs/IMPLEMENTATION-PLAN-PHASE3.md`). Companion: `docs/TESTING-PLAN-PHASE5.md`. Work lands directly on `feature/storage-enhancements-phase3` (user directive 2026-09-13 — no Phase-5 branch). Commit per milestone, NO push (user pushes). TDD loop per milestone: current-state analysis → RED (fail for the stated reason) → root-cause GREEN → regression → gates (`cargo fmt --all` + `cargo clippy --all-targets --all-features -- -D warnings`).
 
 ## Chief Architect review of the roadmap

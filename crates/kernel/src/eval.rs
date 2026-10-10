@@ -172,7 +172,7 @@ impl Kernel {
 
     /// Detect candidate contradictions among objects of a single type.
     ///
-    /// ponytail: O(n²) exact scan; sufficient for evaluation corpora and small
+    /// ponytail: quadratic exact scan; sufficient for evaluation corpora and small
     /// stores. Replace with an ANN contradiction index if this becomes hot.
     pub fn eval_contradictions(&self, q: EvalContradictionQuery) -> KResult<Vec<Contradiction>> {
         if q.similarity_threshold < 0.0 || q.similarity_threshold > 1.0 {

@@ -1,0 +1,8 @@
+{
+  "id": "d12-rust-sdk",
+  "pre_fix_commit": "f1555c7",
+  "command": "env AIKOQL_MCP_BIN=/e/dreams/Mnemosyne/target/debug/aikoql-mcp.exe cargo test -p aikoql-sdk --test conformance",
+  "captured_at": "2026-10-01T16:40:16Z",
+  "captured_head": "f1555c7e1ac2fd55db1112ade252e4304334ba93",
+  "exit_code": 101
+}

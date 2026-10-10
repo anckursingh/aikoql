@@ -1,0 +1,8 @@
+{
+  "id": "f04-fuzz-estate-unwired",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-01T11:06:49Z",
+  "captured_head": "f0caaaea2f1e189dc2c1916ff4752a365b15bf69",
+  "exit_code": 1
+}

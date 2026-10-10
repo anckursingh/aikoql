@@ -1,0 +1,8 @@
+{
+  "id": "T-62",
+  "pre_fix_commit": "f4a16e2",
+  "command": "bash -c cargo test -p aikoql-mcp --test mcp_real_world p3_006_backup_tools_accept_list_backups_name -- --exact",
+  "captured_at": "2026-10-09T22:42:52Z",
+  "captured_head": "f4a16e295dbd09e09c53b57c60dab8d9d66c11dc",
+  "exit_code": 101
+}

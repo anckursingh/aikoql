@@ -9,7 +9,7 @@
 //! ponytail: one comprehensive test that validates the entire surface.
 
 use serde_json::{json, Value as J};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 
 use aikoql_ingestion::{EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate};
@@ -28,47 +28,91 @@ struct TempSweeper {
 impl Drop for TempSweeper {
     fn drop(&mut self) {
         for p in &self.paths {
-            let _ = std::fs::remove_file(p);
+            // v2 databases are directories (launch S-02).
             let _ = std::fs::remove_dir_all(p);
-            // redb sidecar next to the registered stem (`{stem}.redb.artifacts`).
-            let Some(name) = p.file_name() else { continue };
-            if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
-                let prefix = format!("{}.", name.to_string_lossy());
-                for e in rd.flatten() {
-                    if e.file_name().to_string_lossy().starts_with(&prefix) {
-                        let _ = std::fs::remove_file(e.path());
-                        let _ = std::fs::remove_dir_all(e.path());
-                    }
-                }
-            }
         }
     }
 }
 
 fn tmp_db(suffix: &str) -> String {
-    let p = std::env::temp_dir().join(format!("mcp-{suffix}-{}.redb", std::process::id()));
-    let _ = std::fs::remove_file(&p);
+    let p = std::env::temp_dir().join(format!("mcp-{suffix}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&p);
     TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
     p.to_string_lossy().into_owned()
 }
 
+/// The local model store for F13's end-to-end pin: `AIKOQL_TEST_MODEL_DIR`
+/// wins, else the platform default (~/.aikoql/models). Returns the models
+/// ROOT (the serve joins the model slug itself) when all-MiniLM-L6-v2 is
+/// installed there; `None` when the pin must skip.
+fn installed_models_root() -> Option<String> {
+    let root = if let Ok(dir) = std::env::var("AIKOQL_TEST_MODEL_DIR") {
+        std::path::PathBuf::from(dir)
+    } else {
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)?;
+        home.join(".aikoql").join("models")
+    };
+    if root
+        .join(aikoql_semantic::provider::model_slug(
+            aikoql_semantic::provider::DEFAULT_MODEL_ID,
+        ))
+        .is_dir()
+    {
+        Some(root.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
 struct McpClient {
     child: Child,
-    stdin: std::process::ChildStdin,
-    reader: BufReader<std::process::ChildStdout>,
+    // Option so a pin can take() the handle to close the pipe (T-59).
+    stdin: Option<std::process::ChildStdin>,
+    // Option so `call_bounded` can move the reader onto its deadline thread.
+    reader: Option<BufReader<std::process::ChildStdout>>,
+    // T-59: Some only for spawns that capture stderr (shutdown-path pins).
+    stderr: Option<std::process::ChildStderr>,
     next_id: u64,
 }
 
 impl McpClient {
     fn start(db_path: &str) -> Self {
-        Self::start_with(db_path, None)
+        // Pin the harness to the no-provider mode its assertions assume
+        // (CTX-001 pins semantic:false): an installed local model would
+        // start background enrichment, and its version bumps race
+        // CTX-003's pinned update. An empty model dir is deterministically
+        // unavailable on every machine.
+        let model_dir = tmp_db("ctx-model");
+        std::fs::create_dir_all(&model_dir).expect("create empty model dir");
+        Self::start_inner(db_path, Some(&model_dir), &[], false)
     }
 
-    /// Spawns with an explicit backend override for THIS child only.
-    /// The default strips AIKOQL_BACKEND entirely: the process env is
-    /// shared by every parallel test in this binary, so a global set_var
-    /// in one test would leak into every sibling's children.
-    fn start_with(db_path: &str, backend: Option<&str>) -> Self {
+    /// Serve against a real model store so background enrichment runs
+    /// (F13 pin: the restart's catch-up must enrich, not destroy).
+    fn start_with_model_dir(db_path: &str, model_dir: &str) -> Self {
+        Self::start_inner(db_path, Some(model_dir), &[], false)
+    }
+
+    /// Same, with extra env for the child (T-44 park pins).
+    fn start_with_model_dir_env(db_path: &str, model_dir: &str, envs: &[(&str, &str)]) -> Self {
+        Self::start_inner(db_path, Some(model_dir), envs, false)
+    }
+
+    /// T-59: piped stderr so the shutdown-path logs are assertable.
+    fn start_capture_stderr(db_path: &str) -> Self {
+        let model_dir = tmp_db("ctx-model");
+        std::fs::create_dir_all(&model_dir).expect("create empty model dir");
+        Self::start_inner(db_path, Some(&model_dir), &[], true)
+    }
+
+    fn start_inner(
+        db_path: &str,
+        model_dir: Option<&str>,
+        envs: &[(&str, &str)],
+        capture_stderr: bool,
+    ) -> Self {
         // Find binary relative to workspace root.
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -109,25 +153,32 @@ impl McpClient {
         };
         eprintln!("Using binary: {}", bin.display());
         let mut cmd = Command::new(&bin);
-        cmd.arg("serve")
-            .arg(db_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()) // crash output lands in CI logs, not /dev/null
-            .env_remove("AIKOQL_BACKEND");
-        if let Some(b) = backend {
-            cmd.env("AIKOQL_BACKEND", b);
+        cmd.arg("serve").arg(db_path);
+        if let Some(dir) = model_dir {
+            cmd.arg("--model-dir").arg(dir);
         }
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(if capture_stderr {
+                Stdio::piped()
+            } else {
+                Stdio::inherit() // crash output lands in CI logs, not /dev/null
+            });
         let mut child = cmd.spawn().expect("start MCP server");
 
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take();
         let reader = BufReader::new(stdout);
 
         McpClient {
             child,
-            stdin,
-            reader,
+            stdin: Some(stdin),
+            reader: Some(reader),
+            stderr,
             next_id: 1,
         }
     }
@@ -145,11 +196,19 @@ impl McpClient {
             }
         });
         let line = serde_json::to_string(&req).unwrap() + "\n";
-        self.stdin.write_all(line.as_bytes()).unwrap();
-        self.stdin.flush().unwrap();
+        self.stdin
+            .as_mut()
+            .unwrap()
+            .write_all(line.as_bytes())
+            .unwrap();
+        self.stdin.as_mut().unwrap().flush().unwrap();
 
         let mut response = String::new();
-        self.reader.read_line(&mut response).unwrap();
+        self.reader
+            .as_mut()
+            .unwrap()
+            .read_line(&mut response)
+            .unwrap();
         let v: J = serde_json::from_str(&response).unwrap_or_else(|e| {
             panic!(
                 "MCP parse failure for {tool}: {e:?} — response={response:?}, child_status={:?}",
@@ -164,6 +223,53 @@ impl McpClient {
         serde_json::from_str(text).unwrap_or_else(|_| json!({"raw": text}))
     }
 
+    /// `call` with a wall-clock bound on the RESPONSE — the normal `call`
+    /// reads one line unbounded, which would hang a pin whose server parks.
+    /// On timeout the test aborts (the child is killed by Drop).
+    fn call_bounded(&mut self, tool: &str, args: &J, timeout: std::time::Duration) -> J {
+        let id = self.next_id;
+        self.next_id += 1;
+        let req = json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": tool, "arguments": args}
+        });
+        self.stdin
+            .as_mut()
+            .unwrap()
+            .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
+            .unwrap();
+        self.stdin.as_mut().unwrap().flush().unwrap();
+        let mut reader = self
+            .reader
+            .take()
+            .expect("call_bounded: reader already taken");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut response = String::new();
+            let r = reader.read_line(&mut response);
+            let _ = tx.send((r, response, reader));
+        });
+        let (r, response, reader_back) = rx.recv_timeout(timeout).unwrap_or_else(|_| {
+            panic!(
+                "{tool} did not respond within {timeout:?} — the request queued behind \
+                 the enrichment worker instead of failing fast"
+            )
+        });
+        self.reader = Some(reader_back);
+        r.unwrap();
+        let v: J = serde_json::from_str(&response).unwrap_or_else(|e| {
+            panic!(
+                "MCP parse failure for {tool}: {e:?} — response={response:?}, child_status={:?}",
+                self.child.try_wait()
+            )
+        });
+        if let Some(err) = v.get("error") {
+            panic!("MCP error for {}: {:?}", tool, err);
+        }
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        serde_json::from_str(text).unwrap_or_else(|_| json!({"raw": text}))
+    }
+
     fn call_raw(&mut self, tool: &str, args: &J) -> J {
         let id = self.next_id;
         self.next_id += 1;
@@ -172,11 +278,17 @@ impl McpClient {
             "params": {"name": tool, "arguments": args}
         });
         self.stdin
+            .as_mut()
+            .unwrap()
             .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
             .unwrap();
-        self.stdin.flush().unwrap();
+        self.stdin.as_mut().unwrap().flush().unwrap();
         let mut response = String::new();
-        self.reader.read_line(&mut response).unwrap();
+        self.reader
+            .as_mut()
+            .unwrap()
+            .read_line(&mut response)
+            .unwrap();
         serde_json::from_str(&response).unwrap()
     }
 
@@ -190,11 +302,54 @@ impl McpClient {
             "params": {"agent_id": agent_id, "tenant": tenant}
         });
         self.stdin
+            .as_mut()
+            .unwrap()
             .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
             .unwrap();
-        self.stdin.flush().unwrap();
+        self.stdin.as_mut().unwrap().flush().unwrap();
         let mut response = String::new();
-        self.reader.read_line(&mut response).unwrap();
+        self.reader
+            .as_mut()
+            .unwrap()
+            .read_line(&mut response)
+            .unwrap();
+        serde_json::from_str(&response).unwrap()
+    }
+
+    /// Session with NO tenant pin — the P3-009 fail-open shape.
+    fn session_init_unscoped(&mut self, agent_id: &str) -> J {
+        self.session_init_params(&json!({"agent_id": agent_id}))
+    }
+
+    /// Unscoped session with an explicit admin role — the global read channel.
+    fn session_init_unscoped_admin(&mut self, agent_id: &str) -> J {
+        self.session_init_params(&json!({"agent_id": agent_id, "roles": ["admin"]}))
+    }
+
+    /// Raw session/init passthrough (for boundary-rejection pins).
+    fn session_init_with(&mut self, agent_id: &str, tenant: &str) -> J {
+        self.session_init_params(&json!({"agent_id": agent_id, "tenant": tenant}))
+    }
+
+    fn session_init_params(&mut self, params: &J) -> J {
+        let id = self.next_id;
+        self.next_id += 1;
+        let req = json!({
+            "jsonrpc": "2.0", "id": id, "method": "session/init",
+            "params": params
+        });
+        self.stdin
+            .as_mut()
+            .unwrap()
+            .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
+            .unwrap();
+        self.stdin.as_mut().unwrap().flush().unwrap();
+        let mut response = String::new();
+        self.reader
+            .as_mut()
+            .unwrap()
+            .read_line(&mut response)
+            .unwrap();
         serde_json::from_str(&response).unwrap()
     }
 }
@@ -202,9 +357,9 @@ impl McpClient {
 impl Drop for McpClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
-        // Wait for the process to fully exit: the child holds the redb
-        // exclusive flock, and a respawn on the same db before the OS tears
-        // it down fails to open and dies before responding (EOF flake under
+        // Wait for the process to fully exit: the child holds the database
+        // dir lock, and a respawn on the same db before the OS tears it
+        // down fails to open and dies before responding (EOF flake under
         // parallel load).
         let _ = self.child.wait();
     }
@@ -213,7 +368,7 @@ impl Drop for McpClient {
 #[test]
 fn real_world_agent_workflow() {
     let db = tmp_db("rw");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
 
     // ── Phase 1: Knowledge CRUD ──────────────────────────────────────────
@@ -471,7 +626,7 @@ fn real_world_agent_workflow() {
         "MATCH leaked beta's note: {match_koids:?}"
     );
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 /// §51 Critical End-to-End Scenario (chatbot suite, certification G5):
@@ -486,7 +641,7 @@ fn real_world_agent_workflow() {
 #[test]
 fn critical_e2e_scenario_51_chatbot_memory() {
     let db = tmp_db("s51");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
     c.session_init("chatbot-user", "acme");
 
@@ -738,7 +893,7 @@ fn critical_e2e_scenario_51_chatbot_memory() {
         "policy BotMayDeploy allowed"
     );
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 /// G6 — Chatbot Memory Certification Scenarios (TP-3b): scripted replay of
@@ -751,7 +906,7 @@ fn critical_e2e_scenario_51_chatbot_memory() {
 #[test]
 fn chatbot_memory_certification_scenarios() {
     let db = tmp_db("cmem");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
     c.session_init("chatbot-user", "acme");
 
@@ -1071,7 +1226,7 @@ fn chatbot_memory_certification_scenarios() {
         "PERS-004: another user's point read must be denied: {foreign}"
     );
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 /// G7 — CTX differential scenarios (TP-3c): the same context-compilation
@@ -1082,7 +1237,7 @@ fn chatbot_memory_certification_scenarios() {
 #[test]
 fn ctx_differential_scenarios() {
     let db = tmp_db("ctx");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
     c.session_init("alice", "acme");
 
@@ -1273,34 +1428,38 @@ fn ctx_differential_scenarios() {
         "CTX-003: the new entity must enter the context: {after_names:?}"
     );
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 #[test]
 fn mcp_ping_and_tools_list() {
     let db = tmp_db("ping");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
 
     // Ping
     let mut req = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
     c.stdin
+        .as_mut()
+        .unwrap()
         .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
         .unwrap();
-    c.stdin.flush().unwrap();
+    c.stdin.as_mut().unwrap().flush().unwrap();
     let mut resp = String::new();
-    c.reader.read_line(&mut resp).unwrap();
+    c.reader.as_mut().unwrap().read_line(&mut resp).unwrap();
     let v: J = serde_json::from_str(&resp).unwrap();
     assert_eq!(v["result"], json!({}));
 
     // Tools list
     req = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
     c.stdin
+        .as_mut()
+        .unwrap()
         .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
         .unwrap();
-    c.stdin.flush().unwrap();
+    c.stdin.as_mut().unwrap().flush().unwrap();
     resp.clear();
-    c.reader.read_line(&mut resp).unwrap();
+    c.reader.as_mut().unwrap().read_line(&mut resp).unwrap();
     let v: J = serde_json::from_str(&resp).unwrap();
     let tools = v["result"]["tools"].as_array().unwrap();
     assert!(
@@ -1309,13 +1468,13 @@ fn mcp_ping_and_tools_list() {
         tools.len()
     );
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 #[test]
 fn mcp_idempotency_guarantee() {
     let db = tmp_db("idem");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
 
     // Create with idempotency key.
@@ -1340,7 +1499,7 @@ fn mcp_idempotency_guarantee() {
     );
     assert_eq!(r2["koid"].as_str().unwrap(), koid1);
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 #[test]
@@ -1349,7 +1508,7 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
     // knowledge — same KOID resolvable with the same content, and the
     // backup is listable.
     let db = tmp_db("recv");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 
     // Phase 1: build knowledge.
     let mut c = McpClient::start(&db);
@@ -1423,8 +1582,7 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
         "backup must appear in list_backups, got {names:?}"
     );
 
-    // Phase 3: destroy — kill the server, delete the database (a redb file
-    // pre-flip, an aikoql-v2 directory now — the 2026-09-07 default; give
+    // Phase 3: destroy — kill the server, delete the v2 database dir (give
     // the killed process a moment to release the handle on Windows).
     drop(c);
     let mut removed = false;
@@ -1482,61 +1640,18 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
     assert!(!evidence.is_empty(), "evidence must survive restore");
     assert_eq!(restored_asserted["extensions"]["valid_from"], 1000);
 
-    let _ = std::fs::remove_file(&db);
-}
-
-/// Removes the backend env var on drop — even when the test panics, so a
-/// global AIKOQL_BACKEND can never poison the other parallel tests.
-struct BackendEnvGuard;
-
-impl Drop for BackendEnvGuard {
-    fn drop(&mut self) {
-        std::env::remove_var("AIKOQL_BACKEND");
-    }
-}
-
-#[test]
-fn mcp_client_children_ignore_process_backend_env() {
-    // CI flake (2026-09-18, Windows job): p3m3_bkp005's redb leg set
-    // AIKOQL_BACKEND on the WHOLE test process, and every parallel test's
-    // child inherited it — a sibling's v2 directory opened as redb and
-    // died with "Access is denied". The harness must spawn children with
-    // a clean backend env, not leak the process-global one.
-    let db = tmp_db("envleak");
-    let _ = std::fs::remove_file(&db);
-    let _ = std::fs::remove_dir_all(&db);
-    let _guard = BackendEnvGuard;
-    std::env::set_var("AIKOQL_BACKEND", "redb");
-    let mut c = McpClient::start(&db);
-    drop(_guard); // the child inherited at spawn; clean the process now
-    let note = c.call(
-        "remember",
-        &json!({
-            "subject": "admin", "type_name": "note",
-            "properties": {"body": "backend env must not leak"}
-        }),
-    );
-    assert!(note["koid"].as_str().is_some());
-    let backup = c.call("backup", &json!({"subject": "admin"}));
-    assert_eq!(
-        backup["engine"], "aikoql-v2",
-        "McpClient::start leaked the process-global AIKOQL_BACKEND into the child: {backup}"
-    );
-    let _ = std::fs::remove_file(&db);
     let _ = std::fs::remove_dir_all(&db);
 }
 
-// P3-M3 bkp005 — MCP backup/restore route v2 backends through the
-// engine-native snapshot (§58–60): the backup dir holds the manifest +
-// segments + logs + torn-safe WAL and exactly one SNAPSHOT-{gen} marker
-// (the commit point), and restore verifies then swaps rows through the
-// live kernel. redb servers keep the trait-default scan (REC-002
-// untouched): the backup dir holds a redb data file and no marker.
+// P3-M3 bkp005 — MCP backup/restore take the engine-native snapshot
+// (§58–60): the backup dir holds the manifest + segments + logs +
+// torn-safe WAL and exactly one SNAPSHOT-{gen} marker (the commit point),
+// and restore verifies then swaps rows through the live kernel.
 #[test]
 fn p3m3_bkp005_backup_restore_route_by_backend() {
     // ── v2 leg (the production default): engine-native snapshot ──────────
     let db = tmp_db("bkp005v2");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let _ = std::fs::remove_dir_all(&db);
 
     let mut c = McpClient::start(&db);
@@ -1571,10 +1686,10 @@ fn p3m3_bkp005_backup_restore_route_by_backend() {
     );
     assert!(
         !entries.iter().any(|n| n.ends_with(".redb")),
-        "v2 backup must not hold a redb file, got {entries:?}"
+        "v2 backup must hold no redb file, got {entries:?}"
     );
 
-    // verify_backup on a v2 backup verifies the marker instead of redb.
+    // verify_backup verifies the snapshot marker.
     let v = c.call(
         "verify_backup",
         &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
@@ -1618,74 +1733,1836 @@ fn p3m3_bkp005_backup_restore_route_by_backend() {
         "restored knowledge must read back: {fetched}"
     );
     drop(c);
+}
 
-    // ── redb leg: trait-default scan unchanged (REC-002 untouched) ───────
-    // The backend rides the CHILD's env, never the test process's — a
-    // process-global set_var races every parallel test's children.
-    let db2 = tmp_db("bkp005rb");
-    let _ = std::fs::remove_file(&db2);
+#[test]
+fn p3_006_backup_tools_accept_list_backups_name() {
+    // P3-006: `backup` returns the path, `list_backups` returns entry
+    // names — but verify_backup/restore accepted only the path, so a
+    // listed name failed with "not a valid backup: os error 3". Both
+    // tools must accept the listed name too (resolved next to the db).
+    let db = tmp_db("p3-006");
+    let _ = std::fs::remove_dir_all(&db);
 
-    let mut c = McpClient::start_with(&db2, Some("redb"));
+    let mut c = McpClient::start(&db);
     let note = c.call(
         "remember",
         &json!({
-            "subject": "admin", "type_name": "note",
-            "properties": {"body": "bkp005 redb path", "memo": "bkp005"}
+            "subject": "admin", "type_name": "note", "tenant": "acme",
+            "properties": {"body": "p3-006 name dialect", "memo": "p3-006"}
         }),
     );
-    let koid2 = note["koid"].as_str().unwrap().to_string();
+    let koid = note["koid"].as_str().unwrap().to_string();
 
     let backup = c.call("backup", &json!({"subject": "admin"}));
-    assert_eq!(
-        backup["verified"], true,
-        "redb backup must verify: {backup}"
-    );
-    assert!(
-        backup["engine"].as_str().is_none(),
-        "redb backup keeps the old response shape: {backup}"
-    );
-    let backup_dir = std::path::PathBuf::from(backup["backup"].as_str().unwrap());
-    let entries: Vec<String> = std::fs::read_dir(&backup_dir)
+    assert_eq!(backup["verified"], true, "backup must verify: {backup}");
+    let backup_dir = backup["backup"].as_str().unwrap().to_string();
+
+    // The listed NAME, not the path — the POC's exact failing dialect.
+    let list = c.call("list_backups", &json!({"subject": "admin"}));
+    let name = list["backups"]
+        .as_array()
         .unwrap()
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    assert!(
-        entries.iter().any(|n| n.ends_with(".redb")),
-        "redb backup must hold a redb data file, got {entries:?}"
+        .iter()
+        .filter_map(|b| b["name"].as_str())
+        .find(|n| backup_dir.ends_with(*n))
+        .expect("backup must be listed")
+        .to_string();
+
+    let v = c.call(
+        "verify_backup",
+        &json!({"subject": "admin", "backup": &name}),
     );
-    assert!(
-        !entries.iter().any(|n| n.starts_with("SNAPSHOT-")),
-        "redb backup must hold no snapshot marker, got {entries:?}"
+    assert_eq!(
+        v["verified"], true,
+        "verify_backup must accept the listed name: {v}"
     );
 
-    // Full REC-002 loop on redb stays green.
+    // destroy → fresh server → restore BY NAME → restart → knowledge back.
     drop(c);
     let mut removed = false;
     for _ in 0..20 {
-        if std::fs::remove_file(&db2).is_ok() {
+        if std::fs::remove_dir_all(&db).is_ok() {
             removed = true;
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
-    assert!(removed, "destroy: redb file must be removable");
+    assert!(removed, "destroy: db dir must be removable");
 
-    let mut c = McpClient::start_with(&db2, Some("redb"));
-    let restored = c.call(
-        "restore",
-        &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
-    );
+    let mut c = McpClient::start(&db);
+    let restored = c.call("restore", &json!({"subject": "admin", "backup": &name}));
     assert_eq!(
         restored["restored"], true,
-        "redb restore unchanged: {restored}"
+        "restore must accept the listed name: {restored}"
     );
     drop(c);
-    let mut c = McpClient::start_with(&db2, Some("redb"));
-    let fetched = c.call("get", &json!({"koid": &koid2, "subject": "admin"}));
+    let mut c = McpClient::start(&db);
+    let fetched = c.call("get", &json!({"koid": &koid, "subject": "admin"}));
     assert_eq!(
-        fetched["properties"]["body"], "bkp005 redb path",
-        "redb restored knowledge must read back: {fetched}"
+        fetched["properties"]["body"], "p3-006 name dialect",
+        "restored knowledge must read back: {fetched}"
     );
     drop(c);
+}
+
+#[test]
+fn batch_ops_inherit_session_identity() {
+    // F2: batch ops without an explicit subject land as mcp-agent and the
+    // submitting session then hits ACCESS_DENIED on its own KO.
+    let db = tmp_db("batch-ident");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+    let batch = c.call(
+        "batch",
+        &json!({
+            "operations": [{
+                "op": "remember",
+                "type_name": "device",
+                "properties": {"device_id": "d1", "farm": "f07"},
+                "idempotency_key": "batch-ident-d1"
+            }]
+        }),
+    );
+    let koid = batch["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let got = c.call("get", &json!({"koid": &koid}));
+    assert_eq!(
+        got["koid"],
+        json!(koid),
+        "batch op must inherit the submitting session's identity: {got}"
+    );
+
+    // Fill-if-absent, not override: an op with its own subject keeps it.
+    let batch2 = c.call(
+        "batch",
+        &json!({
+            "operations": [{
+                "op": "remember",
+                "type_name": "device",
+                "subject": "another-agent",
+                "properties": {"device_id": "d2"}
+            }]
+        }),
+    );
+    let koid2 = batch2["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let got2 = c.call_raw("get", &json!({"koid": &koid2}));
+    let text2 = got2["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        got2["result"]["isError"] == true && text2.contains("ACCESS_DENIED"),
+        "an explicit op subject must survive injection: {got2}"
+    );
+}
+
+#[test]
+fn replay_relate_through_batch_is_version_idempotent() {
+    // F13: re-applying an identical relate on replay re-versions the source
+    // (device-eval DI-002: 14 d2 edges re-versioned — koid stable, edge set
+    // unchanged, version bumped).
+    let db = tmp_db("relate-replay");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+
+    let mk = |idem: &str, dev: &str| {
+        json!({
+            "op": "remember",
+            "type_name": "device",
+            "properties": {"device_id": dev},
+            "idempotency_key": idem
+        })
+    };
+    let b1 = c.call(
+        "batch",
+        &json!({"operations": [mk("f13-d1", "d1"), mk("f13-d2", "d2")]}),
+    );
+    let d1 = b1["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let d2 = b1["results"][1]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let rel = json!({"op": "relate", "from": &d1, "to": &d2, "rel_type": "linked_to"});
+
+    let first = c.call("batch", &json!({"operations": [rel.clone()]}));
+    let v_first = first["results"][0]["result"]["version"].as_u64().unwrap();
+
+    // Replay: the same remember ops (idempotency keys) + the same relate.
+    let replay = c.call(
+        "batch",
+        &json!({"operations": [mk("f13-d1", "d1"), mk("f13-d2", "d2"), rel]}),
+    );
+    let v_replay = replay["results"][2]["result"]["version"].as_u64().unwrap();
+    assert_eq!(
+        v_replay, v_first,
+        "an identical relate replayed through batch must not re-version the source"
+    );
+    let head = c.call("get", &json!({"koid": &d1}));
+    assert_eq!(
+        head["version"],
+        json!(v_first),
+        "the source head must stay at the first relate's version"
+    );
+}
+
+#[test]
+fn t57_ordered_replay_through_batch_converges() {
+    // P3-008 MEDIUM: the P3-007 corpus shape (ingest -> correct -> retract,
+    // per-op idempotency keys, per-op tenant stamps, retracts targeting a
+    // prior op's returned koid) must replay through the batch tool and
+    // converge — a full re-send of the same batches is a no-op, and the
+    // AS_OF slices re-check against the expected corpus timeline.
+    let db = tmp_db("t57-replay");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+    let now_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    let t_pre = now_ms();
+    let ev = json!([{"source_artifact": "t57-pin", "method": "human_provided"}]);
+
+    // Batch A: two ingests (one tenant-stamped per-op) + an in-batch
+    // correction targeting $1.koid — the handle of the first op. MVCC picks
+    // versions by commit_ts, so the oracle slices are the markers BETWEEN
+    // batches (nothing exists before batch A commits).
+    let mk_batch_a = || {
+        json!({
+            "operations": [
+                {"op": "remember", "type_name": "device",
+                 "properties": {"device_id": "dev0", "value": "v0"},
+                 "extensions": {"valid_from": t_pre - 60_000},
+                 "idempotency_key": "t57-s1-0"},
+                {"op": "remember", "type_name": "device",
+                 "tenant": "other",
+                 "properties": {"device_id": "dev1", "value": "v1"},
+                 "extensions": {"valid_from": t_pre - 60_000},
+                 "idempotency_key": "t57-s1-1"},
+                {"op": "supersede", "old": "$1.koid", "type_name": "device",
+                 "properties": {"device_id": "dev0", "value": "v0b"},
+                 "evidence": ev, "idempotency_key": "t57-c1",
+                 "reason": "corpus correction t57-c1"}
+            ]
+        })
+    };
+    let batch_a = c.call("batch", &mk_batch_a());
+    for (i, r) in batch_a["results"].as_array().unwrap().iter().enumerate() {
+        assert!(
+            r["ok"] == true,
+            "batch A op {i} must apply through the bulk path: {batch_a}"
+        );
+    }
+    let koid0 = batch_a["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let koid1 = batch_a["results"][1]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let new0 = batch_a["results"][2]["result"]["new"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        batch_a["results"][2]["result"]["old"],
+        json!(koid0),
+        "$1.koid must resolve to the first op's returned handle: {batch_a}"
+    );
+
+    let t_mid = now_ms();
+    // Batch B must commit in a strictly later millisecond than t_mid: the
+    // retraction stamps valid_to = its own commit ms, and F12's half-open
+    // [valid_from, valid_to) interval hides the row at valid_to itself — a
+    // same-ms retract would make AS_OF t_mid (correctly) empty. Wait out
+    // the millisecond so the slice is unambiguously pre-retraction.
+    while now_ms() <= t_mid {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // Batch B: the corpus retraction — targets a handle batch A returned.
+    let mk_batch_b = || {
+        json!({
+            "operations": [
+                {"op": "supersede", "old": koid1, "type_name": "device",
+                 "retract": true, "tenant": "other", "evidence": ev,
+                 "idempotency_key": "t57-r1", "reason": "corpus retraction t57-r1"}
+            ]
+        })
+    };
+    let batch_b = c.call("batch", &mk_batch_b());
+    assert!(
+        batch_b["results"][0]["ok"] == true,
+        "retract must ride batch: {batch_b}"
+    );
+    assert!(
+        batch_b["results"][0]["result"]["new"].is_null(),
+        "a retraction has no successor: {batch_b}"
+    );
+    let t_post = now_ms();
+
+    // Replay both batches: per-op idempotency keys make the re-send a no-op.
+    let replay_a = c.call("batch", &mk_batch_a());
+    for (i, r) in replay_a["results"].as_array().unwrap().iter().enumerate() {
+        assert!(
+            r["ok"] == true,
+            "batch A replay op {i} must converge, not error: {replay_a}"
+        );
+    }
+    assert_eq!(replay_a["results"][0]["result"]["koid"], json!(koid0));
+    assert_eq!(replay_a["results"][2]["result"]["new"], json!(new0));
+    let replay_b = c.call("batch", &mk_batch_b());
+    assert!(
+        replay_b["results"][0]["ok"] == true,
+        "a replayed retraction must converge via its idempotency key: {replay_b}"
+    );
+
+    // Context oracle: the AS_OF slices + heads must match the corpus timeline.
+    let proj = |resp: &J| -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = resp["results"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|r| {
+                        (
+                            r["properties"]["device_id"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string(),
+                            r["properties"]["value"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let mid = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF {t_mid} RETURN *")}),
+    );
+    assert_eq!(
+        proj(&mid),
+        vec![("dev0".into(), "v0b".into())],
+        "AS_OF t_mid must show the corrected value (batch A landed before t_mid): {mid}"
+    );
+    let mid_other = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF {t_mid} RETURN *"), "tenant": "other"}),
+    );
+    assert_eq!(
+        proj(&mid_other),
+        vec![("dev1".into(), "v1".into())],
+        "AS_OF t_mid under the per-op tenant must show dev1 before its retraction: {mid_other}"
+    );
+    let post_other = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF {t_post} RETURN *"), "tenant": "other"}),
+    );
+    assert_eq!(
+        proj(&post_other),
+        vec![],
+        "AS_OF t_post must hide the retracted row: {post_other}"
+    );
+    let head = c.call("aikoql", &json!({"query": "MATCH device RETURN *"}));
+    assert_eq!(
+        proj(&head),
+        vec![("dev0".into(), "v0b".into())],
+        "head must show the corrected value only: {head}"
+    );
+    let head_other = c.call(
+        "aikoql",
+        &json!({"query": "MATCH device RETURN *", "tenant": "other"}),
+    );
+    assert_eq!(
+        proj(&head_other),
+        vec![],
+        "head under the other tenant must hide the retracted row: {head_other}"
+    );
+}
+
+#[test]
+fn t58_asof_journal_domain_slices_between_applies() {
+    // P3-008 LOW: AS_OF accepted only real wall-clock millis, so a client
+    // replaying a synthetic corpus synthesizes wall markers (sleep loops,
+    // collision footgun). AS_OF JOURNAL <n> makes the journal seq the
+    // client-clock domain: health()["journal_seq"] after each apply is an
+    // exact per-apply marker — no sleeps, no marker synthesis, restart-safe
+    // (the ke/ event journal persists seq -> commit_ts).
+    let db = tmp_db("t58-asof-journal");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+    let ev = json!([{"source_artifact": "t58-pin", "method": "human_provided"}]);
+    fn journal_seq(c: &mut McpClient) -> u64 {
+        c.call("health", &json!({}))["journal_seq"]
+            .as_u64()
+            .expect("health must expose the journal seq")
+    }
+
+    // Apply 1: the original row. Apply 2: the correction. Apply 3: the
+    // retraction. The journal seq captured after each apply is the marker.
+    let a1 = c.call(
+        "remember",
+        &json!({"type_name": "device",
+                "properties": {"device_id": "dev9", "value": "v0"},
+                "evidence": ev}),
+    );
+    assert!(a1["koid"].is_string(), "apply 1 must land: {a1}");
+    let s1 = journal_seq(&mut c);
+    let a2 = c.call(
+        "supersede",
+        &json!({"old": a1["koid"], "type_name": "device",
+                "properties": {"device_id": "dev9", "value": "v0b"},
+                "evidence": ev, "reason": "t58 correction"}),
+    );
+    assert!(a2["new"].is_string(), "apply 2 must land: {a2}");
+    let s2 = journal_seq(&mut c);
+    // Apply 3: the retraction — targets the current generation (the
+    // correction's successor), the way a corpus replay would; retracting the
+    // original is refused ("already superseded — supersede the successor").
+    let a3 = c.call(
+        "supersede",
+        &json!({"old": a2["new"], "type_name": "device",
+                "retract": true, "evidence": ev, "reason": "t58 retraction"}),
+    );
+    assert!(
+        a3["new"].is_null() && a3["old"].is_string(),
+        "apply 3 must land: {a3}"
+    );
+    let s3 = journal_seq(&mut c);
+    assert!(
+        s1 < s2 && s2 < s3,
+        "the journal seq must advance strictly per apply: {s1} < {s2} < {s3}"
+    );
+
+    let proj = |resp: &J| -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = resp["results"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|r| {
+                        (
+                            r["properties"]["device_id"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string(),
+                            r["properties"]["value"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+
+    // The slices are journal-seq domain: no wall marker is captured anywhere.
+    let at_s1 = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF JOURNAL {s1} RETURN *")}),
+    );
+    assert_eq!(
+        proj(&at_s1),
+        vec![("dev9".into(), "v0".into())],
+        "AS_OF JOURNAL s1 must show the pre-correction value: {at_s1}"
+    );
+    let at_s2 = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF JOURNAL {s2} RETURN *")}),
+    );
+    assert_eq!(
+        proj(&at_s2),
+        vec![("dev9".into(), "v0b".into())],
+        "AS_OF JOURNAL s2 must show the corrected value: {at_s2}"
+    );
+    let at_s3 = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF JOURNAL {s3} RETURN *")}),
+    );
+    assert_eq!(
+        proj(&at_s3),
+        vec![],
+        "AS_OF JOURNAL s3 must hide the retracted row: {at_s3}"
+    );
+    // 0 = before the first event (empty); beyond the head = the current
+    // state (the retracted row is gone from it too).
+    let at_0 = c.call(
+        "aikoql",
+        &json!({"query": "MATCH device AS_OF JOURNAL 0 RETURN *"}),
+    );
+    assert_eq!(proj(&at_0), vec![], "AS_OF JOURNAL 0 must be empty: {at_0}");
+    let at_big = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF JOURNAL {} RETURN *", s3 + 1000)}),
+    );
+    assert_eq!(
+        proj(&at_big),
+        vec![],
+        "AS_OF JOURNAL beyond the head must equal the current state: {at_big}"
+    );
+}
+
+#[test]
+fn serve_restart_catchup_preserves_edges_for_relate_replay() {
+    // F13 end-to-end (the device-eval DI-002 pipeline): run1 remembers and
+    // relates, run2 restarts the serve — the start-up catch-up enriches
+    // every KO, and pre-T-34 enrichment rode the remember-update path,
+    // wiping caller edges between the relate and its replay. The replay
+    // relate then missed the no-op guard and re-versioned the source.
+    // Needs the local embedding model; skips where none is installed.
+    let Some(models_root) = installed_models_root() else {
+        eprintln!("[SKIP] no local embedding model (run `aikoql model install`)");
+        return;
+    };
+    let db = tmp_db("relate-restart");
+    let mk = |idem: &str, dev: &str| {
+        json!({
+            "op": "remember",
+            "type_name": "device",
+            "properties": {"device_id": dev},
+            "idempotency_key": idem
+        })
+    };
+    // Serve A: no enrichment provider (empty model dir) — remember + relate.
+    let (d1, rel) = {
+        let mut a = McpClient::start(&db);
+        a.session_init("device-identity-eval", "acme");
+        let b1 = a.call(
+            "batch",
+            &json!({"operations": [mk("f13e-d1", "d1"), mk("f13e-d2", "d2")]}),
+        );
+        let d1 = b1["results"][0]["result"]["koid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let d2 = b1["results"][1]["result"]["koid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let rel = json!({"op": "relate", "from": &d1, "to": &d2, "rel_type": "linked_to"});
+        a.call("batch", &json!({"operations": [rel.clone()]}));
+        let head = a.call("get", &json!({"koid": &d1}));
+        assert_eq!(
+            head["relationships"].as_array().map(|r| r.len()),
+            Some(1),
+            "serve A must record the relate edge before the restart"
+        );
+        (d1, rel)
+    }; // drop serve A: child killed and waited, the db dir survives
+
+    // Serve B: real model store — start-up catch-up enriches both devices.
+    let mut b = McpClient::start_with_model_dir(&db, &models_root);
+    b.session_init("device-identity-eval", "acme");
+
+    // PRR-3: the enrichment worker flips health to "ready" only after the
+    // catch-up scan completes.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    loop {
+        let h = b.call("health", &json!({}));
+        let state = h["semantic"]["state"].as_str().unwrap_or("initializing");
+        if state == "ready" {
+            break;
+        }
+        if state == "unavailable" {
+            panic!("enrichment unavailable: {}", h["semantic"]["detail"]);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "catch-up enrichment never reached ready"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    // Wipe tooth: enrichment must not have destroyed the caller edge.
+    let head = b.call("get", &json!({"koid": &d1}));
+    assert!(
+        !head["relationships"].as_array().unwrap().is_empty(),
+        "catch-up enrichment wiped the caller-created edge"
+    );
+    let v_head = head["version"].as_u64().unwrap();
+
+    // Replay: the same remember ops (idempotency keys) + the same relate.
+    let replay = b.call(
+        "batch",
+        &json!({"operations": [mk("f13e-d1", "d1"), mk("f13e-d2", "d2"), rel]}),
+    );
+    assert_eq!(
+        replay["results"][2]["result"]["version"].as_u64().unwrap(),
+        v_head,
+        "the replayed relate must no-op after restart catch-up enrichment"
+    );
+    let after = b.call("get", &json!({"koid": &d1}));
+    assert_eq!(after["version"].as_u64().unwrap(), v_head);
+    assert_eq!(
+        after["relationships"].as_array().map(|r| r.len()),
+        Some(1),
+        "the edge set must survive enrichment and replay unchanged"
+    );
+}
+
+#[test]
+fn query_group_by_count_aggregate_surfaces_through_tool() {
+    // device-eval MINOR-1: "no GROUP BY count aggregate" — the eval's
+    // binary predated T-32 and dropped Grouped rows at the tool layer, so
+    // COUNT(*) looked absent. The compiler/runtime has executed the
+    // aggregate since P5-M2 (count = every row, count(field) = non-null);
+    // this pins the end-to-end tool path the eval drives.
+    let db = tmp_db("cnt");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+    c.session_init("admin", "acme");
+
+    for (name, dept, salary) in [
+        ("Alice Chen", "Engineering", 165_000),
+        ("Bob Ortiz", "Engineering", 152_000),
+        ("Carol Wu", "Sales", 131_000),
+    ] {
+        let _ = c.call(
+            "remember",
+            &json!({
+                "subject": "admin", "type_name": "Employee", "tenant": "acme",
+                "properties": {"name": name, "dept": dept, "salary": salary}
+            }),
+        );
+    }
+
+    // GROUP BY <key>, COUNT(*) — the mixed key/aggregate list.
+    let res = c.call(
+        "aikoql",
+        &json!({"query": "MATCH Employee GROUP BY dept, COUNT(*) RETURN *"}),
+    );
+    let rows = res["results"]
+        .as_array()
+        .expect("grouped rows must surface through the tool");
+    assert_eq!(rows.len(), 2, "two dept groups, got {rows:?}");
+    let eng = rows
+        .iter()
+        .find(|r| r["properties"]["dept"] == "Engineering")
+        .unwrap_or_else(|| panic!("Engineering group missing: {rows:?}"));
+    let sales = rows
+        .iter()
+        .find(|r| r["properties"]["dept"] == "Sales")
+        .unwrap_or_else(|| panic!("Sales group missing: {rows:?}"));
+    assert_eq!(
+        eng["properties"]["count"],
+        json!(2),
+        "COUNT(*) must count every row in the group"
+    );
+    assert_eq!(sales["properties"]["count"], json!(1));
+
+    // Global aggregate (no keys): one row over the whole match set.
+    let res = c.call(
+        "aikoql",
+        &json!({"query": "MATCH Employee GROUP BY COUNT(*) RETURN *"}),
+    );
+    let rows = res["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "one global group, got {rows:?}");
+    assert_eq!(rows[0]["properties"]["count"], json!(3));
+}
+
+#[test]
+fn tool_boundary_emits_plain_epoch_millis_commit_ts() {
+    // device-eval MINOR-2: the commit_ts hybrid encoding leaks through the
+    // API — `epoch_ms << 16 | counter` forced clients to shift right 16
+    // before AS_OF/validity math. The tool boundary emits plain epoch
+    // millis; the counter stays kernel-internal.
+    let db = tmp_db("cts");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+    c.session_init("admin", "acme");
+    let now_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    let before = now_ms();
+    let res = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "Device", "tenant": "acme",
+            "properties": {"mac": "aa:bb:cc:dd:ee:ff"}
+        }),
+    );
+    let after = now_ms();
+    let koid = res["koid"].as_str().unwrap().to_string();
+    let ts = res["commit_ts"]
+        .as_u64()
+        .expect("remember must carry commit_ts");
+    assert!(
+        ts >= before && ts <= after + 60_000,
+        "remember commit_ts must be plain epoch millis inside the commit \
+         window (before={before}, after={after}, ts={ts})"
+    );
+    let got = c.call("get", &json!({"koid": koid}));
+    let gts = got["commit_ts"].as_u64().expect("get must carry commit_ts");
+    assert!(
+        gts >= before && gts <= after + 60_000,
+        "get commit_ts must be plain epoch millis inside the commit window \
+         (ts={gts})"
+    );
+}
+
+// ── T-44: compile_context must never queue behind the enrichment worker ──
+// The device-eval corpus drove compile_context while the enrichment worker
+// held the embedding model lock (one scalar-CPU forward ≈ 3s), and the
+// training client's 5s socket timeout expired mid-catch-up. The pins below
+// park the worker's embed holding the model lock (deterministic contention)
+// and bound the compile response: queueing callers have no answer inside
+// the bound, fail-fast callers answer instantly.
+
+fn t44_snapshot() -> KnowledgeIr {
+    KnowledgeIr {
+        entities: vec![EntityCandidate {
+            name: "PaymentService".into(),
+            type_hint: Some("Struct".into()),
+            mentions: vec!["processes payments".into()],
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        }],
+        facts: vec![FactCandidate {
+            snippet: None,
+            statement: "payments flow through Stripe".into(),
+            entities: vec![],
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        }],
+        ..Default::default()
+    }
+}
+
+/// Park the enrichment worker's Nth embed on the serve provider and wait
+/// for the marker it writes while holding the model lock.
+fn t44_parked_client(
+    db: &str,
+    models_root: &str,
+    park_at: &str,
+) -> (McpClient, std::path::PathBuf) {
+    let marker = std::path::PathBuf::from(db).with_extension("park-marker");
+    let _ = std::fs::remove_file(&marker);
+    let client = McpClient::start_with_model_dir_env(
+        db,
+        models_root,
+        &[
+            ("AIKOQL_EMBED_PARK_AT", park_at),
+            ("AIKOQL_EMBED_PARK_MARKER", marker.to_str().unwrap()),
+        ],
+    );
+    (client, marker)
+}
+
+fn t44_wait_parked(marker: &std::path::Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !marker.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "enrichment worker never entered the park"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn compile_context_stays_bounded_while_enrichment_holds_the_model() {
+    // The corpus shape: a fresh snapshot is remembered, the enrichment
+    // worker starts embedding it (parked here), and compile_context runs
+    // mid-catch-up. It must answer inside the bound — lexically — instead
+    // of queueing its semantic embed behind the worker.
+    let Some(models_root) = installed_models_root() else {
+        eprintln!("[SKIP] no local embedding model (run `aikoql model install`)");
+        return;
+    };
+    let db = tmp_db("cc-park");
+    let (mut c, marker) = t44_parked_client(&db, &models_root, "1");
+    c.session_init("alice", "acme");
+    let doc = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {"ir_json": serde_json::to_string(&t44_snapshot()).unwrap()},
+            "origin": "system"
+        }),
+    );
+    let doc_koid = doc["koid"].as_str().unwrap().to_string();
+    t44_wait_parked(&marker);
+
+    let ctx = c.call_bounded(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments"}),
+        std::time::Duration::from_secs(2),
+    );
+    let names: Vec<&str> = ctx["package"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"PaymentService"),
+        "the lexical package must survive the busy model: {ctx}"
+    );
+    assert_eq!(
+        ctx["semantic"],
+        json!(false),
+        "a queued semantic leg must degrade, not block: {ctx}"
+    );
+}
+
+#[test]
+fn compile_context_fails_fast_when_model_busy_with_stored_embeddings() {
+    // The residual race: the snapshot ALREADY carries entity_embeddings
+    // (ingest wrote them), so the semantic leg runs — but the worker's
+    // next embed parks holding the model lock. The embed must fail fast
+    // (Retryable) instead of queueing on the mutex.
+    let Some(models_root) = installed_models_root() else {
+        eprintln!("[SKIP] no local embedding model (run `aikoql model install`)");
+        return;
+    };
+    let db = tmp_db("cc-busy");
+    let (mut c, marker) = t44_parked_client(&db, &models_root, "2");
+    c.session_init("alice", "acme");
+    let k1 = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {
+                "ir_json": serde_json::to_string(&t44_snapshot()).unwrap(),
+                "entity_embeddings": "{\"d::PaymentService\": [0.1, 0.2]}"
+            },
+            "origin": "system"
+        }),
+    );
+    let k1_koid = k1["koid"].as_str().unwrap().to_string();
+    // The worker's second embed (this KO) parks holding the model lock.
+    let _ = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {"ir_json": serde_json::to_string(&t44_snapshot()).unwrap()},
+            "origin": "system"
+        }),
+    );
+    t44_wait_parked(&marker);
+
+    let ctx = c.call_bounded(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &k1_koid, "task": "process payments"}),
+        std::time::Duration::from_secs(2),
+    );
+    assert!(
+        !ctx["package"]["entities"].as_array().unwrap().is_empty(),
+        "the lexical package must survive the busy model: {ctx}"
+    );
+    assert_eq!(
+        ctx["semantic"],
+        json!(false),
+        "a contended embed must fail fast, not queue: {ctx}"
+    );
+}
+
+#[test]
+fn compile_context_skips_semantic_embed_without_stored_embeddings() {
+    // Guard-A tooth: with no entity_embeddings on the snapshot there is
+    // nothing to score the task against, so the semantic leg must not burn
+    // a full forward pass (~3s scalar) inside the caller's socket budget.
+    let Some(models_root) = installed_models_root() else {
+        eprintln!("[SKIP] no local embedding model (run `aikoql model install`)");
+        return;
+    };
+    let db = tmp_db("cc-skip");
+    let mut c = McpClient::start_with_model_dir(&db, &models_root);
+    c.session_init("alice", "acme");
+    let doc = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {"ir_json": serde_json::to_string(&t44_snapshot()).unwrap()},
+            "origin": "system"
+        }),
+    );
+    let doc_koid = doc["koid"].as_str().unwrap().to_string();
+
+    let ctx = c.call_bounded(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments"}),
+        std::time::Duration::from_secs(1),
+    );
+    assert_eq!(
+        ctx["semantic"],
+        json!(false),
+        "no stored embeddings → no embed, no score: {ctx}"
+    );
+}
+
+// ── T-45: the default rate limit serves a batch ingest phase ──
+// The device eval throttles at 115 and takes ~130 batch calls per
+// dataset phase against a default-configured server — the 120/min
+// cap denied the tail of every phase. A legitimate batch phase from
+// one principal must fit the default budget.
+
+#[test]
+fn default_rate_limit_serves_a_batch_ingest_phase() {
+    let db = tmp_db("rl-batch");
+    let mut c = McpClient::start(&db);
+    c.session_init("alice", "acme");
+    let started = std::time::Instant::now();
+    for i in 0..130 {
+        let doc = c.call(
+            "remember",
+            &json!({
+                "subject": "alice", "type_name": "note", "tenant": "acme",
+                "properties": {"body": format!("batch note {i}")},
+                "origin": "system"
+            }),
+        );
+        assert!(
+            doc["koid"].is_string(),
+            "remember #{i} must not trip the default rate limit: {doc}"
+        );
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(50),
+        "the batch phase straddled a window rollover — the pin proves nothing"
+    );
+}
+
+// T-49 (POC-3 B3-1): supersede must read `extensions.valid_from` for the
+// successor exactly as remember does — commit time is only the fallback.
+// The device stream back-dates corrections by event_time; stamping the
+// commit instant instead makes the successor assert validity in the future
+// and breaks AS_OF reconstruction of the device timeline.
+#[test]
+fn supersede_honors_extensions_valid_from() {
+    let db = tmp_db("t49vf");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note",
+            "properties": {"body": "v1"}
+        }),
+    );
+    let old = note["koid"].as_str().unwrap().to_string();
+
+    let sup = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &old, "type_name": "note",
+            "properties": {"body": "v2"},
+            "extensions": {"valid_from": 1_700_000_000_000u64},
+            "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+        }),
+    );
+    let new = sup["new"].as_str().unwrap().to_string();
+
+    let got = c.call("get", &json!({"koid": &new, "subject": "admin"}));
+    assert_eq!(
+        got["extensions"]["valid_from"], 1_700_000_000_000u64,
+        "successor valid_from must honor extensions.valid_from, got: {got}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-50 (POC-3 B3-4): a supersede successor must inherit the replaced row's
+// tenant. The successor generation replaces the claim — an untenanted
+// successor is shared (ACL R9: untenanted objects stay visible), so the row
+// escapes tenant_a's confinement and leaks into every other tenant's scans.
+#[test]
+fn supersede_successor_inherits_tenant() {
+    let db = tmp_db("t50tn");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    let old = note["koid"].as_str().unwrap().to_string();
+
+    let sup = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &old, "type_name": "device",
+            "properties": {"key": "d1", "value": "v2"},
+            "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+        }),
+    );
+    assert!(sup["new"].is_string(), "successor must exist: {sup}");
+
+    // A foreign tenant must not see the successor (pre-fix: untenanted
+    // successors are shared, escaping tenant_a's confinement).
+    let leak = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_b",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        leak["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "tenant_b must not see tenant_a's successor: {leak}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-52 (POC-3 P3-009 HIGH): the idempotency key namespace was global, so a
+// tenant_b remember with tenant_a's key replayed tenant_a's commit — tenant_b
+// received the foreign koid and its own write silently vanished. Acceptance:
+// same key, two tenants => two distinct KOs, both writes persisted.
+#[test]
+fn idempotency_key_is_tenant_scoped() {
+    let db = tmp_db("t52id");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let a = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "idempotency_key": "p9-twin",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    let koid_a = a["koid"].as_str().unwrap().to_string();
+
+    let b = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_b",
+            "idempotency_key": "p9-twin",
+            "properties": {"key": "d1", "value": "v2"}
+        }),
+    );
+    assert_ne!(
+        b["koid"].as_str().unwrap(),
+        koid_a.as_str(),
+        "tenant_b must not receive tenant_a's koid on replay: {b}"
+    );
+
+    // Both writes persisted — tenant_b's value is v2, not silently dropped.
+    let match_b = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_b",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    let rows = match_b["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "tenant_b's write must persist: {match_b}");
+    assert_eq!(rows[0]["properties"]["value"], json!("v2"));
+
+    // Same-tenant retry stays exact-once.
+    let a2 = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "idempotency_key": "p9-twin",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    assert_eq!(a2["koid"].as_str().unwrap(), koid_a.as_str());
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-51 (POC-3 B3-3): `retract: true` ends validity without creating a shell
+// successor. The G-002 workaround shape (supersede with no properties)
+// created an empty v1 row — properties {} — visible in every MATCH head and
+// AS_OF slice; a retracted device link must leave nothing behind.
+#[test]
+fn supersede_retract_leaves_no_shell_successor() {
+    let db = tmp_db("t51rt");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    let old = note["koid"].as_str().unwrap().to_string();
+
+    let r = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &old, "type_name": "device",
+            "retract": true,
+            "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+        }),
+    );
+    assert_eq!(
+        r["new"],
+        json!(null),
+        "retraction must not create a shell: {r}"
+    );
+
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        m["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "no shell row may remain in MATCH head: {m}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-53 (POC-3 Stage C HIGH): plain MATCH answers with current truth only —
+// a supersede chain of a device key must leave exactly ONE row (the final
+// generation) in the head; every closed generation stays out. History stays
+// reachable through AS_OF (T-38), never through the default read.
+#[test]
+fn superseded_generations_stay_out_of_plain_match() {
+    let db = tmp_db("t53sc");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let mut old = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_053", "value": "v1"}
+        }),
+    )["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Four supersede hops => five generations of the same key. gen3's commit
+    // instant is captured for the AS_OF history assertion.
+    let mut mid_ts: u64 = 0;
+    for gen in 2..=5u32 {
+        let sup = c.call(
+            "supersede",
+            &json!({
+                "subject": "admin", "old": &old, "type_name": "device",
+                "properties": {"key": "dev_053", "value": format!("v{gen}")},
+                "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+            }),
+        );
+        old = sup["new"].as_str().unwrap().to_string();
+        if gen == 3 {
+            let got = c.call("get", &json!({"subject": "admin", "koid": &old}));
+            mid_ts = got["commit_ts"].as_u64().unwrap();
+        }
+    }
+    assert!(mid_ts > 0, "gen3 commit instant must be captured");
+
+    // The head: exactly the final generation, nothing else.
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_053\" RETURN *"
+        }),
+    );
+    let rows = m["results"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "plain MATCH must show only the current generation: {m}"
+    );
+    assert_eq!(rows[0]["properties"]["value"], json!("v5"));
+
+    // The AS_OF slice at the head agrees (T-38): one row, the successor.
+    let head = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_053\" AS_OF 4102444800000 RETURN *"
+        }),
+    );
+    let hrows = head["results"].as_array().unwrap();
+    assert_eq!(
+        hrows.len(),
+        1,
+        "AS_OF at the head must show one row, not the chain: {head}"
+    );
+    assert_eq!(hrows[0]["properties"]["value"], json!("v5"));
+
+    // History preserved: at gen3's commit instant the row was v3 — and the
+    // closed generations behind it stay out of that slice too.
+    let hist = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device WHERE key == \"dev_053\" AS_OF {mid_ts} RETURN *")
+        }),
+    );
+    let hists = hist["results"].as_array().unwrap();
+    assert_eq!(
+        hists.len(),
+        1,
+        "AS_OF at gen3's instant must show exactly the v3 generation: {hist}"
+    );
+    assert_eq!(hists[0]["properties"]["value"], json!("v3"));
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-54 (POC-3 Stage B3-2 HIGH): superseded predecessors stay visible in
+// BETWEEN windows. The predecessor closes at the wall supersession instant
+// (~1.79e12) while the eval's valid-time windows are event-time, so the
+// stale row overlaps every later window. Acceptance: BETWEEN retires the
+// superseded generation — the window after the correction returns exactly
+// the corrected row — while AS_OF history stays reconstructable.
+#[test]
+fn between_windows_retire_superseded_generations() {
+    let db = tmp_db("t54bt");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let first = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "extensions": {"valid_from": 5000u64},
+            "properties": {"key": "dev_b2", "value": "old"}
+        }),
+    );
+    let old = first["koid"].as_str().unwrap().to_string();
+    let gen1_ts = first["commit_ts"].as_u64().unwrap();
+
+    let sup = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &old, "type_name": "device",
+            "extensions": {"valid_from": 5050u64},
+            "properties": {"key": "dev_b2", "value": "new"},
+            "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+        }),
+    );
+    assert!(sup["new"].is_string(), "successor must exist: {sup}");
+
+    // The window after the correction: exactly the corrected row. Pre-fix
+    // the predecessor's wall valid_to overlaps every event-time window.
+    let after = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_b2\" BETWEEN 6000 AND 9000 RETURN *"
+        }),
+    );
+    let rows = after["results"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the window after the correction must hold only the corrected row: {after}"
+    );
+    assert_eq!(rows[0]["properties"]["value"], json!("new"));
+
+    // The window before the correction event: nothing is valid there.
+    let before = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_b2\" BETWEEN 0 AND 4000 RETURN *"
+        }),
+    );
+    assert_eq!(
+        before["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "nothing was valid before the first ingest: {before}"
+    );
+
+    // History preserved: AS_OF at the first commit instant still shows the
+    // old generation (the filter is scan-level, storage is untouched).
+    let past = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device WHERE key == \"dev_b2\" AS_OF {gen1_ts} RETURN *")
+        }),
+    );
+    let pasts = past["results"].as_array().unwrap();
+    assert_eq!(
+        pasts.len(),
+        1,
+        "AS_OF at the first commit must still show the old generation: {past}"
+    );
+    assert_eq!(pasts[0]["properties"]["value"], json!("old"));
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-65 (POC-3 Stage B3-1, POC-3 post-fix re-run Issue 1): BETWEEN must
+// enumerate closed generations, not just open heads. When a correction
+// asserts the predecessor's closure instant (extensions.valid_to = the
+// correction's op tx), the predecessor generation [vf, vt) must appear in
+// every window it overlaps — the straddling window returns BOTH the closed
+// predecessor and the successor; the window after the closure returns only
+// the successor.
+#[test]
+fn between_enumerates_asserted_closed_generations() {
+    let db = tmp_db("t65cl");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let first = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "extensions": {"valid_from": 5000u64},
+            "properties": {"key": "dev_b3", "value": "old"}
+        }),
+    );
+    let old = first["koid"].as_str().unwrap().to_string();
+    let gen1_ts = first["commit_ts"].as_u64().unwrap();
+
+    let sup = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &old, "type_name": "device",
+            "extensions": {"valid_from": 5050u64, "valid_to": 5700u64},
+            "properties": {"key": "dev_b3", "value": "new"},
+            "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+        }),
+    );
+    assert!(sup["new"].is_string(), "successor must exist: {sup}");
+
+    // The window straddling the asserted closure: both the closed
+    // predecessor generation [5000, 5700) and the successor [5050, ..)
+    // overlap it. Pre-fix the Between arm only yields open heads.
+    let straddle = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_b3\" BETWEEN 5000 AND 5400 RETURN *"
+        }),
+    );
+    let mut vals: Vec<String> = straddle["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results array: {straddle}"))
+        .iter()
+        .map(|r| r["properties"]["value"].as_str().unwrap().to_string())
+        .collect();
+    vals.sort();
+    assert_eq!(
+        vals,
+        vec!["new".to_string(), "old".to_string()],
+        "the window straddling the asserted closure must hold both generations: {straddle}"
+    );
+
+    // The window after the closure: only the successor remains valid.
+    let after = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_b3\" BETWEEN 6000 AND 9000 RETURN *"
+        }),
+    );
+    let rows = after["results"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the window after the asserted closure must hold only the successor: {after}"
+    );
+    assert_eq!(rows[0]["properties"]["value"], json!("new"));
+
+    // History preserved: AS_OF at the first commit instant still shows the
+    // old generation (asserted closure lives on its own key, wall time and
+    // AS_OF semantics are untouched).
+    let past = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device WHERE key == \"dev_b3\" AS_OF {gen1_ts} RETURN *")
+        }),
+    );
+    let pasts = past["results"].as_array().unwrap();
+    assert_eq!(
+        pasts.len(),
+        1,
+        "AS_OF at the first commit must still show the old generation: {past}"
+    );
+    assert_eq!(pasts[0]["properties"]["value"], json!("old"));
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-55 (POC-3 P3-009 MEDIUM): a session pinned with no tenant sees ALL
+// tenants' rows — the read side fails OPEN when the client forgets the
+// tenant pin. A tenant-less session must see nothing tenant-scoped; only an
+// explicit admin role may read unscoped.
+#[test]
+fn tenantless_session_sees_nothing_scoped() {
+    let db = tmp_db("t55ns");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    // Two tenants, one row each, owned by different writers.
+    let _a = c.call(
+        "remember",
+        &json!({
+            "subject": "writer-a", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    let _b = c.call(
+        "remember",
+        &json!({
+            "subject": "writer-b", "type_name": "device", "tenant": "tenant_b",
+            "properties": {"key": "d2", "value": "v2"}
+        }),
+    );
+
+    // An unscoped session (no tenant pin) must fail closed: 0 rows, not
+    // the cross-tenant head (POC F3 shape).
+    let _init = c.session_init_unscoped("plain-agent");
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "plain-agent",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        m["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "tenant-less session must see nothing tenant-scoped: {m}"
+    );
+
+    // Even an unscoped OWNER stays confined — ownership does not bypass the
+    // tenant pin; the pin is the only door for an unscoped principal.
+    let _init = c.session_init_unscoped("writer-a");
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "writer-a",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        m["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "unscoped owner must not read own tenant-scoped rows: {m}"
+    );
+
+    // The explicit global channel still works: an admin-role unscoped
+    // subject reads across tenants.
+    let _init = c.session_init_unscoped_admin("global-admin");
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "global-admin",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        m["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        2,
+        "admin-role unscoped subject is the explicit global read channel: {m}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-55 (POC-3 P3-009 P2c LOW): `tenant: ""` is accepted silently and the row
+// lands in an invisible "" namespace. The tool boundary must reject a
+// present-but-empty tenant instead of storing a black-hole row.
+#[test]
+fn remember_rejects_empty_tenant() {
+    let db = tmp_db("t55et");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let r = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    assert_eq!(
+        r["ok"],
+        json!(false),
+        "empty tenant must be rejected at the boundary: {r}"
+    );
+    assert_eq!(
+        r["error"]["code"],
+        json!("VALIDATION_ERROR"),
+        "empty tenant rejection carries a validation code: {r}"
+    );
+
+    // And the same shape on the session pin.
+    let i = c.session_init_with("admin", "");
+    assert_eq!(i["error"]["code"], json!(-32602));
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-55 (POC-3 P3-009 P5 LOW): ACL denials surface as INTERNAL with an
+// "unexpected error" suggestion — clients cannot tell a permission denial
+// from a server fault. A cross-tenant denial must carry ACCESS_DENIED,
+// retryable=false, and an access-oriented suggestion.
+#[test]
+fn foreign_access_denied_is_not_internal() {
+    let db = tmp_db("t55ad");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "writer-a", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    let koid = note["koid"].as_str().unwrap().to_string();
+
+    // Foreign session: tenant_b cannot read tenant_a's object.
+    let _init = c.session_init("reader-b", "tenant_b");
+    for tool in ["get", "explain", "prove", "trace"] {
+        let args = match tool {
+            "explain" => json!({"subject": "reader-b", "koid": &koid}),
+            "prove" => json!({"subject": "reader-b", "koid": &koid}),
+            "trace" => json!({"subject": "reader-b", "koid": &koid}),
+            _ => json!({"subject": "reader-b", "koid": &koid}),
+        };
+        let r = c.call(tool, &args);
+        assert_eq!(r["ok"], json!(false), "foreign {tool} must be denied: {r}");
+        assert_eq!(
+            r["error"]["code"],
+            json!("ACCESS_DENIED"),
+            "denial must classify ACCESS_DENIED, not INTERNAL ({tool}): {r}"
+        );
+        assert_eq!(
+            r["error"]["retryable"],
+            json!(false),
+            "a permission denial is not retryable ({tool}): {r}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+/// T-59 (POC-3 P3-010 LOW): the stdio shutdown hand-off is observable.
+/// The POC saw a rapid close->respawn exit 0 mid-call with no trace; the
+/// loop-end reason + checkpoint trace below turn any recurrence into a
+/// diagnosable one. Pin: closing stdin (EOF, the driver's close signal)
+/// ends the loop with a logged reason, logs the shutdown checkpoint, and
+/// the process exits 0.
+#[test]
+fn t59_stdio_shutdown_handoff_is_observable() {
+    let db = tmp_db("t59-shutdown");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start_capture_stderr(&db);
+    c.session_init("t59-agent", "tenant_a");
+
+    // EOF: take() drops the stdin handle — the graceful-close signal.
+    c.stdin.take();
+
+    // Bounded wait for the graceful shutdown (checkpoint included).
+    let mut status = None;
+    for _ in 0..600 {
+        match c.child.try_wait().expect("poll child") {
+            Some(s) => {
+                status = Some(s);
+                break;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+    let status = status.expect("server did not exit after stdin EOF");
+    assert!(status.success(), "clean exit expected, got {status:?}");
+
+    let mut err = String::new();
+    c.stderr
+        .as_mut()
+        .expect("stderr captured")
+        .read_to_string(&mut err)
+        .expect("read stderr");
+    assert!(
+        err.contains("stdio loop ended: eof"),
+        "missing loop-end reason; stderr: {err}"
+    );
+    assert!(
+        err.contains("shutdown maintainer checkpoint done"),
+        "missing checkpoint trace; stderr: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-60 (POC-3 MINOR): `remember` silently dropped a top-level `valid_from`
+// (the observe/assert_knowledge spelling) — the row landed with no
+// valid-time claim. Pin: the top-level arg lands in the row's valid_from
+// extension; when BOTH spellings are given, the extension wins (the T-49
+// precedence).
+#[test]
+fn t60_remember_accepts_top_level_valid_from() {
+    let db = tmp_db("t60-valid-from");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let t0 = 1_600_000_000_000u64;
+    let r = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device",
+            "properties": {"device_id": "t60_top", "v": "top"},
+            "valid_from": t0,
+        }),
+    );
+    let koid = r["koid"].as_str().unwrap().to_string();
+    let got = c.call("get", &json!({"koid": koid, "subject": "admin"}));
+    assert_eq!(
+        got["extensions"]["valid_from"], t0,
+        "top-level valid_from must land in the row's valid-time extension: {got}"
+    );
+
+    // Precedence: the extension wins when both spellings are given.
+    let r2 = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device",
+            "properties": {"device_id": "t60_both", "v": "both"},
+            "valid_from": t0,
+            "extensions": {"valid_from": t0 + 5_000},
+        }),
+    );
+    let koid2 = r2["koid"].as_str().unwrap().to_string();
+    let got2 = c.call("get", &json!({"koid": koid2, "subject": "admin"}));
+    assert_eq!(
+        got2["extensions"]["valid_from"],
+        t0 + 5_000,
+        "extensions.valid_from must win over the top-level spelling: {got2}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-63 (reopen-visibility anomaly): during T-53 pin work an abrupt-close
+// respawn served 0 rows on MATCH once, and it did not reproduce on a fresh
+// KB. POC-side hammering (poc3/.stagee-work/probe_reopen_visibility.py,
+// 64 cycles: plain kills, full-burst kills right after acked remembers, and
+// mid-burst torn-WAL kills) found no repro on the current kernel — this pin
+// locks the contract at the surface where the anomaly was observed: every
+// row acked by `remember` must be visible to MATCH after the server dies
+// WITHOUT the stdio EOF handoff (Drop's child.kill() is exactly that) and
+// a fresh server respawns on the same db.
+#[test]
+fn abrupt_close_respawn_serves_committed_rows() {
+    let db = tmp_db("t63rc");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let mut koids = Vec::new();
+    for i in 0..12 {
+        let r = c.call(
+            "remember",
+            &json!({
+                "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+                "properties": {"key": format!("dev_{i}"), "value": format!("v{i}")}
+            }),
+        );
+        koids.push(r["koid"].as_str().unwrap().to_string());
+    }
+    // A supersede chain over one key — the exact T-53 context the anomaly
+    // came from. The head must be the successor, not the whole chain.
+    let mut old = koids[0].clone();
+    for gen in 2..=4 {
+        let sup = c.call(
+            "supersede",
+            &json!({
+                "subject": "admin", "old": old, "type_name": "device",
+                "properties": {"key": "dev_000", "value": format!("v{gen}")},
+                "evidence": [{"source_artifact": "pin", "method": "runtime_observation"}]
+            }),
+        );
+        old = sup["new"].as_str().unwrap().to_string();
+    }
+
+    // Abrupt close (Drop kills the child, no stdin EOF) and an immediate
+    // respawn on the SAME db — no cleanup between the two serves.
+    drop(c);
+    let mut c2 = McpClient::start(&db);
+    let m = c2.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    let rows = m["results"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        12,
+        "a respawned MATCH must serve every committed row: {m}"
+    );
+    let dev0 = rows
+        .iter()
+        .find(|r| r["properties"]["key"] == json!("dev_000"))
+        .expect("dev_000 head must be present");
+    assert_eq!(
+        dev0["properties"]["value"],
+        json!("v4"),
+        "the superseded chain must stay invisible after the respawn: {m}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-64 (G-002): a tombstoned row must stay reconstructable — AS_OF slices
+// from before the tombstone show the row and HISTORICAL lists its
+// pre-deletion versions, while plain MATCH and BETWEEN stay tombstone-free.
+// forget(tombstone) commits a Deleted head version; the type scan dropped
+// the koid entirely, so the temporal layer never saw it.
+#[test]
+fn tombstoned_rows_stay_asof_and_historical_reconstructable() {
+    let db = tmp_db("t64g002");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let r = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_tomb", "value": "v1"}
+        }),
+    );
+    let tomb = r["koid"].as_str().unwrap().to_string();
+    let _ = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "koid": tomb, "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_tomb", "value": "v2"}
+        }),
+    );
+    // Journal-seq markers: n2 = the v2 update's instant, n3 = the survivor's.
+    let n2 = c.call("health", &json!({}))["journal_seq"]
+        .as_u64()
+        .unwrap();
+    let _ = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_live", "value": "v1"}
+        }),
+    );
+    let n3 = c.call("health", &json!({}))["journal_seq"]
+        .as_u64()
+        .unwrap();
+    let f = c.call(
+        "forget",
+        &json!({"subject": "admin", "koid": tomb, "mode": "tombstone"}),
+    );
+    assert!(f.get("koid").is_some(), "tombstone must succeed: {f}");
+    let n4 = c.call("health", &json!({}))["journal_seq"]
+        .as_u64()
+        .unwrap();
+    assert!(n4 > n3 && n3 > n2, "the journal must advance per apply");
+
+    let pairs = |m: &J| -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = m["results"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no results array — query failed: {m}"))
+            .iter()
+            .map(|row| {
+                (
+                    row["properties"]["key"].as_str().unwrap().to_string(),
+                    row["properties"]["value"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        v.sort();
+        v
+    };
+
+    // AS_OF at the v2 update's instant: the row existed and was open.
+    let at_n2 = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device AS_OF JOURNAL {n2} RETURN *")
+        }),
+    );
+    assert_eq!(
+        pairs(&at_n2),
+        vec![("dev_tomb".into(), "v2".into())],
+        "AS_OF before the tombstone must reconstruct the open row: {at_n2}"
+    );
+
+    // HISTORICAL: both pre-deletion versions, plus the survivor's.
+    let hist = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device HISTORICAL RETURN *"
+        }),
+    );
+    assert_eq!(
+        pairs(&hist),
+        vec![
+            ("dev_live".into(), "v1".into()),
+            ("dev_tomb".into(), "v1".into()),
+            ("dev_tomb".into(), "v2".into()),
+        ],
+        "HISTORICAL must list the pre-deletion versions: {hist}"
+    );
+
+    // The tombstone itself: current truth hides the row...
+    let plain = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        pairs(&plain),
+        vec![("dev_live".into(), "v1".into())],
+        "plain MATCH must stay tombstone-free: {plain}"
+    );
+    // ...AS_OF at/after it hides it...
+    let at_n4 = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device AS_OF JOURNAL {n4} RETURN *")
+        }),
+    );
+    assert_eq!(
+        pairs(&at_n4),
+        vec![("dev_live".into(), "v1".into())],
+        "AS_OF at/after the tombstone must hide the row: {at_n4}"
+    );
+    // ...and BETWEEN never sees the deleted head (no live row to contribute).
+    let bet = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device BETWEEN 0 AND 4102444800000 RETURN *"
+        }),
+    );
+    assert_eq!(
+        pairs(&bet),
+        vec![("dev_live".into(), "v1".into())],
+        "BETWEEN must not resurrect the tombstoned head: {bet}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
 }

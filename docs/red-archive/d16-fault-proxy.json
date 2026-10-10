@@ -1,0 +1,8 @@
+{
+  "id": "d16-fault-proxy",
+  "pre_fix_commit": "37c1a34",
+  "command": "cargo test -p aikoql-sdk --test fault",
+  "captured_at": "2026-10-01T20:11:50Z",
+  "captured_head": "37c1a3450911470fd646b1b6a3470ac47bb786f3",
+  "exit_code": 101
+}

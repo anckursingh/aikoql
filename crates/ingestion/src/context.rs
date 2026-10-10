@@ -1418,6 +1418,14 @@ pub fn context_cache_stats() -> (usize, u64) {
     (count, oldest)
 }
 
+/// Tests that touch the process-global CONTEXT_CACHE take this lock: the
+/// cache is shared state across parallel tests, and a sibling's insert
+/// between invalidate and stats made context_cache_invalidates_on_clear
+/// flaky on the 2-core Windows runner ("cache should be empty after
+/// invalidate: left 1" — CI-16-class, run 36611811657).
+#[cfg(test)]
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod expansion_tests {
     use super::*;
@@ -1483,6 +1491,7 @@ mod expansion_tests {
 
     #[test]
     fn context_cache_hits_on_repeat_task() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let ir = sample_ir();
         // Invalidate first to ensure clean state
         invalidate_context_cache();
@@ -1496,6 +1505,7 @@ mod expansion_tests {
 
     #[test]
     fn context_cache_invalidates_on_clear() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let ir = sample_ir();
         invalidate_context_cache();
         let _ = compile_context_cached("transaction", &ir, 0, 300);
@@ -1852,6 +1862,7 @@ mod tests {
 
     #[test]
     fn cached_semantic_key_separates_embeddings() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         invalidate_context_cache();
         let ir = KnowledgeIr {
             entities: vec![

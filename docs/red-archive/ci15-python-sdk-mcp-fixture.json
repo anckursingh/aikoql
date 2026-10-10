@@ -1,0 +1,8 @@
+{
+  "id": "ci15-python-sdk-mcp-fixture",
+  "pre_fix_commit": "50d675e",
+  "command": ".venv/Scripts/python.exe -m pytest crates/sdk/python/tests/ -q",
+  "captured_at": "2026-09-27T17:53:56Z",
+  "captured_head": "50d675eb6a2c1d4b28d716d677b14a931cf86006",
+  "exit_code": 1
+}

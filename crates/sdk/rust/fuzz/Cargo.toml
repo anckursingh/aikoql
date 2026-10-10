@@ -1,0 +1,75 @@
+[package]
+name = "aikoql-sdk-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+aikoql-sdk = { path = ".." }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "fuzz_rpc_frame"
+path = "fuzz_targets/fuzz_rpc_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_native_frame"
+path = "fuzz_targets/fuzz_native_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_error_frame"
+path = "fuzz_targets/fuzz_error_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_stream_frame"
+path = "fuzz_targets/fuzz_stream_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_protocol_version"
+path = "fuzz_targets/fuzz_protocol_version.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_request_decoder"
+path = "fuzz_targets/fuzz_request_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_response_decoder"
+path = "fuzz_targets/fuzz_response_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_auth_frame"
+path = "fuzz_targets/fuzz_auth_frame.rs"
+test = false
+doc = false
+bench = false

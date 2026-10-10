@@ -25,7 +25,7 @@
 //! v0.3 K5 adds the agent-experience pair:
 //! - `record_experience`: an execution outcome captured as a first-class
 //!   `aikoql:experience` KO (agent_derived authority, evidence mandatory,
-//!   TTL-bounded valid time, confidence context);
+//!   TTL-gated valid time, confidence context);
 //! - `match_experiences`: reuse-condition gating over an ACL-filtered scan,
 //!   confidence-weighted ranking, expired/invalidated experiences filtered.
 
@@ -223,6 +223,27 @@ pub struct SupersedeRequest {
     /// old claim (it backs the supersession decision), and the dependent
     /// sweep runs. The successor must exist, be readable, and be current.
     pub superseded_by: Option<KOID>,
+    /// Asserted validity start of the successor (the observation/evidence
+    /// instant). When set, a fresh successor's valid_from is this instant;
+    /// when absent, it falls back to commit time (F7).
+    pub observed_at_ms: Option<u64>,
+    /// T-65 (POC-3 Stage B3-1): asserted closure instant for the
+    /// predecessor's validity (the correction op's tx, corpus scale).
+    /// Stored on its own extension key read only by the BETWEEN arm;
+    /// the wall closure in valid_to stays untouched (AS_OF semantics).
+    pub predecessor_valid_to_ms: Option<u64>,
+    /// B3-3 (POC-3): end validity WITHOUT a successor. The old claim is
+    /// stamped Superseded + valid_to=now with no SUPERSEDES edge, the
+    /// evidence is appended to the old claim, and the dependent sweep runs —
+    /// no new KO is created (the G-002 workaround shape used to leave an
+    /// empty shell row). Mutually exclusive with `superseded_by` and with
+    /// non-empty `properties`.
+    pub retract: bool,
+    /// T-57 (P3-008): per-op idempotency for ordered replay. The key is
+    /// scoped by the row's own tenant (T-52) and stored only after the whole
+    /// composition lands, so a replay converges instead of hitting the
+    /// "already superseded" guard.
+    pub idempotency_key: Option<String>,
 }
 
 impl SupersedeRequest {
@@ -240,6 +261,10 @@ impl SupersedeRequest {
             reason: None,
             note: None,
             superseded_by: None,
+            observed_at_ms: None,
+            predecessor_valid_to_ms: None,
+            retract: false,
+            idempotency_key: None,
         }
     }
 }
@@ -247,7 +272,8 @@ impl SupersedeRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SupersedeResult {
     pub old: KOID,
-    pub new: KOID,
+    /// The successor generation; None for a retraction (no successor exists).
+    pub new: Option<KOID>,
     /// Derived dependents stamped invalidated (stale) by the sweep.
     pub invalidated_dependents: Vec<KOID>,
     /// False when any dependent stamp failed (see `failed`, review P1-5).
@@ -776,6 +802,7 @@ impl Kernel {
                 None,
                 Some(head.version),
                 reason.clone(),
+                None,
             )?;
             version = changed.version;
             commit_ts = changed.commit_ts;
@@ -971,86 +998,40 @@ impl Kernel {
     /// transition + dependent sweep under one lock.
     pub fn supersede(&self, req: SupersedeRequest) -> KResult<SupersedeResult> {
         require_evidence(&req.evidence)?;
-        let ctx = req.context.clone();
-        let mut pipe = self.pipe.lock().unwrap();
-        let old = self
-            .head_object(&req.old)?
-            .ok_or(KError::NotFound(req.old))?;
-        self.auth
-            .read()
-            .unwrap()
-            .authorize(&ctx.subject, &old, Action::Write)?;
-        if old.epistemic_status() == EpistemicStatus::Superseded {
+        // B3-3: retraction is its own shape — it can neither name a successor
+        // nor carry the properties a fresh successor would need (dropping
+        // them silently is how the shell-row bug class starts).
+        if req.retract && req.superseded_by.is_some() {
             return Err(KError::InvalidObject(
-                "already superseded — supersede the successor instead".into(),
+                "retract cannot name a successor".into(),
             ));
         }
-        // Successor: an existing KO named by the caller (superseded_by) or a
-        // fresh generation created right here.
-        let successor = match req.superseded_by {
-            Some(s) => {
-                self.validate_successor(&ctx, s)?;
-                s
-            }
-            None => {
-                let at = self.clock_now();
-                let mut ext = ExtensionMap::new();
-                ext.insert(
-                    KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
-                    Value::Text("asserted".into()),
-                );
-                ext.insert(
-                    KnowledgeObject::EXT_EVIDENCE.into(),
-                    evidence_value(&req.evidence),
-                );
-                ext.insert(
-                    KnowledgeObject::EXT_VALID_FROM.into(),
-                    Value::Int(at as i64),
-                );
-                self.remember_locked(
-                    &mut pipe,
-                    &RememberRequest {
-                        context: ctx.clone(),
-                        koid: None,
-                        expected_version: Some(0),
-                        idempotency_key: None,
-                        metadata: Metadata {
-                            type_name: req.type_name,
-                            tenant: ctx.tenant.clone(),
-                            schema_version: 1,
-                            tags: vec![],
-                        },
-                        properties: req.properties,
-                        semantic: None,
-                        relationships: vec![],
-                        security: None,
-                        extensions: ext,
-                        origin: Origin::Agent(ctx.subject.name.clone()),
-                        note: req.note,
-                        referential_policy: ReferentialPolicy::default(),
-                    },
-                )?
-                .koid
-            }
-        };
-        let reason = req
-            .reason
-            .clone()
-            .unwrap_or_else(|| format!("superseded by {}", successor.to_hex()));
-        self.transition_epistemic_locked(
-            &mut pipe,
-            &ctx,
-            &req.old,
-            EpistemicStatus::Superseded,
-            Origin::Agent(ctx.subject.name.clone()),
-            Some(successor),
-            Some(old.version),
-            Some(reason.clone()),
-        )?;
-        // superseded_by path: the evidence backs the supersession decision
-        // itself — append it to the old claim so it is never silently dropped
-        // (review P0-1: evidence cannot disappear on a semantic op).
-        if req.superseded_by.is_some() {
+        if req.retract && !req.properties.is_empty() {
+            return Err(KError::InvalidObject(
+                "retract takes no successor properties".into(),
+            ));
+        }
+        let ctx = req.context.clone();
+        let mut pipe = self.pipe.lock().unwrap();
+        // T-47: pin one HLC instant for the whole composition — the
+        // successor's Created event and the predecessor's Superseded
+        // transition share a commit time, so no AS_OF slice can show both
+        // generations of the same link (device-eval residual 1).
+        pipe.pair_pin = Some(self.snapshot_now());
+        let result = self.supersede_composition(&ctx, &req, &mut pipe);
+        pipe.pair_pin = None;
+        let result = result?;
+        // superseded_by / retract paths: the evidence backs the supersession
+        // decision itself — append it to the old claim so it is never
+        // silently dropped (review P0-1: evidence cannot disappear on a
+        // semantic op). Runs OUTSIDE the pinned instant: a second version of
+        // the old KO at the pair's commit_ts would collide with the
+        // transition under MVCC.
+        if req.superseded_by.is_some() || req.retract {
+            let reason = req.reason.clone().unwrap_or_else(|| match result.new {
+                Some(s) => format!("superseded by {}", s.to_hex()),
+                None => "retracted".into(),
+            });
             let new_head = self
                 .head_object(&req.old)?
                 .ok_or(KError::NotFound(req.old))?;
@@ -1068,15 +1049,163 @@ impl Kernel {
                 security: None,
                 extensions,
                 origin: Origin::System,
-                note: Some(reason.clone()),
+                note: Some(reason),
                 referential_policy: ReferentialPolicy::default(),
             };
             self.remember_locked(&mut pipe, &rr)?;
         }
+        // T-57 (P3-008): the idempotency row doubles as the completion
+        // marker — written only after the whole composition (transition +
+        // sweep + evidence) landed, so a crash mid-supersede degrades to
+        // today's "already superseded" refusal rather than replaying a
+        // half-done outcome.
+        if let Some(key) = &req.idempotency_key {
+            let old = self
+                .head_object(&req.old)?
+                .ok_or(KError::NotFound(req.old))?;
+            let scoped = idem_scope(old.metadata.tenant.as_deref(), key);
+            let (cell, v) = match result.new {
+                Some(n) => (n, 1u64),
+                None => (result.old, 0u64),
+            };
+            let mut batch = WriteBatch::new();
+            self.repo
+                .put_idem(&mut batch, &scoped, &cell, v, self.clock_now());
+            self.repo.write_batch(&batch)?;
+        }
+        Ok(result)
+    }
+
+    /// supersede() with the atomic-pair pin armed and the pipe lock held:
+    /// fresh-successor creation (or named-successor validation) +
+    /// supersession transition + dependent sweep, all at one commit instant.
+    fn supersede_composition(
+        &self,
+        ctx: &KnowledgeContext,
+        req: &SupersedeRequest,
+        pipe: &mut Pipeline,
+    ) -> KResult<SupersedeResult> {
+        let old = self
+            .head_object(&req.old)?
+            .ok_or(KError::NotFound(req.old))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &old, Action::Write)?;
+        // T-57 (P3-008): an idempotent replay converges instead of tripping
+        // the "already superseded" guard. The key is scoped by the row's own
+        // tenant — the tenant the write carried (T-52/T-50). The stored cell
+        // discriminates by version: 0 = retraction (cell is the old KOID),
+        // >=1 = successor (cell is the new KOID); `old` is the caller's own
+        // argument on replay, so the outcome reconstructs without a graph
+        // walk. Sweep details are omitted on replay — the sweep ran at the
+        // first apply.
+        if let Some(key) = &req.idempotency_key {
+            let scoped = idem_scope(old.metadata.tenant.as_deref(), key);
+            if let Some((cell, v, _ts)) = self.repo.get_idem(&scoped)? {
+                let new = (v != 0).then_some(cell);
+                return Ok(SupersedeResult {
+                    old: req.old,
+                    new,
+                    invalidated_dependents: vec![],
+                    completed: true,
+                    failed: vec![],
+                });
+            }
+        }
+        if old.epistemic_status() == EpistemicStatus::Superseded {
+            return Err(KError::InvalidObject(
+                "already superseded — supersede the successor instead".into(),
+            ));
+        }
+        // Successor: an existing KO named by the caller (superseded_by), a
+        // fresh generation created right here, or None — B3-3 retraction
+        // ends validity without creating any KO (the old G-002 workaround
+        // shape left an empty shell row behind).
+        let successor: Option<KOID> = match req.superseded_by {
+            Some(s) => {
+                self.validate_successor(ctx, s)?;
+                Some(s)
+            }
+            None if req.retract => None,
+            None => {
+                let at = self.clock_now();
+                let mut ext = ExtensionMap::new();
+                ext.insert(
+                    KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
+                    Value::Text("asserted".into()),
+                );
+                ext.insert(
+                    KnowledgeObject::EXT_EVIDENCE.into(),
+                    evidence_value(&req.evidence),
+                );
+                ext.insert(
+                    KnowledgeObject::EXT_VALID_FROM.into(),
+                    // F7: the successor asserts validity from the observed
+                    // instant when the caller provides one — commit time is
+                    // only the fallback.
+                    Value::Int(req.observed_at_ms.unwrap_or(at) as i64),
+                );
+                // F11: the generation replaces the claim, so it must be
+                // visible wherever the claim was. Inherit scope/authority —
+                // the Origin::Agent defaults (session / agent_derived) would
+                // hide the successor from every cross-session consumer of
+                // the superseded link.
+                for key in ["scope", "authority"] {
+                    if let Some(v) = old.extensions.get(key) {
+                        ext.insert(key.into(), v.clone());
+                    }
+                }
+                self.remember_locked(
+                    pipe,
+                    &RememberRequest {
+                        context: ctx.clone(),
+                        koid: None,
+                        expected_version: Some(0),
+                        idempotency_key: None,
+                        metadata: Metadata {
+                            type_name: req.type_name.clone(),
+                            // B3-4 (POC-3): the generation replaces the
+                            // claim, so it must stay inside the claim's
+                            // tenant. An untenanted successor is shared
+                            // (ACL R9) and escapes the row's confinement.
+                            tenant: old.metadata.tenant.clone().or_else(|| ctx.tenant.clone()),
+                            schema_version: 1,
+                            tags: vec![],
+                        },
+                        properties: req.properties.clone(),
+                        semantic: None,
+                        relationships: vec![],
+                        security: None,
+                        extensions: ext,
+                        origin: Origin::Agent(ctx.subject.name.clone()),
+                        note: req.note.clone(),
+                        referential_policy: ReferentialPolicy::default(),
+                    },
+                )?
+                .koid
+                .into()
+            }
+        };
+        let reason = req.reason.clone().unwrap_or_else(|| match successor {
+            Some(s) => format!("superseded by {}", s.to_hex()),
+            None => "retracted".into(),
+        });
+        self.transition_epistemic_locked(
+            pipe,
+            ctx,
+            &req.old,
+            EpistemicStatus::Superseded,
+            Origin::Agent(ctx.subject.name.clone()),
+            successor,
+            Some(old.version),
+            Some(reason),
+            req.predecessor_valid_to_ms,
+        )?;
         let roots = self.outbound_edges(&req.old, Some(DERIVED_FROM))?;
         let sweep = self.invalidate_dependents_locked(
-            &mut pipe,
-            &ctx,
+            pipe,
+            ctx,
             roots,
             &format!("premise {} was superseded", req.old.to_hex()),
         )?;
@@ -1157,7 +1286,9 @@ impl Kernel {
         let ctx = req.context.clone();
         // Exact-once replay: the idempotency key is stored by side B's create.
         if let Some(key) = &req.idempotency_key {
-            if let Some((b_koid, b_version, _)) = self.resolve_idempotency(key)? {
+            if let Some((b_koid, b_version, _)) =
+                self.resolve_idempotency_scoped(ctx.tenant.as_deref(), key)?
+            {
                 let a_version = self
                     .head_object(&req.subject)?
                     .ok_or(KError::NotFound(req.subject))?
@@ -1363,6 +1494,7 @@ impl Kernel {
                 None,
                 Some(head.version),
                 Some(reason.clone()),
+                None,
             )?;
         }
         let new_head = self
@@ -1739,6 +1871,7 @@ impl Kernel {
             superseded_by,
             Some(head.version),
             Some(reason.into()),
+            None,
         )?;
         effects.push((*koid, to));
         Ok(())
@@ -1757,7 +1890,10 @@ impl Kernel {
         roots: Vec<(String, KOID)>,
         reason: &str,
     ) -> KResult<SweepOutcome> {
-        let at = self.clock_now();
+        let at = pipe
+            .pair_pin
+            .map(|ts| ts >> 16)
+            .unwrap_or_else(|| self.clock_now());
         // Phase 1 — collect: discover the full dependent closure WITHOUT
         // mutating anything (review P1-7: never mutate while discovering the
         // dependency graph). Cycle-safe via the visited set; duplicate edges

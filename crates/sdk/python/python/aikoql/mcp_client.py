@@ -6,12 +6,30 @@ Talks to a aikoql-mcp server over TCP. No native dependencies.
 import json
 import socket
 import time
+import uuid
+from importlib import metadata as _importlib_metadata
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 # P5-M12 (ND-12) version contract: the oldest server this SDK will talk to.
 # Pinned by tests/test_version_contract.py to the workspace version — a
 # workspace bump turns that test RED until this constant follows.
-MIN_SERVER_VERSION = "0.1.19"
+MIN_SERVER_VERSION = "0.2.2"
+
+# §19: a malicious server cannot cause unbounded client memory — an
+# unterminated line past this cap is refused mid-accumulation
+# (FRAME_TOO_LARGE) and the client latches closed.
+MAX_FRAME = 1024 * 1024
+
+
+def _default_client_version() -> str:
+    """The SDK's own version advertised as the default client identity:
+    the installed distribution's version (pyproject: dynamic, from the
+    Rust crate), or the honest "dev" marker when imported without
+    installation metadata (a source-tree checkout, a vendored copy)."""
+    try:
+        return _importlib_metadata.version("aikoql")
+    except Exception:
+        return "dev"
 
 
 def _parse_version(v: str) -> Tuple[int, ...]:
@@ -23,6 +41,18 @@ def _parse_version(v: str) -> Tuple[int, ...]:
         except ValueError:
             parts.append(-1)
     return tuple(parts)
+
+
+def _stream_notify(frame: dict, stream_id: str):
+    """The stream loop's notify verdict primitive: the method gate, params
+    extraction and stream-id filter in one place (the aikoql_stream loop
+    and the §16 corpus pin share it)."""
+    if frame.get("method") != "notifications/notify":
+        return None
+    p = frame.get("params", {})
+    if p.get("stream_id") != stream_id:
+        return None
+    return p
 
 
 class McpError(Exception):
@@ -45,6 +75,57 @@ class McpError(Exception):
         )
 
 
+class Transaction:
+    """A staged write handle (§3.5): begin on the connection, execute
+    stages ops, commit or rollback closes it. The txn_id is a first-class
+    attribute — it never leaks as a bare tool argument.
+    """
+
+    def __init__(self, client: "McpClient", txn_id: str):
+        self._client = client
+        self.txn_id = txn_id
+        self._done = False
+
+    def _guard(self):
+        if self._done:
+            raise McpError(
+                code="INVALID_ARGUMENT",
+                message=f"transaction {self.txn_id} is closed",
+                suggestion="Begin a new transaction.",
+            )
+
+    def execute(self, action: str, type_name: Optional[str] = None,
+                koid: Optional[str] = None,
+                properties: Optional[dict] = None) -> dict:
+        """Stage one write: action is "create" or "update"."""
+        self._guard()
+        op: Dict[str, Any] = {"action": action}
+        if type_name is not None:
+            op["type_name"] = type_name
+        if koid is not None:
+            op["koid"] = koid
+        if properties is not None:
+            op["properties"] = properties
+        return self._client.call_tool(
+            "txn_stage", {"txn_id": self.txn_id, "op": op})
+
+    def commit(self) -> dict:
+        """Apply the staged writes and close the handle."""
+        self._guard()
+        result = self._client.call_tool(
+            "txn_commit", {"txn_id": self.txn_id})
+        self._done = True
+        return result
+
+    def rollback(self) -> dict:
+        """Discard the staged writes and close the handle."""
+        self._guard()
+        result = self._client.call_tool(
+            "txn_rollback", {"txn_id": self.txn_id})
+        self._done = True
+        return result
+
+
 class McpClient:
     """JSON-RPC 2.0 client for aikoql-mcp over TCP."""
 
@@ -55,11 +136,16 @@ class McpClient:
         self.token = token
         self._sock: Optional[socket.socket] = None
         self._buf = b""
+        # The transport died (EOF / over-cap frame / write failure): a
+        # later call fails fast with UNAVAILABLE instead of dialing a dead
+        # socket (§7 principle 11). A fresh connect() clears it.
+        self._dead = False
         self._next_id = 0
 
     def connect(self, timeout: float = 5.0) -> "McpClient":
         self._sock = socket.create_connection((self.host, self.port), timeout=timeout)
         self._sock.settimeout(timeout)
+        self._dead = False
         return self
 
     def close(self):
@@ -93,16 +179,43 @@ class McpClient:
                 return json.loads(text)
             chunk = self._sock.recv(4096)
             if not chunk:
-                raise ConnectionError("server closed connection")
+                # EOF: the server (or the fault proxy) closed — latch so a
+                # later call fails fast instead of reading a dead socket.
+                self._dead = True
+                raise McpError(
+                    code="UNAVAILABLE",
+                    message="the server closed the connection",
+                    suggestion="Connect again.",
+                )
             self._buf += chunk
+            if len(self._buf) > MAX_FRAME:
+                # §19: the cap trips mid-accumulation, before an
+                # unterminated line can grow the buffer past the bound.
+                # The stream is desynced — latch.
+                self._dead = True
+                raise McpError(
+                    code="FRAME_TOO_LARGE",
+                    message="response frame exceeds the 1 MiB cap",
+                    suggestion="The server sent an over-cap frame; reconnect.",
+                )
 
-    def _rpc(self, method: str, params: Optional[dict] = None) -> dict:
+    def _rpc(self, method: str, params: Optional[dict] = None,
+             timeout: Optional[float] = None) -> dict:
+        if self._sock is None or self._dead:
+            # A call on a closed (or transport-failed) client fails
+            # observably (§7 principle 11: a dead connection never
+            # deadlocks the caller) and a fresh connect() recovers it.
+            raise McpError(
+                code="UNAVAILABLE",
+                message="the client is closed",
+                suggestion="Connect again.",
+            )
         self._next_id += 1
         req = {"jsonrpc": "2.0", "id": self._next_id, "method": method}
         if params is not None:
             req["params"] = params
         self._send(req)
-        resp = self._recv()
+        resp = self._recv_response(self._next_id, timeout)
         if "error" in resp:
             err = resp["error"]
             raise McpError(
@@ -111,9 +224,68 @@ class McpClient:
             )
         return resp.get("result", resp)
 
+    @staticmethod
+    def _deadline_error(expected_id: int, timeout: float) -> McpError:
+        return McpError(
+            code="TIMEOUT",
+            message=f"no response for request {expected_id} within {timeout}s",
+            retryable=True,
+            suggestion="Retry with backoff; the request may have "
+                       "committed.",
+        )
+
+    def _recv_response(self, expected_id: int,
+                       timeout: Optional[float] = None) -> dict:
+        """Read frames until the response for expected_id arrives.
+
+        Serialized-but-ID-based (§3.3): a notification or id-less frame is
+        never a response, a stale id (duplicate or late, < expected) is
+        skipped, an impossible response (id > expected, or non-numeric) is
+        a protocol violation, and a malformed frame is never misread as
+        the response. A missing response is TIMEOUT (retryable).
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise self._deadline_error(expected_id, timeout)
+            try:
+                frame = self._recv()
+            except socket.timeout:
+                if deadline is None:
+                    raise
+                continue  # bounded by the deadline check above
+            except ValueError:
+                continue  # malformed frame — never a response
+            if deadline is not None and time.monotonic() >= deadline:
+                # The frame arrived after the deadline: as good as missing
+                # — the frozen TIMEOUT, never a late delivery (the socket
+                # timeout is not per-call, so the check rides the frame).
+                raise self._deadline_error(expected_id, timeout)
+            rid = frame.get("id")
+            if rid is None:
+                continue  # notification / id-less frame
+            if not isinstance(rid, int):
+                raise McpError(
+                    code="PROTOCOL_ERROR",
+                    message=f"response id {rid!r} is not an integer",
+                    suggestion="Check SDK/server version pairing.",
+                )
+            if rid < expected_id:
+                continue  # stale: duplicate or late response
+            if rid > expected_id:
+                raise McpError(
+                    code="PROTOCOL_ERROR",
+                    message=f"response id {rid} does not match request "
+                            f"{expected_id}",
+                    suggestion="Check SDK/server version pairing.",
+                )
+            return frame
+
     # -- MCP protocol ---------------------------------------------------
 
-    def initialize(self, client_name: str = "aikoql-py", client_version: str = "0.1.0"):
+    def initialize(self, client_name: str = "aikoql-py", client_version: Optional[str] = None):
+        if client_version is None:
+            client_version = _default_client_version()
         params = {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
@@ -173,6 +345,15 @@ class McpClient:
 
     # -- Tool wrappers (high-level API) ---------------------------------
 
+    def begin(self, txn_id: Optional[str] = None) -> "Transaction":
+        """Open a transaction (§3.5). A generated 32-hex id by default;
+        pass one to retry the same begin idempotently (P5-M20).
+        """
+        if txn_id is None:
+            txn_id = uuid.uuid4().hex
+        self.call_tool("txn_begin", {"txn_id": txn_id})
+        return Transaction(self, txn_id)
+
     def remember(self, type_name: str, properties: Optional[dict] = None,
                  koid: Optional[str] = None, subject: Optional[str] = None,
                  note: Optional[str] = None, idempotency_key: Optional[str] = None,
@@ -207,7 +388,8 @@ class McpClient:
 
     def find_similar(self, text: Optional[str] = None, vector: Optional[List[float]] = None,
                      type_name: Optional[str] = None, k: int = 10,
-                     fusion: Optional[str] = None, subject: Optional[str] = None) -> dict:
+                     fusion: Optional[str] = None, subject: Optional[str] = None,
+                     wait_for_freshness_ms: Optional[int] = None) -> dict:
         args: Dict[str, Any] = {}
         if text:
             args["text"] = text
@@ -220,6 +402,8 @@ class McpClient:
             args["fusion"] = fusion
         if subject:
             args["subject"] = subject
+        if wait_for_freshness_ms is not None:
+            args["wait_for_freshness_ms"] = wait_for_freshness_ms
         return self.call_tool("find_similar", args)
 
     def aikoql(self, query: str, subject: Optional[str] = None) -> dict:
@@ -227,6 +411,26 @@ class McpClient:
         if subject:
             args["subject"] = subject
         return self.call_tool("aikoql", args)
+
+    def prepare(self, query: str) -> "PreparedStatement":
+        """Prepare a statement (§3.6): validates the query client-side and
+        extracts its :name placeholders. Compiles on every execute until a
+        native prepare protocol lands."""
+        from aikoql.prepared import PreparedStatement, _PLACEHOLDER
+
+        if not query.strip():
+            raise McpError(
+                code="INVALID_ARGUMENT",
+                message="prepared statement query is empty",
+                suggestion="Pass a non-empty AikoQL query.",
+            )
+        params = []
+        seen = set()
+        for m in _PLACEHOLDER.finditer(query):
+            if m.group(1) not in seen:
+                seen.add(m.group(1))
+                params.append(m.group(1))
+        return PreparedStatement(self, query, tuple(params))
 
     def relate(self, from_koid: str, to_koid: str, rel_type: str,
                subject: Optional[str] = None) -> dict:
@@ -309,10 +513,8 @@ class McpClient:
         received = 1
         while received < total:
             frame = self._recv()
-            if frame.get("method") != "notifications/notify":
-                continue
-            p = frame.get("params", {})
-            if p.get("stream_id") != stream_id:
+            p = _stream_notify(frame, stream_id)
+            if p is None:
                 continue
             yield p
             received += 1

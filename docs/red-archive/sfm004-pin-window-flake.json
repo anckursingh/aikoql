@@ -1,0 +1,9 @@
+{
+  "id": "sfm004-pin-window-flake",
+  "pre_fix_commit": "951f7cfd3c0e37fb9fc405438132d5b82494bcb7",
+  "command": "cargo test -p aikoql-storage-v2 (live full-suite run — snapshot_matrix binary)",
+  "captured_at": "2026-10-02T23:16:07Z",
+  "captured_head": "951f7cfd3c0e37fb9fc405438132d5b82494bcb7",
+  "exit_code": 101,
+  "capture_note": "Timing RED, extracted from the live full-suite run — the window cannot re-capture deterministically because BOTH orderings are legal product behavior. The race: interleave() releases the during_copy park before joining the op, so a fast snapshot can finish first — snapshot_to returns, the SnapshotPinGuard disarms the pins, and the compact's deletion loop (db.rs: for p in &old_paths — skip pinned names) then legally deletes the old segments (the copies are already done, so restore is safe). segs_in drops below the pre-interleave count and the assertion at snapshot_matrix.rs:356 fires. The product is correct in both orderings (the restore + live-walk asserts stayed green in every run — pins only guard in-flight copies, and disarm happens after the last copy). The fix: row 4 uses a variant that joins the op BEFORE releasing the park, so the compact's whole life — deletion included — runs against the armed pin and the mechanism assertion is deterministic. 6/6 green in isolation and as the full binary on the flaked head."
+}

@@ -234,6 +234,42 @@ fn supersede_without_successor_still_ends_validity() {
 }
 
 #[test]
+fn as_of_slice_hides_a_superseded_generation() {
+    // F12: AS_OF reconstruction is transaction-time only — a superseded
+    // gen-1 has valid_to stamped at the supersession instant but still
+    // leaks into later slices.
+    let (k, clock, _store) = mk_kernel();
+    let gen1 = fact(&k, "alice", "msg", 1); // committed at 10_000
+    clock.set(20_000);
+    let gen2 = fact(&k, "alice", "msg", 2); // successor committed at 20_000
+    k.admin_transition_epistemic(
+        Subject::new("alice"),
+        &gen1,
+        EpistemicStatus::Superseded,
+        Origin::System,
+        Some(gen2),
+        None,
+        Some("replaced by successor".into()),
+    )
+    .unwrap();
+    // Pre-supersede slices still see gen1: it was valid then.
+    assert!(k
+        .get_as_of(Subject::new("alice"), &gen1, 10_000)
+        .unwrap()
+        .is_some());
+    // Post-supersede slices must not — valid_to == 20_000 closed the
+    // interval, and half-open semantics mean the slice AT the closure
+    // instant is already post-validity.
+    for at in [20_000, 20_001] {
+        let leaked = k.get_as_of(Subject::new("alice"), &gen1, at).unwrap();
+        assert!(
+            leaked.is_none(),
+            "superseded gen-1 leaked into the AS_OF slice at {at}: {leaked:?}"
+        );
+    }
+}
+
+#[test]
 fn superseded_by_requires_a_superseded_transition() {
     let (k, _clock, _store) = mk_kernel();
     let a = fact(&k, "alice", "msg", 1);
@@ -313,6 +349,23 @@ fn as_of_reads_the_version_committed_at_that_instant() {
         .get_as_of(Subject::new("alice"), &id, 5_000)
         .unwrap()
         .is_none());
+}
+
+#[test]
+fn as_of_sees_versions_committed_within_the_same_millisecond() {
+    let (k, _clock, _store) = mk_kernel(); // ManualClock frozen at 10_000
+                                           // A warmup commit occupies the HLC counter slot 0 of millis 10_000;
+                                           // the version under test commits in the SAME wall-clock millisecond,
+                                           // so its packed timestamp carries counter bits (10_000<<16 | c>0).
+                                           // trace() reports that to clients as wall-clock 10_000 — AS_OF 10_000
+                                           // must still return the version: the instant spans the millisecond.
+    fact(&k, "alice", "warmup", 0);
+    let id = fact(&k, "alice", "a", 1);
+    let ko = k
+        .get_as_of(Subject::new("alice"), &id, 10_000)
+        .unwrap()
+        .expect("version committed during ms 10_000 must be visible at AS_OF 10_000");
+    assert_eq!(ko.properties.get("a"), Some(&Value::Int(1)));
 }
 
 #[test]

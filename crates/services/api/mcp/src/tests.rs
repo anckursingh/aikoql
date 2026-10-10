@@ -14,26 +14,15 @@ struct TempSweeper {
 impl Drop for TempSweeper {
     fn drop(&mut self) {
         for p in &self.paths {
-            let _ = std::fs::remove_file(p);
+            // v2 databases are directories (launch S-02).
             let _ = std::fs::remove_dir_all(p);
-            // redb sidecar next to the registered stem (`{stem}.redb.artifacts`).
-            let Some(name) = p.file_name() else { continue };
-            if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
-                let prefix = format!("{}.", name.to_string_lossy());
-                for e in rd.flatten() {
-                    if e.file_name().to_string_lossy().starts_with(&prefix) {
-                        let _ = std::fs::remove_file(e.path());
-                        let _ = std::fs::remove_dir_all(e.path());
-                    }
-                }
-            }
         }
     }
 }
 
 fn tmp_db(tag: &str) -> String {
-    let p = std::env::temp_dir().join(format!("mnemo-{tag}-{}.redb", std::process::id()));
-    let _ = std::fs::remove_file(&p);
+    let p = std::env::temp_dir().join(format!("mnemo-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&p);
     TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
     p.to_string_lossy().into_owned()
 }
@@ -179,8 +168,9 @@ fn semantic_scores_parses_caches_and_scores() {
     // after it) forever. This test walks both branches: parse+insert,
     // then cache-hit.
     let db = tmp_db("sem");
-    let _ = std::fs::remove_file(&db);
-    let engine = crate::RedbEngine::open(&db).expect("open store");
+    let _ = std::fs::remove_dir_all(&db);
+    let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+        .expect("open store");
     let k = crate::Kernel::open(
         std::sync::Arc::new(engine),
         std::sync::Arc::new(crate::SystemClock),
@@ -223,7 +213,7 @@ fn semantic_scores_parses_caches_and_scores() {
     assert_eq!(cached.len(), 1);
 
     drop(k);
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 #[test]
@@ -260,9 +250,12 @@ fn snapshot_manifest_props_carry_source_revision() {
 #[test]
 fn execute_program_idempotency_execution_id_replays() {
     let db = tmp_db("prg7");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let k = crate::Kernel::open(
-        std::sync::Arc::new(crate::RedbEngine::open(&db).expect("open store")),
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
         std::sync::Arc::new(crate::SystemClock),
         0,
     )
@@ -359,7 +352,7 @@ fn execute_program_idempotency_execution_id_replays() {
     ));
 
     drop(k);
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 // ---------------------------------------------------------------------------
@@ -390,9 +383,12 @@ fn auth002_session_token_256bit_unpredictable() {
 #[test]
 fn auth005_route_matrix_unauthenticated_401() {
     let db = tmp_db("auth5");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let k = crate::Kernel::open(
-        std::sync::Arc::new(crate::RedbEngine::open(&db).expect("open store")),
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
         std::sync::Arc::new(crate::SystemClock),
         0,
     )
@@ -439,7 +435,7 @@ fn auth005_route_matrix_unauthenticated_401() {
     }
 
     drop(k);
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 /// auth008 (regression): the REST rate limiter keys per principal — an
@@ -544,9 +540,12 @@ fn auth004_remote_http_refused_without_auth() {
 #[test]
 fn auth006_graph_runs_as_session_subject_not_hardcoded_admin() {
     let db = tmp_db("auth6");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let k = crate::Kernel::open(
-        std::sync::Arc::new(crate::RedbEngine::open(&db).expect("open store")),
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
         std::sync::Arc::new(crate::SystemClock),
         0,
     )
@@ -598,7 +597,7 @@ fn auth006_graph_runs_as_session_subject_not_hardcoded_admin() {
     );
 
     drop(k);
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 // ---------------------------------------------------------------------------
@@ -785,8 +784,9 @@ fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
 fn register_schema_tool_drives_constraint_diagnostics() {
     use crate::tools::constraints::{tool_constraint_diagnostics, tool_register_schema};
     let db = tmp_db("cst");
-    let _ = std::fs::remove_file(&db);
-    let engine = crate::RedbEngine::open(&db).expect("open store");
+    let _ = std::fs::remove_dir_all(&db);
+    let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+        .expect("open store");
     let k = crate::Kernel::open(
         std::sync::Arc::new(engine),
         std::sync::Arc::new(crate::SystemClock),
@@ -852,5 +852,76 @@ fn register_schema_tool_drives_constraint_diagnostics() {
     assert_eq!(age_evt["koid"], serde_json::json!(koid.to_hex()));
 
     drop(k);
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+/// Dogfood (EI ingest, 2026-09-29): the adapter's external-id lookup ran a
+/// full MATCH scan of ExternalIDIndex per object — ~600 ms at 150K objects,
+/// O(n) and growing. The idempotency key is already an O(1) engine lookup
+/// (get_idem); this tool exposes it read-only, and a miss classifies to
+/// NOT_FOUND (what the adapter maps to ErrNotFound).
+#[test]
+fn get_by_idem_tool_resolves_idempotency() {
+    let db = tmp_db("gbi");
+    let _ = std::fs::remove_dir_all(&db);
+    let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+        .expect("open store");
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(engine),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+
+    let mut props = crate::PropertyMap::new();
+    props.insert(
+        "external_id".into(),
+        crate::Value::Text("github.com:repo:acme/widgets".into()),
+    );
+    let r = k
+        .remember(crate::RememberRequest {
+            context: crate::KnowledgeContext::from(&crate::Subject::with_roles("test", &["admin"])),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: Some("github.com:repo:acme/widgets".into()),
+            metadata: crate::Metadata {
+                type_name: "Repository".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: crate::ExtensionMap::new(),
+            origin: crate::Origin::Human,
+            note: None,
+            referential_policy: crate::ReferentialPolicy::Permissive,
+        })
+        .expect("remember");
+
+    let out = crate::tools::knowledge::tool_get_by_idem(
+        &k,
+        &crate::json!({"key": "github.com:repo:acme/widgets", "subject": "test"}),
+    )
+    .expect("lookup");
+    assert_eq!(out["koid"], crate::json!(r.koid.to_hex()));
+    assert_eq!(out["type_name"], crate::json!("Repository"));
+    assert_eq!(
+        out["properties"]["external_id"],
+        crate::json!("github.com:repo:acme/widgets")
+    );
+
+    let miss = crate::tools::knowledge::tool_get_by_idem(&k, &crate::json!({"key": "nope"}))
+        .expect_err("missing key must be an error");
+    assert!(
+        miss.to_lowercase().contains("not found"),
+        "classifiable message, got: {miss}"
+    );
+    let wrapped = crate::error_codes::wrap_result(Err::<crate::J, _>(miss));
+    assert_eq!(wrapped["error"]["code"], crate::json!("NOT_FOUND"));
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
 }

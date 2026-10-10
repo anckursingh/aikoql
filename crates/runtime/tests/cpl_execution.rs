@@ -129,3 +129,109 @@ fn cpl004_projection_applied_after_traverse() {
         }
     }
 }
+
+/// Deterministic one-hot embedding table for the N1 similarity pins
+/// (same hand-computable scheme as hybrid_h_suite).
+struct OneHot;
+
+impl EmbeddingProvider for OneHot {
+    fn embed(&self, text: &str, _model: Option<&str>) -> KResult<Vec<f32>> {
+        Ok(match text {
+            "cats" => vec![1.0, 0.0],
+            _ => vec![0.70710677, 0.70710677],
+        })
+    }
+}
+
+/// Seeded notes: `body` drives text scoring, `device_id` is the projection
+/// target, the one-hot embedding drives vector scoring. Returns the koids.
+fn seeded_notes(k: &Kernel) -> Vec<KOID> {
+    let mut out = Vec::new();
+    for (body, device_id, emb) in [
+        ("cats", "dev_a", vec![1.0f32, 0.0]),
+        ("dogs", "dev_b", vec![0.70710677, 0.70710677]),
+        ("fish", "dev_c", vec![0.0, 1.0]),
+    ] {
+        let mut req = RememberRequest::create(ctx(), meta("note"));
+        req.properties
+            .insert("body".into(), Value::Text(body.into()));
+        req.properties
+            .insert("device_id".into(), Value::Text(device_id.into()));
+        req.semantic = Some(SemanticBlock {
+            embedding: Some(emb),
+            embedding_model: None,
+            summary: None,
+            confidence: None,
+            source: None,
+        });
+        out.push(k.remember(req).unwrap().koid);
+    }
+    out
+}
+
+fn objects_of(rows: RowSet) -> Vec<KnowledgeObject> {
+    match rows {
+        RowSet::Objects(kos) => kos,
+        other => panic!("expected Objects, got {:?}", other),
+    }
+}
+
+#[test]
+fn cpl005_projection_applied_after_similarity() {
+    // Device-eval N1: similarity legs produce Scored rows; projection must
+    // load the KO each row refers to instead of failing.
+    let k = mk().with_embedding_provider(Arc::new(OneHot));
+    let ids = seeded_notes(&k);
+
+    // Text path: Jaccard scores every note (k=10), rank order survives
+    // projection — the best text match first.
+    let plan =
+        parser::compile_with_subject(r#"MATCH note SIMILAR TO "cats" RETURN device_id"#, "alice")
+            .unwrap();
+    let kos = objects_of(Interpreter::execute(&k, &plan).unwrap());
+    assert_eq!(kos.len(), 3, "Jaccard scores every seeded note");
+    for ko in &kos {
+        assert_eq!(
+            ko.properties.len(),
+            1,
+            "projection keeps only the listed fields"
+        );
+        match ko.properties.get("device_id") {
+            Some(Value::Text(d)) => assert!(["dev_a", "dev_b", "dev_c"].contains(&d.as_str())),
+            other => panic!("expected device_id text, got {:?}", other),
+        }
+    }
+    assert_eq!(
+        kos[0].properties.get("device_id"),
+        Some(&Value::Text("dev_a".into())),
+        "rank order survives projection"
+    );
+
+    // Embedding path: USING EMBEDDING fuses ANN + text via RRF — only
+    // score>0 rows survive (cats, dogs); projection works the same.
+    let plan = parser::compile_with_subject(
+        r#"MATCH note SIMILAR TO "cats" USING EMBEDDING RETURN device_id"#,
+        "alice",
+    )
+    .unwrap();
+    let kos = objects_of(Interpreter::execute(&k, &plan).unwrap());
+    assert_eq!(kos.len(), 2, "RRF drops the zero-score fish");
+    assert_eq!(
+        kos[0].properties.get("device_id"),
+        Some(&Value::Text("dev_a".into()))
+    );
+    assert_eq!(
+        kos[1].properties.get("device_id"),
+        Some(&Value::Text("dev_b".into()))
+    );
+
+    // RETURN koid: KO identity survives projection even though koid is
+    // not a property.
+    let plan = parser::compile_with_subject(r#"MATCH note SIMILAR TO "cats" RETURN koid"#, "alice")
+        .unwrap();
+    let kos = objects_of(Interpreter::execute(&k, &plan).unwrap());
+    assert_eq!(kos.len(), 3);
+    let got: HashSet<KOID> = kos.iter().map(|ko| ko.koid).collect();
+    let want: HashSet<KOID> = ids.iter().copied().collect();
+    assert_eq!(got, want, "koid rows carry the seeded KO identities");
+}
