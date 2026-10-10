@@ -1,0 +1,46 @@
+   Compiling aikoql-kernel v0.2.2 (E:\dreams\Mnemosyne\crates\kernel)
+   Compiling aikoql-storage-v2 v0.2.2 (E:\dreams\Mnemosyne\crates\storage\aikoql-v2)
+   Compiling aikoql-compiler v0.2.2 (E:\dreams\Mnemosyne\crates\compiler)
+   Compiling aikoql-vector v0.2.2 (E:\dreams\Mnemosyne\crates\engines\vector)
+   Compiling aikoql-graph v0.2.2 (E:\dreams\Mnemosyne\crates\engines\graph)
+   Compiling aikoql-runtime v0.2.2 (E:\dreams\Mnemosyne\crates\runtime)
+   Compiling aikoql-scheduler v0.2.2 (E:\dreams\Mnemosyne\crates\engines\scheduler)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 45s
+     Running tests\conformance.rs (target\debug\deps\conformance-aba032c60b058777.exe)
+
+running 10 tests
+test t32_scoped_subjects_cannot_read_untenanted_rows ... FAILED
+test t33_deleted_objects_absent_from_scan_by_type ... ok
+test t34_type_index_backfill_on_open ... ok
+test t35_cache_never_serves_stale_heads ... ok
+test t31_scoped_owner_still_confined_cross_tenant ... ok
+test t30_tenant_scan_confines_to_tenant ... ok
+test t33_unscoped_subject_sees_only_shared_rows ... FAILED
+test t34_agents_share_org_knowledge_keep_private_memory ... ok
+test t35_find_similar_respects_tenant_scope ... ok
+test t_ret3_retention_update_refreshes_horizon ... ok
+
+failures:
+
+---- t32_scoped_subjects_cannot_read_untenanted_rows stdout ----
+
+thread 't32_scoped_subjects_cannot_read_untenanted_rows' (70732) panicked at crates\kernel\tests\conformance.rs:3029:5:
+assertion failed: matches!(k.get(acme(), &ko), Err(KError::AccessDenied { .. }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- t33_unscoped_subject_sees_only_shared_rows stdout ----
+
+thread 't33_unscoped_subject_sees_only_shared_rows' (80360) panicked at crates\kernel\tests\conformance.rs:3073:5:
+assertion `left == right` failed
+  left: 2
+ right: 1
+
+
+failures:
+    t32_scoped_subjects_cannot_read_untenanted_rows
+    t33_unscoped_subject_sees_only_shared_rows
+
+test result: FAILED. 8 passed; 2 failed; 0 ignored; 0 measured; 101 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `-p aikoql-kernel --test conformance`
+EXIT=101

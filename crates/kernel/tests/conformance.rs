@@ -3016,15 +3016,21 @@ fn t31_scoped_owner_still_confined_cross_tenant() {
 }
 
 #[test]
-fn t32_untenanted_objects_visible_to_scoped_subjects() {
+fn t32_scoped_subjects_cannot_read_untenanted_rows() {
     let k = mk().0;
     let ko = k
         .remember(RememberRequest::create(alice(), meta("fact")))
         .unwrap()
         .koid;
-    // No tenant on the object — not confined, visible to any scoped subject.
-    assert!(k.get(acme(), &ko).is_ok());
-    assert_eq!(k.scan_by_type(&acme(), "fact").unwrap().len(), 1);
+    // T-66 (POC-3 post-fix re-run Issue 2): strict isolation — a scoped
+    // subject reads ONLY its own tenant's rows. An untenanted row is not
+    // confined to that tenant, so it is not visible to scoped reads; the
+    // pre-R9 admin global read is the only channel to shared rows.
+    assert!(matches!(
+        k.get(acme(), &ko),
+        Err(KError::AccessDenied { .. })
+    ));
+    assert_eq!(k.scan_by_type(&acme(), "fact").unwrap().len(), 0);
 }
 
 // T-55 (POC-3 P3-009 MEDIUM): a tenant-less subject's READ fails open —
@@ -3061,9 +3067,10 @@ fn t33_unscoped_subject_sees_only_shared_rows() {
         Err(KError::AccessDenied { .. })
     ));
 
-    // The scoped subject still reads it — the tenant pin is the door.
+    // The scoped subject still reads its own row — the tenant pin is the
+    // door; T-66: the shared row is NOT visible to the scoped read.
     assert!(k.get(acme(), &scoped).is_ok());
-    assert_eq!(k.scan_by_type(&acme(), "fact").unwrap().len(), 2);
+    assert_eq!(k.scan_by_type(&acme(), "fact").unwrap().len(), 1);
 
     // An unscoped admin keeps the pre-R9 global read (t30's shape).
     assert_eq!(
@@ -3110,12 +3117,24 @@ fn t34_agents_share_org_knowledge_keep_private_memory() {
         .insert("t".into(), Value::Text("B secret".into()));
     let b_id = k.remember(b_priv).unwrap().koid;
 
-    // Shared authoritative knowledge: both agents read the org KO.
+    // T-66 (POC-3 post-fix re-run Issue 2, strict isolation): scoped
+    // subjects read ONLY their own tenant's rows — the untenanted org KO
+    // is invisible to both scoped agents regardless of ownership or grant.
+    // Sharing remains for unscoped agents: alice reads it as owner, bob
+    // reads it through the ACL grant.
+    assert!(matches!(
+        k.get(&support, &org_id),
+        Err(KError::AccessDenied { .. })
+    ));
+    assert!(matches!(
+        k.get(&sales, &org_id),
+        Err(KError::AccessDenied { .. })
+    ));
     assert_eq!(
-        k.get(&support, &org_id).unwrap().properties.get("policy"),
+        k.get(&alice(), &org_id).unwrap().properties.get("policy"),
         Some(&Value::Text("SLA 4h".into()))
     );
-    assert!(k.get(&sales, &org_id).is_ok());
+    assert!(k.get(&Subject::new("bob"), &org_id).is_ok());
 
     // Private memory stays confined: each agent sees only their own.
     assert!(k.get(&support, &a_id).is_ok());
@@ -3137,13 +3156,15 @@ fn t34_agents_share_org_knowledge_keep_private_memory() {
         Err(KError::AccessDenied { .. })
     ));
 
-    // Scans: each agent's view = own tenant + shared org; never the other's.
+    // Scans: each agent's view = own tenant only; the untenanted org KO is
+    // not in any scoped scan (T-66), and the unscoped owner still scans it.
     assert_eq!(k.scan_by_type(&support, "support_note").unwrap().len(), 1);
     assert_eq!(k.scan_by_type(&sales, "support_note").unwrap().len(), 0);
     assert_eq!(k.scan_by_type(&support, "sales_note").unwrap().len(), 0);
     assert_eq!(k.scan_by_type(&sales, "sales_note").unwrap().len(), 1);
-    assert_eq!(k.scan_by_type(&support, "org_policy").unwrap().len(), 1);
-    assert_eq!(k.scan_by_type(&sales, "org_policy").unwrap().len(), 1);
+    assert_eq!(k.scan_by_type(&support, "org_policy").unwrap().len(), 0);
+    assert_eq!(k.scan_by_type(&sales, "org_policy").unwrap().len(), 0);
+    assert_eq!(k.scan_by_type(&alice(), "org_policy").unwrap().len(), 1);
 }
 
 #[test]

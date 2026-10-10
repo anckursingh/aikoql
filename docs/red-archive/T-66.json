@@ -1,0 +1,8 @@
+{
+  "id": "T-66",
+  "pre_fix_commit": "d61c6e5",
+  "command": "bash -c cargo test -p aikoql-kernel --test conformance t3",
+  "captured_at": "2026-10-10T07:57:48Z",
+  "captured_head": "d61c6e533b4398db06cdd14e855c4ca46f591482",
+  "exit_code": 101
+}
