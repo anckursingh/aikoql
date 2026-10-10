@@ -2195,3 +2195,46 @@ receiving the caller's subject/context (the nine deploy_* active
 objects, document ingest, derive, and the reason-claim KO) now stamp
 the caller's tenant — a scoped caller's created object is confined to
 its tenant.
+
+## 71. CHANGESET — native change-detection between commit instants — T-67 (POC G-001)
+
+P3-004 shape 8 computed its change delta client-side: two AS_OF scans
+plus a Python diff. The frozen verdict reads that as driver complexity
+over real capability, and shape 8 alone cannot establish production
+readiness. The frozen `exp_changeset` oracle cuts on the COMMIT
+domain — unseen idempotency keys, ingest/correct ops, the half-open
+(5000, 13000] TX window; retractions and duplicate replays contribute
+nothing. Event-time (valid_from) windows can never match it: 20 of 45
+corpus ops are late arrivals (event_time != tx). The commit instant
+already exists inside the KOID — the 48-bit created_ms prefix is the
+physical mint instant — and the driver already maps tx -> wall markers
+for AS_OF (`marker()` over replay-commit-ts.jsonl), so the same
+mapping serves CHANGESET with zero new replay machinery.
+
+T-67 adds `MATCH <t> CHANGESET BETWEEN <a> AND <b>`: a half-open
+(a, b] window on KOID created_ms. Lexer keyword, `TemporalClause::
+Changeset` AST variant, parser arm (same from<to `InvalidTemporalRange`
+diagnostic as BETWEEN), `TemporalOp::Changeset` IR variant. The
+runtime arm walks the same generation scan as the other temporal arms
+(T-64 Deleted-head skip) and keeps rows with `from < created_ms <=
+to`. Superseded generations are NOT retired here — a predecessor
+minted inside the window is a real change, which is exactly what the
+oracle counts (T-54/T-65 retirement is a BETWEEN-valid-time concern,
+not a commit-domain one).
+
+`KOID::created_ms()` decodes the 48-bit prefix. Note the fixture
+discipline this surfaced: the P5-M7 catalog bootstrap mints rows at
+the open-time clock and IdGen never moves backwards, so temporal
+fixtures must move the clock FORWARD from their open instant — a
+fixture stepping backwards silently clamps every mint to the
+open-time millis.
+
+Pins: the runtime pin `changeset_enumerates_generations_minted_in_
+half_open_window` (boundary predecessor excluded, correction successor
+counted, retraction mints nothing) and the MCP acceptance pin
+`p3_004_shape8_native_changeset` — remember -> correct -> twin-tenant
+remember -> retract -> duplicate replay, then ONE unscoped-admin
+CHANGESET returning exactly [(dev_a, v1b), (dev_a, v2)], and a
+tenant_a-scoped call returning only its own row (T-66 strict
+isolation). The commit_ts boundary values are T-43 plain wall millis
+— no HLC >>16 unpacking.
