@@ -393,8 +393,12 @@ pub fn execute_streaming<'a>(
     }
     // PR6 P1-13: the assist binds only to the Filter IMMEDIATELY after the
     // Scan — positional adjacency is the proven semantic dependency.
+    // T-71: an Or/And branch is never index-assisted — only a Cmp-Eq node.
     let adjacent_eq = match ops.get(1).map(|po| &po.op) {
-        Some(IrOp::Filter { predicates }) => predicates.iter().find(|p| p.op == PredOp::Eq),
+        Some(IrOp::Filter { predicates }) => predicates
+            .iter()
+            .find(|p| matches!(p, Predicate::Cmp { op: PredOp::Eq, .. }))
+            .and_then(|p| p.as_cmp()),
         _ => None,
     };
 
@@ -404,7 +408,7 @@ pub fn execute_streaming<'a>(
     // snapshot by construction.
     let mut assist: Option<Vec<KOID>> = None;
     let mut exact_head: Option<u64> = None;
-    if let Some(p) = adjacent_eq {
+    if let Some((property, _, value)) = adjacent_eq {
         if opts.index_strategy != IndexStrategy::Scan {
             for idx in kernel.property_indexes()? {
                 // P5-M22 (P1-16): the DDL state gate — a non-Ready index is
@@ -412,13 +416,13 @@ pub fn execute_streaming<'a>(
                 if idx.state() != aikoql_kernel::IndexState::Ready {
                     continue;
                 }
-                if !idx.covers(type_name, &p.property) {
+                if !idx.covers(type_name, property) {
                     continue;
                 }
                 match opts.index_strategy {
                     IndexStrategy::Scan => {}
                     IndexStrategy::EventualIndex => {
-                        assist = Some(idx.scan_eq(std::slice::from_ref(&p.value))?);
+                        assist = Some(idx.scan_eq(std::slice::from_ref(value))?);
                     }
                     IndexStrategy::Exact => {
                         let mut head = kernel.journal_head()?.0;
@@ -430,7 +434,7 @@ pub fn execute_streaming<'a>(
                             {
                                 break; // the index lags the store — Scan answers the truth
                             }
-                            let koids = idx.scan_eq(std::slice::from_ref(&p.value))?;
+                            let koids = idx.scan_eq(std::slice::from_ref(value))?;
                             let now = kernel.journal_head()?.0;
                             if now == head {
                                 assist = Some(koids);

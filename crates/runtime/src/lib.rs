@@ -65,23 +65,37 @@ fn skip_take<T>(v: Vec<T>, offset: usize, limit: usize) -> Vec<T> {
 /// The shared predicate test for one KO — the materializing Filter arm and
 /// the P5-M4 streaming FilterOperator both route through here (one place).
 pub(crate) fn row_matches(ko: &KnowledgeObject, predicates: &[Predicate]) -> bool {
-    predicates.iter().all(|p| {
-        let val = ko.properties.get(&p.property);
-        match p.op {
-            PredOp::Eq => values_equal(val, Some(&p.value)),
-            PredOp::Neq => !values_equal(val, Some(&p.value)),
-            PredOp::Gt => compare_values(val, Some(&p.value)) == Some(Ordering::Greater),
-            PredOp::Lt => compare_values(val, Some(&p.value)) == Some(Ordering::Less),
-            PredOp::Gte => matches!(
-                compare_values(val, Some(&p.value)),
-                Some(Ordering::Greater) | Some(Ordering::Equal)
-            ),
-            PredOp::Lte => matches!(
-                compare_values(val, Some(&p.value)),
-                Some(Ordering::Less) | Some(Ordering::Equal)
-            ),
+    predicates.iter().all(|p| row_matches_one(ko, p))
+}
+
+/// One predicate tree node (T-71): comparisons evaluate against the row's
+/// properties; And/Or combine recursively — Or is a real disjunction.
+fn row_matches_one(ko: &KnowledgeObject, p: &Predicate) -> bool {
+    match p {
+        Predicate::Cmp {
+            property,
+            op,
+            value,
+        } => {
+            let val = ko.properties.get(property);
+            match op {
+                PredOp::Eq => values_equal(val, Some(value)),
+                PredOp::Neq => !values_equal(val, Some(value)),
+                PredOp::Gt => compare_values(val, Some(value)) == Some(Ordering::Greater),
+                PredOp::Lt => compare_values(val, Some(value)) == Some(Ordering::Less),
+                PredOp::Gte => matches!(
+                    compare_values(val, Some(value)),
+                    Some(Ordering::Greater) | Some(Ordering::Equal)
+                ),
+                PredOp::Lte => matches!(
+                    compare_values(val, Some(value)),
+                    Some(Ordering::Less) | Some(Ordering::Equal)
+                ),
+            }
         }
-    })
+        Predicate::And(l, r) => row_matches_one(ko, l) && row_matches_one(ko, r),
+        Predicate::Or(l, r) => row_matches_one(ko, l) || row_matches_one(ko, r),
+    }
 }
 
 // ---------------------------------------------------------------------------

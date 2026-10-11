@@ -486,13 +486,26 @@ fn flatten_predicates(preds: &[ast::Predicate]) -> Vec<Predicate> {
                     right.as_ref().clone(),
                 ]));
             }
-            ast::Predicate::Or { .. } => {
-                // ponytail: OR predicates not yet mapped to IR. Each OR branch
-                // would produce a separate filter scan; add when needed.
+            ast::Predicate::Or { left, right } => {
+                // T-71 (POC-4): a real disjunction — each side flattens to
+                // its own conjunct list and folds into And nodes when it
+                // holds more than one comparison.
+                let l = flatten_predicates(&[left.as_ref().clone()]);
+                let r = flatten_predicates(&[right.as_ref().clone()]);
+                out.push(Predicate::Or(Box::new(and_fold(l)), Box::new(and_fold(r))));
             }
         }
     }
     out
+}
+
+/// Fold a flattened conjunct list into one And tree — the kernel Filter's
+/// Vec is a conjunction, so a multi-conjunct OR branch needs the structure
+/// as a node. A single predicate passes through unchanged.
+fn and_fold(ps: Vec<Predicate>) -> Predicate {
+    ps.into_iter()
+        .reduce(|a, b| Predicate::And(Box::new(a), Box::new(b)))
+        .expect("an OR branch holds at least one comparison")
 }
 
 fn expr_to_value(e: &ast::Expr) -> Value {

@@ -16,7 +16,7 @@
 //! honest-ledger rows document which alternatives do not exist yet.
 
 use aikoql_compiler::parser;
-use aikoql_kernel::ir::{IrOp, IrPlan, PhysicalOp, PhysicalPlan, PredOp, Strategy};
+use aikoql_kernel::ir::{IrOp, IrPlan, PhysicalOp, PhysicalPlan, PredOp, Predicate, Strategy};
 use aikoql_kernel::transaction::kernel::Kernel;
 use aikoql_kernel::{KError, KResult, Statistics};
 
@@ -54,16 +54,21 @@ pub(crate) fn first_eq_after(
     i: usize,
 ) -> Option<&aikoql_kernel::ir::Predicate> {
     match ops.get(i + 1).map(|po| &po.op) {
-        Some(IrOp::Filter { predicates }) => predicates.iter().find(|p| p.op == PredOp::Eq),
+        // T-71: only a comparison node is index-assistable — a boolean
+        // branch (Or/And) is never answered from an index.
+        Some(IrOp::Filter { predicates }) => predicates
+            .iter()
+            .find(|p| matches!(p, Predicate::Cmp { op: PredOp::Eq, .. })),
         _ => None,
     }
 }
 
 /// The uniform match fraction of that predicate: 1/distinct from the stats,
-/// 1.0 (no information) when the property was never seen.
+/// 1.0 (no information) when the property was never seen (or the node is a
+/// boolean branch with no single property).
 fn eq_selectivity(pred: &aikoql_kernel::ir::Predicate, stats: Option<&Statistics>) -> f64 {
-    stats
-        .and_then(|s| s.cardinality(&pred.property))
+    pred.as_cmp()
+        .and_then(|(property, _, _)| stats.and_then(|s| s.cardinality(property)))
         .filter(|&d| d > 0)
         .map_or(1.0, |d| 1.0 / d as f64)
 }
@@ -96,12 +101,16 @@ pub(crate) fn scan_assist(
     let Some(pred) = first_eq_after(ops, i) else {
         return Ok(None);
     };
+    // T-71: first_eq_after guarantees a Cmp-Eq node.
+    let Some((property, _, value)) = pred.as_cmp() else {
+        return Ok(None);
+    };
     for idx in kernel.property_indexes()? {
         if !may_serve_exact(&*idx) {
             continue; // CandidateOnly never answers an exact scan
         }
-        if idx.covers(type_name, &pred.property) {
-            return Ok(Some(idx.scan_eq(std::slice::from_ref(&pred.value))?));
+        if idx.covers(type_name, property) {
+            return Ok(Some(idx.scan_eq(std::slice::from_ref(value))?));
         }
     }
     Ok(None)
@@ -150,10 +159,11 @@ pub fn cost_plan(
             },
             IrOp::Filter { predicates } => {
                 // ponytail: the first Eq drives the estimate; conjuncts are
-                // assumed uniform and one already covers it.
+                // assumed uniform and one already covers it. A boolean
+                // branch (Or/And) has no single property to estimate from.
                 let sel = predicates
                     .iter()
-                    .find(|p| p.op == PredOp::Eq)
+                    .find(|p| matches!(p, Predicate::Cmp { op: PredOp::Eq, .. }))
                     .map(|p| eq_selectivity(p, stats))
                     .unwrap_or(1.0)
                     .min(1.0);
@@ -235,14 +245,16 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
     let mut index_used: Option<String> = None;
     if let Some(stats) = &stats {
         if stats_used {
-            if let Some(pred) = first_eq_after(&ops, 0) {
+            // T-71: first_eq_after guarantees a Cmp-Eq node; as_cmp on it
+            // always yields the (property, _, _) triple.
+            if let Some((property, _, _)) = first_eq_after(&ops, 0).and_then(|p| p.as_cmp()) {
                 for idx in kernel.property_indexes()? {
                     // P5-M22 (P1-16): the DDL state gate — a non-Ready index
                     // is never chosen, however fresh the stats (idx4-004).
                     if idx.state() != aikoql_kernel::IndexState::Ready {
                         continue;
                     }
-                    if !idx.covers(&stats.type_name, &pred.property) {
+                    if !idx.covers(&stats.type_name, property) {
                         continue;
                     }
                     // The exactness gate: the index must hold the committed

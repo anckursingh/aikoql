@@ -182,7 +182,14 @@ impl Parser {
         let mut join = None;
         loop {
             match &self.current {
-                Token::Where | Token::And | Token::Or => {
+                Token::Where => {
+                    self.advance();
+                    // T-71 (POC-4): WHERE introduces one boolean expression
+                    // with SQL precedence (AND binds tighter than OR) — a
+                    // disjunction must not flatten into ANDed predicates.
+                    preds.push(self.parse_or_expr()?);
+                }
+                Token::And | Token::Or => {
                     self.advance();
                     preds.push(self.parse_predicate()?);
                 }
@@ -594,6 +601,35 @@ impl Parser {
             }
         }
         Ok((score, using))
+    }
+
+    /// T-71 (POC-4): `a OR b` — lowest precedence, so it gathers the
+    /// higher-precedence AND chains as its operands.
+    fn parse_or_expr(&mut self) -> Result<Predicate, ParseError> {
+        let mut left = self.parse_and_expr()?;
+        while let Token::Or = self.current {
+            self.advance();
+            let right = self.parse_and_expr()?;
+            left = Predicate::Or {
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    /// `a AND b` — binds tighter than OR; each operand is one comparison.
+    fn parse_and_expr(&mut self) -> Result<Predicate, ParseError> {
+        let mut left = self.parse_predicate()?;
+        while let Token::And = self.current {
+            self.advance();
+            let right = self.parse_predicate()?;
+            left = Predicate::And {
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
     }
 
     fn parse_predicate(&mut self) -> Result<Predicate, ParseError> {

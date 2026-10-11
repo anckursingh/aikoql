@@ -105,15 +105,21 @@ fn golden_match_multi_filter() {
         parser::parse(r#"MATCH Person WHERE company == "Visa" AND city == "Amsterdam" RETURN *"#)
             .unwrap();
     let m = as_match(&stmt);
-    assert_eq!(m.predicates.len(), 2);
-    // AND flattens into two Eq predicates.
-    for pred in &m.predicates {
-        match pred {
-            Predicate::Eq { property, .. } => {
-                assert!(property == "company" || property == "city");
+    // T-71: one WHERE reads one boolean expression — the AND is a single
+    // And node over two comparisons, not two flat predicates.
+    assert_eq!(m.predicates.len(), 1);
+    match &m.predicates[0] {
+        Predicate::And { left, right } => {
+            for pred in [left.as_ref(), right.as_ref()] {
+                match pred {
+                    Predicate::Eq { property, .. } => {
+                        assert!(property == "company" || property == "city");
+                    }
+                    _ => panic!("expected Eq"),
+                }
             }
-            _ => panic!("expected Eq"),
         }
+        _ => panic!("expected And"),
     }
 }
 

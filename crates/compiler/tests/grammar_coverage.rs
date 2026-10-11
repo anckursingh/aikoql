@@ -207,7 +207,9 @@ fn cover_predicate_and() {
         Statement::Match(m) => m,
         _ => panic!(),
     };
-    assert_eq!(m.predicates.len(), 2);
+    // T-71: one WHERE reads one boolean expression — AND is a single node.
+    assert_eq!(m.predicates.len(), 1);
+    assert!(matches!(&m.predicates[0], Predicate::And { .. }));
 }
 
 #[test]
@@ -216,7 +218,9 @@ fn cover_predicate_or() {
         Statement::Match(m) => m,
         _ => panic!(),
     };
-    assert_eq!(m.predicates.len(), 2);
+    // T-71: one WHERE reads one boolean expression — OR is a single node.
+    assert_eq!(m.predicates.len(), 1);
+    assert!(matches!(&m.predicates[0], Predicate::Or { .. }));
 }
 
 #[test]
@@ -229,7 +233,9 @@ fn cover_predicate_nested_and_or() {
         Statement::Match(m) => m,
         _ => panic!(),
     };
-    assert!(m.predicates.len() >= 2);
+    // T-71: precedence — one Or node whose left branch is the And.
+    assert_eq!(m.predicates.len(), 1);
+    assert!(matches!(&m.predicates[0], Predicate::Or { .. }));
 }
 
 // ---------------------------------------------------------------------------
