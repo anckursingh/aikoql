@@ -3635,11 +3635,13 @@ fn t69_changeset_rows_carry_tenant() {
         let key = row["properties"]["key"].as_str().unwrap();
         match key {
             "dev_x" => assert_eq!(
-                row["tenant"], json!("tenant_a"),
+                row["tenant"],
+                json!("tenant_a"),
                 "row {key} must be labeled with its tenant: {q}"
             ),
             "dev_y" => assert_eq!(
-                row["tenant"], json!("tenant_b"),
+                row["tenant"],
+                json!("tenant_b"),
                 "row {key} must be labeled with its tenant: {q}"
             ),
             "dev_z" => assert!(
@@ -3661,7 +3663,11 @@ fn t69_changeset_rows_carry_tenant() {
     );
     let rows_a = qa["results"].as_array().unwrap();
     assert_eq!(rows_a.len(), 1, "scoped changeset: {qa}");
-    assert_eq!(rows_a[0]["tenant"], json!("tenant_a"), "scoped row label: {qa}");
+    assert_eq!(
+        rows_a[0]["tenant"],
+        json!("tenant_a"),
+        "scoped row label: {qa}"
+    );
 
     // The label is the Objects row surface, not a CHANGESET special case:
     // a plain scoped MATCH row carries it too.
@@ -3674,7 +3680,11 @@ fn t69_changeset_rows_carry_tenant() {
     );
     let mrows = m["results"].as_array().unwrap();
     assert_eq!(mrows.len(), 1, "plain scoped match: {m}");
-    assert_eq!(mrows[0]["tenant"], json!("tenant_a"), "match row label: {m}");
+    assert_eq!(
+        mrows[0]["tenant"],
+        json!("tenant_a"),
+        "match row label: {m}"
+    );
 
     let _ = std::fs::remove_dir_all(&db);
 }

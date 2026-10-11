@@ -72,6 +72,10 @@ pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
                 "koid": ko.koid.to_hex(),
                 "type_name": ko.metadata.type_name,
                 "version": ko.version,
+                // T-69 (POC T-67 follow-up): every row carries its tenant
+                // (null for a tenantless row) so one unscoped call assembles
+                // tenant-prefixed results without per-tenant scoped calls.
+                "tenant": ko.metadata.tenant,
                 "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
                 // v0.3 K1: epistemic metadata must survive the QL query
                 // boundary too — no silent drops.
@@ -140,6 +144,9 @@ pub(crate) fn execute_stream_query(
             "koid": ko.koid.to_hex(),
             "type_name": ko.metadata.type_name,
             "version": ko.version,
+            // T-69: the row's tenant — null for a tenantless row (see the
+            // non-stream serializer).
+            "tenant": ko.metadata.tenant,
             "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
             // v0.3 K1: epistemic metadata must survive the QL query
             // boundary too — no silent drops.

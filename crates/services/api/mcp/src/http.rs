@@ -593,6 +593,9 @@ pub(crate) fn aikoql_endpoint(
                         "koid": ko.koid.to_hex(),
                         "type_name": ko.metadata.type_name,
                         "version": ko.version,
+                        // T-69: the row's tenant (null for tenantless) — the
+                        // REST query surface mirrors the MCP tool.
+                        "tenant": ko.metadata.tenant,
                         "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
                     }));
                 }
