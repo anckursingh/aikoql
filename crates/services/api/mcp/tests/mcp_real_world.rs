@@ -3593,14 +3593,14 @@ fn t69_changeset_rows_carry_tenant() {
     let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
 
-    let r_a = c.call(
+    let _r_a = c.call(
         "remember",
         &json!({
             "subject": "admin", "type_name": "device", "tenant": "tenant_a",
             "properties": {"key": "dev_x", "value": "v1"}
         }),
     );
-    let r_b = c.call(
+    let _r_b = c.call(
         "remember",
         &json!({
             "subject": "admin", "type_name": "device", "tenant": "tenant_b",
@@ -4242,6 +4242,94 @@ fn t70_batch_idem_key_conflict_fails_loudly() {
             .unwrap_or("")
             .contains("IDEMPOTENCY_CONFLICT"),
         "the symmetric collision must carry the named error: {r2}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-71 (POC-4): `WHERE ... OR ...` compiles but silently matches nothing —
+// the OR keyword was a bare clause separator, so the disjunction lowered
+// to a conjunction and rows matching either side (but not both) vanished.
+// The query must return the union of both disjuncts' matches (POC shape:
+// each disjunct alone matches at least one row).
+#[test]
+fn t71_where_or_returns_the_union() {
+    let db = tmp_db("t71-where-or");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    for (subj, dev) in [("s1", "d-0"), ("s2", "d-1"), ("s3", "d-2")] {
+        let r = c.call(
+            "remember",
+            &json!({
+                "subject": "admin", "type_name": "p4d_fact",
+                "properties": {"subject": subj, "device": dev}
+            }),
+        );
+        assert!(r["koid"].as_str().is_some(), "remember failed: {r}");
+    }
+
+    let union_of = |q: &serde_json::Value| -> Vec<(String, String)> {
+        q["results"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no results array: {q}"))
+            .iter()
+            .map(|row| {
+                (
+                    row["properties"]["subject"].as_str().unwrap().to_string(),
+                    row["properties"]["device"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+
+    // The POC's exact failing shape: each side alone matches a row, the
+    // union is {s1/d-0, s2/d-1} — a conjunction returns nothing.
+    let q = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin",
+            "query": "MATCH p4d_fact WHERE subject == \"s1\" OR device == \"d-1\" RETURN *"
+        }),
+    );
+    // union_of fails loudly with the whole response when the query errors.
+    let mut rows = union_of(&q);
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ("s1".to_string(), "d-0".to_string()),
+            ("s2".to_string(), "d-1".to_string())
+        ],
+        "OR must return the union of both disjuncts, not the empty set: {q}"
+    );
+
+    // Regression: AND keeps its conjunction semantics on the same KB.
+    let qa = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin",
+            "query": "MATCH p4d_fact WHERE subject == \"s1\" AND device == \"d-0\" RETURN *"
+        }),
+    );
+    assert_eq!(
+        union_of(&qa),
+        vec![("s1".to_string(), "d-0".to_string())],
+        "AND must keep matching the conjunction: {qa}"
+    );
+
+    // A one-sided OR returns the matching disjunct's rows.
+    let qo = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin",
+            "query": "MATCH p4d_fact WHERE subject == \"nope\" OR device == \"d-2\" RETURN *"
+        }),
+    );
+    assert_eq!(
+        union_of(&qo),
+        vec![("s3".to_string(), "d-2".to_string())],
+        "a disjunct with no matches must not empty the union: {qo}"
     );
 
     let _ = std::fs::remove_dir_all(&db);

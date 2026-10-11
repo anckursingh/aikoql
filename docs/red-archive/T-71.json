@@ -1,0 +1,8 @@
+{
+  "id": "T-71",
+  "pre_fix_commit": "853dee6",
+  "command": "bash -c cargo test -p aikoql-compiler where_or_parses_to_a_disjunction; cargo test -p aikoql-mcp t71_where_or_returns_the_union -- --nocapture",
+  "captured_at": "2026-10-11T12:51:57Z",
+  "captured_head": "853dee671c6e546bcbe295161735b9b4d283469b",
+  "exit_code": 101
+}

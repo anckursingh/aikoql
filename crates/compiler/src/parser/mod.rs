@@ -847,4 +847,50 @@ mod tests {
             _ => panic!("expected TextSearch"),
         }
     }
+
+    #[test]
+    fn where_or_parses_to_a_disjunction() {
+        // T-71 (POC-4): `WHERE a == X OR b == Y` compiled as two ANDed
+        // predicates — the OR keyword was a bare clause separator, so the
+        // disjunction silently became a conjunction and matched nothing.
+        // The AST must carry ONE Or node per OR clause.
+        let st = parse("MATCH Fact WHERE a == 1 OR b == 2 RETURN *").unwrap();
+        let ast::Statement::Match(m) = st else {
+            panic!("expected MATCH statement")
+        };
+        assert_eq!(
+            m.predicates.len(),
+            1,
+            "one OR clause is one predicate, not two: {:?}",
+            m.predicates
+        );
+        assert!(
+            matches!(&m.predicates[0], ast::Predicate::Or { .. }),
+            "expected an Or node: {:?}",
+            m.predicates[0]
+        );
+
+        // SQL precedence: a == 1 OR b == 2 AND c == 3 parses as
+        // a == 1 OR (b == 2 AND c == 3) — AND binds tighter than OR.
+        let st2 = parse("MATCH Fact WHERE a == 1 OR b == 2 AND c == 3 RETURN *").unwrap();
+        let ast::Statement::Match(m2) = st2 else {
+            panic!("expected MATCH statement")
+        };
+        assert_eq!(m2.predicates.len(), 1);
+        match &m2.predicates[0] {
+            ast::Predicate::Or { left, right } => {
+                assert!(
+                    matches!(**left, ast::Predicate::Eq { ref property, .. } if property == "a"),
+                    "the left disjunct must be the a == 1 comparison: {:?}",
+                    left
+                );
+                assert!(
+                    matches!(**right, ast::Predicate::And { .. }),
+                    "AND must bind tighter than OR: {:?}",
+                    right
+                );
+            }
+            other => panic!("expected Or node: {other:?}"),
+        }
+    }
 }
