@@ -1,0 +1,8 @@
+{
+  "id": "T-70",
+  "pre_fix_commit": "70a9518",
+  "command": "bash -c cargo test -p aikoql-mcp t70_batch_idem_key_conflict_fails_loudly -- --nocapture",
+  "captured_at": "2026-10-11T11:34:53Z",
+  "captured_head": "70a95188abb3fd358fb05947ff90bc329b570a75",
+  "exit_code": 101
+}

@@ -4152,3 +4152,97 @@ fn tombstoned_rows_stay_asof_and_historical_reconstructable() {
 
     let _ = std::fs::remove_dir_all(&db);
 }
+
+// T-70 (POC-4, batch $N handle-table corruption): an idempotency key
+// reused across op kinds — a supersede carrying a key a remember already
+// used in the same batch — replays the foreign row's cell as its
+// successor, and the batch appends that foreign koid as the next $N
+// handle, so every later $N resolves one entry early (cross-tenant
+// targeting, T-66 denials). The hit must fail loudly with the named
+// IDEMPOTENCY_CONFLICT and the op must not execute; the handle table
+// then advances only on real outcomes, keeping later $N resolutions
+// aligned. Symmetric arm: a remember reusing a supersede's key.
+#[test]
+fn t70_batch_idem_key_conflict_fails_loudly() {
+    let db = tmp_db("t70-batch-idem-conflict");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    // POC-4 repro shape: [remember t-a key=K, remember t-a, supersede $2
+    // t-a key=K, remember t-b, supersede $3 t-b] — with the collision the
+    // table desyncs and the last supersede resolves $3 to tenant_a's koid.
+    let r = c.call(
+        "batch",
+        &json!({"operations": [
+            {"op": "remember", "type_name": "t70_dev", "tenant": "tenant_a",
+             "properties": {"key": "x"}, "idempotency_key": "t70-K"},
+            {"op": "remember", "type_name": "t70_dev", "tenant": "tenant_a",
+             "properties": {"key": "y"}},
+            {"op": "supersede", "old": "$2.koid", "type_name": "t70_dev",
+             "tenant": "tenant_a", "properties": {"key": "y", "value": "y2"},
+             "idempotency_key": "t70-K", "evidence": [{"source_artifact": "t70-pin", "method": "human_provided"}]},
+            {"op": "remember", "type_name": "t70_dev", "tenant": "tenant_b",
+             "properties": {"key": "z"}},
+            {"op": "supersede", "old": "$3.koid", "type_name": "t70_dev",
+             "tenant": "tenant_b", "properties": {"key": "z", "value": "z2"},
+             "evidence": [{"source_artifact": "t70-pin", "method": "human_provided"}]}
+        ]}),
+    );
+    let results = r["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results array: {r}"));
+    assert_eq!(results.len(), 5, "batch must carry five outcomes: {r}");
+    assert_eq!(
+        results[2]["ok"],
+        json!(false),
+        "the colliding supersede must fail, not replay the remember's cell: {r}"
+    );
+    assert!(
+        results[2]["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("IDEMPOTENCY_CONFLICT"),
+        "the collision must carry the named error: {r}"
+    );
+    // $3 then resolves to op 4's koid (tenant_b) — the supersede lands
+    // instead of being denied against the desynced tenant_a handle.
+    let z_koid = results[3]["result"]["koid"].as_str().unwrap().to_string();
+    assert_eq!(results[4]["ok"], json!(true), "op 5 must land: {r}");
+    assert_eq!(
+        results[4]["result"]["old"],
+        json!(z_koid),
+        "op 5 must target $3 = op 4's koid: {r}"
+    );
+
+    // Symmetric arm: a remember reusing a supersede's key conflicts too —
+    // the foreign successor cell must not replay as "the remembered koid".
+    let r2 = c.call(
+        "batch",
+        &json!({"operations": [
+            {"op": "remember", "type_name": "t70_dev", "tenant": "tenant_a",
+             "properties": {"key": "w"}},
+            {"op": "supersede", "old": "$1.koid", "type_name": "t70_dev",
+             "tenant": "tenant_a", "properties": {"key": "w", "value": "w2"},
+             "idempotency_key": "t70-K2", "evidence": [{"source_artifact": "t70-pin", "method": "human_provided"}]},
+            {"op": "remember", "type_name": "t70_dev", "tenant": "tenant_a",
+             "properties": {"key": "v"}, "idempotency_key": "t70-K2"}
+        ]}),
+    );
+    let results2 = r2["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results array: {r2}"));
+    assert_eq!(
+        results2[2]["ok"],
+        json!(false),
+        "the remember must conflict with the supersede's key: {r2}"
+    );
+    assert!(
+        results2[2]["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("IDEMPOTENCY_CONFLICT"),
+        "the symmetric collision must carry the named error: {r2}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
