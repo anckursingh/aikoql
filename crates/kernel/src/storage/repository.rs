@@ -220,12 +220,31 @@ fn decode_journal(b: &[u8]) -> KResult<(u64, [u8; 32], u64)> {
     d.finish()?;
     Ok((s, a, t))
 }
-fn encode_idem(koid: &KOID, version: u64, commit_ts: u64) -> Vec<u8> {
+fn encode_idem(koid: &KOID, version: u64, commit_ts: u64, kind: u8) -> Vec<u8> {
     let mut e = Enc::new();
     e.raw(koid.as_bytes());
     e.u64(version);
     e.u64(commit_ts);
+    // T-70 (POC-4): trailing op-kind tag — the row discriminates which op
+    // wrote it, so a key reused across op kinds fails loudly instead of
+    // replaying a foreign cell. Appended, not inlined, so rows written
+    // before the tag decode leniently as kind None (legacy).
+    e.u8(kind);
     e.buf
+}
+
+/// Idempotency row op kinds (T-70).
+pub const IDEM_KIND_REMEMBER: u8 = 0;
+pub const IDEM_KIND_SUPERSEDE: u8 = 1;
+
+/// Human name of an idempotency row's kind, for conflict messages.
+pub fn idem_kind_name(kind: Option<u8>) -> &'static str {
+    match kind {
+        Some(IDEM_KIND_REMEMBER) => "remember",
+        Some(IDEM_KIND_SUPERSEDE) => "supersede",
+        Some(_) => "an unknown op",
+        None => "a legacy op",
+    }
 }
 fn encode_tomb(payload_hash: [u8; 32], seq: u64) -> Vec<u8> {
     let mut e = Enc::new();
@@ -880,19 +899,29 @@ impl KnowledgeRepository {
         koid: &KOID,
         version: u64,
         commit_ts: u64,
+        kind: u8,
     ) {
-        batch.put(idem_key(key), encode_idem(koid, version, commit_ts));
+        batch.put(idem_key(key), encode_idem(koid, version, commit_ts, kind));
     }
 
     pub fn get_idem(&self, key: &str) -> KResult<Option<(KOID, u64, u64)>> {
+        Ok(self
+            .get_idem_tagged(key)?
+            .map(|(k, v, ts, _)| (k, v, ts)))
+    }
+
+    /// T-70 (POC-4): the idem row with its op-kind tag. Legacy rows written
+    /// before the tag existed decode as kind None — replay as they always
+    /// did (the cross-kind collision cannot be proven for them).
+    pub fn get_idem_tagged(&self, key: &str) -> KResult<Option<(KOID, u64, u64, Option<u8>)>> {
         match self.engine().get(&idem_key(key))? {
             Some(b) => {
                 let mut d = Dec::new(&b);
                 let k = d.koid()?;
                 let v = d.u64()?;
                 let ts = d.u64()?;
-                d.finish()?;
-                Ok(Some((k, v, ts)))
+                let kind = if d.remaining() >= 1 { Some(d.u8()?) } else { None };
+                Ok(Some((k, v, ts, kind)))
             }
             None => Ok(None),
         }

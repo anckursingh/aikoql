@@ -1083,8 +1083,14 @@ impl Kernel {
                 None => (result.old, 0u64),
             };
             let mut batch = WriteBatch::new();
-            self.repo
-                .put_idem(&mut batch, &scoped, &cell, v, self.clock_now());
+            self.repo.put_idem(
+                &mut batch,
+                &scoped,
+                &cell,
+                v,
+                self.clock_now(),
+                crate::storage::repository::IDEM_KIND_SUPERSEDE,
+            );
             self.repo.write_batch(&batch)?;
         }
         Ok(result)
@@ -1116,7 +1122,19 @@ impl Kernel {
         // first apply.
         if let Some(key) = &req.idempotency_key {
             let scoped = idem_scope(old.metadata.tenant.as_deref(), key);
-            if let Some((cell, v, _ts)) = self.repo.get_idem(&scoped)? {
+            if let Some((cell, v, _ts, kind)) = self.repo.get_idem_tagged(&scoped)? {
+                // T-70 (POC-4): a key held by a different op kind is a
+                // caller bug — replaying the foreign cell would return it
+                // as this op's successor and the batch would append it as
+                // the next $N handle, desyncing every later reference.
+                // Legacy rows without a tag replay as they always did.
+                if kind.is_some_and(|k| k != crate::storage::repository::IDEM_KIND_SUPERSEDE) {
+                    return Err(KError::IdempotencyConflict(format!(
+                        "supersede reuses idempotency key '{}' already held by {}",
+                        key,
+                        crate::storage::repository::idem_kind_name(kind)
+                    )));
+                }
                 let new = (v != 0).then_some(cell);
                 return Ok(SupersedeResult {
                     old: req.old,
@@ -1305,9 +1323,19 @@ impl Kernel {
         let ctx = req.context.clone();
         // Exact-once replay: the idempotency key is stored by side B's create.
         if let Some(key) = &req.idempotency_key {
-            if let Some((b_koid, b_version, _)) =
-                self.resolve_idempotency_scoped(ctx.tenant.as_deref(), key)?
+            if let Some((b_koid, b_version, _, kind)) =
+                self.repo
+                    .get_idem_tagged(&idem_scope(ctx.tenant.as_deref(), key))?
             {
+                // T-70 (POC-4): same cross-kind guard — split's row is
+                // stored by side B's remember, so any other kind is foreign.
+                if kind.is_some_and(|k| k != crate::storage::repository::IDEM_KIND_REMEMBER) {
+                    return Err(KError::IdempotencyConflict(format!(
+                        "split reuses idempotency key '{}' already held by {}",
+                        key,
+                        crate::storage::repository::idem_kind_name(kind)
+                    )));
+                }
                 let a_version = self
                     .head_object(&req.subject)?
                     .ok_or(KError::NotFound(req.subject))?

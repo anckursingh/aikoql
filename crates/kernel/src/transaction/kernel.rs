@@ -1499,8 +1499,14 @@ impl Kernel {
         self.repo.put_event(&mut batch, seq, &ke);
         self.repo.put_journal(&mut batch, seq, audit, commit_ts);
         if let Some(k) = idem {
-            self.repo
-                .put_idem(&mut batch, k, &ko.koid, ko.version, commit_ts);
+            self.repo.put_idem(
+                &mut batch,
+                k,
+                &ko.koid,
+                ko.version,
+                commit_ts,
+                crate::storage::repository::IDEM_KIND_REMEMBER,
+            );
         }
         self.repo.write_batch(&batch)?;
         pipe.seq = seq;
@@ -1686,7 +1692,19 @@ impl Kernel {
             .as_deref()
             .map(|k| idem_scope(req.metadata.tenant.as_deref(), k));
         if let Some(scoped) = &scoped_idem {
-            if let Some((koid, version, commit_ts)) = self.repo.get_idem(scoped)? {
+            if let Some((koid, version, commit_ts, kind)) = self.repo.get_idem_tagged(scoped)? {
+                // T-70 (POC-4): a key held by a different op kind is a
+                // caller bug — replaying the foreign cell would return a
+                // koid this remember never minted (and in a batch, poison
+                // the $N handle table). Legacy rows without a tag replay
+                // as they always did.
+                if kind.is_some_and(|k| k != crate::storage::repository::IDEM_KIND_REMEMBER) {
+                    return Err(KError::IdempotencyConflict(format!(
+                        "remember reuses idempotency key '{}' already held by {}",
+                        req.idempotency_key.as_deref().unwrap_or_default(),
+                        crate::storage::repository::idem_kind_name(kind)
+                    )));
+                }
                 // P3-008: replay returns the ORIGINAL mint seq — each commit
                 // pushed exactly one event ref, ordered by version, so the
                 // stored row recovers it without a storage-format change.

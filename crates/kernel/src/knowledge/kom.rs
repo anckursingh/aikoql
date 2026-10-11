@@ -3241,6 +3241,10 @@ pub enum KError {
     /// Device-eval N4: the operation is correct but the store is not ready
     /// to answer it yet — retry later (e.g. semantic catch-up running).
     Retryable(String),
+    /// T-70 (POC-4): an idempotency key was reused across op kinds — the
+    /// stored row belongs to a different op, so replaying it would hand
+    /// the caller a foreign outcome.
+    IdempotencyConflict(String),
     Store(String),
     Codec(String),
 }
@@ -3279,6 +3283,7 @@ impl fmt::Display for KError {
             KError::IndexLagExceeded => write!(f, "INDEX_LAG_EXCEEDED"),
             KError::JobRejected(m) => write!(f, "JOB_REJECTED: {}", m),
             KError::Retryable(m) => write!(f, "RETRYABLE: {}", m),
+            KError::IdempotencyConflict(m) => write!(f, "IDEMPOTENCY_CONFLICT: {}", m),
             KError::Store(m) => write!(f, "STORE: {}", m),
             KError::Codec(m) => write!(f, "CODEC: {}", m),
         }
