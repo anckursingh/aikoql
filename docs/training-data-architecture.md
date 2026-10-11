@@ -2299,3 +2299,36 @@ AS_OF JOURNAL checkpoints matching an in-test oracle with zero
 sleeps, a spanning BETWEEN matching, and TWO full re-sends
 converging identically (same koids/versions, same seqs — the second
 re-send proves no journal churn).
+
+## 73. Query rows carry their tenant — T-69 (POC T-67 follow-up)
+
+T-67 gave CHANGESET its native one-call delta, but the rows it
+returns are unlabeled: the Objects row serializer emitted
+koid/type_name/version/properties/extensions and dropped
+metadata.tenant. A tenant-scoped call returns only its own rows
+(T-66), so the eval assembles the tenant-prefixed oracle from one
+unscoped call plus one scoped call per tenant, reconstructing the
+unscoped rows by multiset remainder — correct, but shape 8's
+one-call win is diluted 3x, and any multi-tenant CHANGESET consumer
+must guess row ownership.
+
+The row IS the KO — metadata.tenant already rides it through the
+runtime; only the wire serialization drops it. T-69 adds
+`"tenant": ko.metadata.tenant` (null for a tenantless row) to every
+Objects row at the three wire surfaces that answer aikoql queries:
+the MCP tool's plain and stream serializers (tools/query.rs) and the
+REST query endpoint (http.rs). The shell prints human text and other
+tools carry their own row schemas, so they stay untouched.
+
+Compatibility: the frozen POC comparators read only each row's
+`properties` (`props_of`), and no repo pin asserts a full row's
+JSON — the label is additive and invisible to every existing gate.
+It is the whole Objects surface, not a CHANGESET special case:
+plain MATCH, BETWEEN and HISTORICAL rows carry the same label.
+
+Pin: `t69_changeset_rows_carry_tenant` (mcp_real_world) — a
+tenant_a row, a tenant_b row and a tenantless row, then one
+unscoped-admin CHANGESET returns all three labeled
+tenant_a/tenant_b/null, the tenant_a-scoped call holds only its own
+labeled row (T-66 strict isolation), and a plain scoped MATCH row
+carries the same label.
