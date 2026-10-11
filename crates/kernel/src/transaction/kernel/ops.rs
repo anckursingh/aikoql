@@ -1323,9 +1323,9 @@ impl Kernel {
         let ctx = req.context.clone();
         // Exact-once replay: the idempotency key is stored by side B's create.
         if let Some(key) = &req.idempotency_key {
-            if let Some((b_koid, b_version, _, kind)) =
-                self.repo
-                    .get_idem_tagged(&idem_scope(ctx.tenant.as_deref(), key))?
+            if let Some((b_koid, b_version, _, kind)) = self
+                .repo
+                .get_idem_tagged(&idem_scope(ctx.tenant.as_deref(), key))?
             {
                 // T-70 (POC-4): same cross-kind guard — split's row is
                 // stored by side B's remember, so any other kind is foreign.

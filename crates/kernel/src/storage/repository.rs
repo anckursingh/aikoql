@@ -905,9 +905,7 @@ impl KnowledgeRepository {
     }
 
     pub fn get_idem(&self, key: &str) -> KResult<Option<(KOID, u64, u64)>> {
-        Ok(self
-            .get_idem_tagged(key)?
-            .map(|(k, v, ts, _)| (k, v, ts)))
+        Ok(self.get_idem_tagged(key)?.map(|(k, v, ts, _)| (k, v, ts)))
     }
 
     /// T-70 (POC-4): the idem row with its op-kind tag. Legacy rows written
@@ -920,7 +918,11 @@ impl KnowledgeRepository {
                 let k = d.koid()?;
                 let v = d.u64()?;
                 let ts = d.u64()?;
-                let kind = if d.remaining() >= 1 { Some(d.u8()?) } else { None };
+                let kind = if d.remaining() >= 1 {
+                    Some(d.u8()?)
+                } else {
+                    None
+                };
                 Ok(Some((k, v, ts, kind)))
             }
             None => Ok(None),

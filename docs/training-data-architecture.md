@@ -2332,3 +2332,40 @@ unscoped-admin CHANGESET returns all three labeled
 tenant_a/tenant_b/null, the tenant_a-scoped call holds only its own
 labeled row (T-66 strict isolation), and a plain scoped MATCH row
 carries the same label.
+
+## 74. Idempotency rows carry their op kind — T-70 (POC-4)
+
+T-52 scoped the idempotency namespace per tenant, and T-57 made
+`batch` carry supersede/retract/tenant/idempotency — but the idem
+row stores only (koid, version, commit_ts). An op-kind tag is
+missing, so a supersede whose idempotency_key collides with a prior
+remember's key (same tenant scope) hits the row and replays the
+foreign remember cell as its successor. `tool_batch` then appends
+that foreign koid as the next `$N.koid` handle, every later `$N`
+resolves one entry early, and the misaligned writes target the wrong
+tenant — ACCESS_DENIED, the POC's arm C failure shape.
+
+The row's job is exact-once replay, and replay needs to know WHAT
+it replays. T-70 appends a trailing op-kind tag byte to the idem
+row: IDEM_KIND_REMEMBER (0) or IDEM_KIND_SUPERSEDE (1). The decoder
+is lenient — legacy 3-field rows decode with kind None and replay
+exactly as before, so re-sends against a pre-fix DB still converge
+on their original outcome. A same-scope hit whose kind differs from
+the applying op fails loudly with the named IDEMPOTENCY_CONFLICT
+(KError::IdempotencyConflict); the op does not execute and the batch
+advances no handle, so the `$N` table can never desync.
+
+The guard sits at all three replay sites — remember_locked,
+supersede_composition and split (split's idem row is stored by side
+B's remember, so its guard expects the remember kind) — and same-kind
+hits still converge, leaving T-57's re-send contract untouched.
+POC option (b), "advance the handle table only on minted koids",
+was rejected: replayed ops must still advance the table or a
+re-sent batch's later `$N` refs stop resolving.
+
+Pin: `t70_batch_idem_key_conflict_fails_loudly` (mcp_real_world) —
+the POC's 5-op batch (remember key=K, remember, supersede $2 key=K,
+remember tenant_b, supersede $3): the colliding supersede fails with
+IDEMPOTENCY_CONFLICT and no handle advances, the tenant_b supersede
+targets its own row; the symmetric arm (a remember reusing a
+supersede's key) fails the same way.
