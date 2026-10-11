@@ -3581,6 +3581,104 @@ fn p3_004_shape8_native_changeset() {
     let _ = std::fs::remove_dir_all(&db);
 }
 
+// T-69 (POC T-67 follow-up, LOW): CHANGESET result rows carry no tenant
+// field — an unscoped call's rows are unlabeled, so the eval must issue
+// per-tenant scoped calls and rebuild the unscoped set by multiset
+// remainder. Every Objects row must carry its row's tenant (null for a
+// tenantless row), so one unscoped call assembles tenant-prefixed results
+// directly.
+#[test]
+fn t69_changeset_rows_carry_tenant() {
+    let db = tmp_db("t69-cs-tenant");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let r_a = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_x", "value": "v1"}
+        }),
+    );
+    let r_b = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_b",
+            "properties": {"key": "dev_y", "value": "v2"}
+        }),
+    );
+    let r_z = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device",
+            "properties": {"key": "dev_z", "value": "v3"}
+        }),
+    );
+    // The window closes at the last mint's commit instant: created_ms <=
+    // commit_ts of the same op, so (0, wall_b] catches all three rows.
+    let wall_b = r_z["commit_ts"].as_u64().unwrap();
+
+    // One unscoped-admin call labels every row: tenant_a, tenant_b, and
+    // the tenantless row as null.
+    let q = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin",
+            "query": format!("MATCH device CHANGESET BETWEEN 0 AND {wall_b} RETURN *")
+        }),
+    );
+    let rows = q["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results array: {q}"));
+    assert_eq!(rows.len(), 3, "the window must hold all three mints: {q}");
+    for row in rows {
+        let key = row["properties"]["key"].as_str().unwrap();
+        match key {
+            "dev_x" => assert_eq!(
+                row["tenant"], json!("tenant_a"),
+                "row {key} must be labeled with its tenant: {q}"
+            ),
+            "dev_y" => assert_eq!(
+                row["tenant"], json!("tenant_b"),
+                "row {key} must be labeled with its tenant: {q}"
+            ),
+            "dev_z" => assert!(
+                row["tenant"].is_null(),
+                "the tenantless row must be labeled null, not omitted: {q}"
+            ),
+            other => panic!("unexpected row key {other}: {q}"),
+        }
+    }
+
+    // Strict isolation holds (T-66): the scoped call returns only its own
+    // row, and that row carries the same label.
+    let qa = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device CHANGESET BETWEEN 0 AND {wall_b} RETURN *")
+        }),
+    );
+    let rows_a = qa["results"].as_array().unwrap();
+    assert_eq!(rows_a.len(), 1, "scoped changeset: {qa}");
+    assert_eq!(rows_a[0]["tenant"], json!("tenant_a"), "scoped row label: {qa}");
+
+    // The label is the Objects row surface, not a CHANGESET special case:
+    // a plain scoped MATCH row carries it too.
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    let mrows = m["results"].as_array().unwrap();
+    assert_eq!(mrows.len(), 1, "plain scoped match: {m}");
+    assert_eq!(mrows[0]["tenant"], json!("tenant_a"), "match row label: {m}");
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
 // T-55 (POC-3 P3-009 MEDIUM): a session pinned with no tenant sees ALL
 // tenants' rows — the read side fails OPEN when the client forgets the
 // tenant pin. A tenant-less session must see nothing tenant-scoped; only an
