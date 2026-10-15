@@ -1,0 +1,27 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.67s
+     Running unittests src\main.rs (target\debug\deps\aikoql_mcp-20a3986fbfc0d4b9.exe)
+
+running 1 test
+test tests::s07_rest_query_aligns_with_mcp_for_stored_unregistered_types ... FAILED
+
+failures:
+
+---- tests::s07_rest_query_aligns_with_mcp_for_stored_unregistered_types stdout ----
+
+thread 'tests::s07_rest_query_aligns_with_mcp_for_stored_unregistered_types' (344) panicked at crates\services\api\mcp\src\tests.rs:1092:5:
+the studio must agree with MCP on a stored type: Err("AIKOQL1030: unknown type 's7_thing' at line 0, column 0. Hint: register the type via SchemaRegistry or an Ontology KO (Studio: Ontology → Auto-Discover)")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::s07_rest_query_aligns_with_mcp_for_stored_unregistered_types
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 82 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

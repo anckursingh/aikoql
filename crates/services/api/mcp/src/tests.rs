@@ -1030,3 +1030,71 @@ fn s08_discover_ontology_hot_reloads_the_compile_registry() {
     let _ = std::fs::remove_dir_all(&db);
     let _ = std::fs::remove_file(format!("{db}.audit.log"));
 }
+
+// POC-4 S-7: REST /api/aikoql validated every type against an empty
+// SchemaRegistry + whatever ontology existed, while the MCP tool compiled
+// without schema validation — the identical query died in the studio with
+// AIKOQL1030 and worked over MCP. The two paths must agree.
+#[test]
+fn s07_rest_query_aligns_with_mcp_for_stored_unregistered_types() {
+    let db = tmp_db("s07");
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    crate::tools::tool_remember(
+        &k,
+        &serde_json::json!({
+            "subject": "admin", "roles": ["admin"], "type_name": "s7_thing",
+            "properties": {"x": 1},
+        }),
+    )
+    .expect("remember");
+
+    // The MCP path is the reference: a stored type compiles without any
+    // registry.
+    let mcp = crate::tools::tool_aikoql(
+        &k,
+        &serde_json::json!({
+            "subject": "admin", "roles": ["admin"],
+            "query": "MATCH s7_thing RETURN *",
+        }),
+    )
+    .expect("mcp query");
+    assert!(
+        mcp["results"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false),
+        "mcp must return the stored row: {mcp}"
+    );
+
+    // The studio path must agree with MCP on the same KB and query.
+    let subject = crate::Subject {
+        name: "admin".into(),
+        roles: vec!["admin".into()],
+        tenant: None,
+    };
+    let empty = crate::OntologyRegistry::empty();
+    let rest = crate::http::aikoql_endpoint(
+        &k,
+        "MATCH s7_thing RETURN *",
+        &subject,
+        None,
+        &empty,
+    );
+    assert!(
+        rest.is_ok(),
+        "the studio must agree with MCP on a stored type: {rest:?}"
+    );
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+    let _ = std::fs::remove_file(format!("{db}.audit.log"));
+}

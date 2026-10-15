@@ -1,0 +1,8 @@
+{
+  "id": "s07-compile-path-alignment",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp -- s07_",
+  "captured_at": "2026-10-15T11:10:27Z",
+  "captured_head": "5be5b13f12c920d7f296d32b43cbc31149666441",
+  "exit_code": 101
+}
