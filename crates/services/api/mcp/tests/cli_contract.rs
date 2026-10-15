@@ -305,7 +305,7 @@ fn cl01b_error_code_source_completeness() {
             tags.push(tag);
         }
     }
-    assert_eq!(tags.len(), 15, "kernel-tag extraction drifted: {tags:?}");
+    assert_eq!(tags.len(), 16, "kernel-tag extraction drifted: {tags:?}");
     for tag in &tags {
         assert!(
             doc.contains(tag),

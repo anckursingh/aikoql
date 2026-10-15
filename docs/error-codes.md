@@ -71,6 +71,7 @@ above (e.g. `NOT_FOUND: <koid>` → NOT_FOUND via the "not_found" keyword).
 | CANCELLED | streaming plan cancelled mid-scan (P5-M4) |
 | INDEX_LAG_EXCEEDED | index behind the journal |
 | JOB_REJECTED | async job refused |
+| IDEMPOTENCY_CONFLICT | idempotency-key reuse across op kinds in one scope (T-70) |
 | STORE | storage engine error |
 | CODEC | serialization error |
 | RETRYABLE | similarity arm: query embedded but no in-scope KO carries an embedding yet |
