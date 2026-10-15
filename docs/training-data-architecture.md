@@ -2514,3 +2514,31 @@ the corrected hint reaches every error surface with no studio change
 Pin: `s09_unknown_type_hint_names_the_real_registration_paths` (a
 `MATCH p4d_fact` against a registry without it → the hint contains
 SchemaRegistry + Ontology + Auto-Discover and no CREATE TYPE).
+
+## 80. Ontology registry hot-reload and the editor's 1030 hint — S-8 (POC-4)
+
+The OntologyRegistry was a startup snapshot: main.rs loaded it once
+into an immutable `Arc` and the REST compile path read that snapshot
+forever. Auto-Discover saved a perfectly good Ontology KO, but the
+query editor kept failing with AIKOQL1030 until a server restart —
+and the error surface never mentioned discovery, so a fresh KB looked
+like a dead end.
+
+The active registry now lives in a process-wide slot
+(`OnceLock<RwLock<Arc<OntologyRegistry>>>`). One shared
+`load_ontology_registry` helper (the old startup block: manual
+ontologies preferred over auto-discovered, latest by commit_ts) feeds
+all three publisher sites: startup, the discover tool, and REST
+remembers of `type_name: "Ontology"` — the studio's manual Save
+flow. `aikoql_endpoint` prefers the slot over the startup snapshot it
+is handed, which keeps every existing caller/tests on the fallback
+path (they pass an explicit snapshot and never install). The query
+editor's AIKOQL1030 error surface appends "type not registered — run
+Ontology → Auto-Discover", turning the error into the workflow.
+
+Pins: `s08_discover_ontology_hot_reloads_the_compile_registry` (a
+stored p4d_fact row → the studio query fails before discovery;
+`tool_discover_ontology`; the same endpoint then resolves through the
+reloaded registry with no restart) and
+`s08_editor_1030_error_surface_points_at_auto_discover` (STUDIO_HTML
+pin on the editor hint).
