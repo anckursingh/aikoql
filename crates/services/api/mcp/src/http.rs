@@ -663,15 +663,30 @@ pub(crate) fn aikoql_endpoint(
                                         // Auto-Discover / REST Ontology remembers) over the startup snapshot.
     let hot = current_ontology();
     let ont = hot.as_deref().unwrap_or(ontology);
-    let plans = aikoql_compiler::parser::compile_with_ontology_scoped(
+    let plans = match aikoql_compiler::parser::compile_with_ontology_scoped(
         query,
         &subject.name,
         &subject.roles,
         subject.tenant.as_deref(),
         &schema,
         Some(ont),
-    )
-    .map_err(|e| e.to_string())?;
+    ) {
+        Ok(plans) => plans,
+        // S-7 (POC-4): the strict compile rejects a stored-but-unregistered
+        // type with AIKOQL1030 (stable code, MRFC-0010 §10) while the MCP
+        // tool compiles without schema validation — the studio must agree
+        // with MCP on the same KB. Any other error stays fail-closed.
+        Err(e) if e.starts_with("AIKOQL1030") => {
+            vec![aikoql_compiler::parser::compile_scoped(
+                query,
+                &subject.name,
+                &subject.roles,
+                subject.tenant.as_deref(),
+            )
+            .map_err(|e| e.to_string())?]
+        }
+        Err(e) => return Err(e),
+    };
     // Execute all plans and merge results.
     let mut all_kos: Vec<serde_json::Value> = Vec::new();
     for plan in &plans {

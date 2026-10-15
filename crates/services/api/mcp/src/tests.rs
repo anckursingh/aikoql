@@ -1007,19 +1007,27 @@ fn s08_discover_ontology_hot_reloads_the_compile_registry() {
         tenant: None,
     };
     let empty = crate::OntologyRegistry::empty();
-    // Precondition: the exact POC dead end — the studio query fails while no
-    // ontology is registered.
-    let before =
-        crate::http::aikoql_endpoint(&k, "MATCH p4d_fact RETURN *", &subject, None, &empty);
+    // Precondition: before discovery no installed registry resolves the
+    // type. (S-7 superseded the old "query must fail first" pin — the
+    // compile-path fallback makes an unregistered query succeed regardless,
+    // so this test now pins the slot republish itself.)
     assert!(
-        before.is_err(),
-        "precondition: the query must fail before discovery: {before:?}"
+        crate::http::current_ontology()
+            .as_deref()
+            .map(|ont| ont.resolve_class("p4d_fact").is_none())
+            .unwrap_or(true),
+        "precondition: no registry must resolve p4d_fact before discovery"
     );
 
     // Auto-Discover (the studio button's route) must republish the registry.
     crate::tools::tool_discover_ontology(&k).expect("discover");
 
-    // No restart: the same endpoint resolves through the reloaded registry.
+    // No restart: the hot-reloaded registry in the slot resolves the type.
+    let hot = crate::http::current_ontology().expect("slot populated");
+    assert!(
+        hot.resolve_class("p4d_fact").is_some(),
+        "discover must republish the registry so p4d_fact resolves"
+    );
     let after = crate::http::aikoql_endpoint(&k, "MATCH p4d_fact RETURN *", &subject, None, &empty);
     assert!(
         after.is_ok(),
@@ -1082,13 +1090,7 @@ fn s07_rest_query_aligns_with_mcp_for_stored_unregistered_types() {
         tenant: None,
     };
     let empty = crate::OntologyRegistry::empty();
-    let rest = crate::http::aikoql_endpoint(
-        &k,
-        "MATCH s7_thing RETURN *",
-        &subject,
-        None,
-        &empty,
-    );
+    let rest = crate::http::aikoql_endpoint(&k, "MATCH s7_thing RETURN *", &subject, None, &empty);
     assert!(
         rest.is_ok(),
         "the studio must agree with MCP on a stored type: {rest:?}"
