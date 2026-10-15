@@ -524,6 +524,85 @@ mod tests {
     use super::*;
 
     #[test]
+    fn s04_get_prove_reads_koid_from_query_string() {
+        // POC-4 S-4: the studio calls GET /api/v1/prove?koid=…; the REST
+        // layer must fold query args into tool args (GET carries no body) or
+        // the call dies with "missing argument: koid".
+        let db = std::env::temp_dir().join(format!("mnemo-s04-prove-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&db);
+        let k = crate::Kernel::open(
+            std::sync::Arc::new(
+                aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                    .expect("open store"),
+            ),
+            std::sync::Arc::new(crate::SystemClock),
+            0,
+        )
+        .expect("open kernel");
+        let r = k
+            .remember(crate::RememberRequest::create(
+                crate::Subject::with_roles("admin", &["admin"]),
+                crate::Metadata {
+                    type_name: "Fact".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+            ))
+            .expect("remember");
+        let koid = r.koid.to_hex();
+
+        let sessions = Mutex::new(HashMap::new());
+        sessions.lock().unwrap().insert(
+            "tok".into(),
+            crate::HttpSession {
+                username: "admin".into(),
+                roles: vec!["admin".into()],
+                created: std::time::Instant::now(),
+                ttl_secs: 86_400,
+            },
+        );
+        let rate = Mutex::new(crate::rate_limiter::RateLimiter::new(false, 1));
+
+        let (status, _ct, body) = route_v1(
+            "GET",
+            &format!("/api/v1/prove?koid={koid}"),
+            "",
+            &k,
+            &db.to_string_lossy(),
+            &sessions,
+            Some("tok".into()),
+            &rate,
+            None,
+        );
+        drop(k);
+        let _ = std::fs::remove_dir_all(&db);
+        let _ = std::fs::remove_file(format!("{}.audit.log", db.to_string_lossy()));
+
+        assert_eq!(
+            status, "200 OK",
+            "GET prove with ?koid= must verify the chain, got: {body}"
+        );
+        let j: serde_json::Value = serde_json::from_str(&body).expect("json body");
+        assert_eq!(j["data"]["chain_valid"], true, "chain must verify: {body}");
+    }
+
+    #[test]
+    fn s04_studio_prove_call_carries_the_koid() {
+        // POC-4 S-4: the studio's Prove button must send the inspected KOID
+        // and guard the empty-input case instead of a blind GET /api/v1/prove.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("/api/v1/prove?koid=' + encodeURIComponent"),
+            "studio prove must carry the koid in the query string"
+        );
+        assert!(
+            html.contains("Enter a KOID"),
+            "studio prove must guard the empty-input case"
+        );
+    }
+
+    #[test]
     fn with_principal_token_overrides_body() {
         let sessions = Mutex::new(HashMap::new());
         sessions.lock().unwrap().insert(

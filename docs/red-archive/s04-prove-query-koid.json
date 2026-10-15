@@ -1,0 +1,8 @@
+{
+  "id": "s04-prove-query-koid",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp s04_",
+  "captured_at": "2026-10-15T10:22:01Z",
+  "captured_head": "76f61b990a3f6b52b393b4aff90135ba86af8b18",
+  "exit_code": 101
+}
