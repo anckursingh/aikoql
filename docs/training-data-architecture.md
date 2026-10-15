@@ -2613,3 +2613,25 @@ still surface in place.
 
 Pin: `s10_api_helper_401_shows_login_overlay` (STUDIO_HTML carries the
 401 branch, the expiry message, and the showLogin() return).
+
+## 84. Discovered ontology carries temporal relationships — S-11 (POC-4)
+
+Auto-Discover reported "Classes (1), Relationships (0)" on the
+device-identity corpus: `discover_ontology` derived relationships only
+from `ko.relationships` arrays, and the corpus stores its supersession
+as epistemic state (S-2), not as RelationshipRefs — so the ontology
+could not express historical linking at all.
+
+Discovery now lifts the S-2 instance heuristic to the type level. For
+each superseded KO carrying `valid_to_asserted`, it scans for the
+successor — same tenant, same `case_id` and `kind`, and the
+successor's `valid_from` equal to the predecessor's
+`valid_to_asserted` — and records two relationships: `retracts` (old
+type → new type) and `supersedes` (new type → old type). Explicit
+RelationshipRef-derived relationships are untouched, and the first
+(domain, range) pair wins per relationship name (same-type pairs, the
+corpus's shape, are unambiguous).
+
+Pin: `s11_discover_infers_temporal_relationships` (a superseded and a
+successor identity_link pair → the discovered def carries retracts and
+supersedes with domain and range set).
