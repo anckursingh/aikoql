@@ -2369,3 +2369,40 @@ remember tenant_b, supersede $3): the colliding supersede fails with
 IDEMPOTENCY_CONFLICT and no handle advances, the tenant_b supersede
 targets its own row; the symmetric arm (a remember reusing a
 supersede's key) fails the same way.
+
+## 75. WHERE reads one boolean expression with SQL precedence — T-71 (POC-4)
+
+`WHERE a == X OR b == Y` compiled but silently matched nothing. The
+parser's MATCH loop treated `Token::Or` as a bare clause separator:
+every clause lowered to one flat comparison, `IrOp::Filter` AND-combined
+its predicate list, and the flatten step had no `ast::Predicate::Or`
+mapping at all — the disjunction was dropped on the floor. A device
+fingerprint filter built as "this subject OR that device" came back
+empty while each side alone matched rows.
+
+T-71 makes one WHERE read ONE boolean expression: `parse_or_expr` over
+`parse_and_expr` over `parse_predicate`, with SQL precedence (AND binds
+tighter than OR — `a == 1 OR b == 2 AND c == 3` parses as
+`Or(Eq a, And(Eq b, Eq c))`). The kernel predicate becomes a real tree —
+`Predicate::Cmp { property, op, value } | And | Or` — with the six
+constructor fns preserved so every existing call site compiles unchanged,
+and an `as_cmp` accessor for the one extraction callers actually need.
+One recursive `row_matches_one` evaluates the tree; the materializing
+Filter and the streaming FilterOperator share it, so the two executors
+cannot drift.
+
+AND keeps flattening into the Filter's predicate list — that preserves
+the property-index assist for conjunctive queries. The index-assist
+sites (CBO `first_eq_after`/`scan_assist`, streaming adjacent-Eq) bind
+only to Cmp-Eq nodes: a boolean branch is never answered from an index,
+so an OR query plans a full scan and the tree evaluates every row —
+the correct, complete answer.
+
+Pins: `where_or_parses_to_a_disjunction` (parser mod tests — one Or
+node per WHERE plus the precedence shape) and
+`t71_where_or_returns_the_union` (mcp_real_world — the POC's exact
+shape returns {s1/d-0, s2/d-1}, the AND regression stays conjunctive,
+a one-sided OR returns its matching disjunct). Contract follow-through:
+the fuzz/golden/grammar/koql parser pins and the `plan_golden.json`
+byte pin regenerate to the new shape (one And/Or node per WHERE, Cmp
+serialization on the wire).
