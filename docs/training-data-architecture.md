@@ -2495,3 +2495,22 @@ Pins: `s01_graph_nodes_style_from_epistemic_status_not_lifecycle` and
 epistemic_status styling gate, `borderDashes`, `epistemic_history`,
 the `valid_to_asserted` heuristic, the `retracts` label, the detail=1
 request).
+
+## 79. AIKOQL1030 hint names the real registration paths — S-9 (POC-4)
+
+The unknown-type diagnostic advised `register it with CREATE TYPE
+{name}` — a statement that does not exist. AikoQL's `CREATE` is
+insert-form (`CREATE <entity> <props>`); types enter through a
+SchemaRegistry (compile-time) or an Ontology KO (data-side, built by
+the studio's Ontology → Auto-Discover flow). Following the phantom
+advice changed nothing.
+
+The hint now names both real paths: "register the type via
+SchemaRegistry or an Ontology KO (Studio: Ontology → Auto-Discover)".
+Because the studio's editor renders the formatted diagnostic verbatim,
+the corrected hint reaches every error surface with no studio change
+(S-8 builds the editor-side flow on top of it).
+
+Pin: `s09_unknown_type_hint_names_the_real_registration_paths` (a
+`MATCH p4d_fact` against a registry without it → the hint contains
+SchemaRegistry + Ontology + Auto-Discover and no CREATE TYPE).
