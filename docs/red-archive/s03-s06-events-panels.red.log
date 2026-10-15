@@ -1,0 +1,41 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.69s
+     Running unittests src\main.rs (target\debug\deps\aikoql_mcp-20a3986fbfc0d4b9.exe)
+
+running 3 tests
+test api_rest::tests::s03_studio_panels_render_events_with_kind_actor_note_and_formatted_times ... FAILED
+test api_rest::tests::s04_studio_prove_renders_the_response_fields ... FAILED
+test tests::s03_trace_events_carry_audit_hash_and_versions_carry_valid_from ... FAILED
+
+failures:
+
+---- api_rest::tests::s03_studio_panels_render_events_with_kind_actor_note_and_formatted_times stdout ----
+
+thread 'api_rest::tests::s03_studio_panels_render_events_with_kind_actor_note_and_formatted_times' (17292) panicked at crates\services\api\mcp\src\api_rest.rs:631:9:
+studio needs a time formatter
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- api_rest::tests::s04_studio_prove_renders_the_response_fields stdout ----
+
+thread 'api_rest::tests::s04_studio_prove_renders_the_response_fields' (30244) panicked at crates\services\api\mcp\src\api_rest.rs:661:9:
+prove panel must show the chain_valid verdict
+
+---- tests::s03_trace_events_carry_audit_hash_and_versions_carry_valid_from stdout ----
+
+thread 'tests::s03_trace_events_carry_audit_hash_and_versions_carry_valid_from' (30372) panicked at crates\services\api\mcp\src\tests.rs:964:10:
+events must carry audit_hash
+
+
+failures:
+    api_rest::tests::s03_studio_panels_render_events_with_kind_actor_note_and_formatted_times
+    api_rest::tests::s04_studio_prove_renders_the_response_fields
+    tests::s03_trace_events_carry_audit_hash_and_versions_carry_valid_from
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 74 filtered out; finished in 0.54s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

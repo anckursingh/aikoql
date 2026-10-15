@@ -925,3 +925,53 @@ fn get_by_idem_tool_resolves_idempotency() {
     drop(k);
     let _ = std::fs::remove_dir_all(&db);
 }
+
+// POC-4 S-3/S-6: the provenance + timeline panels render events[] — the
+// wire must carry the event's audit_hash and the version's asserted
+// event-time (valid_from) for that to be possible at all.
+#[test]
+fn s03_trace_events_carry_audit_hash_and_versions_carry_valid_from() {
+    let db = tmp_db("s03");
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let t0 = 1_700_000_000_000u64;
+    let r = crate::tools::tool_remember(
+        &k,
+        &serde_json::json!({
+            "subject": "admin", "roles": ["admin"], "type_name": "device",
+            "properties": {"device_id": "s03"}, "valid_from": t0,
+        }),
+    )
+    .expect("remember");
+    let koid = r["koid"].as_str().expect("koid").to_string();
+    let tr = crate::tools::tool_trace(
+        &k,
+        &serde_json::json!({"subject": "admin", "roles": ["admin"], "koid": koid}),
+    )
+    .expect("trace");
+
+    let ev = &tr["events"][0];
+    let ah = ev["audit_hash"]
+        .as_str()
+        .expect("events must carry audit_hash");
+    assert_eq!(ah.len(), 64, "audit_hash must be 64 hex chars, got: {ah}");
+    assert!(ah.chars().all(|c| c.is_ascii_hexdigit()), "hex only: {ah}");
+    assert_eq!(ev["kind"], "Created");
+    assert_eq!(ev["actor"], "admin");
+    assert_eq!(
+        tr["versions"][0]["valid_from"], t0,
+        "versions must carry the asserted event-time: {tr}"
+    );
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+    let _ = std::fs::remove_file(format!("{db}.audit.log"));
+}

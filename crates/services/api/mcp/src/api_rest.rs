@@ -623,6 +623,52 @@ mod tests {
     }
 
     #[test]
+    fn s03_studio_panels_render_events_with_kind_actor_note_and_formatted_times() {
+        // POC-4 S-3/S-6: provenance + timeline must render events[] with
+        // kind/actor/note/audit_hash and human-readable times (ISO + relative),
+        // plus the event-time column when the version carries valid_from.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("function fmtTime("),
+            "studio needs a time formatter"
+        );
+        assert!(
+            html.contains("data.events || data.versions"),
+            "panels must prefer events[] over versions[]"
+        );
+        assert!(
+            html.contains("event time: '"),
+            "timeline must label the event-time column"
+        );
+        assert!(html.contains("'Actor: '"), "provenance must show the actor");
+        assert!(html.contains("'Note: '"), "provenance must show the note");
+        assert!(
+            html.contains("e.audit_hash"),
+            "provenance must show the audit hash"
+        );
+        assert!(
+            html.contains("'s ago'"),
+            "formatter must render relative time"
+        );
+    }
+
+    #[test]
+    fn s04_studio_prove_renders_the_response_fields() {
+        // POC-4 S-4 follow-through: the prove panel must render the
+        // response's actual fields — the chain_valid verdict and the
+        // hex-joined head hash — not fields the response never carries.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("chain_valid"),
+            "prove panel must show the chain_valid verdict"
+        );
+        assert!(
+            html.contains("padStart(2,'0')"),
+            "prove panel must hex-join the head-hash array"
+        );
+    }
+
+    #[test]
     fn with_principal_token_overrides_body() {
         let sessions = Mutex::new(HashMap::new());
         sessions.lock().unwrap().insert(
