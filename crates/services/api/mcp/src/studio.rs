@@ -634,6 +634,13 @@ async function api(url) {
   const sep = url.includes('?') ? '&' : '?';
   const full = url + (authToken ? sep + 'token=' + encodeURIComponent(authToken) : '');
   const res = await fetch(full);
+  // S-10 (POC-4): a 401 means the server restarted and dropped the session —
+  // return to the login overlay instead of leaking the raw body into a panel.
+  if (res.status === 401) {
+    showLogin();
+    document.getElementById('login-error').textContent = 'Session expired — sign in again';
+    throw new Error('session expired');
+  }
   if (!res.ok) {
     let msg = 'HTTP ' + res.status;
     try { const body = await res.json(); if (body.error) msg = body.error; } catch(_) {}
