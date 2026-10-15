@@ -2406,3 +2406,25 @@ a one-sided OR returns its matching disjunct). Contract follow-through:
 the fuzz/golden/grammar/koql parser pins and the `plan_golden.json`
 byte pin regenerate to the new shape (one And/Or node per WHERE, Cmp
 serialization on the wire).
+
+## 76. REST GET routes carry tool args in the query string — S-4 (POC-4)
+
+The studio's Prove Integrity button called `GET /api/v1/prove` with no
+koid and died with 400 "missing argument: koid" on every click. Two
+halves to the finding: the v1 REST router stripped `?koid=…` before
+routing and handed the tool an empty body (`args()` parses the body,
+and a GET carries none), and the studio JS never sent the koid anyway.
+
+`route_v1` now folds a GET's query pairs into a JSON args body before
+routing — `?koid=<hex>` becomes `{"koid":"<hex>"}` — so every tool
+reads the same args shape regardless of method. The auth `token` pair
+is excluded (it is consumed by `extract_token`, never by a tool), and
+the path-embedded GETs (trace/get/explain) keep their shape — their
+handlers build the args from the path segment. `verifyProvenance`
+sends `?koid=` + `encodeURIComponent` of the inspected KOID and guards
+the empty input with a hint instead of a doomed request.
+
+Pins: `s04_get_prove_reads_koid_from_query_string` (a remembered Fact
+proves `chain_valid: true` through the route) and
+`s04_studio_prove_call_carries_the_koid` (the embedded STUDIO_HTML
+carries the koid-carrying call and the empty-input guard).
