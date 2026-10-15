@@ -675,6 +675,48 @@ mod tests {
     }
 
     #[test]
+    fn s01_graph_nodes_style_from_epistemic_status_not_lifecycle() {
+        // POC-4 S-1: retracted rows keep lifecycle.state "draft" — the graph
+        // must style nodes from extensions.epistemic_status (superseded →
+        // dashed border + muted palette) and surface the epistemic_history
+        // transition in the tooltip.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("n.extensions&&n.extensions.epistemic_status"),
+            "node styling must read extensions.epistemic_status"
+        );
+        assert!(
+            html.contains("borderDashes:[4,3]"),
+            "superseded nodes must get a dashed border"
+        );
+        assert!(
+            html.contains("epistemic_history"),
+            "the tooltip must surface the epistemic transition"
+        );
+    }
+
+    #[test]
+    fn s02_graph_derives_virtual_retraction_edges() {
+        // POC-4 S-2: retraction creates no SUPERSEDES edge (B3-3) — the
+        // studio derives virtual "retracts" edges: same tenant + case_id +
+        // kind, with the successor's valid_from equal to the predecessor's
+        // valid_to_asserted.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("valid_to_asserted"),
+            "the virtual-edge heuristic must key on valid_to_asserted"
+        );
+        assert!(
+            html.contains("label:'retracts'"),
+            "virtual edges must be labeled retracts"
+        );
+        assert!(
+            html.contains("params.push('detail=1')"),
+            "the graph load must request detail payloads (extensions)"
+        );
+    }
+
+    #[test]
     fn with_principal_token_overrides_body() {
         let sessions = Mutex::new(HashMap::new());
         sessions.lock().unwrap().insert(

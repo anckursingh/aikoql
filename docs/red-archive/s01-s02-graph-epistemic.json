@@ -1,0 +1,8 @@
+{
+  "id": "s01-s02-graph-epistemic",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp -- s01_graph s02_graph",
+  "captured_at": "2026-10-15T10:48:59Z",
+  "captured_head": "8636f609db94dd68bfedbd38bb44c83a7c5d7cfd",
+  "exit_code": 101
+}
