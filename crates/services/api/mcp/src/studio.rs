@@ -353,7 +353,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
         <div class="card">
           <div class="query-editor-label">
             <span>Aikoql Query</span>
-            <span>Ctrl+Enter to run · comma-separated properties · SQL-style highlighting</span>
+            <span>Ctrl+Enter to run · AS_OF = wall-clock MVCC · BETWEEN = event-time · comma-separated properties · SQL-style highlighting</span>
           </div>
           <div id="query-editor"></div>
           <div class="query-toolbar">
