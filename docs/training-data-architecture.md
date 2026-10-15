@@ -2673,3 +2673,28 @@ keeps its opacity-only transition, which moves no layout.
 Pin: `s13_sidebar_does_not_animate_its_width` (STUDIO_HTML carries no
 `transition: width`; the `#sidebar:hover { width: 190px; }` expansion
 stays).
+
+## 87. Test scratch DBs and audit sidecars die with the test thread — T-72 (POC-4)
+
+The integration suites created their scratch DBs directly in the
+process temp dir with no Drop guard, and the server's audit log is
+written next to every DB by design (`audit.rs` appends to
+`{db_path}.audit.log`). The result: ~510 leftover items in %TEMP% over
+twelve days — DB dirs plus their audit sidecars, on success and
+failure alike — and the audit contents (agent ids, tool calls,
+outcomes) accumulating in a world-readable location.
+
+The suites now share the v2 pattern: a `tests/common` TLS `TempSweeper`
+registers every scratch path a test thread creates (cli_contract m12,
+index_tool m17b, server_lifecycle sv DB and marker), and the sweep —
+which runs when the thread exits, even on panic — removes the path and
+any `{stem}.`-prefixed sidecar, so the audit log vanishes with the DB.
+The bin's own unit sweeper (src/tests.rs) gains the same sidecar
+sweep, and the met005/met006 scratch dirs register with it. Explicit
+end-of-test cleanups stay as the fast path; the sweep is the
+panic-safe backstop.
+
+Pin: `t72_scratch_dbs_register_for_sweep_and_the_sweep_removes_sidecars`
+(behavioral: the sweeper removes a registered dir and its `.audit.log`
+sidecar; structural: all three suite sources call
+`register_temp_path`).
