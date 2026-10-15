@@ -653,6 +653,19 @@ async function apiPost(url, body) {
   return res.json();
 }
 
+// Epoch millis → "YYYY-MM-DD HH:MM:SS (13s ago)".
+function fmtTime(ms) {
+  if (ms === null || ms === undefined || !Number.isFinite(Number(ms))) return '?';
+  const iso = new Date(Number(ms)).toISOString().replace('T', ' ').slice(0, 19);
+  const secs = Math.round((Date.now() - Number(ms)) / 1000);
+  const ago = secs < 0 ? 'future'
+    : secs < 60 ? secs + 's ago'
+    : secs < 3600 ? Math.round(secs / 60) + 'm ago'
+    : secs < 86400 ? Math.round(secs / 3600) + 'h ago'
+    : Math.round(secs / 86400) + 'd ago';
+  return iso + ' (' + ago + ')';
+}
+
 // ═══════════════════════════════════════════
 // Navigation
 // ═══════════════════════════════════════════
@@ -1376,18 +1389,23 @@ async function loadTimeline() {
   try {
     const trace = await api('/api/v1/trace/' + encodeURIComponent(koid));
     const data = trace.data || trace;
-    const versions = data.versions || data.events || [];
-    if (!versions.length) { div.innerHTML = '<div class="empty-state">No versions found for this KOID.</div>'; return; }
-    let h = '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">'+versions.length+' versions</div>';
+    // S-6: events[] carries kind/actor/note; versions[] only the version
+    // skeleton. Join by version for the asserted event-time column.
+    const events = data.events || data.versions || [];
+    const vmap = {};
+    (data.versions || []).forEach(v => { vmap[v.version] = v; });
+    if (!events.length) { div.innerHTML = '<div class="empty-state">No versions found for this KOID.</div>'; return; }
+    let h = '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">'+events.length+' versions</div>';
     h += '<div class="timeline-track">';
-    versions.forEach((v, i) => {
-      const ts = v.timestamp || v.commit_ts || '?';
-      const ver = v.version !== undefined ? 'v' + v.version : '';
-      const src = v.source || v.mutation_source || '?';
+    events.forEach((e, i) => {
+      const ver = e.version !== undefined ? 'v' + e.version : '';
+      const vf = (vmap[e.version] || {}).valid_from;
       h += '<div class="timeline-dot" style="margin-bottom:8px;">';
       h += '<span class="badge badge-cyan">' + ver + '</span> ';
-      h += '<span style="font-size:11px;">' + ts + '</span> ';
-      h += '<span style="font-size:10px;color:var(--muted);">by ' + src + '</span>';
+      h += '<span class="badge badge-purple">' + (e.kind || '') + '</span> ';
+      h += '<span style="font-size:11px;">' + fmtTime(e.commit_ts) + '</span> ';
+      if (vf) h += '<span style="font-size:10px;color:var(--muted);">event time: ' + fmtTime(vf) + '</span> ';
+      h += '<span style="font-size:10px;color:var(--muted);">by ' + (e.actor || '?') + '</span>';
       h += '</div>';
     });
     h += '</div>';
@@ -1406,15 +1424,18 @@ async function loadProvenance() {
   try {
     const trace = await api('/api/v1/trace/' + encodeURIComponent(koid));
     const data = trace.data || trace;
-    const versions = data.versions || data.events || [];
-    if (!versions.length) { div.innerHTML = '<div class="empty-state">No provenance data for this KOID.</div>'; return; }
+    // S-3: events[] carries kind/actor/note/audit_hash — versions[] only
+    // the version skeleton, which is how every row rendered "Source: ?".
+    const events = data.events || data.versions || [];
+    if (!events.length) { div.innerHTML = '<div class="empty-state">No provenance data for this KOID.</div>'; return; }
     let h = '<div class="provenance-chain">';
-    versions.forEach((v, i) => {
+    events.forEach((e, i) => {
       h += '<div class="provenance-node" style="border-left:2px solid var(--cyan);padding-left:12px;margin-bottom:12px;">';
-      h += '<div style="font-size:12px;font-weight:600;">#' + (i + 1) + ' — v' + (v.version || '?') + '</div>';
-      h += '<div style="font-size:11px;color:var(--muted);">' + (v.timestamp || v.commit_ts || '?') + '</div>';
-      h += '<div style="font-size:10px;color:var(--muted);">Source: ' + (v.source || v.mutation_source || '?') + '</div>';
-      if (v.audit_hash) h += '<div style="font-size:10px;font-family:var(--font-mono);color:var(--green);">SHA-256: ' + v.audit_hash.substring(0, 16) + '...</div>';
+      h += '<div style="font-size:12px;font-weight:600;">#' + (i + 1) + ' — v' + (e.version || '?') + ' <span class="badge badge-purple">' + (e.kind || '') + '</span></div>';
+      h += '<div style="font-size:11px;color:var(--muted);">' + fmtTime(e.commit_ts) + '</div>';
+      h += '<div style="font-size:10px;color:var(--muted);">Actor: ' + (e.actor || '?') + '</div>';
+      if (e.note) h += '<div style="font-size:10px;color:var(--muted);">Note: ' + e.note + '</div>';
+      if (e.audit_hash) h += '<div style="font-size:10px;font-family:var(--font-mono);color:var(--green);">SHA-256: ' + e.audit_hash.substring(0, 16) + '...</div>';
       h += '</div>';
     });
     h += '</div>';
@@ -1430,10 +1451,15 @@ async function verifyProvenance() {
   try {
     const proof = await api('/api/v1/prove?koid=' + encodeURIComponent(koid));
     const data = proof.data || proof;
-    div.innerHTML = '<div class="card" style="border-left:3px solid var(--green);padding:12px;">' +
-      '<div style="font-size:14px;font-weight:600;color:var(--green);">✅ Audit Chain Verified</div>' +
-      '<div style="font-size:11px;color:var(--muted);margin-top:4px;">Journal seq: ' + (data.journal_seq || '?') + '</div>' +
-      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Head: ' + ((data.head_audit_hash||'').substring(0,32)) + '...</div>' +
+    // The response carries {claim, events, chain_valid, head_audit_hash};
+    // head_audit_hash is a byte array on the wire — hex-join it.
+    const headHex = (data.head_audit_hash || []).map(b => b.toString(16).padStart(2,'0')).join('');
+    const ok = data.chain_valid;
+    div.innerHTML = '<div class="card" style="border-left:3px solid ' + (ok ? 'var(--green)' : 'var(--red)') + ';padding:12px;">' +
+      '<div style="font-size:14px;font-weight:600;color:' + (ok ? 'var(--green)' : 'var(--red)') + ';">' + (ok ? '✅ Audit Chain Verified' : '❌ Audit Chain Broken') + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);margin-top:4px;">Chain valid: ' + (ok ? 'yes' : 'no') + '</div>' +
+      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Claim: ' + (data.claim || '?') + '</div>' +
+      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Head: ' + headHex.substring(0, 32) + '...</div>' +
       '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Events: ' + ((data.events||[]).length) + ' in chain</div>' +
       '</div>';
   } catch(e) { div.innerHTML = '<div class="error-text">Chain verification failed: '+e.message+'</div>'; }

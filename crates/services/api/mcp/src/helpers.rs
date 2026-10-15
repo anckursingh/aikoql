@@ -246,6 +246,12 @@ pub(crate) fn ko_json(ko: &KnowledgeObject) -> J {
     })
 }
 
+/// 64-char lowercase hex of a 32-byte digest ([u8; 32] serializes as a JSON
+/// number array, which no UI consumer wants).
+pub(crate) fn hex32(b: &[u8; 32]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
 pub(crate) fn ke_json(ke: &KnowledgeEvent) -> J {
     json!({
         "seq": ke.seq,
@@ -254,7 +260,9 @@ pub(crate) fn ke_json(ke: &KnowledgeEvent) -> J {
         "kind": format!("{:?}", ke.kind),
         "actor": ke.actor,
         "commit_ts": commit_ts_millis(ke.commit_ts),
-        "note": ke.note
+        "note": ke.note,
+        // POC-4 S-3: the provenance panel shows the per-event audit hash.
+        "audit_hash": hex32(&ke.audit_hash)
     })
 }
 

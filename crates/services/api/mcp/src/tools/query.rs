@@ -356,7 +356,10 @@ pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
         "versions": lin.versions.iter().map(|v| json!({
             "version": v.version,
             "commit_ts": commit_ts_millis(v.commit_ts),
-            "state": v.state.to_string()
+            "state": v.state.to_string(),
+            // POC-4 S-6: the asserted event-time start, when the version
+            // carried one — the timeline's event-time column.
+            "valid_from": v.valid_from
         })).collect::<Vec<_>>(),
         "events": lin.events.iter().map(ke_json).collect::<Vec<_>>(),
         "derivation": derivation,

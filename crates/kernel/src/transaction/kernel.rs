@@ -593,6 +593,9 @@ pub struct VersionRecord {
     pub commit_ts: u64,
     pub origin: Origin,
     pub state: LifecycleState,
+    /// Asserted event-time start (`extensions.valid_from`), when the version
+    /// carried one — the timeline's event-time column (POC-4 S-6).
+    pub valid_from: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -3676,6 +3679,7 @@ impl Kernel {
                 commit_ts: ko.commit_ts,
                 origin: ko.lifecycle.origin.clone(),
                 state: ko.lifecycle.state,
+                valid_from: ko.valid_from(),
             });
         }
         let mut events = Vec::new();

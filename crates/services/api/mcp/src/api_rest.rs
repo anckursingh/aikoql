@@ -640,8 +640,14 @@ mod tests {
             html.contains("event time: '"),
             "timeline must label the event-time column"
         );
-        assert!(html.contains("'Actor: '"), "provenance must show the actor");
-        assert!(html.contains("'Note: '"), "provenance must show the note");
+        assert!(
+            html.contains(";color:var(--muted);\">Actor: '"),
+            "provenance must show the actor"
+        );
+        assert!(
+            html.contains(";color:var(--muted);\">Note: '"),
+            "provenance must show the note"
+        );
         assert!(
             html.contains("e.audit_hash"),
             "provenance must show the audit hash"
