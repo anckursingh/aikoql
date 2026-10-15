@@ -2635,3 +2635,21 @@ corpus's shape, are unambiguous).
 Pin: `s11_discover_infers_temporal_relationships` (a superseded and a
 successor identity_link pair → the discovered def carries retracts and
 supersedes with domain and range set).
+
+## 85. Metrics-only serve survives stdin EOF — S-12 (POC-4)
+
+`serve --metrics-addr` without a TCP or native listener fell into the
+stdio branch: the loop read stdin, and in a background/service context
+stdin hits EOF immediately — which the stdio contract treats as the
+shutdown signal. The process checkpointed the maintainer and exited
+clean (code 0) right after boot, so the POC had to keep the process
+alive with a `sleep 99999` pipe. A footgun for any service manager.
+
+The metrics-only case no longer reads stdin at all: main parks forever
+and the metrics thread keeps the HTTP surface up — the same
+never-returning shape as TCP mode, which equally has no shutdown-time
+maintainer checkpoint (honest ledger). Stdio mode is untouched.
+
+Pin: `sv014_metrics_only_serve_survives_stdin_eof` (spawn `serve
+--metrics-addr` with stdin closed → the process stays up through the
+poll window and `/health` answers HTTP/1.0 200).
