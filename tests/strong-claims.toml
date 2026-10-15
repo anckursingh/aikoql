@@ -83,25 +83,25 @@ evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 1315
+line = 1373
 text = "// TDD-COMP-001 (P4-M7): physical-type index — O(1) resolution"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 1320
+line = 1378
 text = "// The probe counter pins O(1) average: each lookup costs exactly ONE"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/storage/repository.rs"
-line = 720
+line = 739
 text = "/// P4-M4 — bounded predecessor lookup (TDD-KERNEL-002): the newest"
 evidence = "ker002_version_count_sweep_latency_cell"
 
 [[claim]]
 file = "crates/kernel/src/storage/repository.rs"
-line = 858
+line = 877
 text = "/// the first seq past `after_seq` — no whole-journal scan, bounded by"
 evidence = "ker003_event_replay_cell"
 
@@ -131,25 +131,25 @@ evidence = "predecessor_boundary_cases"
 
 [[claim]]
 file = "crates/kernel/src/transaction/kernel.rs"
-line = 314
+line = 338
 text = "/// Retried calls with the same key commit exactly once (MRFC-0011 req 10)."
 evidence = "t06_idempotent_retry_commits_exactly_once"
 
 [[claim]]
 file = "crates/kernel/tests/conformance.rs"
-line = 1146
+line = 1165
 text = "// regression) and every write must land exactly once."
 evidence = "t25b_concurrent_readers_and_writers_see_only_committed_state"
 
 [[claim]]
 file = "crates/kernel/tests/conformance.rs"
-line = 1202
+line = 1221
 text = "// Every write landed exactly once: 1 seed + WRITERS×UPDATES entries,"
 evidence = "t25b_concurrent_readers_and_writers_see_only_committed_state"
 
 [[claim]]
 file = "crates/kernel/tests/conformance.rs"
-line = 3691
+line = 3778
 text = "// Wait for completion (bounded poll — the wait itself never journals)."
 evidence = "t11_class_b_admission_is_audited_and_out_of_the_class_a_stream"
 
@@ -185,7 +185,7 @@ evidence = "w2_conc_005_concurrent_overlapping_temporal_updates_keep_one_head"
 
 [[claim]]
 file = "crates/kernel/tests/transactions.rs"
-line = 836
+line = 893
 text = "// B appears exactly once and is stamped exactly once (one version bump)."
 evidence = "sweep_collapses_duplicate_edges_to_one_stamp"
 
