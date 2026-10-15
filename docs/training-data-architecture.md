@@ -2542,3 +2542,30 @@ stored p4d_fact row → the studio query fails before discovery;
 reloaded registry with no restart) and
 `s08_editor_1030_error_surface_points_at_auto_discover` (STUDIO_HTML
 pin on the editor hint).
+
+## 81. AS_OF and BETWEEN timebases — ADR + editor label (S-5, POC-4)
+
+Two temporal clauses, two different timebases, one shared "time
+travel" label. AS_OF is MVCC over wall-clock `commit_ts` (HLC packed,
+counter bits included — T-33; the asserted `valid_to` filter rides on
+top — T-38; the journal-seq domain — T-58). BETWEEN reads asserted
+event-time validity: `valid_from` / `valid_to_asserted` (T-65).
+Against the device-identity corpus (2023 event times, 2026 ingestion
+times), an event-anchored AS_OF silently returns 0 rows while BETWEEN
+returns the retracted row — and nothing said why.
+
+**Decision: keep both timebases.** AS_OF's wall-MVCC semantics are
+eval-pinned at the conformance level (T-33/T-38/T-58 and the frozen
+POC arms all assert wall behavior), so folding AS_OF into event-time
+would break shipped semantics; both models are defensible on their
+own. Instead the distinction is now named wherever a user meets it:
+
+- the editor's persistent label reads "AS_OF = wall-clock MVCC ·
+  BETWEEN = event-time";
+- the timeline panel keeps its MVCC tooltip, and S-6 rendered every
+  timestamp as ISO + relative, so the 2023-vs-2026 gap is visible
+  instead of masquerading as a broken feature;
+- this ADR is the doc anchor for the timebase contract.
+
+Pin: `s05_editor_labels_the_timebases` (STUDIO_HTML carries both
+timebase labels).
