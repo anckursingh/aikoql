@@ -2462,3 +2462,36 @@ Pins: `s03_trace_events_carry_audit_hash_and_versions_carry_valid_from`
 asserted instant), `s03_studio_panels_render_events_with_kind_actor_`
 `note_and_formatted_times` and `s04_studio_prove_renders_the_response_`
 `fields` (STUDIO_HTML pins on the fixed renderers).
+
+## 78. Graph epistemic styling and virtual retraction edges — S-1 + S-2 (POC-4)
+
+The Knowledge Graph lied about epistemic state. A retracted link
+rendered as a normal node: the badge/color/dash styling read
+`lifecycle.state`, which stays `"draft"` on retracted rows, while
+`extensions.epistemic_status` said `superseded` with an append-only
+`epistemic_history` transition. And supersede-with-retract (B3-3)
+creates no SUPERSEDES edge, so retracted rows floated disconnected
+from their successors.
+
+The wire already carried everything (`/api/graph?detail=1` embeds the
+full `extensions`/`properties` maps per node), so both fixes are one
+studio-side renderer change. S-1: `loadGraph` always requests
+`detail=1`; superseded nodes render as dashed hollow circles
+(`shape: 'circle'` + `borderDashes` — `dot` cannot dash) with a muted
+palette, the hover tooltip shows `epistemic: superseded` plus the last
+history transition (from → to, reason, by), and the inspect card's
+header carries an epistemic badge beside the lifecycle badge. S-2: the
+graph builder derives virtual `retracts` edges — a superseded row with
+`valid_to_asserted` matches its successor by same tenant + `case_id` +
+`kind` where the successor's `valid_from ==` the predecessor's
+`valid_to_asserted` (the corpus's re-assertion convention, stated in
+the builder comment) — dashed with a `retracts` label, and the status
+line counts them. Kernel-side SUPERSEDES edges on retraction remain a
+separate ADR; this milestone never pretended to change kernel edge
+semantics.
+
+Pins: `s01_graph_nodes_style_from_epistemic_status_not_lifecycle` and
+`s02_graph_derives_virtual_retraction_edges` (STUDIO_HTML pins: the
+epistemic_status styling gate, `borderDashes`, `epistemic_history`,
+the `valid_to_asserted` heuristic, the `retracts` label, the detail=1
+request).
