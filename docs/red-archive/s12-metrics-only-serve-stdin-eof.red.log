@@ -1,0 +1,27 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.68s
+     Running tests\server_lifecycle.rs (target\debug\deps\server_lifecycle-05675e50ed2c7a67.exe)
+
+running 1 test
+test sv014_metrics_only_serve_survives_stdin_eof ... FAILED
+
+failures:
+
+---- sv014_metrics_only_serve_survives_stdin_eof stdout ----
+
+thread 'sv014_metrics_only_serve_survives_stdin_eof' (4196) panicked at crates\services\api\mcp\tests\server_lifecycle.rs:1007:13:
+metrics-only serve must not exit on stdin EOF (exit exit code: 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    sv014_metrics_only_serve_survives_stdin_eof
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 3.53s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test server_lifecycle`
+EXIT=101

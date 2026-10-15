@@ -32,6 +32,8 @@
 //!   acked (child-kill, rule 5)
 //! - sv011 MCP transaction tools (the P5-M10 deferral): begin/stage/commit/
 //!   rollback through tools/call with a server-side handle registry
+//! - sv014 metrics-only serve (S-12): `serve --metrics-addr` with stdin at
+//!   EOF must keep the HTTP surface up instead of exiting clean like stdio
 //!
 //! The binary must be built first: `cargo build --bin aikoql-mcp`
 //! (cargo test does NOT build bins — the txn_crasher trap).
@@ -976,5 +978,50 @@ fn sv013_both_transports_serve_on_one_server() {
         t0.elapsed()
     );
     drop(native);
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// POC-4 S-12: `serve --metrics-addr` alone (no --listen/--native-port) fell
+// into the stdio branch, so in a background/service context the instant
+// stdin EOF was treated as shutdown — a clean exit 0 right after boot. A
+// metrics-only serve must stay up with stdin closed.
+#[test]
+fn sv014_metrics_only_serve_survives_stdin_eof() {
+    let db = tmp_db("s12");
+    let port = free_port();
+    let mut cmd = Command::new(server_bin());
+    cmd.arg("serve")
+        .arg("--metrics-addr")
+        .arg(format!("127.0.0.1:{port}"))
+        .arg(&db)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = cmd.spawn().expect("spawn metrics-only serve");
+
+    // Boot takes a few seconds (journal replay + enrichment); the EOF
+    // shutdown lands right after it. Poll: the child must never exit.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if let Some(st) = child.try_wait().expect("poll child") {
+            panic!("metrics-only serve must not exit on stdin EOF (exit {st})");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let mut s = connect(port);
+    write!(
+        s,
+        "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    assert!(
+        out.starts_with("HTTP/1.0 200"),
+        "the HTTP surface must answer: {out}"
+    );
+
+    hard_kill(&child);
+    let _ = child.wait();
     let _ = std::fs::remove_dir_all(&db);
 }
