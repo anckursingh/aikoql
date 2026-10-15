@@ -2653,3 +2653,23 @@ maintainer checkpoint (honest ledger). Stdio mode is untouched.
 Pin: `sv014_metrics_only_serve_survives_stdin_eof` (spawn `serve
 --metrics-addr` with stdin closed → the process stays up through the
 poll window and `/health` answers HTTP/1.0 200).
+
+## 86. Sidebar expansion must not animate its width — S-13 (POC-4)
+
+Playwright clicking a nav button ("⌨ Query Editor") reported "element
+not stable / intercepts pointer events" with `<div id="sidebar">` as
+the interceptor; JS-dispatched clicks worked. The CSS audit found no
+overlay over the nav row — the interceptor was the sidebar itself:
+its hover expansion ran `transition: width 0.18s ease`, so the
+buttons' hit area moved under the probing mouse, and a click point
+computed against one width lands in the sidebar's own gutter at
+another (mid-shrink, the button's right edge recedes past the point).
+A real user on a slow machine sees the same flakiness.
+
+The width transition is removed: the hover expansion (icons → labels)
+is instant, the button box settles in one frame, and the label fade
+keeps its opacity-only transition, which moves no layout.
+
+Pin: `s13_sidebar_does_not_animate_its_width` (STUDIO_HTML carries no
+`transition: width`; the `#sidebar:hover { width: 190px; }` expansion
+stays).
