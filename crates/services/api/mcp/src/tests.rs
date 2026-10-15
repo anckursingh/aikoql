@@ -975,3 +975,57 @@ fn s03_trace_events_carry_audit_hash_and_versions_carry_valid_from() {
     let _ = std::fs::remove_dir_all(&db);
     let _ = std::fs::remove_file(format!("{db}.audit.log"));
 }
+
+// POC-4 S-8: the OntologyRegistry was loaded only at startup, so the
+// studio's Auto-Discover saved an Ontology KO that queries could not see
+// until a server restart — a fresh KB was a dead end in the query editor.
+#[test]
+fn s08_discover_ontology_hot_reloads_the_compile_registry() {
+    let db = tmp_db("s08");
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    crate::tools::tool_remember(
+        &k,
+        &serde_json::json!({
+            "subject": "admin", "roles": ["admin"], "type_name": "p4d_fact",
+            "properties": {"case_id": "s08"},
+        }),
+    )
+    .expect("remember");
+
+    let subject = crate::Subject {
+        name: "admin".into(),
+        roles: vec!["admin".into()],
+        tenant: None,
+    };
+    let empty = crate::OntologyRegistry::empty();
+    // Precondition: the exact POC dead end — the studio query fails while no
+    // ontology is registered.
+    let before = crate::http::aikoql_endpoint(&k, "MATCH p4d_fact RETURN *", &subject, None, &empty);
+    assert!(
+        before.is_err(),
+        "precondition: the query must fail before discovery: {before:?}"
+    );
+
+    // Auto-Discover (the studio button's route) must republish the registry.
+    crate::tools::tool_discover_ontology(&k).expect("discover");
+
+    // No restart: the same endpoint resolves through the reloaded registry.
+    let after = crate::http::aikoql_endpoint(&k, "MATCH p4d_fact RETURN *", &subject, None, &empty);
+    assert!(
+        after.is_ok(),
+        "the query must succeed after discovery without a restart: {after:?}"
+    );
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+    let _ = std::fs::remove_file(format!("{db}.audit.log"));
+}

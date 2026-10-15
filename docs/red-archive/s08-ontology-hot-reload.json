@@ -1,0 +1,8 @@
+{
+  "id": "s08-ontology-hot-reload",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp -- s08_",
+  "captured_at": "2026-10-15T10:59:57Z",
+  "captured_head": "2cba5a84008c4924d48e0b438d574e5aa6b10dec",
+  "exit_code": 101
+}

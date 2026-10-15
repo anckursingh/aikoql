@@ -717,6 +717,21 @@ mod tests {
     }
 
     #[test]
+    fn s08_editor_1030_error_surface_points_at_auto_discover() {
+        // POC-4 S-8: when the query editor surfaces an AIKOQL1030, it must
+        // point at the discovery flow instead of leaving a dead end.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("includes('AIKOQL1030')"),
+            "the editor must detect the unknown-type error"
+        );
+        assert!(
+            html.contains("run Ontology → Auto-Discover"),
+            "the editor must point at the discovery flow"
+        );
+    }
+
+    #[test]
     fn with_principal_token_overrides_body() {
         let sessions = Mutex::new(HashMap::new());
         sessions.lock().unwrap().insert(
