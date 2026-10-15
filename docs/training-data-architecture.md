@@ -2569,3 +2569,28 @@ own. Instead the distinction is now named wherever a user meets it:
 
 Pin: `s05_editor_labels_the_timebases` (STUDIO_HTML carries both
 timebase labels).
+
+## 82. One compile verdict for stored types — REST/MCP path alignment (S-7, POC-4)
+
+Two surfaces compiled the same query two different ways. The REST
+`/api/aikoql` endpoint ran `compile_with_ontology_scoped` against an
+empty `SchemaRegistry` plus the ontology, so any type stored via
+remember but not registered as a class died with AIKOQL1030 — a real
+row, in the real KB, unqueryable from the studio. The MCP `tool_aikoql`
+ran `compile_scoped` with no schema validation and returned the row.
+Same KB, two verdicts, and the studio was the one that lost.
+
+The strict path stays first — ontology-aware scoped analysis is the
+semantic contract. But an unknown-type failure (code AIKOQL1030) now
+falls back to `compile_scoped`, the exact MCP path, so both surfaces
+agree on the same KB. The fallback rides on the stable-code contract
+(MRFC-0010 §10): the prefix `AIKOQL1030` identifies exactly the
+stored-but-unregistered case; every other diagnostic fails closed
+through the strict path. S-8's hot-reload test loses its obsolete
+"query must fail before discovery" precondition (it asserted this very
+bug) and pins the slot republish directly instead: `current_ontology()`
+resolves the type only after Auto-Discover.
+
+Pin: `s07_rest_query_aligns_with_mcp_for_stored_unregistered_types`
+(remember → MCP returns the row; the endpoint is Ok for the identical
+query against an empty registry).
