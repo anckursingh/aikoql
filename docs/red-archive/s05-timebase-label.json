@@ -1,0 +1,8 @@
+{
+  "id": "s05-timebase-label",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp -- s05_",
+  "captured_at": "2026-10-15T11:04:11Z",
+  "captured_head": "5431c56e34f78c997aea6497072e70313cc258f0",
+  "exit_code": 101
+}

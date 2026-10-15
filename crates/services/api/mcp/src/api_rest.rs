@@ -739,6 +739,24 @@ mod tests {
     }
 
     #[test]
+    fn s05_editor_labels_the_timebases() {
+        // POC-4 S-5: AS_OF (wall-clock MVCC over commit_ts) and BETWEEN
+        // (asserted event-time over valid_from/valid_to_asserted) are
+        // different timebases that the editor presented as one "time travel"
+        // — against 2023-event/2026-ingest corpora, event-anchored AS_OF
+        // always looked broken. The editor label must name each timebase.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("AS_OF = wall-clock"),
+            "the editor must label AS_OF's timebase"
+        );
+        assert!(
+            html.contains("BETWEEN = event-time"),
+            "the editor must label BETWEEN's timebase"
+        );
+    }
+
+    #[test]
     fn with_principal_token_overrides_body() {
         let sessions = Mutex::new(HashMap::new());
         sessions.lock().unwrap().insert(
