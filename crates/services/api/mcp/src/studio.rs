@@ -860,6 +860,7 @@ async function loadGraph() {
   const tenant = document.getElementById('graph-tenant').value;
   let url = '/api/graph';
   let params = [];
+  params.push('detail=1'); // S-1/S-2 (POC-4): extensions drive epistemic styling + virtual retraction edges
   if (koid) params.push('koid='+encodeURIComponent(koid));
   if (tenant) params.push('tenant='+encodeURIComponent(tenant));
   if (params.length) url += '?'+params.join('&');
@@ -868,21 +869,49 @@ async function loadGraph() {
     graphRawData = data;
     typeColors={}; colorIdx=0;
     graphNodes.clear(); graphEdges.clear();
-    const nodes = data.nodes.map(n => ({
-      id: n.koid, label: (n.label||n.type_name)+(n.tenant?'\n@'+n.tenant:''),
-      title: '<b>'+n.type_name+'</b>'+(n.tenant?' @'+n.tenant:'')+'\n'+n.koid,
-      color: {background:colorFor(n.type_name),border:(n.tenant?'#b89ae0':'#252538'),highlight:{background:colorFor(n.type_name),border:'#fff'}},
-      size: n.size||20, borderWidth: n.tenant?2.5:(n.edge_count>2?3:1.5),
-      font: {size:Math.max(9,Math.min(13,(n.size||20)/2+3))},
-    }));
+    const nodes = data.nodes.map(n => {
+      // S-1 (POC-4): retracted rows keep lifecycle.state "draft" — style from
+      // the epistemic extension: superseded → dashed hollow circle + muted
+      // palette, so the retraction is visible at a glance.
+      const es = n.extensions&&n.extensions.epistemic_status;
+      const superseded = es==='superseded';
+      return {
+        id: n.koid, label: (n.label||n.type_name)+(n.tenant?'\n@'+n.tenant:''),
+        title: '<b>'+n.type_name+'</b>'+(n.tenant?' @'+n.tenant:'')+'\n'+n.koid+(es?'\n'+es:''),
+        color: superseded
+          ? {background:'#3d3d4a',border:'#8a8a99',highlight:{background:'#4a4a58',border:'#fff'}}
+          : {background:colorFor(n.type_name),border:(n.tenant?'#b89ae0':'#252538'),highlight:{background:colorFor(n.type_name),border:'#fff'}},
+        shape: superseded?'circle':'dot',
+        shapeProperties: superseded?{borderDashes:[4,3]}:{},
+        size: n.size||20, borderWidth: superseded?2.5:(n.tenant?2.5:(n.edge_count>2?3:1.5)),
+        font: {size:Math.max(9,Math.min(13,(n.size||20)/2+3))},
+      };
+    });
     graphNodes.add(nodes);
     const edges = (data.edges||[]).map(e => ({from:e.source,to:e.target,label:e.rel_type,arrows:'to',color:{color:'#3a3a5c',highlight:'#6cc7f0'},font:{size:9,color:'#5c5c78'},width:1.2}));
+    // S-2 (POC-4): supersede-with-retract (B3-3) leaves no SUPERSEDES edge —
+    // derive virtual "retracts" edges: the superseded row's successor shares
+    // tenant + case_id + kind and asserts valid_from == the predecessor's
+    // valid_to_asserted (the corpus's re-assertion convention).
+    const retracted = data.nodes.filter(n => n.extensions && n.extensions.epistemic_status==='superseded' && n.extensions.valid_to_asserted != null);
+    retracted.forEach(p => {
+      data.nodes.forEach(s => {
+        if (s.koid===p.koid) return;
+        if ((s.tenant||'')!==(p.tenant||'')) return;
+        const pc=p.properties&&p.properties.case_id, sc=s.properties&&s.properties.case_id;
+        if (pc===undefined||sc===undefined||JSON.stringify(pc)!==JSON.stringify(sc)) return;
+        const pk=p.properties&&p.properties.kind, sk=s.properties&&s.properties.kind;
+        if (pk===undefined||sk===undefined||JSON.stringify(pk)!==JSON.stringify(sk)) return;
+        if (!s.extensions || s.extensions.valid_from!==p.extensions.valid_to_asserted) return;
+        edges.push({from:p.koid,to:s.koid,label:'retracts',arrows:'to',dashes:[4,3],color:{color:'#8a7a5c',highlight:'#c9a86a'},font:{size:9,color:'#8a7a5c'},width:1});
+      });
+    });
     graphEdges.add(edges);
     // Legend
     let lh = '';
     for (const [t,c] of Object.entries(typeColors)) { const cnt = data.nodes.filter(n=>n.type_name===t).length; lh += '<div class="legend-item"><div class="legend-dot" style="background:'+c+'"></div>'+t+' ('+cnt+')</div>'; }
     document.getElementById('legend').innerHTML = lh||'<div style="color:var(--muted)">No types</div>';
-    document.getElementById('status-center').textContent = data.nodes.length+' objects, '+data.edges.length+' relationships';
+    document.getElementById('status-center').textContent = data.nodes.length+' objects, '+edges.length+' relationships';
     setTimeout(() => { if(graphNetwork&&nodes.length>0) graphNetwork.fit({animation:{duration:400}}); }, 200);
   } catch(e) { document.getElementById('status-center').textContent = 'Error: '+e.message; }
 }
@@ -896,6 +925,15 @@ function showGraphTooltip(nodeId) {
   let h = '<div style="color:var(--accent);font-weight:600;">'+node.type_name+'</div>';
   if (node.tenant) h += '<div style="color:var(--purple);font-size:10px;">@'+node.tenant+'</div>';
   if (node.key_props) node.key_props.slice(0,5).forEach(p => h += '<div style="color:var(--muted);">'+p.key+': '+JSON.stringify(p.value)+'</div>');
+  // S-1 (POC-4): surface the epistemic status and its last transition —
+  // lifecycle.state stays "draft" on retracted rows.
+  const es = node.extensions&&node.extensions.epistemic_status;
+  if (es) h += '<div style="color:'+(es==='superseded'?'#c9a86a':'var(--muted)')+';">epistemic: '+es+'</div>';
+  const hist = node.extensions&&node.extensions.epistemic_history;
+  if (hist && hist.length) {
+    const last = hist[hist.length-1];
+    h += '<div style="color:var(--muted);">'+last.from+' → '+last.to+(last.reason?' ('+last.reason+')':'')+' by '+(last.by||'?')+'</div>';
+  }
   tt.innerHTML = h;
 }
 async function inspectNode(koid) {
@@ -1026,6 +1064,12 @@ function renderNodeDetail(node) {
     const st = typeof node.lifecycle === 'object' ? node.lifecycle.state : node.lifecycle;
     const cls = st==='active'?'badge-green':st==='archived'?'badge-red':st==='draft'?'badge-orange':'badge-cyan';
     h += '<span class="badge '+cls+'">'+st+'</span> ';
+  }
+  // S-1 (POC-4): the lifecycle badge alone is misleading on retracted rows
+  // ("draft") — show the epistemic status next to it.
+  if (node.extensions && node.extensions.epistemic_status) {
+    const es = node.extensions.epistemic_status;
+    h += '<span class="badge '+(es==='superseded'?'badge-orange':'badge-muted')+'">'+es+'</span> ';
   }
   if (node.security && node.security.classification) {
     h += '<span class="badge badge-red">'+node.security.classification+'</span> ';
