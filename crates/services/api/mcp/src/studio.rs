@@ -1424,9 +1424,11 @@ async function loadProvenance() {
 
 async function verifyProvenance() {
   const div = document.getElementById('provenance-result');
+  const koid = document.getElementById('provenance-koid-input').value.trim();
+  if (!koid) { div.innerHTML = '<div class="error-text">Enter a KOID first.</div>'; return; }
   div.innerHTML = '<div class="loading">Verifying audit chain...</div>';
   try {
-    const proof = await api('/api/v1/prove');
+    const proof = await api('/api/v1/prove?koid=' + encodeURIComponent(koid));
     const data = proof.data || proof;
     div.innerHTML = '<div class="card" style="border-left:3px solid var(--green);padding:12px;">' +
       '<div style="font-size:14px;font-weight:600;color:var(--green);">✅ Audit Chain Verified</div>' +

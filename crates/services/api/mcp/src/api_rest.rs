@@ -16,6 +16,26 @@ pub fn route_v1(
 ) -> (String, String, String) {
     let clean_path = path.split('?').next().unwrap_or(path);
 
+    // S-4 (POC-4): GET routes carry tool args in the query string (?koid=…).
+    // Fold them into a JSON body so every tool reads one args shape — the
+    // studio prove call is the first caller. The auth `token` pair stays out
+    // of tool args (it is consumed by extract_token).
+    let folded_body = if method == "GET" {
+        let mut map = serde_json::Map::new();
+        if let Some(qs) = path.split_once('?').map(|(_, q)| q) {
+            for pair in qs.split('&') {
+                if let Some((key, val)) = pair.split_once('=') {
+                    if key != "token" {
+                        map.insert(key.to_string(), json!(crate::http::url_decode(val)));
+                    }
+                }
+            }
+        }
+        serde_json::to_string(&json!(map)).unwrap_or_default()
+    } else {
+        body.to_string()
+    };
+
     // PRR-4: [rate_limit] config applies to the REST surface — 60s window,
     // keyed per token (anonymous callers share one bucket).
     if let Err(max) = rate_limit
@@ -32,7 +52,7 @@ pub fn route_v1(
     let result: Result<J, String> = route_inner(
         method,
         clean_path,
-        body,
+        &folded_body,
         kernel,
         db_path,
         sessions,
