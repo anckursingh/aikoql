@@ -1837,4 +1837,74 @@ mod tests {
             _ => None,
         }
     }
+
+    // POC-4 S-11: discovery derived relationships only from ko.relationships
+    // (empty for the device-identity corpus), so the ontology reported
+    // Relationships (0) and the supersession chain was inexpressible. The
+    // S-2 instance heuristic (superseded row with valid_to_asserted matches
+    // its successor by tenant + case_id + kind with valid_from ==
+    // valid_to_asserted) must surface as type-level temporal relationships.
+    #[test]
+    fn s11_discover_infers_temporal_relationships() {
+        let mut old = KnowledgeObject::new(
+            KOID::ZERO,
+            Metadata {
+                type_name: "identity_link".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            SecurityDescriptor {
+                owner: "system".into(),
+                acl: vec![],
+                classification: None,
+            },
+        );
+        old.set_epistemic_status(EpistemicStatus::Superseded);
+        old.extensions.insert(
+            KnowledgeObject::EXT_VALID_TO_ASSERTED.into(),
+            Value::Int(1699996400000),
+        );
+        old.properties
+            .insert("case_id".into(), Value::Text("c-77".into()));
+        old.properties
+            .insert("kind".into(), Value::Text("link".into()));
+
+        let mut succ = KnowledgeObject::new(
+            KOID::ZERO,
+            Metadata {
+                type_name: "identity_link".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            SecurityDescriptor {
+                owner: "system".into(),
+                acl: vec![],
+                classification: None,
+            },
+        );
+        succ.extensions.insert(
+            KnowledgeObject::EXT_VALID_FROM.into(),
+            Value::Int(1699996400000),
+        );
+        succ.properties
+            .insert("case_id".into(), Value::Text("c-77".into()));
+        succ.properties
+            .insert("kind".into(), Value::Text("link".into()));
+
+        let def = discover_ontology(&[old, succ]);
+        let retracts = def
+            .relationships
+            .get("retracts")
+            .expect("discovery must infer a retracts relationship");
+        assert_eq!(retracts.domain.as_deref(), Some("identity_link"));
+        assert_eq!(retracts.range.as_deref(), Some("identity_link"));
+        let supersedes = def
+            .relationships
+            .get("supersedes")
+            .expect("discovery must infer a supersedes relationship");
+        assert_eq!(supersedes.domain.as_deref(), Some("identity_link"));
+        assert_eq!(supersedes.range.as_deref(), Some("identity_link"));
+    }
 }
