@@ -1,0 +1,20 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+   Compiling aikoql-mcp v0.2.2 (E:\dreams\Mnemosyne\crates\services\api\mcp)
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+error[E0433]: cannot find module or crate `common` in this scope
+   --> crates\services\api\mcp\tests\cli_contract.rs:663:23
+    |
+663 |         let sweeper = common::TempSweeper {
+    |                       ^^^^^^ use of unresolved module or unlinked crate `common`
+    |
+help: to make use of source file crates\services\api\mcp\tests\common\mod.rs, use `mod common` in this file to declare the module
+    |
+ 15 + mod common;
+    |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `aikoql-mcp` (test "cli_contract") due to 1 previous error
+EXIT=101

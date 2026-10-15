@@ -638,3 +638,50 @@ fn cl04_fresh_shell_default_is_an_honest_v2_directory() {
 
     let _ = std::fs::remove_dir_all(&cwd);
 }
+
+// POC-4 T-72: test scratch DBs leaked into the shared temp dir (DB dirs +
+// the {db}.audit.log sidecars next to them; ~510 items in ~12 days), with
+// nothing removing them on panic. Every scratch path must register for the
+// TLS sweep, and the sweep must take the audit sidecar with it.
+#[test]
+fn t72_scratch_dbs_register_for_sweep_and_the_sweep_removes_sidecars() {
+    // Behavioral: the sweeper removes the registered path AND the
+    // {stem}.audit.log sidecar the server writes next to every DB.
+    let stem = std::env::temp_dir().join(format!(
+        "aikoql_t72_probe_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&stem);
+    std::fs::create_dir_all(&stem).unwrap();
+    let sidecar = std::path::PathBuf::from(format!("{}.audit.log", stem.display()));
+    std::fs::write(&sidecar, b"x").unwrap();
+    {
+        let sweeper = common::TempSweeper {
+            paths: vec![stem.clone()],
+        };
+        drop(sweeper);
+    }
+    assert!(!stem.exists(), "the sweep must remove the scratch DB dir");
+    assert!(
+        !sidecar.exists(),
+        "the sweep must remove the audit sidecar with the DB"
+    );
+
+    // Structural: every integration suite's scratch helper must register.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    for f in [
+        "tests/cli_contract.rs",
+        "tests/index_tool.rs",
+        "tests/server_lifecycle.rs",
+    ] {
+        let src = std::fs::read_to_string(format!("{manifest}/{f}")).unwrap();
+        assert!(
+            src.contains("register_temp_path"),
+            "{f} must register its scratch paths for the TLS sweep"
+        );
+    }
+}
