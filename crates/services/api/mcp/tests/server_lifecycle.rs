@@ -49,6 +49,9 @@ use std::time::{Duration, Instant};
 use aikoql_kernel::*;
 use serde_json::{json, Value as J};
 
+// T-72 (POC-4): TLS sweep for scratch DBs + audit sidecars.
+mod common;
+
 // --- helpers ------------------------------------------------------------------
 
 static PORT_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -87,6 +90,7 @@ fn tmp_db(name: &str) -> PathBuf {
         stamp
     ));
     let _ = std::fs::remove_dir_all(&db); // v2 database = directory
+    common::register_temp_path(&db);
     db
 }
 
@@ -99,6 +103,7 @@ fn tmp_marker(name: &str) -> PathBuf {
         seq
     ));
     let _ = std::fs::remove_file(&m);
+    common::register_temp_path(&m);
     m
 }
 

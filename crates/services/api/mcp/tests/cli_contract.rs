@@ -18,6 +18,9 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
+// T-72 (POC-4): TLS sweep for scratch DBs + audit sidecars.
+mod common;
+
 // --- helpers ------------------------------------------------------------------
 
 fn docs(name: &str) -> String {
@@ -49,6 +52,7 @@ fn tmp_db(name: &str) -> PathBuf {
         stamp
     ));
     let _ = std::fs::remove_dir_all(&db); // v2 database = directory
+    common::register_temp_path(&db);
     db
 }
 

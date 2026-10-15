@@ -16,6 +16,19 @@ impl Drop for TempSweeper {
         for p in &self.paths {
             // v2 databases are directories (launch S-02).
             let _ = std::fs::remove_dir_all(p);
+            // T-72 (POC-4): the audit sidecar next to the DB vanishes with
+            // it — the stem is pid-unique, so a `{stem}.` prefix match is
+            // own-files only.
+            let Some(name) = p.file_name() else { continue };
+            if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
+                let prefix = format!("{}.", name.to_string_lossy());
+                for e in rd.flatten() {
+                    if e.file_name().to_string_lossy().starts_with(&prefix) {
+                        let _ = std::fs::remove_file(e.path());
+                        let _ = std::fs::remove_dir_all(e.path());
+                    }
+                }
+            }
         }
     }
 }
@@ -653,6 +666,7 @@ fn met005_metrics_carry_storage_series_only_with_cap() {
     use std::sync::Arc;
 
     let dir = std::env::temp_dir().join(format!("mnemo-met005-{}", std::process::id()));
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(dir.clone()));
     let _ = std::fs::remove_dir_all(&dir);
     let e = Arc::new(AikoqlStorageEngineV2::open(dir.to_str().unwrap()).unwrap());
     let engine: Arc<dyn StorageEngine> = e.clone();
@@ -692,6 +706,7 @@ fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
     use std::sync::Arc;
 
     let dir = std::env::temp_dir().join(format!("mnemo-met006-{}", std::process::id()));
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(dir.clone()));
     let _ = std::fs::remove_dir_all(&dir);
     let mut c = Config::new(dir.clone());
     c.memtable_bytes = 512; // force flushes so compact has segments to merge
