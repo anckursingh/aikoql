@@ -2594,3 +2594,22 @@ resolves the type only after Auto-Discover.
 Pin: `s07_rest_query_aligns_with_mcp_for_stored_unregistered_types`
 (remember → MCP returns the row; the endpoint is Ok for the identical
 query against an empty registry).
+
+## 83. Stale-session 401 returns the studio to the login overlay — S-10 (POC-4)
+
+Server restart invalidates sessions. The studio's `api()` helper
+surfaced every non-OK response the same way: extract `body.error` or
+"HTTP <status>" and throw it into whichever panel had called it — so a
+stale token left the "admin (admin)" badge in place while the results
+panel showed the raw "login required" string, and the only way back was
+a manual reload.
+
+`api()` now treats a 401 as session expiry, not as data: it clears the
+token, shows the login overlay, and sets the login error line to
+"Session expired — sign in again" before throwing — the badge is
+hidden behind the overlay and the raw body never reaches a panel.
+Other statuses keep the existing error extraction, so real API errors
+still surface in place.
+
+Pin: `s10_api_helper_401_shows_login_overlay` (STUDIO_HTML carries the
+401 branch, the expiry message, and the showLogin() return).
