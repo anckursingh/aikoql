@@ -158,7 +158,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); heig
 
 /* ── Layout ── */
 #app { display: none; height: 100vh; width: 100vw; }
-#sidebar { width: 52px; min-width: 52px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding-top: 10px; z-index: 10; transition: width 0.18s ease; overflow: hidden; }
+#sidebar { width: 52px; min-width: 52px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding-top: 10px; z-index: 10; overflow: hidden; }
 #sidebar:hover { width: 190px; }
 #sidebar .logo { font-size: 18px; margin-bottom: 6px; opacity: 0.9; flex-shrink: 0; }
 #sidebar .logo-text { display: none; font-size: 13px; font-weight: 700; color: var(--accent); white-space: nowrap; }
