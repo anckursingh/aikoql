@@ -2428,3 +2428,37 @@ Pins: `s04_get_prove_reads_koid_from_query_string` (a remembered Fact
 proves `chain_valid: true` through the route) and
 `s04_studio_prove_call_carries_the_koid` (the embedded STUDIO_HTML
 carries the koid-carrying call and the empty-input guard).
+
+## 77. Provenance and timeline render the event stream — S-3 + S-6 (POC-4)
+
+Both studio panels read `data.versions || data.events`; `versions`
+exists and wins, but carries only `version/commit_ts/state`. Every
+provenance row rendered "Source: ?" and every timeline row "by ?" with
+raw epoch milliseconds, while the API response held the actor, the
+event kind and the retraction note all along — and the event's audit
+hash never left the wire.
+
+Three-layer fix. Kernel: `VersionRecord` gains `valid_from`
+(`Option<u64>`, read from the version's `extensions.valid_from` — the
+trace already scans the full KO per version, so this is one field at
+the single constructor site). Wire: `ke_json` emits `audit_hash` as
+64-char hex — a raw `[u8; 32]` would serialize as a JSON number array
+no UI consumer can render — and `tool_trace` versions emit
+`valid_from`. Studio: a `fmtTime` helper renders epoch millis as
+`YYYY-MM-DD HH:MM:SS (13s ago)`; both panels iterate `events[]`
+(kind badge, actor, note, SHA-256 prefix) and the timeline shows the
+event-time column when the version carried an asserted `valid_from`,
+so ingestion time can't be mistaken for event time.
+
+S-4 follow-through rides the same milestone: the prove panel rendered
+`journal_seq` (the response never carries it) and called
+`.substring()` on the head hash, which is a byte array on the wire —
+the panel now renders the verdict (`chain_valid`), the claim koid and
+the hex-joined head hash.
+
+Pins: `s03_trace_events_carry_audit_hash_and_versions_carry_valid_from`
+(a remember with top-level `valid_from` → trace events[0] carries a
+64-hex `audit_hash` with kind/actor present, versions[0] carries the
+asserted instant), `s03_studio_panels_render_events_with_kind_actor_`
+`note_and_formatted_times` and `s04_studio_prove_renders_the_response_`
+`fields` (STUDIO_HTML pins on the fixed renderers).
