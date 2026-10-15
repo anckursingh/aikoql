@@ -1,0 +1,8 @@
+{
+  "id": "s10-stale-session-401-ux",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp -- s10_",
+  "captured_at": "2026-10-15T11:14:17Z",
+  "captured_head": "cb956334a56867ddf91c5efed78700727a93f246",
+  "exit_code": 101
+}

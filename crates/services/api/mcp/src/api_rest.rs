@@ -757,6 +757,28 @@ mod tests {
     }
 
     #[test]
+    fn s10_api_helper_401_shows_login_overlay() {
+        // POC-4 S-10: after a server restart invalidates the session, the
+        // studio kept the stale "admin (admin)" badge and printed the raw
+        // "login required" body into the results panel — a manual reload was
+        // the only way back. A 401 from the api helper must drop the stale
+        // session and return the user to the login overlay with a message.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("res.status === 401"),
+            "the api helper must detect a 401"
+        );
+        assert!(
+            html.contains("Session expired"),
+            "a 401 must explain the session expiry"
+        );
+        assert!(
+            html.contains("showLogin()"),
+            "a 401 must return the user to the login overlay"
+        );
+    }
+
+    #[test]
     fn with_principal_token_overrides_body() {
         let sessions = Mutex::new(HashMap::new());
         sessions.lock().unwrap().insert(
