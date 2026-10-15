@@ -252,10 +252,7 @@ mod tests {
         let a = SemanticAnalyzer::new(&r);
         let stmt = crate::parser::parse("MATCH p4d_fact RETURN *").unwrap();
         let err = a.analyze(&stmt).unwrap_err();
-        let hint = err
-            .hint
-            .as_deref()
-            .expect("unknown-type must carry a hint");
+        let hint = err.hint.as_deref().expect("unknown-type must carry a hint");
         assert!(
             !hint.contains("CREATE TYPE"),
             "the hint must not reference a nonexistent statement: {hint}"
