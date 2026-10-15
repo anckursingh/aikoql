@@ -779,6 +779,25 @@ mod tests {
     }
 
     #[test]
+    fn s13_sidebar_does_not_animate_its_width() {
+        // POC-4 S-13: the sidebar's hover expansion animated its width, so
+        // the nav buttons' hit area moved under a probing mouse — Playwright
+        // reported "element not stable / intercepts pointer events" with the
+        // sidebar div itself as the interceptor, and a slow-machine user
+        // sees the same flakiness. The audit found no overlay: the moving
+        // hit area is the width transition, so the rule must not carry one.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            !html.contains("transition: width"),
+            "the sidebar must not animate its width under the cursor"
+        );
+        assert!(
+            html.contains("#sidebar:hover { width: 190px; }"),
+            "the hover expansion itself stays (icons → labels)"
+        );
+    }
+
+    #[test]
     fn with_principal_token_overrides_body() {
         let sessions = Mutex::new(HashMap::new());
         sessions.lock().unwrap().insert(

@@ -1,0 +1,8 @@
+{
+  "id": "s13-sidebar-animated-width",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp -- s13_",
+  "captured_at": "2026-10-15T11:34:43Z",
+  "captured_head": "dc8871608a647b6392d4683abecd4f4b20a8e1c3",
+  "exit_code": 101
+}
