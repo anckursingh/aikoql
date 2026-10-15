@@ -556,6 +556,16 @@ fn main() {
                 cfg.max_connections,
             );
         }
+    } else if metrics_addr.is_some() {
+        // S-12 (POC-4): metrics-only serve must not read stdin — in a
+        // background/service context stdin hits EOF immediately, which the
+        // stdio loop treats as shutdown, taking the HTTP surface down with
+        // a clean exit. Park main forever (the metrics thread keeps
+        // serving); like TCP mode there is no shutdown-time checkpoint
+        // (honest ledger).
+        loop {
+            std::thread::park();
+        }
     } else {
         run_stdio(
             &kernel,
