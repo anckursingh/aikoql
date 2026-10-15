@@ -184,7 +184,14 @@ fn route_inner(
 
         ("POST", "/api/v1/remember") => {
             need_auth()?;
-            tool_remember(k, &args())
+            let args = args();
+            let r = tool_remember(k, &args)?;
+            // S-8 (POC-4): the studio's manual Save Ontology flow — a
+            // remembered Ontology KO republishes the compile-time registry.
+            if args.get("type_name").and_then(|t| t.as_str()) == Some("Ontology") {
+                crate::http::install_ontology(crate::http::load_ontology_registry(k));
+            }
+            Ok(r)
         }
         ("POST", "/api/v1/forget") => {
             need_auth()?;

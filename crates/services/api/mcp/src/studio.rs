@@ -742,7 +742,12 @@ async function runQuery() {
   if (tenant) url += '&tenant=' + encodeURIComponent(tenant);
   try {
     const data = await api(url);
-    if (data.error) { resDiv.innerHTML = '<div class="error-text">'+data.error+'</div>'; return; }
+    if (data.error) {
+      // S-8 (POC-4): an unknown type is fixable from the studio — point at
+      // the discovery flow instead of leaving a dead end.
+      resDiv.innerHTML = '<div class="error-text">'+data.error+'</div>' + (data.error.includes('AIKOQL1030') ? '<div style="font-size:10px;color:var(--muted);margin-top:4px;">type not registered — run Ontology → Auto-Discover</div>' : '');
+      return;
+    }
     if (data.created) { resDiv.innerHTML = '<div class="card"><span class="badge badge-green">Created</span> '+data.created+' v'+data.version+'</div>'; return; }
     if (data.results && data.results.length > 0) {
       const keys = new Set();

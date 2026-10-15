@@ -591,6 +591,9 @@ pub(crate) fn tool_discover_ontology(k: &Kernel) -> Result<J, String> {
             referential_policy: ReferentialPolicy::default(),
         })
         .map_err(|e| e.to_string())?;
+    // S-8 (POC-4): republish the compile-time registry right away — the
+    // query editor resolves the new classes without a server restart.
+    crate::http::install_ontology(crate::http::load_ontology_registry(k));
     Ok(json!({
         "saved": true,
         "koid": r.koid.to_hex(),

@@ -7,10 +7,95 @@ use crate::tools::*;
 use crate::{
     api_rest, error, graph_ui, info, json, studio, thread, Arc, Direction, ExtensionMap,
     GraphEngineApi, HashMap, HashSet, HttpSession, Instant, Kernel, KnowledgeContext,
-    KnowledgeObject, LifecycleState, Metadata, Mutex, OntologyRegistry, Origin, PropertyMap, Read,
-    ReferentialPolicy, RememberRequest, SchemaRegistry, Subject, TcpListener, TcpStream,
-    TraverseQuery, Value, Write, J, KOID, SERVER_START,
+    KnowledgeObject, LifecycleState, Metadata, Mutex, OnceLock, OntologyDef, OntologyRegistry,
+    Origin, PropertyMap, Read, ReferentialPolicy, RememberRequest, SchemaRegistry, Subject,
+    TcpListener, TcpStream, TraverseQuery, Value, Write, J, KOID, ONTOLOGY_TYPE, SERVER_START,
 };
+use std::sync::RwLock;
+
+// ---- S-8 (POC-4): hot-reloadable compile-time ontology ----
+
+/// The process-wide ontology slot: the startup load, the studio's
+/// Auto-Discover, and REST Ontology remembers all republish through here;
+/// `aikoql_endpoint` prefers it over the startup snapshot it is handed.
+static ONTOLOGY_SLOT: OnceLock<RwLock<Arc<OntologyRegistry>>> = OnceLock::new();
+
+pub(crate) fn install_ontology(reg: Arc<OntologyRegistry>) {
+    match ONTOLOGY_SLOT.get() {
+        Some(slot) => {
+            // justified: RwLock poison is unrecoverable
+            *slot.write().unwrap() = reg;
+        }
+        None => {
+            let _ = ONTOLOGY_SLOT.set(RwLock::new(reg));
+        }
+    }
+}
+
+pub(crate) fn current_ontology() -> Option<Arc<OntologyRegistry>> {
+    ONTOLOGY_SLOT.get().map(|slot| slot.read().unwrap().clone()) // justified: poison is unrecoverable
+}
+
+/// Load the active ontology from stored Ontology KOs (MRFC-0041).
+/// Prefer manually-curated ontologies over auto-discovered ones.
+/// If multiple exist, pick the latest non-discovered, fall back to discovered.
+pub(crate) fn load_ontology_registry(k: &Kernel) -> Arc<OntologyRegistry> {
+    let subj = Subject::with_roles("system", &["admin"]);
+    match k.scan_by_type(&subj, ONTOLOGY_TYPE) {
+        Ok(kos) if !kos.is_empty() => {
+            let manual: Vec<_> = kos
+                .iter()
+                .filter(|ko| !ko.metadata.tags.contains(&"auto-discovered".to_string()))
+                .collect();
+            let candidate = if !manual.is_empty() {
+                // Prefer the latest manually-created ontology.
+                manual
+                    .into_iter()
+                    .max_by_key(|ko| ko.commit_ts)
+                    .expect("manual is non-empty") // justified: guarded by !manual.is_empty() above
+            } else {
+                // Fall back to latest auto-discovered.
+                kos.iter()
+                    .max_by_key(|ko| ko.commit_ts)
+                    .expect("kos is non-empty") // justified: guarded by the outer Ok(kos) if !kos.is_empty() arm
+            };
+            match OntologyDef::from_ko(candidate) {
+                Ok(def) => {
+                    let source = if candidate
+                        .metadata
+                        .tags
+                        .contains(&"auto-discovered".to_string())
+                    {
+                        "auto-discovered"
+                    } else {
+                        "manual"
+                    };
+                    info!(namespace = %def.namespace, version = %def.version,
+                          classes = def.classes.len(),
+                          mappings = def.mappings.len(),
+                          source = source,
+                          "ontology loaded");
+                    match OntologyRegistry::new(def) {
+                        Ok(r) => Arc::new(r),
+                        Err(e) => {
+                            info!(error = %e, "ontology registry failed to initialize — using empty registry");
+                            Arc::new(OntologyRegistry::empty())
+                        }
+                    }
+                }
+                Err(e) => {
+                    info!(error = %e, "ontology KO found but failed to decode — using empty registry");
+                    Arc::new(OntologyRegistry::empty())
+                }
+            }
+        }
+        _ => {
+            info!("no ontology KO found — using empty registry");
+            Arc::new(OntologyRegistry::empty())
+        }
+    }
+}
+
 pub(crate) fn serve_metrics(
     kernel: Arc<Kernel>,
     ontology: Arc<OntologyRegistry>,
@@ -574,13 +659,17 @@ pub(crate) fn aikoql_endpoint(
     // Query: MATCH, TRAVERSE, etc. — ontology-aware compilation.
     // R9: compile scoped so the plan carries the caller's roles + tenant.
     let schema = SchemaRegistry::new(); // ponytail: empty registry; ontology handles resolution
+                                        // S-8 (POC-4): prefer the hot-reloaded registry (published by
+                                        // Auto-Discover / REST Ontology remembers) over the startup snapshot.
+    let hot = current_ontology();
+    let ont = hot.as_deref().unwrap_or(ontology);
     let plans = aikoql_compiler::parser::compile_with_ontology_scoped(
         query,
         &subject.name,
         &subject.roles,
         subject.tenant.as_deref(),
         &schema,
-        Some(ontology),
+        Some(ont),
     )
     .map_err(|e| e.to_string())?;
     // Execute all plans and merge results.

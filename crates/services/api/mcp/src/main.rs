@@ -442,65 +442,12 @@ fn main() {
     let db_path = Arc::new(db_path);
     SERVER_START.set(Instant::now()).ok();
 
-    // Load ontology from stored Ontology KOs (MRFC-0041).
-    // Prefer manually-curated ontologies over auto-discovered ones.
-    // If multiple exist, pick the latest non-discovered, fall back to discovered.
-    let ontology: Arc<OntologyRegistry> = {
-        let subj = Subject::with_roles("system", &["admin"]);
-        match kernel.scan_by_type(&subj, ONTOLOGY_TYPE) {
-            Ok(kos) if !kos.is_empty() => {
-                let manual: Vec<_> = kos
-                    .iter()
-                    .filter(|ko| !ko.metadata.tags.contains(&"auto-discovered".to_string()))
-                    .collect();
-                let candidate = if !manual.is_empty() {
-                    // Prefer the latest manually-created ontology.
-                    manual
-                        .into_iter()
-                        .max_by_key(|ko| ko.commit_ts)
-                        .expect("manual is non-empty") // justified: guarded by !manual.is_empty() above
-                } else {
-                    // Fall back to latest auto-discovered.
-                    kos.iter()
-                        .max_by_key(|ko| ko.commit_ts)
-                        .expect("kos is non-empty") // justified: guarded by the outer Ok(kos) if !kos.is_empty() arm
-                };
-                match OntologyDef::from_ko(candidate) {
-                    Ok(def) => {
-                        let source = if candidate
-                            .metadata
-                            .tags
-                            .contains(&"auto-discovered".to_string())
-                        {
-                            "auto-discovered"
-                        } else {
-                            "manual"
-                        };
-                        info!(namespace = %def.namespace, version = %def.version,
-                              classes = def.classes.len(),
-                              mappings = def.mappings.len(),
-                              source = source,
-                              "ontology loaded");
-                        match OntologyRegistry::new(def) {
-                            Ok(r) => Arc::new(r),
-                            Err(e) => {
-                                info!(error = %e, "ontology registry failed to initialize — using empty registry");
-                                Arc::new(OntologyRegistry::empty())
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        info!(error = %e, "ontology KO found but failed to decode — using empty registry");
-                        Arc::new(OntologyRegistry::empty())
-                    }
-                }
-            }
-            _ => {
-                info!("no ontology KO found — using empty registry");
-                Arc::new(OntologyRegistry::empty())
-            }
-        }
-    };
+    // Load ontology from stored Ontology KOs (MRFC-0041) and install it in
+    // the hot-reload slot — S-8 (POC-4): Auto-Discover and REST Ontology
+    // remembers republish through the same path, so the query editor never
+    // waits for a restart.
+    let ontology = crate::http::load_ontology_registry(&kernel);
+    crate::http::install_ontology(ontology.clone());
 
     // Optional HTTP metrics endpoint for Prometheus + Kubernetes probes.
     if let Some(ref addr) = metrics_addr {

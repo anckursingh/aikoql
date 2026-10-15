@@ -1009,7 +1009,8 @@ fn s08_discover_ontology_hot_reloads_the_compile_registry() {
     let empty = crate::OntologyRegistry::empty();
     // Precondition: the exact POC dead end — the studio query fails while no
     // ontology is registered.
-    let before = crate::http::aikoql_endpoint(&k, "MATCH p4d_fact RETURN *", &subject, None, &empty);
+    let before =
+        crate::http::aikoql_endpoint(&k, "MATCH p4d_fact RETURN *", &subject, None, &empty);
     assert!(
         before.is_err(),
         "precondition: the query must fail before discovery: {before:?}"
