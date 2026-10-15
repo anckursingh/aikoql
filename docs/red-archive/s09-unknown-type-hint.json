@@ -1,0 +1,8 @@
+{
+  "id": "s09-unknown-type-hint",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-compiler --lib s09_unknown_type_hint",
+  "captured_at": "2026-10-15T10:53:05Z",
+  "captured_head": "e9b22b28b15063640b91179c01033a0836c23011",
+  "exit_code": 101
+}
