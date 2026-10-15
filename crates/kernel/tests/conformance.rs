@@ -3131,10 +3131,10 @@ fn t34_agents_share_org_knowledge_keep_private_memory() {
         Err(KError::AccessDenied { .. })
     ));
     assert_eq!(
-        k.get(&alice(), &org_id).unwrap().properties.get("policy"),
+        k.get(alice(), &org_id).unwrap().properties.get("policy"),
         Some(&Value::Text("SLA 4h".into()))
     );
-    assert!(k.get(&Subject::new("bob"), &org_id).is_ok());
+    assert!(k.get(Subject::new("bob"), &org_id).is_ok());
 
     // Private memory stays confined: each agent sees only their own.
     assert!(k.get(&support, &a_id).is_ok());

@@ -620,6 +620,42 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
         }
     }
 
+    // S-11 (POC-4): temporal relationships from the S-2 heuristic — a
+    // superseded row with valid_to_asserted matches its successor by tenant
+    // + case_id + kind, with the successor's valid_from == valid_to_asserted.
+    // Type-level lift: retracts (old type → new type), supersedes (reverse).
+    let mut retract_pairs: BTreeSet<(String, String)> = BTreeSet::new();
+    for p in kos {
+        if p.epistemic_status() != EpistemicStatus::Superseded {
+            continue;
+        }
+        let Some(Value::Int(v_to)) = p.extensions.get(KnowledgeObject::EXT_VALID_TO_ASSERTED)
+        else {
+            continue;
+        };
+        let (Some(p_case), Some(p_kind)) = (p.properties.get("case_id"), p.properties.get("kind"))
+        else {
+            continue;
+        };
+        for s in kos {
+            if s.metadata.tenant != p.metadata.tenant {
+                continue;
+            }
+            let Some(Value::Int(v_from)) = s.extensions.get(KnowledgeObject::EXT_VALID_FROM) else {
+                continue;
+            };
+            if v_from != v_to {
+                continue;
+            }
+            if s.properties.get("case_id") != Some(p_case)
+                || s.properties.get("kind") != Some(p_kind)
+            {
+                continue;
+            }
+            retract_pairs.insert((p.metadata.type_name.clone(), s.metadata.type_name.clone()));
+        }
+    }
+
     let mut classes: BTreeMap<String, ClassDef> = BTreeMap::new();
     let mut property_defs: BTreeMap<String, PropertyDef> = BTreeMap::new();
     let mut mappings: Vec<MappingEntry> = Vec::new();
@@ -662,6 +698,28 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
                 name: rel_name.clone(),
                 domain: Some(src_type.clone()),
                 range: None,
+                cardinality: Some(Cardinality::OneToMany),
+                max_count: None,
+            });
+    }
+    // S-11 (POC-4): the inferred temporal relationships join the explicit
+    // RelationshipRef ones; first (domain, range) pair wins per name.
+    for (old_type, new_type) in &retract_pairs {
+        relationships
+            .entry("retracts".into())
+            .or_insert_with(|| RelDef {
+                name: "retracts".into(),
+                domain: Some(old_type.clone()),
+                range: Some(new_type.clone()),
+                cardinality: Some(Cardinality::OneToMany),
+                max_count: None,
+            });
+        relationships
+            .entry("supersedes".into())
+            .or_insert_with(|| RelDef {
+                name: "supersedes".into(),
+                domain: Some(new_type.clone()),
+                range: Some(old_type.clone()),
                 cardinality: Some(Cardinality::OneToMany),
                 max_count: None,
             });
