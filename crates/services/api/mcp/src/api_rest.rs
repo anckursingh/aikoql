@@ -679,6 +679,10 @@ mod tests {
             html.contains("padStart(2,'0')"),
             "prove panel must hex-join the head-hash array"
         );
+        assert!(
+            html.contains("(data.events||0)"),
+            "prove panel must render the events count (events is a number, not an array)"
+        );
     }
 
     #[test]

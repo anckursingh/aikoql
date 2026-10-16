@@ -1516,7 +1516,7 @@ async function verifyProvenance() {
       '<div style="font-size:11px;color:var(--muted);margin-top:4px;">Chain valid: ' + (ok ? 'yes' : 'no') + '</div>' +
       '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Claim: ' + (data.claim || '?') + '</div>' +
       '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Head: ' + headHex.substring(0, 32) + '...</div>' +
-      '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Events: ' + ((data.events||[]).length) + ' in chain</div>' +
+      '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Events: ' + (data.events||0) + ' in chain</div>' +
       '</div>';
   } catch(e) { div.innerHTML = '<div class="error-text">Chain verification failed: '+e.message+'</div>'; }
 }
