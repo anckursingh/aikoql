@@ -869,12 +869,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+        # macos-13 hosted runners are retired (jobs queue forever) — the
+        # Intel mac wheel rides the universal2 build on the arm64 runner
+        # below, so three runners still produce all four wheels.
+        os: [ubuntu-latest, windows-latest, macos-14]
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # universal2 needs both apple-darwin targets (the arm64 side is
+          # native on macos-14; the extra target is inert on linux/windows).
+          targets: x86_64-apple-darwin
       # CI-05: cargo cache in every build job (default key = OS + rust
       # version + Cargo.lock).
       - uses: Swatinem/rust-cache@v2
@@ -889,7 +896,11 @@ jobs:
           cd crates/sdk/python
           rm -rf dist  # stale wheels (e.g. pre-rename builds) ride the
                         # upload glob and PyPI rejects the batch
-          maturin build --release --out dist
+          if [[ "${{ matrix.os }}" == macos-14 ]]; then
+            maturin build --release --out dist --universal2
+          else
+            maturin build --release --out dist
+          fi
           v="${{ needs.validate-versions.outputs.version }}"
           ls "dist/aikoql-${v}"-*.whl >/dev/null || {
             echo "::error::wheel version does not match tag '${v}' (sdk001 parity)"
@@ -907,9 +918,10 @@ jobs:
           if-no-files-found: error
 
   # ── PyPI publish, gated on the wheel matrix + release ───────────
-  # Trusted publishing (OIDC): collects the four matrix wheels and
-  # publishes them in one shot. The skip guard is the rescue path —
-  # re-dispatch over an already-published version must not re-publish.
+  # Trusted publishing (OIDC): collects the matrix wheels (linux +
+  # windows + universal2 mac) and publishes them in one shot. The
+  # skip guard is the rescue path — re-dispatch over an already-published
+  # version must not re-publish.
   pypi-publish:
     name: Publish Python SDK to PyPI
     if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}

@@ -671,12 +671,18 @@ fi
 
 # workflow test 23 — test_pypi_wheel_matrix (D-18, SDK plan §27):
 # the Python SDK ships abi3-py39 wheels — one wheel per platform covers
-# py3.9+, so the release must build on all four (x86_64 linux/windows/
+# py3.9+, so the release must produce all four (x86_64 linux/windows/
 # macos + arm64 macos) and install-check each wheel against the artifact
 # itself before upload: a wheel that cannot be installed or imported
-# fails the release here, not in the wild.
-if ! grep -qF 'os: [ubuntu-latest, windows-latest, macos-13, macos-14]' "$REL"; then
-  echo "ARCH: release.yml lost the 4-OS pypi wheel matrix (D-18)" >&2
+# fails the release here, not in the wild. macos-13 hosted runners are
+# retired (jobs queue forever), so the mac leg runs on macos-14 and the
+# Intel wheel rides maturin's universal2 build (one wheel, both arches).
+if ! grep -qF 'os: [ubuntu-latest, windows-latest, macos-14]' "$REL"; then
+  echo "ARCH: release.yml lost the 3-OS pypi wheel matrix (D-18)" >&2
+  fail=1
+fi
+if ! grep -qF 'maturin build --release --out dist --universal2' "$REL"; then
+  echo "ARCH: release.yml lost the universal2 mac wheel (macos-13 retirement)" >&2
   fail=1
 fi
 if grep -q '^  pypi-wheel-matrix:' "$REL" && \

@@ -16,6 +16,11 @@ on:
   schedule:
     - cron: "17 3 * * 0"
 
+# CodeQL actions/missing-workflow-permissions: every job only reads the
+# repo (artifact uploads need no token scope) — mirror benchmark.yml.
+permissions:
+  contents: read
+
 jobs:
   unit:
     runs-on: ubuntu-latest

@@ -733,7 +733,10 @@ def main(argv=None) -> int:
         (artifacts / "stats.json").write_text(
             json.dumps({"seeds": len(per_seed), "per_seed": per_seed},
                        sort_keys=True, indent=2), encoding="utf-8")
-        print(json.dumps(report, sort_keys=True))
+        # the gates' secret_scan entry is a boolean verdict, not a secret —
+        # the corpus never carries credentials (proving that is the gate's
+        # whole job)
+        print(json.dumps(report, sort_keys=True))  # lgtm[py/clear-text-logging-sensitive-data]
         return 0 if publishable else 1
 
 

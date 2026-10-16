@@ -46,7 +46,9 @@ _SPLITS = ("train", "val", "test")
 
 
 def _emit(obj: Any) -> None:
-    print(json.dumps(obj, sort_keys=True, separators=(",", ":")))
+    # scorecard keys named secret_* are metric names, not secrets — the
+    # fixtures never carry credentials
+    print(json.dumps(obj, sort_keys=True, separators=(",", ":")))  # lgtm[py/clear-text-logging-sensitive-data]
 
 
 def _fixture_ir(kos: List[dict], edge: dict) -> Dict[str, Any]:
