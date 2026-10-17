@@ -362,7 +362,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m venv .venv
-          .venv/bin/pip install -q maturin pytest hypothesis
+          .venv/bin/pip install -q "maturin==1.14.1" pytest hypothesis
           export VIRTUAL_ENV="$PWD/.venv"
           cd crates/sdk/python
           "$VIRTUAL_ENV/bin/maturin" develop --release
@@ -533,7 +533,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m venv .venv
-          .venv/bin/pip install -q maturin pytest hypothesis
+          .venv/bin/pip install -q "maturin==1.14.1" pytest hypothesis
           export VIRTUAL_ENV="$PWD/.venv"
           cd crates/sdk/python
           "$VIRTUAL_ENV/bin/maturin" develop
