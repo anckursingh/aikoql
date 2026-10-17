@@ -28,7 +28,7 @@ done_() { echo "::endgroup::"; }
 # maturin develop needs VIRTUAL_ENV or it targets the wrong interpreter.
 say "toolchain: python venv + native module"
 python3 -m venv /tmp/aikoql-nightly-venv
-/tmp/aikoql-nightly-venv/bin/pip install -q maturin pytest hypothesis
+/tmp/aikoql-nightly-venv/bin/pip install -q "maturin==1.14.1" pytest hypothesis
 export VIRTUAL_ENV=/tmp/aikoql-nightly-venv
 ( cd crates/sdk/python && "$VIRTUAL_ENV/bin/maturin" develop )
 done_

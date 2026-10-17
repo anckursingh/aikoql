@@ -34,7 +34,8 @@ say "2/8 conformance (5 languages + native)"
 # (RED v02-cert-python-native: ModuleNotFoundError on the v0.2.1 run).
 ( cd crates/sdk/python
   python3 -m venv /tmp/aikoql-cert-venv
-  /tmp/aikoql-cert-venv/bin/pip install -q maturin
+  /tmp/aikoql-cert-venv/bin/pip install -q "maturin==1.14.1"
+  export VIRTUAL_ENV=/tmp/aikoql-cert-venv  # maturin>=1.14: develop without it exits 1 (v0.2.3 release failure)
   /tmp/aikoql-cert-venv/bin/maturin develop --release )
 for lang in python go rust typescript java; do
   bash scripts/sdk-conformance.sh --language "$lang" --bin "$BIN"
@@ -48,7 +49,7 @@ say "3/8 python wheel + suite"
 ( cd crates/sdk/python
   rm -rf dist                      # stale wheels ride the install glob
   python3 -m venv /tmp/aikoql-cert-venv
-  /tmp/aikoql-cert-venv/bin/pip install -q maturin pytest hypothesis
+  /tmp/aikoql-cert-venv/bin/pip install -q "maturin==1.14.1" pytest hypothesis
   /tmp/aikoql-cert-venv/bin/maturin build --release --out dist
   /tmp/aikoql-cert-venv/bin/pip install -q "dist/aikoql-"*.whl
   /tmp/aikoql-cert-venv/bin/python -c "import aikoql; print('aikoql', aikoql.__version__)"
