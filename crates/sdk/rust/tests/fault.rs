@@ -42,6 +42,7 @@
 //!     client memory)
 
 use aikoql_sdk::{Client, Error};
+use std::io::BufRead;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -131,8 +132,12 @@ fn spawn_server(bin: &str, token: &str) -> Server {
 }
 
 /// The D-16 fault proxy: one instance, one fault mode, one client
-/// connection. Spawned with `--listen/--target/--mode ...`; RED by
-/// construction — the binary does not exist until the GREEN lands.
+/// connection. The child binds port 0 itself — the kernel assigns the
+/// port atomically — and reports the bound address on stdout. A
+/// parent-side free-port probe is NOT used: between the probe's drop and
+/// the child's bind another parallel leg can steal the port, the child
+/// dies on EADDRINUSE, and the probe's connect can succeed against the
+/// thief's dying listener — the refusal flake fault_delay_response hit.
 fn spawn_proxy(server_addr: &str, args: &[&str]) -> (Killed, String) {
     let bin = proxy_bin();
     if !bin.exists() {
@@ -141,33 +146,27 @@ fn spawn_proxy(server_addr: &str, args: &[&str]) -> (Killed, String) {
             bin.display()
         );
     }
-    // same port-steal retry as spawn_server
-    for _ in 0..3 {
-        let listen = free_addr();
-        let mut child = Command::new(&bin)
-            .arg("--listen")
-            .arg(&listen)
-            .arg("--target")
-            .arg(server_addr)
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn aikoql-fault-proxy");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if TcpStream::connect(&listen).is_ok() {
-                return (Killed(child), listen);
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    panic!("proxy did not come up after 3 attempts");
+    let mut child = Command::new(&bin)
+        .arg("--listen")
+        .arg("127.0.0.1:0")
+        .arg("--target")
+        .arg(server_addr)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn aikoql-fault-proxy");
+    // the child prints the bound address, then serves — a dead child just
+    // closes the pipe and leaves the line empty; the assert is the check
+    let mut line = String::new();
+    let _ = std::io::BufReader::new(&mut child.stdout.take().expect("piped stdout"))
+        .read_line(&mut line);
+    let addr = line.trim().to_string();
+    assert!(
+        !addr.is_empty(),
+        "aikoql-fault-proxy did not report its bound address"
+    );
+    (Killed(child), addr)
 }
 
 fn proxy_bin() -> PathBuf {

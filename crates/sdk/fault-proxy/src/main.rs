@@ -43,6 +43,10 @@
 //!
 //! ponytail: two blocking read/forward threads and one shared Mutex —
 //! this is a test tool, throughput is not a concern.
+//!
+//! Spawn contract: with `--listen <host>:0` the proxy binds, prints its
+//! bound address as one stdout line, and only then accepts — a spawner
+//! reads that line instead of probing a free port.
 
 use aikoql_native as nat;
 use std::io::{BufRead, BufReader, Write};
@@ -396,6 +400,11 @@ fn handle(client: TcpStream, server: TcpStream, m: &Mode) {
 fn main() {
     let (listen, target, mode) = parse_args();
     let listener = TcpListener::bind(&listen).expect("bind --listen");
+    // port 0: the kernel picked the port — report it (the spawn contract;
+    // the probe-handoff race it replaces is described in the rust fault matrix)
+    if listen.ends_with(":0") {
+        println!("{}", listener.local_addr().expect("local addr"));
+    }
     loop {
         let (client, _) = listener.accept().expect("accept");
         let server = match TcpStream::connect(&target) {
