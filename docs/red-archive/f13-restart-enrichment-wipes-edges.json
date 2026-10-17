@@ -1,0 +1,8 @@
+{
+  "id": "f13-restart-enrichment-wipes-edges",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world serve_restart_catchup_preserves_edges_for_relate_replay -- --nocapture",
+  "captured_at": "2026-10-08T10:07:46Z",
+  "captured_head": "b3fc7553a11e794cf53f17012b857116dd9b5a8a",
+  "exit_code": 101
+}

@@ -1,0 +1,8 @@
+{
+  "id": "m-s2-checksum",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/storage-mutation-harness.sh m-s2-checksum",
+  "captured_at": "2026-10-01T11:05:28Z",
+  "captured_head": "f0caaaea2f1e189dc2c1916ff4752a365b15bf69",
+  "exit_code": 101
+}

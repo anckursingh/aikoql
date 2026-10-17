@@ -1,0 +1,2 @@
+SHUFFLE: benchmark.yml lacks the pinned-nightly install step
+EXIT=1

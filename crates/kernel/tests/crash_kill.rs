@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 fn tmp_db(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "aikoql_kill_{}_{}_{}.redb",
+        "aikoql_kill_{}_{}_{}",
         name,
         std::process::id(),
         std::time::SystemTime::now()
@@ -114,7 +114,9 @@ fn d05_kill_during_write_preserves_committed_prefix() {
     let mut k = None;
     let deadline = Instant::now() + Duration::from_secs(10);
     while k.is_none() && Instant::now() <= deadline {
-        if let Ok(engine) = RedbEngine::open(&path) {
+        if let Ok(engine) =
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&path))
+        {
             k = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 7).ok();
         }
         if k.is_none() {
@@ -145,6 +147,6 @@ fn d05_kill_during_write_preserves_committed_prefix() {
         );
     }
 
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&path);
     let _ = std::fs::remove_file(&progress);
 }

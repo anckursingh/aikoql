@@ -1,0 +1,14 @@
+# github.com/anckursingh/aikoql/sdk/go [github.com/anckursingh/aikoql/sdk/go.test]
+.\transactions_test.go:60:15: c.Begin undefined (type *Client has no field or method Begin)
+.\transactions_test.go:64:28: undefined: StagedOp
+.\transactions_test.go:76:24: undefined: StagedOp
+.\transactions_test.go:97:15: c.Begin undefined (type *Client has no field or method Begin)
+.\transactions_test.go:120:15: c.Begin undefined (type *Client has no field or method Begin)
+.\transactions_test.go:150:15: c.Begin undefined (type *Client has no field or method Begin)
+.\transactions_test.go:154:28: undefined: StagedOp
+.\transactions_test.go:172:16: c.Begin undefined (type *Client has no field or method Begin)
+.\transactions_test.go:176:29: undefined: StagedOp
+FAIL	github.com/anckursingh/aikoql/sdk/go [build failed]
+?   	github.com/anckursingh/aikoql/sdk/go/examples/web-service	[no test files]
+FAIL
+EXIT=1

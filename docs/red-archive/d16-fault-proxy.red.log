@@ -1,0 +1,107 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.61s
+     Running tests\fault.rs (target\debug\deps\fault-1e45504577391acc.exe)
+
+running 13 tests
+test fault_drop_request ... FAILED
+test fault_duplicate_response ... FAILED
+test fault_drop_response ... FAILED
+test fault_delay_response ... FAILED
+test fault_inject_notification ... FAILED
+test fault_close_connection ... FAILED
+test fault_corrupt_frame ... FAILED
+test fault_inject_stale_response ... FAILED
+test fault_reorder_response ... FAILED
+test fault_slow_server ... FAILED
+test fault_oversized_response ... FAILED
+test fault_truncate_frame ... FAILED
+test fault_half_close ... FAILED
+
+failures:
+
+---- fault_drop_request stdout ----
+
+thread 'fault_drop_request' (11616) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- fault_duplicate_response stdout ----
+
+thread 'fault_duplicate_response' (29444) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_drop_response stdout ----
+
+thread 'fault_drop_response' (22276) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_delay_response stdout ----
+
+thread 'fault_delay_response' (21076) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_inject_notification stdout ----
+
+thread 'fault_inject_notification' (32316) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_close_connection stdout ----
+
+thread 'fault_close_connection' (29452) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_corrupt_frame stdout ----
+
+thread 'fault_corrupt_frame' (5912) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_inject_stale_response stdout ----
+
+thread 'fault_inject_stale_response' (34348) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_reorder_response stdout ----
+
+thread 'fault_reorder_response' (28036) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_slow_server stdout ----
+
+thread 'fault_slow_server' (32116) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_oversized_response stdout ----
+
+thread 'fault_oversized_response' (30296) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_truncate_frame stdout ----
+
+thread 'fault_truncate_frame' (29328) panicked at crates\sdk\rust\tests\fault.rs:131:9:
+aikoql-fault-proxy missing at E:\dreams\Mnemosyne\crates\sdk\rust\../../../target/debug/aikoql-fault-proxy.exe — D-16 RED: the §18 fault proxy has not landed yet
+
+---- fault_half_close stdout ----
+
+thread 'fault_half_close' (3204) panicked at crates\sdk\rust\tests\fault.rs:116:9:
+server did not come up on 127.0.0.1:55334
+
+
+failures:
+    fault_close_connection
+    fault_corrupt_frame
+    fault_delay_response
+    fault_drop_request
+    fault_drop_response
+    fault_duplicate_response
+    fault_half_close
+    fault_inject_notification
+    fault_inject_stale_response
+    fault_oversized_response
+    fault_reorder_response
+    fault_slow_server
+    fault_truncate_frame
+
+test result: FAILED. 0 passed; 13 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.75s
+
+error: test failed, to rerun pass `-p aikoql-sdk --test fault`
+EXIT=101

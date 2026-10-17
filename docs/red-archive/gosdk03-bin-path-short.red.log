@@ -1,0 +1,11 @@
+--- FAIL: TestRealServerRoundTrip (0.00s)
+    integration_test.go:81: spawn ../../target/release/aikoql-mcp: exec: "../../target/release/aikoql-mcp": executable file not found in %PATH%
+--- FAIL: TestRealServerRejectsWrongToken (0.00s)
+    integration_test.go:150: spawn ../../target/release/aikoql-mcp: exec: "../../target/release/aikoql-mcp": executable file not found in %PATH%
+--- FAIL: TestRealServerStdioRoundTrip (0.00s)
+    integration_test.go:179: DialStdio: aikoql: start ../../target/release/aikoql-mcp: exec: "../../target/release/aikoql-mcp": executable file not found in %PATH%
+FAIL
+FAIL	github.com/ancku/aikoql-sdk	0.381s
+?   	github.com/ancku/aikoql-sdk/examples/web-service	[no test files]
+FAIL
+EXIT=1

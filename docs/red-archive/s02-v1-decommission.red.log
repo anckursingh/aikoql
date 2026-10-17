@@ -1,0 +1,15 @@
+error: failed to load manifest for workspace member `C:\Users\ancku\AppData\Local\Temp\s02-red\crates\kernel`
+referenced by workspace at `C:\Users\ancku\AppData\Local\Temp\s02-red\Cargo.toml`
+
+Caused by:
+  failed to load manifest for dependency `aikoql-runtime`
+
+Caused by:
+  failed to load manifest for dependency `aikoql-storage`
+
+Caused by:
+  failed to read `C:\Users\ancku\AppData\Local\Temp\s02-red\crates\storage\aikoql\Cargo.toml`
+
+Caused by:
+  The system cannot find the path specified. (os error 3)
+EXIT=101

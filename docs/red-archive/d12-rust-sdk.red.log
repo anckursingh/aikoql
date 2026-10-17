@@ -1,0 +1,27 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests\conformance.rs (target\debug\deps\conformance-bd0421a7fa181bb0.exe)
+
+running 1 test
+test sdk_conformance_rust ... FAILED
+
+failures:
+
+---- sdk_conformance_rust stdout ----
+
+thread 'sdk_conformance_rust' (18212) panicked at crates\sdk\rust\tests\conformance.rs:39:5:
+sdk-conformance --language rust failed: exit code: 2
+stdout:
+
+stderr:
+sdk-conformance: language 'rust' not implemented yet (D-12..D-14)
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    sdk_conformance_rust
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+error: test failed, to rerun pass `-p aikoql-sdk --test conformance`
+EXIT=101

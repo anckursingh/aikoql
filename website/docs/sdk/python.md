@@ -14,14 +14,16 @@ plus a pure-Python MCP client for server mode, unified behind `Agent.connect`.
 pip install aikoql
 ```
 
+Embedded mode needs the native wheel (PyO3 bindings); server mode is pure
+Python.
+
 ## Usage
 
 ```python
 from aikoql import Agent
 
 # Embedded mode — a fresh path creates an aikoql-v2 database directory
-# (existing .redb files open as redb, a v1 WAL opens as v1 — auto-detection,
-# never reinterpretation):
+# (the only engine; legacy .redb/v1 files fail closed):
 db = Agent.connect("./kb")
 
 # Server mode — MCP over TCP (P3-M1 servers require a --tcp-token):

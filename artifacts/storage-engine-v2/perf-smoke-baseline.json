@@ -1,10 +1,14 @@
 {
-  "generated_at": "2026-09-20T14:40:00Z",
+  "generated_at": "2026-09-25T07:45:00Z",
   "machine": "windows/x86_64; 8 logical cores; AMD64 Family 23 Model 24 Stepping 1, AuthenticAMD (laptop, first genuine measurement)",
-  "note": "The harness result rows label the field p50_us but carry nanoseconds (58900 = 58.9 us at 1M — the gate-5 magnitude); the budget is ratio-wise, so units cancel. Budget 3x until CI runs pin the runner variance.",
+  "note": "The harness result rows label the field p50_us but carry nanoseconds (58900 = 58.9 us at 1M — the gate-5 magnitude); the budget is ratio-wise, so units cancel. Budget 3x until CI runs pin the runner variance. CI-03 (review W1–W5): write_p50_ns is the matrix's ingestion (W6) row — the mean commit wall per put (fsync-bound, sync durability); scan_p50_ns is the type scan (W5) row; compact_wall_ms + compact_allocs are the compaction_smoke cell — one merge of two 25K-key segments under a counting allocator.",
   "cells": {
     "w1_ko_get_p50_ns": 6600.0,
     "w2_head_get_p50_ns": 6300.0,
-    "hot_head_p50_ns": 1300.0
+    "write_p50_ns": 747055.0,
+    "scan_p50_ns": 99300.0,
+    "hot_head_p50_ns": 1300.0,
+    "compact_wall_ms": 37.0,
+    "compact_allocs": 50885.0
   }
 }

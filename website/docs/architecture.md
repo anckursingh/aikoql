@@ -22,7 +22,7 @@ aikoql is organized as a layered operating system for knowledge:
 │  MVCC · OCC · HLC · RBAC · Audit · CDC        │
 ├──────────────────────────────────────────────┤
 │           STORAGE KERNEL                      │
-│  aikoql-v2 LSM (default) · redb · EncryptedStore│
+│  aikoql-v2 LSM · EncryptedStore               │
 └──────────────────────────────────────────────┘
 ```
 
@@ -74,8 +74,9 @@ The kernel now treats knowledge as a versioned, evidence-backed, evolving object
 
 ### Storage
 
-One `StorageEngine` trait, three engines, ratified default **aikoql-v2**
-(2026-09-07 ADR, `docs/STORAGE-ENGINE-ARCHITECTURE-DECISION.md`):
+One engine ships: **aikoql-v2** (ratified 2026-09-07 ADR,
+`docs/STORAGE-ENGINE-ARCHITECTURE-DECISION.md`). The trait remains, but redb
+and aikoql v1 were decommissioned in S-02 — legacy files fail closed.
 
 - **aikoql-v2 (default)** — Segmented LSM tree written in Rust: group-commit
   WAL → memtable → immutable segments (bloom filters, block index, v4 dense
@@ -85,16 +86,12 @@ One `StorageEngine` trait, three engines, ratified default **aikoql-v2**
   foundation for sharding and replication without a format rewrite. Bounded
   memory (LRU block cache) and bounded recovery (directory checkpoints: at
   600K updates, open = 75 ms / 1.7 MB vs 348 ms / 41 MB full replay).
-- **redb** — Copy-on-write B-tree, single file. Compatibility fallback:
-  snapshots and pre-v2 databases keep opening as redb.
-- **aikoql v1** — WAL + RAM mirror. Read-hot profile for RAM-affordant
-  deployments with bounded datasets.
-- **EncryptedStore** — Wraps any engine with AES-256-GCM.
+- **EncryptedStore** — Wraps the engine with AES-256-GCM.
 
-The default auto-detects the format at the path: a fresh path creates
-aikoql-v2, an existing redb file opens as redb, a v1 WAL opens as v1 — an
-upgrade never reinterprets an existing database. The certified cross-engine
-matrix (W1–W8, resources, gate status) lives in [Benchmarks](/docs/benchmarks).
+A fresh path creates an aikoql-v2 directory; opening a legacy redb file or
+v1 WAL fails closed with an explicit error. The certified matrix (W1–W8,
+resources, gate status — including the historical redb/v1 columns) lives in
+[Benchmarks](/docs/benchmarks).
 
 ### Event System (CDC)
 
@@ -217,7 +214,7 @@ Upload (PDF/DOCX/MD) → D1-D3 (OCR, AST, Classify)
 | Entry Point | Protocol | Use Case |
 |---|---|---|
 | `aikoql serve` | MCP (JSON-RPC) over stdio/TCP | AI agents |
-| `:9091/api/v1/*` | REST (HTTP/JSON) | Web apps, curl (40+ endpoints) |
+| `:9091/api/v1/*` | REST (HTTP/JSON) | Web apps, curl (60+ endpoints) |
 | `:9091/studio` | Studio SPA (14 panels) | Full management UI |
 | `aikoql shell` | Interactive REPL (9 commands) | Human queries |
 | `:9091/health` | HTTP health check | Kubernetes probes |
@@ -239,38 +236,41 @@ Remember → Property Types → Uniqueness → Cardinality → Domain → Check 
 
 ```
 crates/
-├── kernel/           Knowledge Kernel (MVCC, OCC, HLC, RBAC, audit)
-├── storage/          Storage engines behind one StorageEngine trait
-│   ├── aikoql-v2/    Segmented LSM (default): WAL + memtable + tiered
-│   │                 compaction, identity/replica/placement directories,
-│   │                 checkpoint-bounded recovery
-│   └── aikoql/       v1 WAL + RAM mirror (read-hot profile)
+├── kernel/           Knowledge Kernel (MVCC, OCC, HLC, RBAC, audit, constraint engine)
+├── storage/
+│   └── aikoql-v2/    Segmented LSM (the only engine): WAL + memtable + tiered
+│                     compaction, identity/replica/placement directories,
+│                     checkpoint-bounded recovery
 ├── compiler/         aikoql parser, semantic analyzer, planner
 ├── runtime/          Physical plan interpreter
-├── constraints/      Constraint engine (C1-C9, ~95% complete)
 ├── engines/
 │   ├── graph/        Relationship index + BFS traversal
 │   ├── vector/       HNSW + Tantivy (BM25) hybrid search
-│   └── scheduler/    Background jobs (index, compaction, rotation)
-├── services/
-│   ├── api/mcp/      MCP server + REST API (40+ endpoints) + Studio UI (14 panels)
+│   ├── scheduler/    Background jobs (index, compaction, rotation)
 │   ├── reasoning/    If-then rule engine (first-class derive: premises → DERIVED_FROM)
-│   ├── semantic/     AI embedding enrichment
-│   └── ingestion/    Document ingestion pipeline (D1-D9) + knowledge compilers (A1-A9)
-├── connectors/
+│   └── semantic/     AI embedding enrichment
+├── ingestion/        Document pipeline (D1-D9) + knowledge compilers (A1-A9)
+├── providers/
 │   ├── postgres/     PostgreSQL import
 │   ├── sqlite/       SQLite import
 │   ├── mongodb/      MongoDB import
-│   └── neo4j/        Neo4j import
-├── sdk/
-│   └── python/       PyO3 native bindings + MCP client (P3-M9: the one
-│                     first-party SDK; other languages use standard MCP
-│                     clients — drivers return with the primary-DB roadmap)
+│   ├── neo4j/        Neo4j import
+│   └── sdk/          Provider SDK
+├── services/
+│   └── api/mcp/      MCP server + REST API (60+ endpoints) + Studio UI (14 panels)
+├── protocol/
+│   └── native/       The §6 framed native wire (SDK fault-matrix contract)
+├── certification/    Certification harness
+└── sdk/
+    ├── python/       PyO3 native bindings + MCP client
+    ├── rust/         Rust SDK + fault matrix
+    ├── fault-proxy/  §18 fault proxy (13 modes)
+    └── (+ TypeScript, Go, Java SDKs)
 ```
 
 ## Dependencies
 
 **Zero external runtime dependencies.** The binary is a single self-contained file:
-- Windows: 3.4 MB (PE32+ x86-64)
-- Linux: 3.7 MB (ELF64 static musl, no glibc)
-- Embedded database (aikoql-v2 segmented LSM by default; redb and aikoql v1 as profile engines) — no external DB server required
+- Windows: ~38 MB (PE32+ x86-64)
+- Linux: ~38 MB (ELF64 static musl, no glibc)
+- Embedded database (aikoql-v2 segmented LSM — the only engine) — no external DB server required

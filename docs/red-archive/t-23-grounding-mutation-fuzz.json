@@ -1,0 +1,8 @@
+{
+  "id": "t-23-grounding-mutation-fuzz",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_grounding_fuzz.py -q",
+  "captured_at": "2026-10-04T10:27:34Z",
+  "captured_head": "f0d1f36ceb883c53c8104c19771c41b38dd51b64",
+  "exit_code": 1
+}

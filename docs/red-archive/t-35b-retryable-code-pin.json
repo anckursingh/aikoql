@@ -1,0 +1,8 @@
+{
+  "id": "t-35b-retryable-code-pin",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test cli_contract cl01b_error_code_source_completeness",
+  "captured_at": "2026-10-07T19:07:22Z",
+  "captured_head": "554ff5d705b18c49428ac48117cfe5d7de65e619",
+  "exit_code": 101
+}

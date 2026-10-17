@@ -1,0 +1,8 @@
+{
+  "id": "s04-v2adopt-language",
+  "pre_fix_commit": "75a5d89",
+  "command": "sh -c if grep -rEn "V2ADOPT_" crates scripts .github tests/gated.toml AGENTS.md; then exit 1; fi",
+  "captured_at": "2026-09-25T03:54:32Z",
+  "captured_head": "75a5d89e2eb0a550c9428dd9d195fd2c741ea62c",
+  "exit_code": 1
+}

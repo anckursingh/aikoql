@@ -1,0 +1,12 @@
+T-01 RED: canonical training-example schema — tests fail against the empty package.
+Run: .venv/Scripts/python.exe -m pytest -q (cwd training/, pytest 9.1.1)
+Pre-fix head: 662f974 (T-00 re-stamp tip, branch feature/aikoql-training-data)
+
+tests/conftest.py:7: in <module>
+    from aikoql_training.models import SCHEMA_VERSION, compute_id
+E   ModuleNotFoundError: No module named 'aikoql_training.models'
+
+21 tests blocked at collection (test_schema.py + test_schema_fuzz.py);
+aikoql_training.models does not exist yet. GREEN = models.py with
+fail-closed validation, canonical sort-keyed serialization and
+content-derived example IDs (design §24).

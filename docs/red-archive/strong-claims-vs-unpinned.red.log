@@ -1,0 +1,190 @@
+STRONG CLAIMS: uncovered claim at crates/kernel/benches/kom_benchmark.rs:127 - register it with an evidence test, or the claim loses its claim
+  // R6 guard: a narrow-prefix scan over a 100K-key store must stay bounded
+STRONG CLAIMS: uncovered claim at crates/kernel/src/async_kernel.rs:29 - register it with an evidence test, or the claim loses its claim
+  /// Queue-wait metrics for the bounded async facade (TDD-RUNTIME-001).
+STRONG CLAIMS: uncovered claim at crates/kernel/src/async_kernel.rs:294 - register it with an evidence test, or the claim loses its claim
+  // P4-M7 (TDD-RUNTIME-001) — run001: overload is bounded + measurable.
+STRONG CLAIMS: uncovered claim at crates/kernel/src/async_kernel.rs:295 - register it with an evidence test, or the claim loses its claim
+  // RED state: `bounded`/`queue_stats`/`wait_p99_ns` do not exist yet.
+STRONG CLAIMS: uncovered claim at crates/kernel/src/async_kernel.rs:299 - register it with an evidence test, or the claim loses its claim
+  /// the semaphore and drain — overload creates bounded concurrent work,
+STRONG CLAIMS: uncovered claim at crates/kernel/src/async_kernel.rs:338 - register it with an evidence test, or the claim loses its claim
+  /// record a measurable, bounded queue wait (p99 above zero, under 1 s
+STRONG CLAIMS: uncovered claim at crates/kernel/src/catalog.rs:537 - register it with an evidence test, or the claim loses its claim
+  // ponytail: the open-time convergence is O(committed heads) per
+STRONG CLAIMS: uncovered claim at crates/kernel/src/catalog.rs:538 - register it with an evidence test, or the claim loses its claim
+  // crashed declaration — bounded by the crash itself, not the
+STRONG CLAIMS: uncovered claim at crates/kernel/src/eval.rs:175 - register it with an evidence test, or the claim loses its claim
+  /// ponytail: O(n²) exact scan; sufficient for evaluation corpora and small
+STRONG CLAIMS: uncovered claim at crates/kernel/src/index.rs:61 - register it with an evidence test, or the claim loses its claim
+  /// P5-M22: bounded wait until the maintainer has applied every
+STRONG CLAIMS: uncovered claim at crates/kernel/src/index.rs:138 - register it with an evidence test, or the claim loses its claim
+  /// itself — a delete must stay O(1)).
+STRONG CLAIMS: uncovered claim at crates/kernel/src/index/coordinator.rs:79 - register it with an evidence test, or the claim loses its claim
+  // candidates and never needs this O(store) scan.
+STRONG CLAIMS: uncovered claim at crates/kernel/src/index/property.rs:154 - register it with an evidence test, or the claim loses its claim
+  // P5-M17b — the O(1) freshness proof. rebuild stamps the head it
+STRONG CLAIMS: uncovered claim at crates/kernel/src/index/unified.rs:211 - register it with an evidence test, or the claim loses its claim
+  // P4-M7 (TDD-VECTOR-002): fires at most once per threshold crossing,
+STRONG CLAIMS: uncovered claim at crates/kernel/src/knowledge/ontology.rs:419 - register it with an evidence test, or the claim loses its claim
+  /// Audit counter: one increment per physical-type resolution. Pins O(1):
+STRONG CLAIMS: uncovered claim at crates/kernel/src/knowledge/ontology.rs:521 - register it with an evidence test, or the claim loses its claim
+  /// TDD-COMP-001 (P4-M7): O(1) via the `by_physical_type` index — one hash
+STRONG CLAIMS: uncovered claim at crates/kernel/src/knowledge/ontology.rs:536 - register it with an evidence test, or the claim loses its claim
+  /// for O(1) average resolution.
+STRONG CLAIMS: uncovered claim at crates/kernel/src/knowledge/ontology.rs:1315 - register it with an evidence test, or the claim loses its claim
+  // TDD-COMP-001 (P4-M7): physical-type index — O(1) resolution
+STRONG CLAIMS: uncovered claim at crates/kernel/src/knowledge/ontology.rs:1320 - register it with an evidence test, or the claim loses its claim
+  // The probe counter pins O(1) average: each lookup costs exactly ONE
+STRONG CLAIMS: uncovered claim at crates/kernel/src/lifecycle/constraint.rs:707 - register it with an evidence test, or the claim loses its claim
+  // ponytail: O(n²) duplicate scan — inference is off the write path
+STRONG CLAIMS: uncovered claim at crates/kernel/src/security/audit.rs:187 - register it with an evidence test, or the claim loses its claim
+  // ponytail: naive scan — O(n) over audit log. Fine until millions of
+STRONG CLAIMS: uncovered claim at crates/kernel/src/security/tenant.rs:71 - register it with an evidence test, or the claim loses its claim
+  // Determine tenant by loading the KO — ponytail: O(n) scan,
+STRONG CLAIMS: uncovered claim at crates/kernel/src/statistics.rs:116 - register it with an evidence test, or the claim loses its claim
+  // ponytail: full head walk per analyze — O(store); analyze is an
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/cache.rs:17 - register it with an evidence test, or the claim loses its claim
+  /// Simple LRU cache bounded by `capacity`.
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/repository.rs:10 - register it with an evidence test, or the claim loses its claim
+  //! BTree `range()` scans are naturally prefix-bounded — O(log N + matches).
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/repository.rs:27 - register it with an evidence test, or the claim loses its claim
+  //! space (O(log N + per-type) instead of O(N)). The index is a candidate set —
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/repository.rs:403 - register it with an evidence test, or the claim loses its claim
+  // Type index (R9: O(log N + per-type) scoped scans)
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/repository.rs:452 - register it with an evidence test, or the claim loses its claim
+  /// ponytail: O(derived-index) memory for the two key sets — rebuild is a
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/repository.rs:720 - register it with an evidence test, or the claim loses its claim
+  /// P4-M4 — bounded predecessor lookup (TDD-KERNEL-002): the newest
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/repository.rs:858 - register it with an evidence test, or the claim loses its claim
+  /// the first seq past `after_seq` — no whole-journal scan, bounded by
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/store.rs:69 - register it with an evidence test, or the claim loses its claim
+  /// Implementations MUST seek directly to the prefix range (O(log n) +
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/store.rs:70 - register it with an evidence test, or the claim loses its claim
+  /// O(prefix-range)) rather than iterating from the beginning of the key
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/store.rs:71 - register it with an evidence test, or the claim loses its claim
+  /// space (O(all-keys)). Backends that cannot support this (e.g. external
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/store.rs:74 - register it with an evidence test, or the claim loses its claim
+  /// P4-M4 — bounded forward seek: ascending entries with the given
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/store.rs:87 - register it with an evidence test, or the claim loses its claim
+  /// P4-M4 — bounded predecessor lookup: the single row with the given
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/store.rs:93 - register it with an evidence test, or the claim loses its claim
+  /// Default filters a full scan (correct, O(prefix-range)); engines with
+STRONG CLAIMS: uncovered claim at crates/kernel/src/storage/store.rs:156 - register it with an evidence test, or the claim loses its claim
+  /// next_back step finds the predecessor or proves absence (O(log n)).
+STRONG CLAIMS: uncovered claim at crates/kernel/src/transaction/kernel.rs:314 - register it with an evidence test, or the claim loses its claim
+  /// Retried calls with the same key commit exactly once (MRFC-0011 req 10).
+STRONG CLAIMS: uncovered claim at crates/kernel/src/transaction/kernel.rs:984 - register it with an evidence test, or the claim loses its claim
+  /// Record detected violations on the bounded in-memory diagnostics ring
+STRONG CLAIMS: uncovered claim at crates/kernel/src/transaction/kernel.rs:3185 - register it with an evidence test, or the claim loses its claim
+  /// R9: walks the `type/` secondary index (O(log N + per-type)) instead of
+STRONG CLAIMS: uncovered claim at crates/kernel/src/transaction/kernel.rs:3222 - register it with an evidence test, or the claim loses its claim
+  /// few and metadata ops are rare, so the O(heads) walk is fine.
+STRONG CLAIMS: uncovered claim at crates/kernel/src/transaction/kernel.rs:3240 - register it with an evidence test, or the claim loses its claim
+  /// this list via `scan_by_type_range`, so memory is bounded by the batch
+STRONG CLAIMS: uncovered claim at crates/kernel/src/transaction/kernel.rs:3337 - register it with an evidence test, or the claim loses its claim
+  /// Return all distinct type names from head objects. O(n) scan;
+STRONG CLAIMS: uncovered claim at crates/kernel/src/transaction/kernel/ops.rs:28 - register it with an evidence test, or the claim loses its claim
+  //!   TTL-bounded valid time, confidence context);
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/conformance.rs:1146 - register it with an evidence test, or the claim loses its claim
+  // regression) and every write must land exactly once.
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/conformance.rs:1202 - register it with an evidence test, or the claim loses its claim
+  // Every write landed exactly once: 1 seed + WRITERS×UPDATES entries,
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/conformance.rs:3691 - register it with an evidence test, or the claim loses its claim
+  // Wait for completion (bounded poll — the wait itself never journals).
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/experiences.rs:3 - register it with an evidence test, or the claim loses its claim
+  //! authority, TTL-bounded validity, reuse-condition gating,
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/index_lifecycle.rs:285 - register it with an evidence test, or the claim loses its claim
+  /// cardinality (the per-upsert all-bucket sweep — O(buckets) every call) and
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/index_subsystem.rs:285 - register it with an evidence test, or the claim loses its claim
+  // rebuild is O(committed heads). The SDK re-declares the same-shape index on
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/qa2_concurrency.rs:48 - register it with an evidence test, or the claim loses its claim
+  // QA2-CONC-002 — concurrent ingestion commits exactly once per key
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/qa2_concurrency.rs:89 - register it with an evidence test, or the claim loses its claim
+  // The shared key commits exactly once; every thread saw the same KO.
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/qa2_concurrency.rs:306 - register it with an evidence test, or the claim loses its claim
+  // Every update committed exactly once, in a gapless chain — and there is
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/transactions.rs:630 - register it with an evidence test, or the claim loses its claim
+  // B appears exactly once and is stamped exactly once (one version bump).
+STRONG CLAIMS: uncovered claim at crates/kernel/tests/txn_contract.rs:265 - register it with an evidence test, or the claim loses its claim
+  // Every create committed exactly once — distinct koids, no conflicts.
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/cache.rs:1 - register it with an evidence test, or the claim loses its claim
+  //! SE2-M7 — bounded raw-block cache, SE2-M9 — raw bytes (v2 blocks decode
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/cache.rs:14 - register it with an evidence test, or the claim loses its claim
+  //! gen — hits stay O(1) (hash + stamp only); eviction pops the min-gen
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/cache.rs:15 - register it with an evidence test, or the claim loses its claim
+  //! heap node (O(log n)) and discards stale nodes (a key touched since
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/cache.rs:17 - register it with an evidence test, or the claim loses its claim
+  //! the map, so garbage stays bounded; an intrusive list (O(1) evict,
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/cache.rs:150 - register it with an evidence test, or the claim loses its claim
+  /// Rebuilds the heap from the live entries (O(n) heapify) — the
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/cache.rs:270 - register it with an evidence test, or the claim loses its claim
+  /// P5-M25 RED — a hit must be O(1): it may hash and stamp, but it must
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/cache.rs:355 - register it with an evidence test, or the claim loses its claim
+  /// P5-M30 (P0-04) — the lazy-deletion heap's garbage stays bounded:
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/cache.rs:447 - register it with an evidence test, or the claim loses its claim
+  /// heap garbage stays bounded, and eviction strands never outlive the
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/compaction.rs:17 - register it with an evidence test, or the claim loses its claim
+  //! sequence of bounded segments (chunk cap, 0 = one unbounded segment)
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/compaction.rs:102 - register it with an evidence test, or the claim loses its claim
+  /// HashSet, taking the per-key cost from O(k²) to O(k). The M46
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/compaction.rs:153 - register it with an evidence test, or the claim loses its claim
+  /// bounded L1 segments under `dir` (SE2-M20): live chunks publish as
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/compaction.rs:238 - register it with an evidence test, or the claim loses its claim
+  // the per-key cost is O(k) instead of O(k²) — the k-cells put
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/compaction.rs:247 - register it with an evidence test, or the claim loses its claim
+  // set tier (the O(k²) signature below the crossover).
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:10 - register it with an evidence test, or the claim loses its claim
+  //! queue up and commit as groups — one fsync per group, bounded by
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:167 - register it with an evidence test, or the claim loses its claim
+  /// amplification drops from quadratic to ~O(n log n).
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:184 - register it with an evidence test, or the claim loses its claim
+  /// (one manifest record each) so compaction memory is bounded by the
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:238 - register it with an evidence test, or the claim loses its claim
+  /// compaction; the write trigger reads these in O(1) instead of
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:304 - register it with an evidence test, or the claim loses its claim
+  /// (a fresh bounded(1) per batch — std has no oneshot).
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:431 - register it with an evidence test, or the claim loses its claim
+  /// P4-M5 — bounded, sampled per-request read trace. `record` assigns the
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:820 - register it with an evidence test, or the claim loses its claim
+  // over the manifest (O(segments) once per open, never per write).
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:1179 - register it with an evidence test, or the claim loses its claim
+  /// 4th — write amplification ~O(n log n) instead of quadratic.
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:1187 - register it with an evidence test, or the claim loses its claim
+  // at open/flush/compaction): an O(1) read replaces the M35
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:1411 - register it with an evidence test, or the claim loses its claim
+  /// rid-filtered bounded probe, newest-first; the object's own tombstone
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:1423 - register it with an evidence test, or the claim loses its claim
+  // its anchor decodes O(RESTART_INTERVAL) entries instead of
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:1634 - register it with an evidence test, or the claim loses its claim
+  // per-resolution O(B) retain (O(B²) worst case per segment pass)
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:1635 - register it with an evidence test, or the claim loses its claim
+  // becomes one O(B) compaction at the end of each pass.
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:1715 - register it with an evidence test, or the claim loses its claim
+  // R4-P1-03 — one O(B) compaction per segment pass; the counter
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:2093 - register it with an evidence test, or the claim loses its claim
+  // authoritative backlog (O(flushed), never O(all segments)).
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:2196 - register it with an evidence test, or the claim loses its claim
+  // the tail copy is O(writes interleaved into B's I/O window);
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:2335 - register it with an evidence test, or the claim loses its claim
+  /// volume, so the C-phase renames are O(1) directory moves). Per-process
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:2475 - register it with an evidence test, or the claim loses its claim
+  // of the data dir, so the renames are O(1) directory moves; the open
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:2694 - register it with an evidence test, or the claim loses its claim
+  // P5-M40 — recompute the authoritative backlog (O(segments) once per
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:2757 - register it with an evidence test, or the claim loses its claim
+  /// write trigger reads the authoritative State counters in O(1) — this
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:3100 - register it with an evidence test, or the claim loses its claim
+  /// The committer: drain the queue into groups bounded by the caps and
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:3120 - register it with an evidence test, or the claim loses its claim
+  // O(g²) fold (P1-02), the seqs buffer is cleared and reused (P1-03).
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/db.rs:3395 - register it with an evidence test, or the claim loses its claim
+  // cannot produce. Retry a bounded window on WouldBlock; a live second
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/src/engine.rs:46 - register it with an evidence test, or the claim loses its claim
+Traceback (most recent call last):
+  File "<stdin>", line 31, in <module>
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 36: character maps to <undefined>
+EXIT=1

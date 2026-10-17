@@ -1,0 +1,8 @@
+{
+  "id": "t-29-ci-reshape",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-07T12:52:13Z",
+  "captured_head": "1bae3c487dc63c847ab4cf88973c63363851a01b",
+  "exit_code": 1
+}

@@ -1,0 +1,33 @@
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:29://!   `V2ADOPT_NIGHTLY=1` only (smoke has no committed 2K baseline and
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:32://! Sizing is strict opt-in: `V2ADOPT_NIGHTLY=1` (100K KOs / 10K deep × 10
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:34://! other value = FAIL (no silent skips). `V2ADOPT_LOADER=1` gates the RSS
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:41://! `V2ADOPT_NIGHTLY=1`, so a smoke run never clobbers the canonical
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:42://! artifacts (SE2-M19). `V2ADOPT_PERF_SMOKE=1` (P1-6, strict opt-in,
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:71:const NIGHTLY_ENV: &str = "V2ADOPT_NIGHTLY";
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:72:const LOADER_ENV: &str = "V2ADOPT_LOADER";
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:73:const LOADER_BACKEND_ENV: &str = "V2ADOPT_LOADER_BACKEND";
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:74:const BACKEND_ENV: &str = "V2ADOPT_BACKEND";
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:133:        Ok("1") => "V2ADOPT_NIGHTLY",
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:134:        Ok("1m") => "V2ADOPT_NIGHTLY=1m",
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:142:/// V2ADOPT_BACKEND=aikoql leg (the old republish job) panics HERE, the
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:1177:    // PR6-F6 (P1-6): V2ADOPT_PERF_SMOKE=1 (strict opt-in, smoke size)
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:1180:    let perf_smoke = match std::env::var("V2ADOPT_PERF_SMOKE") {
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:1183:        other => panic!("V2ADOPT_PERF_SMOKE strict opt-in: unset or \"1\", got {other:?}"),
+crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs:1191:        // smoke gets its own -smoke suffix (V2ADOPT_NIGHTLY stays unset, so
+crates/storage/aikoql-v2/tests/scale_certification.rs:17://!    (`V2ADOPT_NIGHTLY=1`, regenerating workloads.md).
+crates/storage/aikoql-v2/tests/scale_certification.rs:880:        .env("V2ADOPT_NIGHTLY", "1")
+crates/storage/aikoql-v2/tests/scale_certification.rs:1132:        "`v2_m7_workloads` child with `V2ADOPT_NIGHTLY=1` — the same harness;\n\
+scripts/artifact_schema.py:29:        # appends its "did the run set V2ADOPT_PERF_SMOKE=1?" hint only to
+scripts/gate5-check.py:12:    V2ADOPT_NIGHTLY=1m V2ADOPT_BACKEND=aikoql-v2 AIKOQL_REPORT_WRITE=1 \
+scripts/perf-smoke-check.py:45:        hint = " (did the run set V2ADOPT_PERF_SMOKE=1?)" if e.unreadable else ""
+scripts/perf-smoke.sh:7:#                       (V2ADOPT_PERF_SMOKE=1 — the arm that makes a smoke
+scripts/perf-smoke.sh:20:V2ADOPT_PERF_SMOKE=1 AIKOQL_REPORT_WRITE=1 \
+.github/workflows/baseline-guard.yml:14:# re-adding a V2ADOPT_BACKEND=aikoql leg fails CI.
+.github/workflows/baseline-guard.yml:63:          export V2ADOPT_NIGHTLY=1m
+.github/workflows/baseline-guard.yml:64:          export V2ADOPT_BACKEND=aikoql-v2
+.github/workflows/ci.yml:42:      # | v2_m7_workloads (SKIPPED)        | verdict is V2ADOPT_NIGHTLY-gated; v2 nets = the 40+ reduced SE2 suites | cells | RSS/disk cells | V2ADOPT_NIGHTLY=1 (100k) at milestones |
+.github/workflows/ci.yml:444:          if ! grep -q 'V2ADOPT_NIGHTLY=1m' "$GUARD"; then
+.github/workflows/ci.yml:445:            echo "DAG VIOLATION: $GUARD must run the 1M regime (V2ADOPT_NIGHTLY=1m)"
+.github/workflows/ci.yml:450:          # republish leg (V2ADOPT_BACKEND=aikoql) must stay deleted.
+.github/workflows/ci.yml:455:          if grep -q 'V2ADOPT_BACKEND=aikoql$' "$GUARD"; then
+EXIT=1

@@ -1,0 +1,8 @@
+{
+  "id": "T-67",
+  "pre_fix_commit": "58e7018",
+  "command": "bash -c cargo test -p aikoql-compiler parse_match_changeset; cargo test -p aikoql-runtime changeset_enumerates; cargo test -p aikoql-mcp p3_004_shape8_native_changeset",
+  "captured_at": "2026-10-10T19:23:53Z",
+  "captured_head": "58e7018b555af268f1c2cd3e24d993f387e6acd2",
+  "exit_code": 101
+}

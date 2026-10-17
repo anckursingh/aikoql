@@ -1,0 +1,49 @@
+{
+  "note": "The §16 golden corpus (TESTING-PLAN-LAUNCH.md:176): the same malformed input gets the same classification in all five SDKs, different idiomatic exception types allowed. Every SDK pin (Go corpus_test.go, Python test_corpus_pin.py, TS corpus-pin.test.ts, Java CorpusPinTest, Rust fuzz_corpus_pin.rs) asserts its column on the real wire primitives; removing a case or a surface is a detected coverage loss. Frozen divergences, verified per implementation: (1) rpc_error null code — Go/Rust surface 'null', TS/Java INTERNAL, Python raw null; (2) rpc_error empty code — INTERNAL everywhere except Python's raw ''; (3) rpc_error missing code — Rust's frame parse rejects, the other four INTERNAL; (4) response id 'x' — Python PROTOCOL_ERROR, the other four skip; (5) id 1e999 — Go/Rust parse-reject (skip), TS/Java/Python protocol (Java's cast yields Long.MAX_VALUE); (6) bare 1e999 — Python's float inf escapes frame.get unclassified, the other four skip; (7) notify pair — Go/Java/Rust synthesize done=false, Python/TS yield the raw params. Version '0x10' is uniform: all five refuse (Python's int(seg) defaults to base 10; the TS regex refuses where Number() would read 16). The TS/Java exception message FIELDS carry the [CODE] decoration (their ctor folds it in), Go/Python/Rust keep the raw message — so the e-series message columns differ accordingly.",
+  "cases": [
+    { "id": "corp-v01", "surface": "version", "input": "0.2.0",
+      "expected": { "go": [0, 2, 0], "python": [0, 2, 0], "typescript": [0, 2, 0], "java": [0, 2, 0], "rust": [0, 2, 0] } },
+    { "id": "corp-v02", "surface": "version", "input": "0x10",
+      "expected": { "go": [-1], "python": [-1], "typescript": [-1], "java": [-1], "rust": [-1] } },
+    { "id": "corp-v03", "surface": "version", "input": "",
+      "expected": { "go": [-1], "python": [-1], "typescript": [-1], "java": [-1], "rust": [-1] } },
+    { "id": "corp-v04", "surface": "version", "input": "1.2.3.4.5",
+      "expected": { "go": [1, 2, 3, 4, 5], "python": [1, 2, 3, 4, 5], "typescript": [1, 2, 3, 4, 5], "java": [1, 2, 3, 4, 5], "rust": [1, 2, 3, 4, 5] } },
+    { "id": "corp-v05", "surface": "version", "input": "1.2.x",
+      "expected": { "go": [1, 2, -1], "python": [1, 2, -1], "typescript": [1, 2, -1], "java": [1, 2, -1], "rust": [1, 2, -1] } },
+
+    { "id": "corp-e01", "surface": "rpc_error", "input": "{\"id\":1,\"error\":{\"code\":-32601,\"message\":\"nf\"}}",
+      "expected": { "go": {"code": "-32601", "message": "nf"}, "python": {"code": -32601, "message": "nf"}, "typescript": {"code": "-32601", "message": "[-32601] nf"}, "java": {"code": "-32601", "message": "[-32601] nf"}, "rust": {"code": "-32601", "message": "nf"} } },
+    { "id": "corp-e02", "surface": "rpc_error", "input": "{\"id\":1,\"error\":{\"code\":\"-32601\",\"message\":\"nf\"}}",
+      "expected": { "go": {"code": "-32601", "message": "nf"}, "python": {"code": "-32601", "message": "nf"}, "typescript": {"code": "-32601", "message": "[-32601] nf"}, "java": {"code": "-32601", "message": "[-32601] nf"}, "rust": {"code": "-32601", "message": "nf"} } },
+    { "id": "corp-e03", "surface": "rpc_error", "input": "{\"id\":1,\"error\":{\"code\":\"\",\"message\":\"m\"}}",
+      "expected": { "go": {"code": "INTERNAL", "message": "m"}, "python": {"code": "", "message": "m"}, "typescript": {"code": "INTERNAL", "message": "[INTERNAL] m"}, "java": {"code": "INTERNAL", "message": "[INTERNAL] m"}, "rust": {"code": "INTERNAL", "message": "m"} } },
+    { "id": "corp-e04", "surface": "rpc_error", "input": "{\"id\":1,\"error\":{\"code\":null,\"message\":\"m\"}}",
+      "expected": { "go": {"code": "null", "message": "m"}, "python": {"code": null, "message": "m"}, "typescript": {"code": "INTERNAL", "message": "[INTERNAL] m"}, "java": {"code": "INTERNAL", "message": "[INTERNAL] m"}, "rust": {"code": "null", "message": "m"} } },
+    { "id": "corp-e05", "surface": "rpc_error", "input": "{\"id\":1,\"error\":{\"message\":\"no code\"}}",
+      "expected": { "go": {"code": "INTERNAL", "message": "no code"}, "python": {"code": "INTERNAL", "message": "no code"}, "typescript": {"code": "INTERNAL", "message": "[INTERNAL] no code"}, "java": {"code": "INTERNAL", "message": "[INTERNAL] no code"}, "rust": "reject" } },
+
+    { "id": "corp-r01", "surface": "response_id", "input": "{\"id\":\"x\",\"result\":{}}",
+      "expected": { "go": "skip", "python": "protocol", "typescript": "skip", "java": "skip", "rust": "skip" } },
+    { "id": "corp-r02", "surface": "response_id", "input": "{\"id\":1e999,\"result\":{}}",
+      "expected": { "go": "skip", "python": "protocol", "typescript": "protocol", "java": "protocol", "rust": "skip" } },
+    { "id": "corp-n01", "surface": "nonfinite", "input": "1e999",
+      "expected": { "go": "skip", "python": "unclassified", "typescript": "skip", "java": "skip", "rust": "skip" } },
+
+    { "id": "corp-s01", "surface": "notify", "input": "{\"method\":\"notifications/notify\",\"params\":{\"stream_id\":\"s1\"}}",
+      "expected": { "go": {"verdict": "yield", "pair": {"stream_id": "s1", "done": false}}, "python": {"verdict": "yield", "pair": {"stream_id": "s1"}}, "typescript": {"verdict": "yield", "pair": {"stream_id": "s1"}}, "java": {"verdict": "yield", "pair": {"stream_id": "s1", "done": false}}, "rust": {"verdict": "yield", "pair": {"stream_id": "s1", "done": false}} } },
+    { "id": "corp-s02", "surface": "notify", "input": "{\"method\":\"notifications/notify\",\"params\":{\"done\":true}}",
+      "expected": { "go": {"verdict": "skip", "pair": null}, "python": {"verdict": "skip", "pair": null}, "typescript": {"verdict": "skip", "pair": null}, "java": {"verdict": "skip", "pair": null}, "rust": {"verdict": "skip", "pair": null} } },
+    { "id": "corp-s03", "surface": "notify", "input": "{\"method\":\"x\",\"params\":{\"stream_id\":\"s1\"}}",
+      "expected": { "go": {"verdict": "skip", "pair": null}, "python": {"verdict": "skip", "pair": null}, "typescript": {"verdict": "skip", "pair": null}, "java": {"verdict": "skip", "pair": null}, "rust": {"verdict": "skip", "pair": null} } },
+
+    { "id": "corp-c01", "surface": "correlation", "input": {"want": 1, "got": 1},
+      "expected": { "go": "match", "python": "match", "typescript": "match", "java": "match", "rust": "match" } },
+    { "id": "corp-c02", "surface": "correlation", "input": {"want": 1, "got": 2},
+      "expected": { "go": "protocol", "python": "protocol", "typescript": "protocol", "java": "protocol", "rust": "protocol" } },
+    { "id": "corp-c03", "surface": "correlation", "input": {"want": 2, "got": 1},
+      "expected": { "go": "skip", "python": "skip", "typescript": "skip", "java": "skip", "rust": "skip" } },
+    { "id": "corp-c04", "surface": "correlation", "input": {"want": 0, "got": 0},
+      "expected": { "go": "match", "python": "match", "typescript": "match", "java": "match", "rust": "match" } }
+  ]
+}

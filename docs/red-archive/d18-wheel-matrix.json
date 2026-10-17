@@ -1,0 +1,8 @@
+{
+  "id": "d18-wheel-matrix",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-02T14:13:15Z",
+  "captured_head": "2e10a8bc2577eb22518d0c2db0b5c9b469fc9cbd",
+  "exit_code": 1
+}

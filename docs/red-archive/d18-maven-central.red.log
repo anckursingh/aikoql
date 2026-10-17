@@ -1,0 +1,2 @@
+ARCH: the maven-central-publish job does not use the Central Portal (D-18)
+EXIT=1

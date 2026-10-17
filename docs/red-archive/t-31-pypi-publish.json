@@ -1,0 +1,8 @@
+{
+  "id": "t-31-pypi-publish",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-07T13:27:34Z",
+  "captured_head": "ca56add0085cb3de6edf4ae88b8c2b840e71f2ca",
+  "exit_code": 1
+}

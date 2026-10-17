@@ -1,0 +1,16 @@
+            want = c["expected"]["python"]
+>           assert got == want, (
+                f"case {c['id']} ({c['surface']}): python column drift — "
+                f"got {got!r}, want {want!r}"
+            )
+E           AssertionError: case corp-v02 (version): python column drift — got [16], want [-1]
+E           assert [16] == [-1]
+E             
+E             At index 0 diff: 16 != -1
+E             Use -v to get more diff
+
+tests\test_corpus_pin.py:116: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_corpus_pin.py::test_corpus_pin - AssertionError: case corp-...
+1 failed in 0.79s
+EXIT=1

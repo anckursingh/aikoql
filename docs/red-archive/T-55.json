@@ -1,0 +1,8 @@
+{
+  "id": "T-55",
+  "pre_fix_commit": "5fbb90e",
+  "command": "bash -c cargo test -p aikoql-kernel --test conformance t33_unscoped_subject_sees_only_shared_rows; cargo test -p aikoql-mcp --test mcp_real_world",
+  "captured_at": "2026-10-09T18:28:48Z",
+  "captured_head": "5fbb90e7fd51872fb83fbf2a883fa4d23ad76759",
+  "exit_code": 101
+}

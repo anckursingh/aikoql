@@ -31,8 +31,13 @@ pub enum Token {
     Explain,
     // v0.3 K2: temporal + epistemic query operators
     AsOf,
+    // T-58 (P3-008 LOW): AS_OF JOURNAL <n> — the journal-seq clock domain
+    Journal,
     Between,
     Historical,
+    // G-001 (POC-3): CHANGESET BETWEEN <a> AND <b> — generations minted in
+    // the half-open (a, b] commit window
+    Changeset,
     Epistemic,
     // QL-006: provenance filter (SOURCE "artifact")
     Source,
@@ -197,8 +202,10 @@ impl Lexer {
             "COMMIT" => Token::Commit,
             "EXPLAIN" => Token::Explain,
             "AS_OF" => Token::AsOf,
+            "JOURNAL" => Token::Journal,
             "BETWEEN" => Token::Between,
             "HISTORICAL" => Token::Historical,
+            "CHANGESET" => Token::Changeset,
             "EPISTEMIC" => Token::Epistemic,
             "SOURCE" => Token::Source,
             "LIMIT" => Token::Limit,

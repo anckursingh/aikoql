@@ -620,6 +620,42 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
         }
     }
 
+    // S-11 (POC-4): temporal relationships from the S-2 heuristic — a
+    // superseded row with valid_to_asserted matches its successor by tenant
+    // + case_id + kind, with the successor's valid_from == valid_to_asserted.
+    // Type-level lift: retracts (old type → new type), supersedes (reverse).
+    let mut retract_pairs: BTreeSet<(String, String)> = BTreeSet::new();
+    for p in kos {
+        if p.epistemic_status() != EpistemicStatus::Superseded {
+            continue;
+        }
+        let Some(Value::Int(v_to)) = p.extensions.get(KnowledgeObject::EXT_VALID_TO_ASSERTED)
+        else {
+            continue;
+        };
+        let (Some(p_case), Some(p_kind)) = (p.properties.get("case_id"), p.properties.get("kind"))
+        else {
+            continue;
+        };
+        for s in kos {
+            if s.metadata.tenant != p.metadata.tenant {
+                continue;
+            }
+            let Some(Value::Int(v_from)) = s.extensions.get(KnowledgeObject::EXT_VALID_FROM) else {
+                continue;
+            };
+            if v_from != v_to {
+                continue;
+            }
+            if s.properties.get("case_id") != Some(p_case)
+                || s.properties.get("kind") != Some(p_kind)
+            {
+                continue;
+            }
+            retract_pairs.insert((p.metadata.type_name.clone(), s.metadata.type_name.clone()));
+        }
+    }
+
     let mut classes: BTreeMap<String, ClassDef> = BTreeMap::new();
     let mut property_defs: BTreeMap<String, PropertyDef> = BTreeMap::new();
     let mut mappings: Vec<MappingEntry> = Vec::new();
@@ -662,6 +698,28 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
                 name: rel_name.clone(),
                 domain: Some(src_type.clone()),
                 range: None,
+                cardinality: Some(Cardinality::OneToMany),
+                max_count: None,
+            });
+    }
+    // S-11 (POC-4): the inferred temporal relationships join the explicit
+    // RelationshipRef ones; first (domain, range) pair wins per name.
+    for (old_type, new_type) in &retract_pairs {
+        relationships
+            .entry("retracts".into())
+            .or_insert_with(|| RelDef {
+                name: "retracts".into(),
+                domain: Some(old_type.clone()),
+                range: Some(new_type.clone()),
+                cardinality: Some(Cardinality::OneToMany),
+                max_count: None,
+            });
+        relationships
+            .entry("supersedes".into())
+            .or_insert_with(|| RelDef {
+                name: "supersedes".into(),
+                domain: Some(new_type.clone()),
+                range: Some(old_type.clone()),
                 cardinality: Some(Cardinality::OneToMany),
                 max_count: None,
             });
@@ -1836,5 +1894,75 @@ mod tests {
             Value::Text(s) => Some(s.as_str()),
             _ => None,
         }
+    }
+
+    // POC-4 S-11: discovery derived relationships only from ko.relationships
+    // (empty for the device-identity corpus), so the ontology reported
+    // Relationships (0) and the supersession chain was inexpressible. The
+    // S-2 instance heuristic (superseded row with valid_to_asserted matches
+    // its successor by tenant + case_id + kind with valid_from ==
+    // valid_to_asserted) must surface as type-level temporal relationships.
+    #[test]
+    fn s11_discover_infers_temporal_relationships() {
+        let mut old = KnowledgeObject::new(
+            KOID::ZERO,
+            Metadata {
+                type_name: "identity_link".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            SecurityDescriptor {
+                owner: "system".into(),
+                acl: vec![],
+                classification: None,
+            },
+        );
+        old.set_epistemic_status(EpistemicStatus::Superseded);
+        old.extensions.insert(
+            KnowledgeObject::EXT_VALID_TO_ASSERTED.into(),
+            Value::Int(1699996400000),
+        );
+        old.properties
+            .insert("case_id".into(), Value::Text("c-77".into()));
+        old.properties
+            .insert("kind".into(), Value::Text("link".into()));
+
+        let mut succ = KnowledgeObject::new(
+            KOID::ZERO,
+            Metadata {
+                type_name: "identity_link".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            SecurityDescriptor {
+                owner: "system".into(),
+                acl: vec![],
+                classification: None,
+            },
+        );
+        succ.extensions.insert(
+            KnowledgeObject::EXT_VALID_FROM.into(),
+            Value::Int(1699996400000),
+        );
+        succ.properties
+            .insert("case_id".into(), Value::Text("c-77".into()));
+        succ.properties
+            .insert("kind".into(), Value::Text("link".into()));
+
+        let def = discover_ontology(&[old, succ]);
+        let retracts = def
+            .relationships
+            .get("retracts")
+            .expect("discovery must infer a retracts relationship");
+        assert_eq!(retracts.domain.as_deref(), Some("identity_link"));
+        assert_eq!(retracts.range.as_deref(), Some("identity_link"));
+        let supersedes = def
+            .relationships
+            .get("supersedes")
+            .expect("discovery must infer a supersedes relationship");
+        assert_eq!(supersedes.domain.as_deref(), Some("identity_link"));
+        assert_eq!(supersedes.range.as_deref(), Some("identity_link"));
     }
 }

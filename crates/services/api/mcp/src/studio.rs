@@ -158,7 +158,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); heig
 
 /* ── Layout ── */
 #app { display: none; height: 100vh; width: 100vw; }
-#sidebar { width: 52px; min-width: 52px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding-top: 10px; z-index: 10; transition: width 0.18s ease; overflow: hidden; }
+#sidebar { width: 52px; min-width: 52px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding-top: 10px; z-index: 10; overflow: hidden; }
 #sidebar:hover { width: 190px; }
 #sidebar .logo { font-size: 18px; margin-bottom: 6px; opacity: 0.9; flex-shrink: 0; }
 #sidebar .logo-text { display: none; font-size: 13px; font-weight: 700; color: var(--accent); white-space: nowrap; }
@@ -353,7 +353,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
         <div class="card">
           <div class="query-editor-label">
             <span>Aikoql Query</span>
-            <span>Ctrl+Enter to run · comma-separated properties · SQL-style highlighting</span>
+            <span>Ctrl+Enter to run · AS_OF = wall-clock MVCC · BETWEEN = event-time · comma-separated properties · SQL-style highlighting</span>
           </div>
           <div id="query-editor"></div>
           <div class="query-toolbar">
@@ -634,6 +634,13 @@ async function api(url) {
   const sep = url.includes('?') ? '&' : '?';
   const full = url + (authToken ? sep + 'token=' + encodeURIComponent(authToken) : '');
   const res = await fetch(full);
+  // S-10 (POC-4): a 401 means the server restarted and dropped the session —
+  // return to the login overlay instead of leaking the raw body into a panel.
+  if (res.status === 401) {
+    showLogin();
+    document.getElementById('login-error').textContent = 'Session expired — sign in again';
+    throw new Error('session expired');
+  }
   if (!res.ok) {
     let msg = 'HTTP ' + res.status;
     try { const body = await res.json(); if (body.error) msg = body.error; } catch(_) {}
@@ -651,6 +658,19 @@ async function apiPost(url, body) {
     throw new Error(msg);
   }
   return res.json();
+}
+
+// Epoch millis → "YYYY-MM-DD HH:MM:SS (13s ago)".
+function fmtTime(ms) {
+  if (ms === null || ms === undefined || !Number.isFinite(Number(ms))) return '?';
+  const iso = new Date(Number(ms)).toISOString().replace('T', ' ').slice(0, 19);
+  const secs = Math.round((Date.now() - Number(ms)) / 1000);
+  const ago = secs < 0 ? 'future'
+    : secs < 60 ? secs + 's ago'
+    : secs < 3600 ? Math.round(secs / 60) + 'm ago'
+    : secs < 86400 ? Math.round(secs / 3600) + 'h ago'
+    : Math.round(secs / 86400) + 'd ago';
+  return iso + ' (' + ago + ')';
 }
 
 // ═══════════════════════════════════════════
@@ -729,7 +749,12 @@ async function runQuery() {
   if (tenant) url += '&tenant=' + encodeURIComponent(tenant);
   try {
     const data = await api(url);
-    if (data.error) { resDiv.innerHTML = '<div class="error-text">'+data.error+'</div>'; return; }
+    if (data.error) {
+      // S-8 (POC-4): an unknown type is fixable from the studio — point at
+      // the discovery flow instead of leaving a dead end.
+      resDiv.innerHTML = '<div class="error-text">'+data.error+'</div>' + (data.error.includes('AIKOQL1030') ? '<div style="font-size:10px;color:var(--muted);margin-top:4px;">type not registered — run Ontology → Auto-Discover</div>' : '');
+      return;
+    }
     if (data.created) { resDiv.innerHTML = '<div class="card"><span class="badge badge-green">Created</span> '+data.created+' v'+data.version+'</div>'; return; }
     if (data.results && data.results.length > 0) {
       const keys = new Set();
@@ -847,6 +872,7 @@ async function loadGraph() {
   const tenant = document.getElementById('graph-tenant').value;
   let url = '/api/graph';
   let params = [];
+  params.push('detail=1'); // S-1/S-2 (POC-4): extensions drive epistemic styling + virtual retraction edges
   if (koid) params.push('koid='+encodeURIComponent(koid));
   if (tenant) params.push('tenant='+encodeURIComponent(tenant));
   if (params.length) url += '?'+params.join('&');
@@ -855,21 +881,49 @@ async function loadGraph() {
     graphRawData = data;
     typeColors={}; colorIdx=0;
     graphNodes.clear(); graphEdges.clear();
-    const nodes = data.nodes.map(n => ({
-      id: n.koid, label: (n.label||n.type_name)+(n.tenant?'\n@'+n.tenant:''),
-      title: '<b>'+n.type_name+'</b>'+(n.tenant?' @'+n.tenant:'')+'\n'+n.koid,
-      color: {background:colorFor(n.type_name),border:(n.tenant?'#b89ae0':'#252538'),highlight:{background:colorFor(n.type_name),border:'#fff'}},
-      size: n.size||20, borderWidth: n.tenant?2.5:(n.edge_count>2?3:1.5),
-      font: {size:Math.max(9,Math.min(13,(n.size||20)/2+3))},
-    }));
+    const nodes = data.nodes.map(n => {
+      // S-1 (POC-4): retracted rows keep lifecycle.state "draft" — style from
+      // the epistemic extension: superseded → dashed hollow circle + muted
+      // palette, so the retraction is visible at a glance.
+      const es = n.extensions&&n.extensions.epistemic_status;
+      const superseded = es==='superseded';
+      return {
+        id: n.koid, label: (n.label||n.type_name)+(n.tenant?'\n@'+n.tenant:''),
+        title: '<b>'+n.type_name+'</b>'+(n.tenant?' @'+n.tenant:'')+'\n'+n.koid+(es?'\n'+es:''),
+        color: superseded
+          ? {background:'#3d3d4a',border:'#8a8a99',highlight:{background:'#4a4a58',border:'#fff'}}
+          : {background:colorFor(n.type_name),border:(n.tenant?'#b89ae0':'#252538'),highlight:{background:colorFor(n.type_name),border:'#fff'}},
+        shape: superseded?'circle':'dot',
+        shapeProperties: superseded?{borderDashes:[4,3]}:{},
+        size: n.size||20, borderWidth: superseded?2.5:(n.tenant?2.5:(n.edge_count>2?3:1.5)),
+        font: {size:Math.max(9,Math.min(13,(n.size||20)/2+3))},
+      };
+    });
     graphNodes.add(nodes);
     const edges = (data.edges||[]).map(e => ({from:e.source,to:e.target,label:e.rel_type,arrows:'to',color:{color:'#3a3a5c',highlight:'#6cc7f0'},font:{size:9,color:'#5c5c78'},width:1.2}));
+    // S-2 (POC-4): supersede-with-retract (B3-3) leaves no SUPERSEDES edge —
+    // derive virtual "retracts" edges: the superseded row's successor shares
+    // tenant + case_id + kind and asserts valid_from == the predecessor's
+    // valid_to_asserted (the corpus's re-assertion convention).
+    const retracted = data.nodes.filter(n => n.extensions && n.extensions.epistemic_status==='superseded' && n.extensions.valid_to_asserted != null);
+    retracted.forEach(p => {
+      data.nodes.forEach(s => {
+        if (s.koid===p.koid) return;
+        if ((s.tenant||'')!==(p.tenant||'')) return;
+        const pc=p.properties&&p.properties.case_id, sc=s.properties&&s.properties.case_id;
+        if (pc===undefined||sc===undefined||JSON.stringify(pc)!==JSON.stringify(sc)) return;
+        const pk=p.properties&&p.properties.kind, sk=s.properties&&s.properties.kind;
+        if (pk===undefined||sk===undefined||JSON.stringify(pk)!==JSON.stringify(sk)) return;
+        if (!s.extensions || s.extensions.valid_from!==p.extensions.valid_to_asserted) return;
+        edges.push({from:p.koid,to:s.koid,label:'retracts',arrows:'to',dashes:[4,3],color:{color:'#8a7a5c',highlight:'#c9a86a'},font:{size:9,color:'#8a7a5c'},width:1});
+      });
+    });
     graphEdges.add(edges);
     // Legend
     let lh = '';
     for (const [t,c] of Object.entries(typeColors)) { const cnt = data.nodes.filter(n=>n.type_name===t).length; lh += '<div class="legend-item"><div class="legend-dot" style="background:'+c+'"></div>'+t+' ('+cnt+')</div>'; }
     document.getElementById('legend').innerHTML = lh||'<div style="color:var(--muted)">No types</div>';
-    document.getElementById('status-center').textContent = data.nodes.length+' objects, '+data.edges.length+' relationships';
+    document.getElementById('status-center').textContent = data.nodes.length+' objects, '+edges.length+' relationships';
     setTimeout(() => { if(graphNetwork&&nodes.length>0) graphNetwork.fit({animation:{duration:400}}); }, 200);
   } catch(e) { document.getElementById('status-center').textContent = 'Error: '+e.message; }
 }
@@ -883,6 +937,15 @@ function showGraphTooltip(nodeId) {
   let h = '<div style="color:var(--accent);font-weight:600;">'+node.type_name+'</div>';
   if (node.tenant) h += '<div style="color:var(--purple);font-size:10px;">@'+node.tenant+'</div>';
   if (node.key_props) node.key_props.slice(0,5).forEach(p => h += '<div style="color:var(--muted);">'+p.key+': '+JSON.stringify(p.value)+'</div>');
+  // S-1 (POC-4): surface the epistemic status and its last transition —
+  // lifecycle.state stays "draft" on retracted rows.
+  const es = node.extensions&&node.extensions.epistemic_status;
+  if (es) h += '<div style="color:'+(es==='superseded'?'#c9a86a':'var(--muted)')+';">epistemic: '+es+'</div>';
+  const hist = node.extensions&&node.extensions.epistemic_history;
+  if (hist && hist.length) {
+    const last = hist[hist.length-1];
+    h += '<div style="color:var(--muted);">'+last.from+' → '+last.to+(last.reason?' ('+last.reason+')':'')+' by '+(last.by||'?')+'</div>';
+  }
   tt.innerHTML = h;
 }
 async function inspectNode(koid) {
@@ -1013,6 +1076,12 @@ function renderNodeDetail(node) {
     const st = typeof node.lifecycle === 'object' ? node.lifecycle.state : node.lifecycle;
     const cls = st==='active'?'badge-green':st==='archived'?'badge-red':st==='draft'?'badge-orange':'badge-cyan';
     h += '<span class="badge '+cls+'">'+st+'</span> ';
+  }
+  // S-1 (POC-4): the lifecycle badge alone is misleading on retracted rows
+  // ("draft") — show the epistemic status next to it.
+  if (node.extensions && node.extensions.epistemic_status) {
+    const es = node.extensions.epistemic_status;
+    h += '<span class="badge '+(es==='superseded'?'badge-orange':'badge-muted')+'">'+es+'</span> ';
   }
   if (node.security && node.security.classification) {
     h += '<span class="badge badge-red">'+node.security.classification+'</span> ';
@@ -1376,18 +1445,23 @@ async function loadTimeline() {
   try {
     const trace = await api('/api/v1/trace/' + encodeURIComponent(koid));
     const data = trace.data || trace;
-    const versions = data.versions || data.events || [];
-    if (!versions.length) { div.innerHTML = '<div class="empty-state">No versions found for this KOID.</div>'; return; }
-    let h = '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">'+versions.length+' versions</div>';
+    // S-6: events[] carries kind/actor/note; versions[] only the version
+    // skeleton. Join by version for the asserted event-time column.
+    const events = data.events || data.versions || [];
+    const vmap = {};
+    (data.versions || []).forEach(v => { vmap[v.version] = v; });
+    if (!events.length) { div.innerHTML = '<div class="empty-state">No versions found for this KOID.</div>'; return; }
+    let h = '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">'+events.length+' versions</div>';
     h += '<div class="timeline-track">';
-    versions.forEach((v, i) => {
-      const ts = v.timestamp || v.commit_ts || '?';
-      const ver = v.version !== undefined ? 'v' + v.version : '';
-      const src = v.source || v.mutation_source || '?';
+    events.forEach((e, i) => {
+      const ver = e.version !== undefined ? 'v' + e.version : '';
+      const vf = (vmap[e.version] || {}).valid_from;
       h += '<div class="timeline-dot" style="margin-bottom:8px;">';
       h += '<span class="badge badge-cyan">' + ver + '</span> ';
-      h += '<span style="font-size:11px;">' + ts + '</span> ';
-      h += '<span style="font-size:10px;color:var(--muted);">by ' + src + '</span>';
+      h += '<span class="badge badge-purple">' + (e.kind || '') + '</span> ';
+      h += '<span style="font-size:11px;">' + fmtTime(e.commit_ts) + '</span> ';
+      if (vf) h += '<span style="font-size:10px;color:var(--muted);">event time: ' + fmtTime(vf) + '</span> ';
+      h += '<span style="font-size:10px;color:var(--muted);">by ' + (e.actor || '?') + '</span>';
       h += '</div>';
     });
     h += '</div>';
@@ -1406,15 +1480,18 @@ async function loadProvenance() {
   try {
     const trace = await api('/api/v1/trace/' + encodeURIComponent(koid));
     const data = trace.data || trace;
-    const versions = data.versions || data.events || [];
-    if (!versions.length) { div.innerHTML = '<div class="empty-state">No provenance data for this KOID.</div>'; return; }
+    // S-3: events[] carries kind/actor/note/audit_hash — versions[] only
+    // the version skeleton, which is how every row rendered "Source: ?".
+    const events = data.events || data.versions || [];
+    if (!events.length) { div.innerHTML = '<div class="empty-state">No provenance data for this KOID.</div>'; return; }
     let h = '<div class="provenance-chain">';
-    versions.forEach((v, i) => {
+    events.forEach((e, i) => {
       h += '<div class="provenance-node" style="border-left:2px solid var(--cyan);padding-left:12px;margin-bottom:12px;">';
-      h += '<div style="font-size:12px;font-weight:600;">#' + (i + 1) + ' — v' + (v.version || '?') + '</div>';
-      h += '<div style="font-size:11px;color:var(--muted);">' + (v.timestamp || v.commit_ts || '?') + '</div>';
-      h += '<div style="font-size:10px;color:var(--muted);">Source: ' + (v.source || v.mutation_source || '?') + '</div>';
-      if (v.audit_hash) h += '<div style="font-size:10px;font-family:var(--font-mono);color:var(--green);">SHA-256: ' + v.audit_hash.substring(0, 16) + '...</div>';
+      h += '<div style="font-size:12px;font-weight:600;">#' + (i + 1) + ' — v' + (e.version || '?') + ' <span class="badge badge-purple">' + (e.kind || '') + '</span></div>';
+      h += '<div style="font-size:11px;color:var(--muted);">' + fmtTime(e.commit_ts) + '</div>';
+      h += '<div style="font-size:10px;color:var(--muted);">Actor: ' + (e.actor || '?') + '</div>';
+      if (e.note) h += '<div style="font-size:10px;color:var(--muted);">Note: ' + e.note + '</div>';
+      if (e.audit_hash) h += '<div style="font-size:10px;font-family:var(--font-mono);color:var(--green);">SHA-256: ' + e.audit_hash.substring(0, 16) + '...</div>';
       h += '</div>';
     });
     h += '</div>';
@@ -1424,15 +1501,22 @@ async function loadProvenance() {
 
 async function verifyProvenance() {
   const div = document.getElementById('provenance-result');
+  const koid = document.getElementById('provenance-koid-input').value.trim();
+  if (!koid) { div.innerHTML = '<div class="error-text">Enter a KOID first.</div>'; return; }
   div.innerHTML = '<div class="loading">Verifying audit chain...</div>';
   try {
-    const proof = await api('/api/v1/prove');
+    const proof = await api('/api/v1/prove?koid=' + encodeURIComponent(koid));
     const data = proof.data || proof;
-    div.innerHTML = '<div class="card" style="border-left:3px solid var(--green);padding:12px;">' +
-      '<div style="font-size:14px;font-weight:600;color:var(--green);">✅ Audit Chain Verified</div>' +
-      '<div style="font-size:11px;color:var(--muted);margin-top:4px;">Journal seq: ' + (data.journal_seq || '?') + '</div>' +
-      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Head: ' + ((data.head_audit_hash||'').substring(0,32)) + '...</div>' +
-      '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Events: ' + ((data.events||[]).length) + ' in chain</div>' +
+    // The response carries {claim, events, chain_valid, head_audit_hash};
+    // head_audit_hash is a byte array on the wire — hex-join it.
+    const headHex = (data.head_audit_hash || []).map(b => b.toString(16).padStart(2,'0')).join('');
+    const ok = data.chain_valid;
+    div.innerHTML = '<div class="card" style="border-left:3px solid ' + (ok ? 'var(--green)' : 'var(--red)') + ';padding:12px;">' +
+      '<div style="font-size:14px;font-weight:600;color:' + (ok ? 'var(--green)' : 'var(--red)') + ';">' + (ok ? '✅ Audit Chain Verified' : '❌ Audit Chain Broken') + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);margin-top:4px;">Chain valid: ' + (ok ? 'yes' : 'no') + '</div>' +
+      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Claim: ' + (data.claim || '?') + '</div>' +
+      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Head: ' + headHex.substring(0, 32) + '...</div>' +
+      '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Events: ' + (data.events||0) + ' in chain</div>' +
       '</div>';
   } catch(e) { div.innerHTML = '<div class="error-text">Chain verification failed: '+e.message+'</div>'; }
 }

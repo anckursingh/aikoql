@@ -28,7 +28,7 @@ cargo build --release
 ```bash
 cargo test --workspace        # full suite (245+ tests across ~60 binaries)
 cargo fmt --all --check       # formatting guardrail
-cargo clippy --workspace --all-targets -- -D warnings   # lint guardrail
+cargo clippy --workspace -- -D warnings   # lint guardrail
 ```
 
 Guardrails are the definition of done: no milestone is complete without a
@@ -41,22 +41,25 @@ cargo run -p aikoql-mcp -- serve ./kb        # fresh path = aikoql-v2 directory
 cargo run -p aikoql-mcp -- shell :memory:
 ```
 
-The backend knob (`--backend redb | aikoql | aikoql-v2`) and auto-detection
-contract live in `docs/STORAGE-BACKENDS.md`.
+Storage is v2-only: `aikoql-v2` is the sole engine (redb/v1 were
+decommissioned, S-02) and there is no backend knob. The adoption ADR lives
+in `docs/STORAGE-ENGINE-ARCHITECTURE-DECISION.md`.
 
 ## Project Layout
 
 ```
 crates/
-├── kernel/           Knowledge Kernel (MVCC, OCC, HLC, RBAC, audit)
-├── storage/          aikoql-v2 (segmented LSM, default) + aikoql v1 (WAL+mirror)
+├── kernel/           Knowledge Kernel (MVCC, OCC, HLC, RBAC, audit, constraints)
+├── storage/          aikoql-v2 — the only engine (segmented LSM)
 ├── compiler/         aikoql parser, semantic analyzer, planner
 ├── runtime/          Physical plan interpreter
-├── constraints/      Constraint engine (C1-C9)
-├── engines/          graph, vector, scheduler
-├── services/         api/mcp (MCP + REST + Studio), reasoning, semantic, ingestion
-├── connectors/       postgres, sqlite, mongodb, neo4j
-├── sdk/              python (P3-M9: the one first-party SDK)
+├── engines/          graph, vector, scheduler, reasoning, semantic
+├── ingestion/        Document pipeline (D1-D9) + knowledge compilers (A1-A9)
+├── providers/        postgres, sqlite, mongodb, neo4j, sdk
+├── services/         api/mcp (MCP + REST + Studio)
+├── protocol/         native (the §6 framed wire)
+├── certification/    certification harness
+├── sdk/              python, rust, fault-proxy (+ TypeScript, Go, Java SDKs)
 ```
 
 See [Architecture](/docs/architecture) for the full crate map and the

@@ -111,7 +111,6 @@ impl Memtable {
     }
 
     pub fn apply(&mut self, key: Vec<u8>, seq: u64, value: Option<Vec<u8>>) {
-        self.bytes += key.len() + value.as_ref().map_or(0, Vec::len) + ENTRY_OVERHEAD;
         self.insert(key, seq, MemEntry::Byte(ByteRow { value }));
     }
 
@@ -125,27 +124,42 @@ impl Memtable {
         value: Option<Vec<u8>>,
         replica_id: ReplicaId,
     ) {
-        self.bytes += key.len() + value.as_ref().map_or(0, Vec::len) + ENTRY_OVERHEAD;
         self.insert(key, seq, MemEntry::Object(ObjectRow { value, replica_id }));
     }
 
     /// P5-M31 — one insert path. Monotonic writes append (partition_point
     /// lands at the end); out-of-order arrivals — legal on the flat map —
     /// insert at their place; a repeated (key, seq) replaces in place (the
-    /// flat map's insert overwrote).
+    /// flat map's insert overwrote). The byte accounting lives here so a
+    /// replacement adjusts by the value-length DELTA (L-03/TDD-004 — apply
+    /// used to charge the full entry per write, so 3× put(k,10,1KiB)
+    /// counted ≈ 3 entries).
     fn insert(&mut self, key: Vec<u8>, seq: u64, e: MemEntry) {
+        let key_len = key.len();
+        let new_len = e.value().map_or(0, Vec::len);
         match self.map.entry(key) {
             Entry::Vacant(v) => {
                 v.insert(VersionChain {
                     versions: vec![(seq, e)],
                 });
+                self.bytes += key_len + new_len + ENTRY_OVERHEAD;
             }
             Entry::Occupied(mut o) => {
                 let chain = o.get_mut();
                 let idx = chain.versions.partition_point(|&(s, _)| s < seq);
                 match chain.versions.get(idx) {
-                    Some(&(s, _)) if s == seq => chain.versions[idx] = (seq, e),
-                    _ => chain.versions.insert(idx, (seq, e)),
+                    Some(&(s, _)) if s == seq => {
+                        let old_len = chain.versions[idx].1.value().map_or(0, Vec::len);
+                        // key + overhead are unchanged on replacement; only
+                        // the value length moves (saturating — bytes is
+                        // approximate, never underflow it).
+                        self.bytes = self.bytes.saturating_add(new_len).saturating_sub(old_len);
+                        chain.versions[idx] = (seq, e);
+                    }
+                    _ => {
+                        chain.versions.insert(idx, (seq, e));
+                        self.bytes += key_len + new_len + ENTRY_OVERHEAD;
+                    }
                 }
             }
         }
@@ -398,5 +412,41 @@ mod tests {
             "999 as u8 = 231; both versions present, head = seq 2"
         );
         assert_eq!(big.entries().count(), 2_000);
+    }
+
+    /// L-03 (TDD-004) — a repeated (key, seq) replaces in place, so the
+    /// byte accounting must adjust by the value-length delta: 3×
+    /// put(k,10,1KiB) used to count ≈ 3 entries (premature flush pressure).
+    #[test]
+    fn replacement_accounting_charges_one_entry() {
+        let mut m = Memtable::new();
+        let key = b"k".to_vec();
+        m.apply(key.clone(), 10, Some(vec![0u8; 1024]));
+        let once = m.bytes();
+        m.apply(key.clone(), 10, Some(vec![0u8; 1024]));
+        m.apply(key.clone(), 10, Some(vec![0u8; 1024]));
+        assert_eq!(m.bytes(), once, "3x same-(key,seq) put = one entry's bytes");
+
+        // The delta legs: a size change moves bytes by exactly the
+        // difference; a tombstone (None) subtracts the old value.
+        m.apply(key.clone(), 10, Some(vec![0u8; 2048]));
+        assert_eq!(m.bytes(), once + 1024, "grow adjusts by the delta");
+        m.apply(key.clone(), 10, None);
+        assert_eq!(
+            m.bytes(),
+            once + 1024 - 2048,
+            "a tombstone replacement adjusts by the delta"
+        );
+
+        // apply_object routes through the same insert path.
+        let mut o = Memtable::new();
+        o.apply_object(key.clone(), 10, Some(vec![0u8; 1024]), rid(7));
+        let once_o = o.bytes();
+        o.apply_object(key.clone(), 10, Some(vec![0u8; 1024]), rid(7));
+        assert_eq!(
+            o.bytes(),
+            once_o,
+            "object replacement charges one entry too"
+        );
     }
 }

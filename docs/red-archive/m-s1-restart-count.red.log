@@ -1,0 +1,16 @@
+failures:
+
+---- every_corruption_class_fails_closed stdout ----
+
+thread 'every_corruption_class_fails_closed' (13928) panicked at crates\storage\aikoql-v2\src\segment.rs:1583:28:
+range end index 5978 out of range for slice of length 5934
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    every_corruption_class_fails_closed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `--test restart_corruption`
+EXIT=101

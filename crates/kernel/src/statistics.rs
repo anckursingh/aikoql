@@ -113,7 +113,7 @@ impl Kernel {
         let mut embedded = 0u64;
         let mut temporal = 0u64;
         let mut tenants: HashSet<Option<String>> = HashSet::new();
-        // ponytail: full head walk per analyze — O(store); analyze is an
+        // ponytail: full head walk per analyze; analyze is an
         // explicit DBA operation, cache freshness if it becomes a hot path.
         for (koid, _version, ts, state) in self.scan_heads()? {
             if state == LifecycleState::Deleted {

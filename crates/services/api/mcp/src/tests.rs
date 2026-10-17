@@ -14,9 +14,11 @@ struct TempSweeper {
 impl Drop for TempSweeper {
     fn drop(&mut self) {
         for p in &self.paths {
-            let _ = std::fs::remove_file(p);
+            // v2 databases are directories (launch S-02).
             let _ = std::fs::remove_dir_all(p);
-            // redb sidecar next to the registered stem (`{stem}.redb.artifacts`).
+            // T-72 (POC-4): the audit sidecar next to the DB vanishes with
+            // it — the stem is pid-unique, so a `{stem}.` prefix match is
+            // own-files only.
             let Some(name) = p.file_name() else { continue };
             if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
                 let prefix = format!("{}.", name.to_string_lossy());
@@ -32,8 +34,8 @@ impl Drop for TempSweeper {
 }
 
 fn tmp_db(tag: &str) -> String {
-    let p = std::env::temp_dir().join(format!("mnemo-{tag}-{}.redb", std::process::id()));
-    let _ = std::fs::remove_file(&p);
+    let p = std::env::temp_dir().join(format!("mnemo-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&p);
     TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
     p.to_string_lossy().into_owned()
 }
@@ -179,8 +181,9 @@ fn semantic_scores_parses_caches_and_scores() {
     // after it) forever. This test walks both branches: parse+insert,
     // then cache-hit.
     let db = tmp_db("sem");
-    let _ = std::fs::remove_file(&db);
-    let engine = crate::RedbEngine::open(&db).expect("open store");
+    let _ = std::fs::remove_dir_all(&db);
+    let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+        .expect("open store");
     let k = crate::Kernel::open(
         std::sync::Arc::new(engine),
         std::sync::Arc::new(crate::SystemClock),
@@ -223,7 +226,7 @@ fn semantic_scores_parses_caches_and_scores() {
     assert_eq!(cached.len(), 1);
 
     drop(k);
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 #[test]
@@ -260,9 +263,12 @@ fn snapshot_manifest_props_carry_source_revision() {
 #[test]
 fn execute_program_idempotency_execution_id_replays() {
     let db = tmp_db("prg7");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let k = crate::Kernel::open(
-        std::sync::Arc::new(crate::RedbEngine::open(&db).expect("open store")),
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
         std::sync::Arc::new(crate::SystemClock),
         0,
     )
@@ -359,7 +365,7 @@ fn execute_program_idempotency_execution_id_replays() {
     ));
 
     drop(k);
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 // ---------------------------------------------------------------------------
@@ -390,9 +396,12 @@ fn auth002_session_token_256bit_unpredictable() {
 #[test]
 fn auth005_route_matrix_unauthenticated_401() {
     let db = tmp_db("auth5");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let k = crate::Kernel::open(
-        std::sync::Arc::new(crate::RedbEngine::open(&db).expect("open store")),
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
         std::sync::Arc::new(crate::SystemClock),
         0,
     )
@@ -439,7 +448,7 @@ fn auth005_route_matrix_unauthenticated_401() {
     }
 
     drop(k);
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 /// auth008 (regression): the REST rate limiter keys per principal — an
@@ -544,9 +553,12 @@ fn auth004_remote_http_refused_without_auth() {
 #[test]
 fn auth006_graph_runs_as_session_subject_not_hardcoded_admin() {
     let db = tmp_db("auth6");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let k = crate::Kernel::open(
-        std::sync::Arc::new(crate::RedbEngine::open(&db).expect("open store")),
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
         std::sync::Arc::new(crate::SystemClock),
         0,
     )
@@ -598,7 +610,7 @@ fn auth006_graph_runs_as_session_subject_not_hardcoded_admin() {
     );
 
     drop(k);
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 // ---------------------------------------------------------------------------
@@ -654,6 +666,7 @@ fn met005_metrics_carry_storage_series_only_with_cap() {
     use std::sync::Arc;
 
     let dir = std::env::temp_dir().join(format!("mnemo-met005-{}", std::process::id()));
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(dir.clone()));
     let _ = std::fs::remove_dir_all(&dir);
     let e = Arc::new(AikoqlStorageEngineV2::open(dir.to_str().unwrap()).unwrap());
     let engine: Arc<dyn StorageEngine> = e.clone();
@@ -693,6 +706,7 @@ fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
     use std::sync::Arc;
 
     let dir = std::env::temp_dir().join(format!("mnemo-met006-{}", std::process::id()));
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(dir.clone()));
     let _ = std::fs::remove_dir_all(&dir);
     let mut c = Config::new(dir.clone());
     c.memtable_bytes = 512; // force flushes so compact has segments to merge
@@ -785,8 +799,9 @@ fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
 fn register_schema_tool_drives_constraint_diagnostics() {
     use crate::tools::constraints::{tool_constraint_diagnostics, tool_register_schema};
     let db = tmp_db("cst");
-    let _ = std::fs::remove_file(&db);
-    let engine = crate::RedbEngine::open(&db).expect("open store");
+    let _ = std::fs::remove_dir_all(&db);
+    let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+        .expect("open store");
     let k = crate::Kernel::open(
         std::sync::Arc::new(engine),
         std::sync::Arc::new(crate::SystemClock),
@@ -852,5 +867,251 @@ fn register_schema_tool_drives_constraint_diagnostics() {
     assert_eq!(age_evt["koid"], serde_json::json!(koid.to_hex()));
 
     drop(k);
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+/// Dogfood (EI ingest, 2026-09-29): the adapter's external-id lookup ran a
+/// full MATCH scan of ExternalIDIndex per object — ~600 ms at 150K objects,
+/// O(n) and growing. The idempotency key is already an O(1) engine lookup
+/// (get_idem); this tool exposes it read-only, and a miss classifies to
+/// NOT_FOUND (what the adapter maps to ErrNotFound).
+#[test]
+fn get_by_idem_tool_resolves_idempotency() {
+    let db = tmp_db("gbi");
+    let _ = std::fs::remove_dir_all(&db);
+    let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+        .expect("open store");
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(engine),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+
+    let mut props = crate::PropertyMap::new();
+    props.insert(
+        "external_id".into(),
+        crate::Value::Text("github.com:repo:acme/widgets".into()),
+    );
+    let r = k
+        .remember(crate::RememberRequest {
+            context: crate::KnowledgeContext::from(&crate::Subject::with_roles("test", &["admin"])),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: Some("github.com:repo:acme/widgets".into()),
+            metadata: crate::Metadata {
+                type_name: "Repository".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: crate::ExtensionMap::new(),
+            origin: crate::Origin::Human,
+            note: None,
+            referential_policy: crate::ReferentialPolicy::Permissive,
+        })
+        .expect("remember");
+
+    let out = crate::tools::knowledge::tool_get_by_idem(
+        &k,
+        &crate::json!({"key": "github.com:repo:acme/widgets", "subject": "test"}),
+    )
+    .expect("lookup");
+    assert_eq!(out["koid"], crate::json!(r.koid.to_hex()));
+    assert_eq!(out["type_name"], crate::json!("Repository"));
+    assert_eq!(
+        out["properties"]["external_id"],
+        crate::json!("github.com:repo:acme/widgets")
+    );
+
+    let miss = crate::tools::knowledge::tool_get_by_idem(&k, &crate::json!({"key": "nope"}))
+        .expect_err("missing key must be an error");
+    assert!(
+        miss.to_lowercase().contains("not found"),
+        "classifiable message, got: {miss}"
+    );
+    let wrapped = crate::error_codes::wrap_result(Err::<crate::J, _>(miss));
+    assert_eq!(wrapped["error"]["code"], crate::json!("NOT_FOUND"));
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// POC-4 S-3/S-6: the provenance + timeline panels render events[] — the
+// wire must carry the event's audit_hash and the version's asserted
+// event-time (valid_from) for that to be possible at all.
+#[test]
+fn s03_trace_events_carry_audit_hash_and_versions_carry_valid_from() {
+    let db = tmp_db("s03");
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let t0 = 1_700_000_000_000u64;
+    let r = crate::tools::tool_remember(
+        &k,
+        &serde_json::json!({
+            "subject": "admin", "roles": ["admin"], "type_name": "device",
+            "properties": {"device_id": "s03"}, "valid_from": t0,
+        }),
+    )
+    .expect("remember");
+    let koid = r["koid"].as_str().expect("koid").to_string();
+    let tr = crate::tools::tool_trace(
+        &k,
+        &serde_json::json!({"subject": "admin", "roles": ["admin"], "koid": koid}),
+    )
+    .expect("trace");
+
+    let ev = &tr["events"][0];
+    let ah = ev["audit_hash"]
+        .as_str()
+        .expect("events must carry audit_hash");
+    assert_eq!(ah.len(), 64, "audit_hash must be 64 hex chars, got: {ah}");
+    assert!(ah.chars().all(|c| c.is_ascii_hexdigit()), "hex only: {ah}");
+    assert_eq!(ev["kind"], "Created");
+    assert_eq!(ev["actor"], "admin");
+    assert_eq!(
+        tr["versions"][0]["valid_from"], t0,
+        "versions must carry the asserted event-time: {tr}"
+    );
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+    let _ = std::fs::remove_file(format!("{db}.audit.log"));
+}
+
+// POC-4 S-8: the OntologyRegistry was loaded only at startup, so the
+// studio's Auto-Discover saved an Ontology KO that queries could not see
+// until a server restart — a fresh KB was a dead end in the query editor.
+#[test]
+fn s08_discover_ontology_hot_reloads_the_compile_registry() {
+    let db = tmp_db("s08");
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    crate::tools::tool_remember(
+        &k,
+        &serde_json::json!({
+            "subject": "admin", "roles": ["admin"], "type_name": "p4d_fact",
+            "properties": {"case_id": "s08"},
+        }),
+    )
+    .expect("remember");
+
+    let subject = crate::Subject {
+        name: "admin".into(),
+        roles: vec!["admin".into()],
+        tenant: None,
+    };
+    let empty = crate::OntologyRegistry::empty();
+    // Precondition: before discovery no installed registry resolves the
+    // type. (S-7 superseded the old "query must fail first" pin — the
+    // compile-path fallback makes an unregistered query succeed regardless,
+    // so this test now pins the slot republish itself.)
+    assert!(
+        crate::http::current_ontology()
+            .as_deref()
+            .map(|ont| ont.resolve_class("p4d_fact").is_none())
+            .unwrap_or(true),
+        "precondition: no registry must resolve p4d_fact before discovery"
+    );
+
+    // Auto-Discover (the studio button's route) must republish the registry.
+    crate::tools::tool_discover_ontology(&k).expect("discover");
+
+    // No restart: the hot-reloaded registry in the slot resolves the type.
+    let hot = crate::http::current_ontology().expect("slot populated");
+    assert!(
+        hot.resolve_class("p4d_fact").is_some(),
+        "discover must republish the registry so p4d_fact resolves"
+    );
+    let after = crate::http::aikoql_endpoint(&k, "MATCH p4d_fact RETURN *", &subject, None, &empty);
+    assert!(
+        after.is_ok(),
+        "the query must succeed after discovery without a restart: {after:?}"
+    );
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+    let _ = std::fs::remove_file(format!("{db}.audit.log"));
+}
+
+// POC-4 S-7: REST /api/aikoql validated every type against an empty
+// SchemaRegistry + whatever ontology existed, while the MCP tool compiled
+// without schema validation — the identical query died in the studio with
+// AIKOQL1030 and worked over MCP. The two paths must agree.
+#[test]
+fn s07_rest_query_aligns_with_mcp_for_stored_unregistered_types() {
+    let db = tmp_db("s07");
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    crate::tools::tool_remember(
+        &k,
+        &serde_json::json!({
+            "subject": "admin", "roles": ["admin"], "type_name": "s7_thing",
+            "properties": {"x": 1},
+        }),
+    )
+    .expect("remember");
+
+    // The MCP path is the reference: a stored type compiles without any
+    // registry.
+    let mcp = crate::tools::tool_aikoql(
+        &k,
+        &serde_json::json!({
+            "subject": "admin", "roles": ["admin"],
+            "query": "MATCH s7_thing RETURN *",
+        }),
+    )
+    .expect("mcp query");
+    assert!(
+        mcp["results"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false),
+        "mcp must return the stored row: {mcp}"
+    );
+
+    // The studio path must agree with MCP on the same KB and query.
+    let subject = crate::Subject {
+        name: "admin".into(),
+        roles: vec!["admin".into()],
+        tenant: None,
+    };
+    let empty = crate::OntologyRegistry::empty();
+    let rest = crate::http::aikoql_endpoint(&k, "MATCH s7_thing RETURN *", &subject, None, &empty);
+    assert!(
+        rest.is_ok(),
+        "the studio must agree with MCP on a stored type: {rest:?}"
+    );
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+    let _ = std::fs::remove_file(format!("{db}.audit.log"));
 }

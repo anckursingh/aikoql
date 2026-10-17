@@ -1,0 +1,8 @@
+{
+  "id": "T-69",
+  "pre_fix_commit": "bacd8b4",
+  "command": "bash -c cargo test -p aikoql-mcp --test mcp_real_world t69_changeset_rows_carry_tenant -- --nocapture",
+  "captured_at": "2026-10-11T05:39:28Z",
+  "captured_head": "bacd8b49df25e19abf1f2a3af04b868a0b12456d",
+  "exit_code": 101
+}

@@ -59,9 +59,6 @@ pub mod kom {
 pub mod store {
     pub use crate::storage::store::*;
 }
-pub mod store_redb {
-    pub use crate::storage::store_redb::*;
-}
 pub mod kernel {
     pub use crate::transaction::kernel::*;
 }
@@ -159,7 +156,6 @@ pub use knowledge::ontology::{
 pub use knowledge::scope::{Scope, ScopeResolver};
 pub use statistics::Statistics;
 pub use storage::store::{ConstraintCapabilities, MemoryEngine, StorageEngine, WriteBatch};
-pub use storage::store_redb::RedbEngine;
 pub use transaction::kernel::{
     AssertionRequest, Clock, ComplianceReport, ConflictResolutionOutcome,
     ConflictResolutionRequest, ContradictionRequest, ContradictionResult, ConversationMessage,

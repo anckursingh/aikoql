@@ -10,6 +10,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
+// T-72 (POC-4): TLS sweep for scratch DBs + audit sidecars.
+mod common;
+
 fn server_bin() -> PathBuf {
     let mut exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     exe.push("../../../../target/debug/aikoql-mcp");
@@ -35,6 +38,7 @@ fn tmp_db(name: &str) -> PathBuf {
         stamp
     ));
     let _ = std::fs::remove_dir_all(&db); // v2 database = directory
+    common::register_temp_path(&db);
     db
 }
 

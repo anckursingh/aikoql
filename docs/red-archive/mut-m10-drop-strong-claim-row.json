@@ -1,0 +1,9 @@
+{
+  "id": "mut-m10-drop-strong-claim-row",
+  "pre_fix_commit": "b4a4fef",
+  "command": "bash scripts/mutation-harness.sh m10-drop-strong-claim-row",
+  "captured_at": "2026-09-29T08:19:09Z",
+  "captured_head": "4b8cd38f0206dd3dc657ed7b317c050253d1dd5e",
+  "exit_code": 1,
+  "note": "TDD-034 (L-23): ONE strong-claims registry row drops in a merge — the sweep's uncovered-hit leg must flag the orphaned claim. The mutation deletes the lib.rs:8 block alone (every [[claim]] block is 5 lines; the sed pins the file+line pair — three rows share line = 8, so the bare line anchor would over-delete). The gate names the exact uncovered claim (lib.rs:8 — SE2-M3 bounded recovery) and exits 1."
+}

@@ -1,0 +1,27 @@
+{
+  "name": "canonical_workload",
+  "operations": [
+    {"op": "remember", "type": "person", "properties": {"name": "ada"}, "as": "person", "assert": {"version": 1}},
+    {"op": "remember", "type": "company", "properties": {"name": "acme"}, "as": "company", "assert": {"version": 1}},
+    {"op": "update", "type": "person", "koid": "$person", "properties": {"name": "ada", "role": "engineer"}, "assert": {"version": 2}},
+    {"op": "relate", "from": "$person", "to": "$company", "rel_type": "works_at", "assert": {"koid": "$person"}},
+    {"op": "query", "query": "MATCH person WHERE name == \"ada\" RETURN *", "assert": {"results.0.properties.name": "ada", "results.0.properties.role": "engineer"}},
+    {"op": "traverse", "koid": "$person", "assert": {"hits.0.koid": "$company", "hits.0.rel_type": "works_at"}},
+    {"op": "find_similar", "text": "ada", "wait_for_freshness_ms": 1000, "assert_any": {"path": "results", "match": {"type_name": "person"}}},
+    {"op": "begin", "as": "tx1"},
+    {"op": "execute", "txn": "$tx1", "action": "create", "type": "ghost", "properties": {"name": "casper"}},
+    {"op": "rollback", "txn": "$tx1", "assert": {"rolled_back": true}},
+    {"op": "query", "query": "MATCH ghost RETURN *", "assert": {"results": []}},
+    {"op": "begin", "as": "tx2"},
+    {"op": "execute", "txn": "$tx2", "action": "create", "type": "pet", "properties": {"name": "rex"}},
+    {"op": "commit", "txn": "$tx2", "as": "pet", "assert": {"deduped": false}},
+    {"op": "get", "koid": "$pet", "assert": {"properties.name": "rex"}},
+    {"op": "explain", "koid": "$person", "assert": {"koid": "$person"}},
+    {"op": "trace", "koid": "$person", "assert": {"versions.0.version": 1, "versions.2.version": 3}},
+    {"op": "delete", "koid": "$pet", "assert": {"koid": "$pet"}},
+    {"op": "get", "koid": "$pet", "assert": {"state": "deleted"}},
+    {"op": "close"},
+    {"op": "connect"},
+    {"op": "get", "koid": "$person", "assert": {"properties.name": "ada"}}
+  ]
+}

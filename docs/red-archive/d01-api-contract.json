@@ -1,0 +1,8 @@
+{
+  "id": "d01-api-contract",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-sdk-compat.sh",
+  "captured_at": "2026-10-01T14:04:09Z",
+  "captured_head": "b71bbcc2cd39c542341e25fe156f91492f1966fb",
+  "exit_code": 1
+}

@@ -1,0 +1,29 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.75s
+     Running tests\cli_contract.rs (target\debug\deps\cli_contract-ac64147b0b15b24c.exe)
+
+running 1 test
+test cl01b_error_code_source_completeness ... FAILED
+
+failures:
+
+---- cl01b_error_code_source_completeness stdout ----
+
+thread 'cl01b_error_code_source_completeness' (31648) panicked at crates\services\api\mcp\tests\cli_contract.rs:308:5:
+assertion `left == right` failed: kernel-tag extraction drifted: ["INVALID_OBJECT", "INVALID_SCHEMA", "INVALID_QUERY", "VERSION_CONFLICT", "ACCESS_DENIED", "INVALID_STATE", "INVALID_EPISTEMIC", "NOT_FOUND", "UNSUPPORTED_OPERATION", "CANCELLED", "INDEX_LAG_EXCEEDED", "JOB_REJECTED", "RETRYABLE", "STORE", "CODEC"]
+  left: 15
+ right: 14
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cl01b_error_code_source_completeness
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test cli_contract`
+EXIT=101

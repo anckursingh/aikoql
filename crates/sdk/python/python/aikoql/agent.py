@@ -45,13 +45,13 @@ class Agent:
             agent._backend = McpClient(host, port, kwargs.get("token")).connect(timeout=kwargs.get("timeout", 5.0))
             agent._backend.initialize(
                 kwargs.get("client_name", "aikoql-py"),
-                kwargs.get("client_version", "0.1.0"),
+                kwargs.get("client_version"),
             )
         elif isinstance(target, str):
             # Server mode iff the string is a bare host:port — no path
             # separators and a numeric port. Anything path-like (fresh
-            # paths included) is embedded: the engine's own auto-detection
-            # decides aikoql-v2 / redb / v1 from what is on disk.
+            # paths included) is embedded: the engine opens aikoql-v2 at
+            # the path (launch S-02).
             is_host_port = (
                 "/" not in target and "\\" not in target
                 and target.count(":") == 1

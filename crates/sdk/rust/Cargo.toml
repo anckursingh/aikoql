@@ -1,0 +1,17 @@
+[package]
+name = "aikoql-sdk"
+description = "Rust SDK for Aikoql — the reference implementation of the canonical Database API (D-12): embedded + remote modes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aikoql-kernel = { workspace = true }
+aikoql-runtime = { workspace = true }
+aikoql-native = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+getrandom = "0.2"

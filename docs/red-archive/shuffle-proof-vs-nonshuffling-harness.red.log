@@ -1,0 +1,2 @@
+SHUFFLE PROOF: scripts/run-shuffle.sh does not run the nightly libtest shuffle — the nightly randomized-order run cannot shuffle (nextest has no --shuffle; stable libtest gates it behind -Z unstable-options)
+EXIT=1

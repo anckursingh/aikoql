@@ -163,3 +163,175 @@ fn acknowledged_ids_never_reused_after_restart() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// TDD-024 — the review's exact sequence: reserve A → WAL failure →
+// reserve B → checkpoint → restart → reserve C. An acknowledged
+// reservation never collides; a failed pre-ack reservation may recycle.
+// ---------------------------------------------------------------------------
+
+use aikoql_storage_v2::identity::directory::{IdentityResolver, LocalIdentityDirectory};
+use aikoql_storage_v2::identity::topology::{LocalReplicaDirectory, ReplicaDirectory};
+use aikoql_storage_v2::identity::ReplicaId;
+use aikoql_storage_v2::placement::directory::{
+    LocalPlacementResolver, Placement, PlacementResolver,
+};
+use std::path::Path;
+
+fn rid_of(db: &Db, a: ObjectId) -> ReplicaId {
+    let lid = LocalIdentityDirectory::new(db).resolve(a).unwrap().unwrap();
+    LocalReplicaDirectory::new(db)
+        .resolve_local(lid)
+        .unwrap()
+        .unwrap()
+}
+
+fn placement_of(db: &Db, rid: ReplicaId) -> Option<Placement> {
+    LocalPlacementResolver::new(db).resolve(rid).unwrap()
+}
+
+/// The delta-log count — the prune's own measure (the checkpoint trigger's
+/// prune deletes the history; zero proves the checkpoint is the sole
+/// directory source).
+fn delta_log_count(d: &Path) -> usize {
+    ["IDENTITY-", "REPLICA-", "PLACEMENT-"]
+        .iter()
+        .map(|stem| {
+            std::fs::read_dir(d)
+                .expect("read dir")
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with(stem))
+                .count()
+        })
+        .sum()
+}
+
+/// A checkpoint between the ack and the restart: reserve A burns on the
+/// injected WAL failure, B is acknowledged and checkpointed (the trigger's
+/// prune deletes the delta history), the restart recovers B from the
+/// checkpoint alone, and the fresh C collides with nothing.
+#[test]
+fn checkpointed_reservations_survive_prune_alone_and_never_collide() {
+    let d = dir("r2-003-e-live");
+    let (b1, b2) = {
+        let mut cfg = Config::new(d.clone());
+        cfg.wal_fail_next = true;
+        cfg.checkpoint_bytes = 1; // any flush publishes a checkpoint and prunes
+        let db = Db::open(cfg).unwrap();
+        // reserve A: burned — acknowledged by nobody
+        assert!(matches!(db.create_object(), Err(FormatError::Io(_))));
+        // reserve B: acknowledged, then checkpointed
+        let b1 = db.create_object().unwrap();
+        let b2 = db.create_object().unwrap();
+        db.put_object(b1, b"k", b"vb1").unwrap();
+        db.put_object(b2, b"k", b"vb2").unwrap();
+        db.flush().unwrap();
+        (b1, b2)
+    };
+    assert_eq!(
+        delta_log_count(&d),
+        0,
+        "the prune must leave only the checkpoint"
+    );
+    let db = Db::open(Config::new(d.clone())).unwrap();
+    // B survives from the checkpoint alone
+    assert_eq!(db.get_object(b1, b"k").unwrap(), Some(b"vb1".to_vec()));
+    assert_eq!(db.get_object(b2, b"k").unwrap(), Some(b"vb2".to_vec()));
+    // reserve C: fresh ids above the checkpointed floors, colliding with nothing
+    let c1 = db.create_object().unwrap();
+    let c2 = db.create_object().unwrap();
+    db.put_object(c1, b"k", b"vc1").unwrap();
+    db.put_object(c2, b"k", b"vc2").unwrap();
+    for c in [c1, c2] {
+        assert!(![b1, b2].contains(&c), "a checkpointed ObjectId was reused");
+    }
+    for (o, v) in [(b1, b"vb1"), (b2, b"vb2"), (c1, b"vc1"), (c2, b"vc2")] {
+        assert_eq!(db.get_object(o, b"k").unwrap(), Some(v.to_vec()));
+    }
+}
+
+/// PlacementGeneration rides the same sequence: a failed frame burns a
+/// generation nobody observed; the acknowledged sibling's placement rides
+/// the checkpoint and survives the prune with its generation intact; the
+/// post-restart write publishes ABOVE the checkpointed floor (INV-05).
+#[test]
+fn placement_generations_never_collide_across_checkpointed_restart() {
+    let d = dir("r2-003-f-live");
+    let (ok_oid, new_oid, g_ok) = {
+        let mut cfg = Config::new(d.clone());
+        cfg.wal_fail_next = true;
+        cfg.checkpoint_bytes = 1;
+        let db = Db::open(cfg).unwrap();
+        // reserve A: a triple burned by the injected WAL failure
+        let new_oid = ObjectId([0xE1; 16]);
+        assert!(matches!(
+            db.put_object(new_oid, b"k", b"v"),
+            Err(FormatError::Io(_))
+        ));
+        // reserve B: acknowledged, then checkpointed
+        let ok = db.create_object().unwrap();
+        db.put_object(ok, b"k", b"vok").unwrap();
+        db.flush().unwrap();
+        let g_ok = match placement_of(&db, rid_of(&db, ok)).unwrap() {
+            Placement::Segment(loc) => loc.generation,
+            other => panic!("flushed placement must be a segment, got {other:?}"),
+        };
+        (ok, new_oid, g_ok)
+    };
+    assert_eq!(
+        delta_log_count(&d),
+        0,
+        "the prune must leave only the checkpoint"
+    );
+    let db = Db::open(Config::new(d.clone())).unwrap();
+    // B's placement survived the checkpoint-only restart, generation intact
+    match placement_of(&db, rid_of(&db, ok_oid)).unwrap() {
+        Placement::Segment(loc) => assert_eq!(
+            loc.generation, g_ok,
+            "the checkpointed placement generation must survive the prune"
+        ),
+        other => panic!("the checkpointed placement must stay a segment, got {other:?}"),
+    }
+    // reserve C: the fresh write publishes ABOVE the checkpointed floor
+    db.put_object(new_oid, b"k", b"v2").unwrap();
+    let g_c = match placement_of(&db, rid_of(&db, new_oid)).unwrap() {
+        Placement::Memtable { generation } => generation,
+        other => panic!("a pre-flush placement must be Memtable, got {other:?}"),
+    };
+    assert!(
+        g_c > g_ok,
+        "a post-restart placement reused a checkpointed generation ({g_c} vs {g_ok})"
+    );
+    assert_eq!(db.get_object(ok_oid, b"k").unwrap(), Some(b"vok".to_vec()));
+    assert_eq!(db.get_object(new_oid, b"k").unwrap(), Some(b"v2".to_vec()));
+}
+
+/// SegmentId ("where applicable" in the review): not WAL-reserved at all —
+/// derived from the manifest generation at open, so a restart can never
+/// re-hand a published segment id.
+#[test]
+fn segment_ids_are_manifest_derived_and_never_reused() {
+    let d = dir("r2-003-g-live");
+    let seg_before = {
+        let db = Db::open(Config::new(d.clone())).unwrap();
+        let a = db.create_object().unwrap();
+        db.put_object(a, b"k", b"v").unwrap();
+        db.flush().unwrap();
+        match placement_of(&db, rid_of(&db, a)).unwrap() {
+            Placement::Segment(loc) => loc.segment_id,
+            other => panic!("flushed placement must be a segment, got {other:?}"),
+        }
+    };
+    let db = Db::open(Config::new(d.clone())).unwrap();
+    let b = db.create_object().unwrap();
+    db.put_object(b, b"k", b"v").unwrap();
+    db.flush().unwrap();
+    let seg_after = match placement_of(&db, rid_of(&db, b)).unwrap() {
+        Placement::Segment(loc) => loc.segment_id,
+        other => panic!("flushed placement must be a segment, got {other:?}"),
+    };
+    assert!(
+        seg_after != seg_before,
+        "a segment id was reused across restart ({seg_before:?})"
+    );
+}

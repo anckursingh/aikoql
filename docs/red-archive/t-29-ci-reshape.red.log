@@ -1,0 +1,12 @@
+ARCH: training/pyproject.toml still sets pytest pythonpath=src (PR9 §34)
+ARCH: training-data.yml job unit has no pip install -e training (PR9 §34)
+ARCH: training-data.yml job fuzz-estate has no pip install -e training (PR9 §34)
+ARCH: the integration leg still carries the 10K sweep (PR9 §33)
+ARCH: training-data.yml lost the nightly leg (PR9 §33)
+ARCH: the nightly leg lost the 10K corpus sweep (PR9 §33)
+ARCH: the nightly leg lost the corpus artifact upload (PR9 §33)
+ARCH: the nightly leg is not event-guarded (PR9 §33)
+ARCH: training-data.yml declares no schedule trigger (PR9 §33)
+ARCH: the fuzz-estate leg does not run test_protocol_fuzz.py (PR9 §33)
+ARCH: the fuzz-estate leg does not run test_grounding_fuzz.py (PR9 §33)
+EXIT=1

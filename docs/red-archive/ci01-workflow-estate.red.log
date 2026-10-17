@@ -1,0 +1,7 @@
+ARCH: .github/workflows/benchmark.yml missing — CI-02 merges baseline-guard + benchmark-nightly into the one benchmark owner
+ARCH: .github/workflows/baseline-guard.yml still exists — CI-02 merges it into benchmark.yml
+ARCH: .github/workflows/benchmark-nightly.yml still exists — CI-02 merges it into benchmark.yml
+ARCH: perf smoke is missing the review cell: throughput
+ARCH: perf smoke is missing the review cell: scan
+ARCH: perf smoke is missing the review cell: compact
+EXIT=1

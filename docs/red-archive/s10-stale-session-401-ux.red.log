@@ -1,0 +1,27 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.46s
+     Running unittests src\main.rs (target\debug\deps\aikoql_mcp-20a3986fbfc0d4b9.exe)
+
+running 1 test
+test api_rest::tests::s10_api_helper_401_shows_login_overlay ... FAILED
+
+failures:
+
+---- api_rest::tests::s10_api_helper_401_shows_login_overlay stdout ----
+
+thread 'api_rest::tests::s10_api_helper_401_shows_login_overlay' (21484) panicked at crates\services\api\mcp\src\api_rest.rs:767:9:
+the api helper must detect a 401
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    api_rest::tests::s10_api_helper_401_shows_login_overlay
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

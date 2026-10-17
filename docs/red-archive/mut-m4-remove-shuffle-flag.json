@@ -1,0 +1,9 @@
+{
+  "id": "mut-m4-remove-shuffle-flag",
+  "pre_fix_commit": "7d09fe73db2a84d02446d3fbe7840e818634903f",
+  "command": "bash scripts/mutation-harness.sh m4-remove-shuffle-flag",
+  "captured_at": "2026-09-28T23:01:03Z",
+  "captured_head": "7d09fe73db2a84d02446d3fbe7840e818634903f",
+  "exit_code": 1,
+  "note": "TDD-033 (L-22): L-22 moved the nightly shuffle from cargo nextest (which has no --shuffle flag) to pinned-nightly libtest. The old m4 mutated the deleted nextest install step; the re-aimed class drops the shuffle flag from run-shuffle.sh's live command line \u2014 the nightly run would silently degrade to a plain ordered run. The gate's live-line pin (^cargo +nightly test .* -Z unstable-options --shuffle) catches it."
+}

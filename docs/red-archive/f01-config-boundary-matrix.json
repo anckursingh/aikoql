@@ -1,0 +1,8 @@
+{
+  "id": "f01-config-boundary-matrix",
+  "pre_fix_commit": "bac2e84",
+  "command": "cargo test -p aikoql-storage-v2 --test config_boundaries",
+  "captured_at": "2026-10-01T10:39:33Z",
+  "captured_head": "bac2e8480aa72ca11ba386f63ca48dc552112637",
+  "exit_code": 101
+}

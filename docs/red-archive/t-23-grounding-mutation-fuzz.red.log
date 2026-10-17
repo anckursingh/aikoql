@@ -1,0 +1,24 @@
+F..                                                                      [100%]
+================================== FAILURES ===================================
+_____________________ test_every_mutant_meets_expectation _____________________
+
+    def test_every_mutant_meets_expectation():
+        mismatches = []
+        for name, mutate, expect_ok, substr in _MUTANTS:
+            ex = _base()
+            mutate(ex)
+            out = validate_grounding(ex)
+            if bool(out["ok"]) != expect_ok:
+                mismatches.append((name, "ok" if expect_ok else "reject", out))
+            elif not expect_ok and substr and \
+                    not any(substr in e for e in out["errors"]):
+                mismatches.append((name, f"reject via {substr!r}", out))
+>       assert not mismatches, mismatches
+E       AssertionError: [('grounded answer labeled unanswerable', 'reject', {'ok': True, 'errors': []}), ('grounded answer labeled ambiguous', 'reject', {'ok': True, 'errors': []})]
+E       assert not [('grounded answer labeled unanswerable', 'reject', {'ok': True, 'errors': []}), ('grounded answer labeled ambiguous', 'reject', {'ok': True, 'errors': []})]
+
+training\tests\test_grounding_fuzz.py:171: AssertionError
+=========================== short test summary info ===========================
+FAILED training\tests\test_grounding_fuzz.py::test_every_mutant_meets_expectation
+1 failed, 2 passed in 1.37s
+EXIT=1

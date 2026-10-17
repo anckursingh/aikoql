@@ -1,0 +1,8 @@
+{
+  "id": "t-24-unknown-precision-recall",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_scorecard.py -q",
+  "captured_at": "2026-10-04T10:36:32Z",
+  "captured_head": "1b48f399799acada2747c7b823869d162df65c01",
+  "exit_code": 1
+}

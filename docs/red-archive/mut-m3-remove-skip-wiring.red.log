@@ -1,0 +1,2 @@
+SKIP DRIFT: ci.yml does not use scripts/skip-list.sh — the registry is not wired
+EXIT=1

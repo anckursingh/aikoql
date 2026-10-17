@@ -26,6 +26,7 @@ mod imports;
 mod ingest;
 mod knowledge_runtime;
 mod model;
+mod native;
 mod protocol;
 mod rate_limiter;
 mod session;
@@ -143,6 +144,7 @@ pub(crate) const PROTOCOL_VERSION: &str = "2024-11-05";
 // else lives in the modules above (R7).
 use crate::cli::*;
 use crate::http::*;
+use crate::native::*;
 use crate::session::TcpAuthTable;
 use crate::transport::*;
 
@@ -207,6 +209,7 @@ fn main() {
         info!(config = %path, "configuration loaded");
     }
     let listen_addr = cfg.listen_addr;
+    let native_addr = cfg.native_port;
     let metrics_addr = cfg.metrics_addr;
     let tcp_tokens = cfg.tcp_tokens;
     let db_path = cfg.db_path;
@@ -260,7 +263,7 @@ fn main() {
         None => None,
     };
 
-    let (kernel, admin) = match engine::open_kernel(&db_path, &cfg.encryption, cfg.backend) {
+    let (kernel, admin) = match engine::open_kernel(&db_path, &cfg.encryption) {
         Ok((k, admin)) => (k, admin),
         Err(e) => {
             eprintln!("open kernel: {}", e);
@@ -326,6 +329,16 @@ fn main() {
                 } else {
                     match aikoql_semantic::provider::CandleEmbedding::from_local(&candle_dir) {
                         Ok(p) => {
+                            // Test park hook (P5-M11 pattern): arm the Nth
+                            // embed to hold the model lock — deterministic
+                            // contention for the bounded compile_context pin.
+                            let p = match std::env::var("AIKOQL_EMBED_PARK_AT")
+                                .ok()
+                                .and_then(|v| v.parse::<usize>().ok())
+                            {
+                                Some(n) => p.with_park_at(n),
+                                None => p,
+                            };
                             set_semantic_status(
                                 "initializing",
                                 "local model loaded; background enrichment running",
@@ -429,65 +442,12 @@ fn main() {
     let db_path = Arc::new(db_path);
     SERVER_START.set(Instant::now()).ok();
 
-    // Load ontology from stored Ontology KOs (MRFC-0041).
-    // Prefer manually-curated ontologies over auto-discovered ones.
-    // If multiple exist, pick the latest non-discovered, fall back to discovered.
-    let ontology: Arc<OntologyRegistry> = {
-        let subj = Subject::with_roles("system", &["admin"]);
-        match kernel.scan_by_type(&subj, ONTOLOGY_TYPE) {
-            Ok(kos) if !kos.is_empty() => {
-                let manual: Vec<_> = kos
-                    .iter()
-                    .filter(|ko| !ko.metadata.tags.contains(&"auto-discovered".to_string()))
-                    .collect();
-                let candidate = if !manual.is_empty() {
-                    // Prefer the latest manually-created ontology.
-                    manual
-                        .into_iter()
-                        .max_by_key(|ko| ko.commit_ts)
-                        .expect("manual is non-empty") // justified: guarded by !manual.is_empty() above
-                } else {
-                    // Fall back to latest auto-discovered.
-                    kos.iter()
-                        .max_by_key(|ko| ko.commit_ts)
-                        .expect("kos is non-empty") // justified: guarded by the outer Ok(kos) if !kos.is_empty() arm
-                };
-                match OntologyDef::from_ko(candidate) {
-                    Ok(def) => {
-                        let source = if candidate
-                            .metadata
-                            .tags
-                            .contains(&"auto-discovered".to_string())
-                        {
-                            "auto-discovered"
-                        } else {
-                            "manual"
-                        };
-                        info!(namespace = %def.namespace, version = %def.version,
-                              classes = def.classes.len(),
-                              mappings = def.mappings.len(),
-                              source = source,
-                              "ontology loaded");
-                        match OntologyRegistry::new(def) {
-                            Ok(r) => Arc::new(r),
-                            Err(e) => {
-                                info!(error = %e, "ontology registry failed to initialize — using empty registry");
-                                Arc::new(OntologyRegistry::empty())
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        info!(error = %e, "ontology KO found but failed to decode — using empty registry");
-                        Arc::new(OntologyRegistry::empty())
-                    }
-                }
-            }
-            _ => {
-                info!("no ontology KO found — using empty registry");
-                Arc::new(OntologyRegistry::empty())
-            }
-        }
-    };
+    // Load ontology from stored Ontology KOs (MRFC-0041) and install it in
+    // the hot-reload slot — S-8 (POC-4): Auto-Discover and REST Ontology
+    // remembers republish through the same path, so the query editor never
+    // waits for a restart.
+    let ontology = crate::http::load_ontology_registry(&kernel);
+    crate::http::install_ontology(ontology.clone());
 
     // Optional HTTP metrics endpoint for Prometheus + Kubernetes probes.
     if let Some(ref addr) = metrics_addr {
@@ -502,9 +462,10 @@ fn main() {
         );
     }
 
-    if let Some(addr) = listen_addr {
+    if listen_addr.is_some() || native_addr.is_some() {
         // PRR-2: TCP requires token auth (fail-closed). Stdio keeps the
-        // process-boundary trust model and needs no token.
+        // process-boundary trust model and needs no token. D-15: the native
+        // listener carries the same bearer token, so it inherits the gate.
         if tcp_tokens.is_empty() {
             eprintln!(
                 "TCP mode requires at least one --tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]] — refusing to serve without authentication (stdio mode needs no token)"
@@ -518,34 +479,93 @@ fn main() {
                 std::process::exit(2);
             }
         };
-        // R1 (review round 3): loopback-only plaintext TCP — a non-loopback
-        // bind would put the bearer token on the wire unencrypted, so it is
-        // rejected fail-closed. TLS arrives post-MVP (terminate TLS at a
-        // reverse proxy in front of the loopback listener).
-        let addr = match validate_listen(&addr) {
-            Ok(a) => a,
-            Err(e) => {
-                eprintln!("{e}");
-                std::process::exit(2);
+        if let Some(addr) = listen_addr {
+            // R1 (review round 3): loopback-only plaintext TCP — a non-loopback
+            // bind would put the bearer token on the wire unencrypted, so it is
+            // rejected fail-closed. TLS arrives post-MVP (terminate TLS at a
+            // reverse proxy in front of the loopback listener).
+            let addr = match validate_listen(&addr) {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(2);
+                }
+            };
+            let listener = match TcpListener::bind(&addr) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("bind TCP listener {}: {}", addr, e);
+                    std::process::exit(1);
+                }
+            };
+            // D-20 (§30): one server serves both transports. With
+            // --native-port set, the TCP loop moves to its own thread so the
+            // main thread reaches the native loop below; otherwise it blocks
+            // main as before. The clones keep the originals for that loop.
+            let has_native = native_addr.is_some();
+            let (k, a, d, rl, adm) = (
+                kernel.clone(),
+                auth.clone(),
+                db_path.clone(),
+                mcp_rate_limit.clone(),
+                admin.clone(),
+            );
+            let serve = move || {
+                run_tcp_listener(
+                    k,
+                    listener,
+                    a,
+                    d,
+                    rl,
+                    adm,
+                    cfg.request_timeout_secs,
+                    cfg.max_connections,
+                )
+            };
+            if has_native {
+                thread::spawn(serve);
+            } else {
+                serve();
             }
-        };
-        let listener = match TcpListener::bind(&addr) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("bind TCP listener {}: {}", addr, e);
-                std::process::exit(1);
-            }
-        };
-        run_tcp_listener(
-            kernel,
-            listener,
-            auth,
-            db_path,
-            mcp_rate_limit,
-            admin,
-            cfg.request_timeout_secs,
-            cfg.max_connections,
-        );
+        }
+        if let Some(addr) = native_addr {
+            // D-15: the same R1 loopback-only rule — the framed protocol
+            // carries the same bearer token in plaintext.
+            let addr = match validate_listen(&addr) {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(2);
+                }
+            };
+            let listener = match TcpListener::bind(&addr) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("bind native listener {}: {}", addr, e);
+                    std::process::exit(1);
+                }
+            };
+            run_native_listener(
+                kernel,
+                listener,
+                auth,
+                db_path,
+                mcp_rate_limit,
+                admin,
+                cfg.request_timeout_secs,
+                cfg.max_connections,
+            );
+        }
+    } else if metrics_addr.is_some() {
+        // S-12 (POC-4): metrics-only serve must not read stdin — in a
+        // background/service context stdin hits EOF immediately, which the
+        // stdio loop treats as shutdown, taking the HTTP surface down with
+        // a clean exit. Park main forever (the metrics thread keeps
+        // serving); like TCP mode there is no shutdown-time checkpoint
+        // (honest ledger).
+        loop {
+            std::thread::park();
+        }
     } else {
         run_stdio(
             &kernel,
@@ -557,10 +577,34 @@ fn main() {
         // P5-M22 (P1-15): stdio mode returns at stdin EOF — checkpoint the
         // maintainer before the process exits. TCP mode never returns, so
         // it has no shutdown-time checkpoint yet (honest ledger).
-        if let Some(m) = server_ctx.db.maintainer.lock().unwrap().as_ref() {
+        //
+        // T-59 (P3-010): the maintainer is attached from a spawned thread
+        // (see the serve setup above) — a close->rapid-EOF shutdown can
+        // read the slot before the attach lands and skip the checkpoint.
+        // Wait for the attach (bounded) so the hand-off is deterministic.
+        let maintainer = {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let m = server_ctx.db.maintainer.lock().unwrap().clone();
+                if m.is_some() {
+                    break m;
+                }
+                if std::time::Instant::now() >= deadline {
+                    warn!("shutdown: maintainer not attached within 5s — skipping checkpoint");
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        if let Some(m) = maintainer {
+            let t0 = std::time::Instant::now();
             if let Err(e) = m.checkpoint(&kernel, &ckpt_dir) {
                 warn!("maintainer checkpoint failed: {e}");
             }
+            info!(
+                elapsed_ms = t0.elapsed().as_millis() as u64,
+                "shutdown maintainer checkpoint done"
+            );
         }
     }
 }

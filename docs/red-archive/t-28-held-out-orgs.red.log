@@ -1,0 +1,58 @@
+FF                                                                       [100%]
+================================== FAILURES ===================================
+__________________ test_held_out_org_never_leaks_into_train ___________________
+
+mcp_server = ('127.0.0.1:56072', 'test-token')
+tmp_path = WindowsPath('C:/Users/ancku/AppData/Local/Temp/pytest-of-ancku/pytest-233/test_held_out_org_never_leaks_0')
+
+    def test_held_out_org_never_leaks_into_train(mcp_server, tmp_path):
+        """T-28 (P1.2 / PR9 Finding #3): the eval slices draw from an org
+        the model never saw — no train example may reference the held-out
+        org (its entities never appear in a train context), the held-out
+        org's examples reach both eval slices, and every example carries
+        the machine-readable org stamp."""
+        host, token = mcp_server
+        out, artifacts = tmp_path / "ds", tmp_path / "artifacts"
+        proc = _run(host, token, out, target=40, seeds=2, artifacts=artifacts)
+        assert proc.returncode == 0, proc.stderr
+        ds = read_dataset(str(out))
+        nova = ("plant-", "crew-", "worker-", "meter-", "zone-")
+    
+        def org_of(ex):
+            names = {e["name"] for e in ex["context"]["entities"]}
+            if any(n.startswith(nova) for n in names):
+                return "novaenergy"
+            return "acmepay"
+    
+        # the tooth: held-out entities never appear in a train context
+>       assert all(org_of(e) != "novaenergy" for e in ds["train"])
+E       assert False
+E        +  where False = all(<generator object test_held_out_org_never_leaks_into_train.<locals>.<genexpr> at 0x00000201351A7BC0>)
+
+training\tests\test_corpus.py:122: AssertionError
+___________ test_held_out_declaration_keeps_eval_orgs_out_of_train ____________
+
+tmp_path = WindowsPath('C:/Users/ancku/AppData/Local/Temp/pytest-of-ancku/pytest-233/test_held_out_declaration_keep0')
+
+    def test_held_out_declaration_keeps_eval_orgs_out_of_train(tmp_path):
+        """The dataset declares its held-out orgs in the manifest; the
+        leakage gate recomputes the assignment with that declaration. An
+        honest placement passes; a held-out example recorded into train is
+        misplaced and fails the gate. The seed is chosen so the holdout
+        force is the ONLY thing keeping b out of train — a disarmed force
+        (mutation leg) agrees with the tamper and the test fails."""
+        a = _ex(split_key="k-1", org="payments")
+        b = _ex(split_key="k-2", org="utilities",
+                question="What is the owner of the checkout service?")
+        for seed in range(400):
+            plain, _ = assign_splits([b], seed, (8, 1, 1))
+>           forced, _ = assign_splits([b], seed, (8, 1, 1),
+                                      held_out_orgs=("utilities",))
+E           TypeError: assign_splits() got an unexpected keyword argument 'held_out_orgs'
+
+training\tests\test_gates.py:174: TypeError
+=========================== short test summary info ===========================
+FAILED training\tests\test_corpus.py::test_held_out_org_never_leaks_into_train
+FAILED training\tests\test_gates.py::test_held_out_declaration_keeps_eval_orgs_out_of_train
+2 failed in 59.72s
+EXIT=1

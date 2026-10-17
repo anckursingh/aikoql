@@ -1,0 +1,11 @@
+--- FAIL: TestCorrelationResponseForAnotherRequestIsProtocolError (2.00s)
+    correlation_test.go:99: expected PROTOCOL_ERROR McpError, got aikoql: read get: read tcp 127.0.0.1:59845->127.0.0.1:59844: i/o timeout
+--- FAIL: TestCorrelationMissingResponseTimesOut (0.30s)
+    correlation_test.go:132: expected retryable TIMEOUT McpError, got aikoql: read get: read tcp 127.0.0.1:59852->127.0.0.1:59851: i/o timeout
+--- FAIL: TestCorrelationLateResponseAfterTimeoutIsSkipped (0.30s)
+    correlation_test.go:152: call 1 must time out, got aikoql: read get: read tcp 127.0.0.1:59854->127.0.0.1:59853: i/o timeout
+FAIL
+FAIL	github.com/anckursingh/aikoql/sdk/go	3.076s
+?   	github.com/anckursingh/aikoql/sdk/go/examples/web-service	[no test files]
+FAIL
+EXIT=1

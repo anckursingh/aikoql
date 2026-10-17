@@ -1,0 +1,8 @@
+--- FAIL: TestCorpusPin (0.00s)
+    corpus_test.go:185: case corp-v02 (version): go column drift — got [0], want [-1]
+    corpus_test.go:185: case corp-v03 (version): go column drift — got [0], want [-1]
+    corpus_test.go:185: case corp-v05 (version): go column drift — got [1,2,0], want [1, 2, -1]
+FAIL
+FAIL	github.com/anckursingh/aikoql/sdk/go	0.068s
+FAIL
+EXIT=1

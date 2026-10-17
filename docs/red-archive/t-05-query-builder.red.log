@@ -1,0 +1,39 @@
+T-05 RED — query builder + oracle (design Phase 10)
+pre-fix head: 30682ff (T-04 dogfood tip)
+run: training/ python -m pytest -q tests/test_query_builder.py
+result: 1 collection error, 22 tests blocked (RED-EXIT=2)
+
+Collection error:
+  tests\test_query_builder.py:33
+    from aikoql_training.generators import build_queries
+  ModuleNotFoundError: No module named 'aikoql_training.generators'
+
+Blocked: 22 tests (expected query strings, fail-closed rendering,
+oracle teeth, live compile->scenario-match acceptance). Nothing to
+execute — the builder and oracle modules do not exist.
+
+Findings (recon against crates/compiler/src/parser + crates/runtime,
+recorded here so the GREEN implementation has the real contract):
+
+1. String literals are double-quoted ONLY and have NO escape mechanism
+   (parser/lexer.rs read_string stops at the next '"'). The conftest
+   _BASE example query `MATCH Service WHERE name == 'settlement' ...`
+   does NOT lex — a lying example that must be fixed.
+2. MATCH predicates address properties only — there is no KOID
+   addressing in the text grammar.
+3. TRAVERSE is outbound-only, one rel_type per clause, DEPTH optional
+   (default 1, 0 rejected at compile). A mixed-rel two-hop path cannot
+   be expressed in one query — it composes as two chained queries.
+4. RETURN * after TRAVERSE yields RowSet::Traversal, which tool_aikoql
+   renders as {"results": []} (query.rs matches only Objects/Scored) —
+   a traverse query MUST project a field (the Project op loads the KOs).
+5. Integral literals lower to Value::Int (mod.rs kq010) and cross-type
+   comparison is fail-closed: ints render as integers, floats as
+   decimals; negative numbers ('-' does not lex) and scientific
+   notation ('e' lexes as an ident) are unrepresentable.
+6. Ident names (type/property/rel) must match [A-Za-z_][A-Za-z0-9_:]*
+   and must not be keywords (MATCH/WHERE/... lex as tokens).
+
+Expected GREEN: aikoql_training/generators/query.py build_queries +
+aikoql_training/validation/execution.py verify_scenario, 100% compile
+rate on the live acceptance cell.

@@ -1,0 +1,9 @@
+{
+  "id": "mut-m3-remove-skip-wiring",
+  "pre_fix_commit": "25ea8e5",
+  "command": "bash scripts/mutation-harness.sh m3-remove-skip-wiring",
+  "captured_at": "2026-09-28T22:39:45Z",
+  "captured_head": "d27f4ccb356ceebcaf4727eb1c65f4a54d2754f3",
+  "exit_code": 1,
+  "note": "mutation RED: the test jobs drop the skip-list.sh derivation while ci.yml's registry comment survives \u2014 a raw grep matched the prose; caught after leg 1 matches live invocation lines only"
+}

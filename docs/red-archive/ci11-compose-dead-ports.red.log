@@ -1,0 +1,3 @@
+ARCH: docker-compose.yml publishes dead aikoql host ports (CI-11)
+ARCH: docker-compose.release.yml publishes dead aikoql host ports (CI-11)
+EXIT=1

@@ -1,0 +1,32 @@
+✖ sdk-conformance --language typescript (404.2635ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 594.3121
+
+✖ failing tests:
+
+test at crates\sdk\typescript\tests\conformance.test.ts:43:1
+✖ sdk-conformance --language typescript (404.2635ms)
+  AssertionError [ERR_ASSERTION]: sdk-conformance --language typescript failed (exit 2):
+  sdk-conformance (typescript): not implemented yet (D-13 RED)
+  
+  
+  2 !== 0
+  
+      at TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/conformance.test.ts:59:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+EXIT=1

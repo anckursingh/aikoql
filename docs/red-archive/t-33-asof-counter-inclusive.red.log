@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.54s
+     Running tests\temporal.rs (target\debug\deps\temporal-28feb0f8e6b8990d.exe)
+
+running 1 test
+test as_of_sees_versions_committed_within_the_same_millisecond ... FAILED
+
+failures:
+
+---- as_of_sees_versions_committed_within_the_same_millisecond stdout ----
+
+thread 'as_of_sees_versions_committed_within_the_same_millisecond' (59900) panicked at crates\kernel\tests\temporal.rs:331:10:
+version committed during ms 10_000 must be visible at AS_OF 10_000
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    as_of_sees_versions_committed_within_the_same_millisecond
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-kernel --test temporal`
+EXIT=101

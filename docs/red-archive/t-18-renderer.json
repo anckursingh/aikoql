@@ -1,0 +1,8 @@
+{
+  "id": "t-18-renderer",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_render.py -q",
+  "captured_at": "2026-10-04T09:20:10Z",
+  "captured_head": "bef59e6b5c65da36d364abb8f6e6804ec10fbf61",
+  "exit_code": 2
+}

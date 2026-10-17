@@ -1,0 +1,8 @@
+{
+  "id": "t47-supersede-atomic-pair",
+  "pre_fix_commit": "e8be1d7",
+  "command": "cargo test -p aikoql-runtime supersede_is_atomic_at_the_successors_instant",
+  "captured_at": "2026-10-08T14:55:07Z",
+  "captured_head": "e8be1d789f35d673436cde0ab806bc2584495678",
+  "exit_code": 101
+}

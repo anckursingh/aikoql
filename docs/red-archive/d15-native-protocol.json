@@ -1,0 +1,8 @@
+{
+  "id": "d15-native-protocol",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo check -p aikoql-sdk --all-targets",
+  "captured_at": "2026-10-01T19:09:26Z",
+  "captured_head": "16c16b04ba86e7068942f18ea9ba15e4d22689b8",
+  "exit_code": 101
+}

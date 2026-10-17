@@ -331,3 +331,45 @@ fn ann004_evidence_cell_past_capacity() {
         );
     }
 }
+
+#[test]
+fn ann006_unembedded_kos_never_score_as_zero_hits() {
+    // Device-eval N4: the coordinator's vector leg used to rank every head
+    // without an embedding at 0.0 — during the semantic catch-up window a
+    // vector query returned the whole store as fabricated zero-score hits.
+    // A KO without an embedding has no vector score; it must be absent.
+
+    // Mixed population: only the embedded KO may answer.
+    let (k, _c) = mk();
+    let embedded = create_vec(&k, "near", vec![1.0, 0.0]);
+    for body in ["plain a", "plain b"] {
+        let mut req = RememberRequest::create(alice(), meta("fact"));
+        req.properties
+            .insert("body".into(), Value::Text(body.into()));
+        k.remember(req).unwrap();
+    }
+    let q = |vector: Option<Vec<f32>>| SimilarityQuery {
+        context: alice().into(),
+        filter: None,
+        text: None,
+        vector,
+        embedding_model: None,
+        k: 10,
+        fusion: Fusion::VectorOnly,
+    };
+    let hits = k.find_similar(q(Some(vec![1.0, 0.0]))).unwrap();
+    assert_eq!(hits.len(), 1, "only embedded KOs may score");
+    assert_eq!(hits[0].ko.koid, embedded);
+
+    // All-unembedded population: honest empty, never zero-score hits.
+    let (k2, _c2) = mk();
+    let mut req = RememberRequest::create(alice(), meta("fact"));
+    req.properties
+        .insert("body".into(), Value::Text("nothing embedded".into()));
+    k2.remember(req).unwrap();
+    let hits = k2.find_similar(q(Some(vec![1.0, 0.0]))).unwrap();
+    assert!(
+        hits.is_empty(),
+        "a KO without an embedding has no vector score"
+    );
+}

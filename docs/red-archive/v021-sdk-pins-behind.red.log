@@ -1,0 +1,5 @@
+SDK COMPAT: workspace:0.2.1 != contract minimum_server_version 0.2.0
+api-v1 contract OK
+error taxonomy OK
+test-vectors OK (2 vectors, 13 conformance dirs)
+EXIT=1

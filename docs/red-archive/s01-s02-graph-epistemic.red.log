@@ -1,0 +1,34 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.64s
+     Running unittests src\main.rs (target\debug\deps\aikoql_mcp-20a3986fbfc0d4b9.exe)
+
+running 2 tests
+test api_rest::tests::s01_graph_nodes_style_from_epistemic_status_not_lifecycle ... FAILED
+test api_rest::tests::s02_graph_derives_virtual_retraction_edges ... FAILED
+
+failures:
+
+---- api_rest::tests::s01_graph_nodes_style_from_epistemic_status_not_lifecycle stdout ----
+
+thread 'api_rest::tests::s01_graph_nodes_style_from_epistemic_status_not_lifecycle' (27988) panicked at crates\services\api\mcp\src\api_rest.rs:684:9:
+node styling must read extensions.epistemic_status
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- api_rest::tests::s02_graph_derives_virtual_retraction_edges stdout ----
+
+thread 'api_rest::tests::s02_graph_derives_virtual_retraction_edges' (7148) panicked at crates\services\api\mcp\src\api_rest.rs:705:9:
+the virtual-edge heuristic must key on valid_to_asserted
+
+
+failures:
+    api_rest::tests::s01_graph_nodes_style_from_epistemic_status_not_lifecycle
+    api_rest::tests::s02_graph_derives_virtual_retraction_edges
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 77 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

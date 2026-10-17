@@ -1,0 +1,8 @@
+{
+  "id": "d16-line-fault-matrix",
+  "pre_fix_commit": "9cd8e76",
+  "command": "bash -c cd /e/dreams/Mnemosyne && ./.venv/Scripts/python.exe -m pytest crates/sdk/python/tests/test_fault_matrix.py -q; cd crates/sdk/go && AIKOQL_MCP_BIN=E:/dreams/Mnemosyne/target/debug/aikoql-mcp.exe go test -run TestFaultMatrix; cd ../typescript && AIKOQL_MCP_BIN=E:/dreams/Mnemosyne/target/debug/aikoql-mcp.exe node --test tests/fault-matrix.test.ts; cd ../java && AIKOQL_MCP_BIN=E:/dreams/Mnemosyne/target/debug/aikoql-mcp.exe mvn -q test -Dtest=FaultMatrixTest",
+  "captured_at": "2026-10-01T20:48:35Z",
+  "captured_head": "9cd8e76c9c79bf3d4302f4c14ada2b9484cf8cad",
+  "exit_code": 1
+}

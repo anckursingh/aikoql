@@ -1,0 +1,8 @@
+{
+  "id": "d19-sdk-nightly",
+  "pre_fix_commit": "51e732d801f083dc85b3aa08a1ee96005ca49385",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-02T15:01:27Z",
+  "captured_head": "51e732d801f083dc85b3aa08a1ee96005ca49385",
+  "exit_code": 1
+}

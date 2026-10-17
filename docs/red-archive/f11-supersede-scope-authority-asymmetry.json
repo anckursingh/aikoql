@@ -1,0 +1,8 @@
+{
+  "id": "f11-supersede-scope-authority-asymmetry",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test transactions supersede_generation_inherits_scope_and_authority",
+  "captured_at": "2026-10-08T10:36:39Z",
+  "captured_head": "f89bec544db75495aacc4d01c491e46baf11803b",
+  "exit_code": 101
+}

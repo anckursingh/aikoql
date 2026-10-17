@@ -1,0 +1,32 @@
+{
+  "name": "@aikoql/client",
+  "version": "0.2.2",
+  "description": "Aikoql — the TypeScript SDK for the agent-first knowledge database. Node + browser-compatible core, async/await, AsyncIterable streaming, AbortSignal, pool. Zero runtime dependencies.",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Anckur Singh",
+    "url": "https://github.com/anckursingh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anckursingh/aikoql.git"
+  },
+  "keywords": [
+    "aikoql",
+    "knowledge-graph",
+    "knowledge-database",
+    "mcp",
+    "sdk"
+  ],
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "fast-check": "^4.10.2",
+    "typescript": "^5.8.0"
+  }
+}

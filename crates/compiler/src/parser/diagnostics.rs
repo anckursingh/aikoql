@@ -182,7 +182,12 @@ pub fn unknown_type(name: &str, line: usize, col: usize) -> Diagnostic {
         line,
         col,
     )
-    .with_hint(format!("register it with CREATE TYPE {}", name))
+    // S-9 (POC-4): CREATE TYPE does not exist in the language — types enter
+    // via a SchemaRegistry or an Ontology KO, and the studio's discovery
+    // flow builds the latter.
+    .with_hint(
+        "register the type via SchemaRegistry or an Ontology KO (Studio: Ontology → Auto-Discover)",
+    )
 }
 
 pub fn unknown_property(prop: &str, entity: &str, line: usize, col: usize) -> Diagnostic {

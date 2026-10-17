@@ -7,4 +7,4 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-aikoql-kernel = { path = "../../kernel" }
+aikoql-kernel = { workspace = true }

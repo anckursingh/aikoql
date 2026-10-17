@@ -27,7 +27,11 @@ pub mod compaction;
 pub mod db;
 pub mod engine;
 pub mod format;
+/// The shared decode-boundary checks for the FZ-01..07 cargo-fuzz targets
+/// (doc(hidden): the out-of-workspace fuzz crate is the consumer).
+pub mod fuzz;
 pub mod identity;
+pub mod legacy_envelope;
 pub mod memtable;
 pub mod migration;
 pub mod placement;

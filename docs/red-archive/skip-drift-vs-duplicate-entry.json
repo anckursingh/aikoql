@@ -1,0 +1,9 @@
+{
+  "id": "skip-drift-vs-duplicate-entry",
+  "pre_fix_commit": "7b64bde",
+  "command": "env GATED_TOML=/tmp/dup-registry.toml bash scripts/check-skip-drift.sh",
+  "captured_at": "2026-09-28T22:44:30Z",
+  "captured_head": "244952914a766d93b67f4f02429fa73d8aa7e5a1",
+  "exit_code": 1,
+  "note": "mutation RED: GATED_TOML pointed at a registry copy carrying one duplicate test name (sfm009_large_wal_snapshot_has_bounded_rss, a second row with its own reason \u2014 the TDD-032 class: legs 1-3 stay green, one row's reason can rot behind the other) \u2014 the gate exits 1 naming it; with the real registry the gate is green"
+}

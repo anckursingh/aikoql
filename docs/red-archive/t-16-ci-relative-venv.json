@@ -1,0 +1,8 @@
+{
+  "id": "t-16-ci-relative-venv",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-04T08:42:14Z",
+  "captured_head": "423cd2a47d4f1a04b3bef32e3349181b80858438",
+  "exit_code": 1
+}

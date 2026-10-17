@@ -1,0 +1,8 @@
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\dreams\Mnemosyne\crates\sdk\python\python\aikoql\__init__.py", line 21, in <module>
+    from aikoql.adapters.crewai import AikoqlCrewAIMemory
+  File "E:\dreams\Mnemosyne\crates\sdk\python\python\aikoql\adapters\__init__.py", line 3, in <module>
+    from aikoql.adapters.crewai import AikoqlCrewAIMemory
+  File "E:\dreams\Mnemosyne\crates\sdk\python\python\aikoql\adapters\crewai.py", line 12, in <module>
+    from aikoql._aikoql import aikoql
+ModuleNotFoundError: No module named 'aikoql._aikoql'

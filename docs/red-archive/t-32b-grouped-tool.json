@@ -1,0 +1,8 @@
+{
+  "id": "t-32b-grouped-tool",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp aikoql_group_by_surfaces_grouped_rows",
+  "captured_at": "2026-10-07T13:53:28Z",
+  "captured_head": "45704188c40cbb5bcc8207fc79d1e5496ffe289c",
+  "exit_code": 101
+}

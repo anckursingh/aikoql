@@ -706,11 +706,7 @@ fn cbo012_a_non_adjacent_filter_is_never_index_assisted() {
             fields: vec!["name".into()],
         },
         IrOp::Filter {
-            predicates: vec![Predicate {
-                property: "name".into(),
-                op: PredOp::Eq,
-                value: Value::Text("P042".into()),
-            }],
+            predicates: vec![Predicate::eq("name", Value::Text("P042".into()))],
         },
     ]);
     let report = cost_optimize(&k, &plan).unwrap();

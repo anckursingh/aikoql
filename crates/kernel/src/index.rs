@@ -135,7 +135,7 @@ pub trait VectorIndex: Send + Sync {
     /// P4-M7 (TDD-VECTOR-002): rebuild ONCE when the dead ratio crossed the
     /// threshold. No-op for non-tombstone indexes. Returns whether a
     /// rebuild ran. Called after maintenance applies (never inside `remove`
-    /// itself — a delete must stay O(1)).
+    /// itself — a delete must stay cheap).
     fn maybe_rebuild(&self) -> bool {
         false
     }

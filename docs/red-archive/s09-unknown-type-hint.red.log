@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running unittests src\lib.rs (target\debug\deps\aikoql_compiler-3d5e854fec898cfa.exe)
+
+running 1 test
+test semantic::tests::s09_unknown_type_hint_names_the_real_registration_paths ... FAILED
+
+failures:
+
+---- semantic::tests::s09_unknown_type_hint_names_the_real_registration_paths stdout ----
+
+thread 'semantic::tests::s09_unknown_type_hint_names_the_real_registration_paths' (27620) panicked at crates\compiler\src\semantic.rs:259:9:
+the hint must not reference a nonexistent statement: register it with CREATE TYPE p4d_fact
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    semantic::tests::s09_unknown_type_hint_names_the_real_registration_paths
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 88 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-compiler --lib`
+EXIT=101

@@ -1,0 +1,8 @@
+{
+  "id": "s12-metrics-only-serve-stdin-eof",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test server_lifecycle sv014",
+  "captured_at": "2026-10-15T11:27:00Z",
+  "captured_head": "110f372633bf5e36929cb2b3ab92ba3e43048777",
+  "exit_code": 101
+}

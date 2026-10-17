@@ -1,0 +1,29 @@
+    Checking aikoql-mcp v0.2.1 (E:\dreams\Mnemosyne\crates\services\api\mcp)
+error: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`: renamed to `try_update` for consistency
+   --> crates\services\api\mcp\src\native.rs:180:10
+    |
+180 |         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+    |          ^^^^^^^^^^^^
+    |
+    = note: `-D deprecated` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(deprecated)]`
+help: replace the use of the deprecated method
+    |
+180 -         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+180 +         .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+    |
+
+error: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`: renamed to `try_update` for consistency
+   --> crates\services\api\mcp\src\transport.rs:105:10
+    |
+105 |         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+    |          ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+105 -         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+105 +         .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+    |
+
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp") due to 2 previous errors
+EXIT=101

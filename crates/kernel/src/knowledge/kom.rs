@@ -71,6 +71,15 @@ impl KOID {
         &self.0
     }
 
+    /// The wall-clock millis the KOID was minted at (the 48-bit prefix).
+    /// G-001 (POC-3): the generation-CREATION instant — the commit-time
+    /// clock domain (a distinct axis from packed HLC commit_ts).
+    pub fn created_ms(&self) -> u64 {
+        let mut b = [0u8; 8];
+        b[2..8].copy_from_slice(&self.0[0..6]);
+        u64::from_be_bytes(b)
+    }
+
     pub fn to_hex(&self) -> String {
         let mut s = String::with_capacity(KOID_LEN * 2);
         for b in &self.0 {
@@ -1053,6 +1062,11 @@ impl KnowledgeObject {
     pub const EXT_VALID_FROM: &str = "valid_from";
     /// Extension key for valid_to (epoch millis; absent = unbounded future).
     pub const EXT_VALID_TO: &str = "valid_to";
+    /// Extension key for an asserted closure instant (epoch millis) carried
+    /// by a supersede predecessor (T-65). Read by the BETWEEN arm only:
+    /// the corpus-scale correction tx, distinct from the wall closure in
+    /// EXT_VALID_TO which AS_OF semantics depend on.
+    pub const EXT_VALID_TO_ASSERTED: &str = "valid_to_asserted";
 
     /// Start of the validity interval, epoch millis. None = unbounded past.
     /// Distinct from commit_ts (transaction time) and from `observed_at` —
@@ -1068,6 +1082,16 @@ impl KnowledgeObject {
     /// End of the validity interval (exclusive), epoch millis. None = open.
     pub fn valid_to(&self) -> Option<u64> {
         match self.extensions.get(Self::EXT_VALID_TO) {
+            Some(Value::Int(v)) if *v >= 0 => Some(*v as u64),
+            _ => None,
+        }
+    }
+
+    /// Asserted closure instant (exclusive) for a superseded generation,
+    /// epoch millis. Read by the BETWEEN arm in place of the wall closure;
+    /// never folded into `valid_to()`, which AS_OF/valid_at depend on.
+    pub fn valid_to_asserted(&self) -> Option<u64> {
+        match self.extensions.get(Self::EXT_VALID_TO_ASSERTED) {
             Some(Value::Int(v)) if *v >= 0 => Some(*v as u64),
             _ => None,
         }
@@ -3214,6 +3238,13 @@ pub enum KError {
     Cancelled,
     IndexLagExceeded,
     JobRejected(String),
+    /// Device-eval N4: the operation is correct but the store is not ready
+    /// to answer it yet — retry later (e.g. semantic catch-up running).
+    Retryable(String),
+    /// T-70 (POC-4): an idempotency key was reused across op kinds — the
+    /// stored row belongs to a different op, so replaying it would hand
+    /// the caller a foreign outcome.
+    IdempotencyConflict(String),
     Store(String),
     Codec(String),
 }
@@ -3251,6 +3282,8 @@ impl fmt::Display for KError {
             KError::Cancelled => write!(f, "CANCELLED"),
             KError::IndexLagExceeded => write!(f, "INDEX_LAG_EXCEEDED"),
             KError::JobRejected(m) => write!(f, "JOB_REJECTED: {}", m),
+            KError::Retryable(m) => write!(f, "RETRYABLE: {}", m),
+            KError::IdempotencyConflict(m) => write!(f, "IDEMPOTENCY_CONFLICT: {}", m),
             KError::Store(m) => write!(f, "STORE: {}", m),
             KError::Codec(m) => write!(f, "CODEC: {}", m),
         }

@@ -1,0 +1,8 @@
+{
+  "id": "t43-commit-ts-hybrid-leaks-through-tool",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world tool_boundary_emits_plain_epoch_millis_commit_ts",
+  "captured_at": "2026-10-08T11:22:07Z",
+  "captured_head": "03e42843b8740037e2366d69d16460e8cff77276",
+  "exit_code": 101
+}

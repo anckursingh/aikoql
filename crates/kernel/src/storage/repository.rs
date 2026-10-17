@@ -7,7 +7,7 @@
 //! ## Key layout (R6 remediation)
 //!
 //! All persistent state lives in a flat keyspace with namespace prefixes.
-//! BTree `range()` scans are naturally prefix-bounded — O(log N + matches).
+//! BTree `range()` scans are naturally prefix-scoped (log N + matches).
 //!
 //! | Prefix    | Key format                          | Purpose                  |
 //! |-----------|-------------------------------------|--------------------------|
@@ -24,7 +24,7 @@
 //! | `meta/`   | `meta/type_index`                   | Type-index backfill marker|
 //!
 //! R9: `scan_by_type` walks `type/<type_name>/` instead of the whole `head/`
-//! space (O(log N + per-type) instead of O(N)). The index is a candidate set —
+//! space (log N + per-type instead of N). The index is a candidate set —
 //! readers still verify the payload's `type_name` so stale entries from type
 //! changes are harmless.
 
@@ -220,12 +220,31 @@ fn decode_journal(b: &[u8]) -> KResult<(u64, [u8; 32], u64)> {
     d.finish()?;
     Ok((s, a, t))
 }
-fn encode_idem(koid: &KOID, version: u64, commit_ts: u64) -> Vec<u8> {
+fn encode_idem(koid: &KOID, version: u64, commit_ts: u64, kind: u8) -> Vec<u8> {
     let mut e = Enc::new();
     e.raw(koid.as_bytes());
     e.u64(version);
     e.u64(commit_ts);
+    // T-70 (POC-4): trailing op-kind tag — the row discriminates which op
+    // wrote it, so a key reused across op kinds fails loudly instead of
+    // replaying a foreign cell. Appended, not inlined, so rows written
+    // before the tag decode leniently as kind None (legacy).
+    e.u8(kind);
     e.buf
+}
+
+/// Idempotency row op kinds (T-70).
+pub const IDEM_KIND_REMEMBER: u8 = 0;
+pub const IDEM_KIND_SUPERSEDE: u8 = 1;
+
+/// Human name of an idempotency row's kind, for conflict messages.
+pub fn idem_kind_name(kind: Option<u8>) -> &'static str {
+    match kind {
+        Some(IDEM_KIND_REMEMBER) => "remember",
+        Some(IDEM_KIND_SUPERSEDE) => "supersede",
+        Some(_) => "an unknown op",
+        None => "a legacy op",
+    }
 }
 fn encode_tomb(payload_hash: [u8; 32], seq: u64) -> Vec<u8> {
     let mut e = Enc::new();
@@ -400,7 +419,7 @@ impl KnowledgeRepository {
     }
 
     // -----------------------------------------------------------------------
-    // Type index (R9: O(log N + per-type) scoped scans)
+    // Type index (R9: scoped scans)
     // -----------------------------------------------------------------------
 
     /// Put one `type/<type_name>/<koid>` entry. Idempotent at the KV level.
@@ -449,7 +468,7 @@ impl KnowledgeRepository {
     /// recomputed as their exact image and the symmetric difference is
     /// applied in ONE batch (disjoint put/del key sets, so the engine's
     /// puts-before-dels order cannot cross a del with a put).
-    /// ponytail: O(derived-index) memory for the two key sets — rebuild is a
+    /// ponytail: derived-index-sized memory for the two key sets — rebuild is a
     /// repair op, not a hot path.
     pub fn rebuild_derived_indexes(&self) -> KResult<DerivedIndexRebuild> {
         let mut old: HashSet<Vec<u8>> = HashSet::new();
@@ -880,19 +899,31 @@ impl KnowledgeRepository {
         koid: &KOID,
         version: u64,
         commit_ts: u64,
+        kind: u8,
     ) {
-        batch.put(idem_key(key), encode_idem(koid, version, commit_ts));
+        batch.put(idem_key(key), encode_idem(koid, version, commit_ts, kind));
     }
 
     pub fn get_idem(&self, key: &str) -> KResult<Option<(KOID, u64, u64)>> {
+        Ok(self.get_idem_tagged(key)?.map(|(k, v, ts, _)| (k, v, ts)))
+    }
+
+    /// T-70 (POC-4): the idem row with its op-kind tag. Legacy rows written
+    /// before the tag existed decode as kind None — replay as they always
+    /// did (the cross-kind collision cannot be proven for them).
+    pub fn get_idem_tagged(&self, key: &str) -> KResult<Option<(KOID, u64, u64, Option<u8>)>> {
         match self.engine().get(&idem_key(key))? {
             Some(b) => {
                 let mut d = Dec::new(&b);
                 let k = d.koid()?;
                 let v = d.u64()?;
                 let ts = d.u64()?;
-                d.finish()?;
-                Ok(Some((k, v, ts)))
+                let kind = if d.remaining() >= 1 {
+                    Some(d.u8()?)
+                } else {
+                    None
+                };
+                Ok(Some((k, v, ts, kind)))
             }
             None => Ok(None),
         }

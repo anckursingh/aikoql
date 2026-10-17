@@ -1,0 +1,8 @@
+{
+  "id": "d06-response-correlation",
+  "pre_fix_commit": "HEAD",
+  "command": "python -m pytest crates/sdk/python/tests/test_response_correlation.py -q",
+  "captured_at": "2026-10-01T14:14:44Z",
+  "captured_head": "1aaa6343be1d4bb1dab65559314f526f91cea048",
+  "exit_code": 1
+}

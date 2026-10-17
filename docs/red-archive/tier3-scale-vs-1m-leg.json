@@ -1,0 +1,8 @@
+{
+  "id": "tier3-scale-vs-1m-leg",
+  "pre_fix_commit": "5c5c6c9",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-09-29T17:45:49Z",
+  "captured_head": "8937a5272bb77e594418fbb7cd7f481ee59b4457",
+  "exit_code": 1
+}

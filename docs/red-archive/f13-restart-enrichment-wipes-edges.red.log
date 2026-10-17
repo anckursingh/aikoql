@@ -1,0 +1,92 @@
+   Compiling aikoql-mcp v0.2.2 (E:\dreams\Mnemosyne\crates\services\api\mcp)
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+warning: value assigned to `d1` is never read
+    --> crates\services\api\mcp\tests\mcp_real_world.rs:1719:10
+     |
+1719 |     let (mut d1, mut d2, mut rel) = (String::new(), String::new(), json!({}));
+     |          ^^^^^^ this value is reassigned later and never used
+...
+1729 |         d1 = b1["results"][0]["result"]["koid"].as_str().unwrap().to_string();
+     |         -- `d1` is overwritten here before the previous value is read
+     |
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `d2` is never read
+    --> crates\services\api\mcp\tests\mcp_real_world.rs:1719:18
+     |
+1719 |     let (mut d1, mut d2, mut rel) = (String::new(), String::new(), json!({}));
+     |                  ^^^^^^ this value is reassigned later and never used
+...
+1730 |         d2 = b1["results"][1]["result"]["koid"].as_str().unwrap().to_string();
+     |         -- `d2` is overwritten here before the previous value is read
+
+warning: value assigned to `rel` is never read
+    --> crates\services\api\mcp\tests\mcp_real_world.rs:1719:26
+     |
+1719 |     let (mut d1, mut d2, mut rel) = (String::new(), String::new(), json!({}));
+     |                          ^^^^^^^ this value is reassigned later and never used
+...
+1731 |         rel = json!({"op": "relate", "from": &d1, "to": &d2, "rel_type": "linked_to"});
+     |         --- `rel` is overwritten here before the previous value is read
+
+warning: `aikoql-mcp` (test "mcp_real_world") generated 4 warnings (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.71s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+[2m2026-10-08T10:08:00.911190Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-08T10:08:00.911334Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-relate-restart-63396 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-08T10:08:00.912852Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T10:08:00.917943Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+[2m2026-10-08T10:08:04.400902Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-08T10:08:04.401006Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-relate-restart-63396 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-08T10:08:04.401843Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T10:08:04.407161Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-08T10:08:04.451717Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 5
+[2m2026-10-08T10:08:04.451794Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 5
+[2m2026-10-08T10:08:04.452039Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T10:08:04.452252Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-08T10:08:04.452407Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-08T10:08:07.357281Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-08T10:08:07.399074Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 10
+[2m2026-10-08T10:08:07.399297Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 10
+[2m2026-10-08T10:08:07.400052Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T10:08:07.400280Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-08T10:08:07.400319Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-08T10:08:10.309513Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-08T10:08:10.335527Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 15
+[2m2026-10-08T10:08:10.335806Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 15
+[2m2026-10-08T10:08:10.336649Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T10:08:10.336836Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-08T10:08:10.336873Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-08T10:08:10.337050Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "51bc2caec5e445a4b5905bc00dd1e21e.10.del"
+[2m2026-10-08T10:08:10.337121Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "51bc2caec5e445a4b5905bc00dd1e21e.term"
+[2m2026-10-08T10:08:10.337152Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "51bc2caec5e445a4b5905bc00dd1e21e.store"
+[2m2026-10-08T10:08:10.337181Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "51bc2caec5e445a4b5905bc00dd1e21e.fast"
+[2m2026-10-08T10:08:10.337206Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "51bc2caec5e445a4b5905bc00dd1e21e.idx"
+[2m2026-10-08T10:08:10.337232Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "51bc2caec5e445a4b5905bc00dd1e21e.fieldnorm"
+[2m2026-10-08T10:08:10.337258Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "51bc2caec5e445a4b5905bc00dd1e21e.pos"
+[2m2026-10-08T10:08:10.337283Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "51bc2caec5e445a4b5905bc00dd1e21e.15.del"
+
+thread 'serve_restart_catchup_preserves_edges_for_relate_replay' (51268) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:1766:5:
+catch-up enrichment wiped the caller-created edge
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test serve_restart_catchup_preserves_edges_for_relate_replay ... FAILED
+
+failures:
+
+failures:
+    serve_restart_catchup_preserves_edges_for_relate_replay
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 11.30s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

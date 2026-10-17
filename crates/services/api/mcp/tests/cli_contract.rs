@@ -18,6 +18,9 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
+// T-72 (POC-4): TLS sweep for scratch DBs + audit sidecars.
+mod common;
+
 // --- helpers ------------------------------------------------------------------
 
 fn docs(name: &str) -> String {
@@ -49,6 +52,7 @@ fn tmp_db(name: &str) -> PathBuf {
         stamp
     ));
     let _ = std::fs::remove_dir_all(&db); // v2 database = directory
+    common::register_temp_path(&db);
     db
 }
 
@@ -267,7 +271,7 @@ fn cl01b_error_code_source_completeness() {
     }
     assert_eq!(
         envelope.len(),
-        9,
+        10,
         "envelope extraction drifted: {envelope:?}"
     );
     for code in &envelope {
@@ -305,7 +309,7 @@ fn cl01b_error_code_source_completeness() {
             tags.push(tag);
         }
     }
-    assert_eq!(tags.len(), 14, "kernel-tag extraction drifted: {tags:?}");
+    assert_eq!(tags.len(), 16, "kernel-tag extraction drifted: {tags:?}");
     for tag in &tags {
         assert!(
             doc.contains(tag),
@@ -557,6 +561,33 @@ fn cl03g_usage_errors_exit_2() {
     );
 }
 
+// --- cl05 — the serve help documents the rate cap (P3-005 MEDIUM) --------------
+
+/// P3-005: the per-principal 300-calls/min cap was invisible — neither
+/// `--help` nor `serve --help` mentioned it and no knob was named, so a
+/// burst failed at call ~300 with -32000 and no documented remedy. Pin:
+/// both help spellings name the cap (300 calls / 60s window), its
+/// per-principal scope, the [rate_limit] max_calls_per_minute TOML knob,
+/// and the bulk-load alternative (import / ingest-dir).
+#[test]
+fn cl05_help_documents_rate_cap() {
+    for args in [&["--help"][..], &["serve", "--help"][..]] {
+        let (st, out, _err) = run_bin(args);
+        assert!(st.success(), "{args:?} must exit 0: {st}");
+        for needle in [
+            "300 calls",
+            "per principal",
+            "max_calls_per_minute",
+            "[rate_limit]",
+        ] {
+            assert!(
+                out.contains(needle),
+                "help must document the rate cap (missing {needle:?}): {out}"
+            );
+        }
+    }
+}
+
 // --- cl04 — the shell's fresh default is an honest v2 directory (PR6 P1-21) ------
 
 /// Today the shell's default is "./aikoql.redb" — a name that lies. A fresh
@@ -610,4 +641,51 @@ fn cl04_fresh_shell_default_is_an_honest_v2_directory() {
     assert!(out2.contains("Connected to: ./aikoql-v2"));
 
     let _ = std::fs::remove_dir_all(&cwd);
+}
+
+// POC-4 T-72: test scratch DBs leaked into the shared temp dir (DB dirs +
+// the {db}.audit.log sidecars next to them; ~510 items in ~12 days), with
+// nothing removing them on panic. Every scratch path must register for the
+// TLS sweep, and the sweep must take the audit sidecar with it.
+#[test]
+fn t72_scratch_dbs_register_for_sweep_and_the_sweep_removes_sidecars() {
+    // Behavioral: the sweeper removes the registered path AND the
+    // {stem}.audit.log sidecar the server writes next to every DB.
+    let stem = std::env::temp_dir().join(format!(
+        "aikoql_t72_probe_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&stem);
+    std::fs::create_dir_all(&stem).unwrap();
+    let sidecar = std::path::PathBuf::from(format!("{}.audit.log", stem.display()));
+    std::fs::write(&sidecar, b"x").unwrap();
+    {
+        let sweeper = common::TempSweeper {
+            paths: vec![stem.clone()],
+        };
+        drop(sweeper);
+    }
+    assert!(!stem.exists(), "the sweep must remove the scratch DB dir");
+    assert!(
+        !sidecar.exists(),
+        "the sweep must remove the audit sidecar with the DB"
+    );
+
+    // Structural: every integration suite's scratch helper must register.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    for f in [
+        "tests/cli_contract.rs",
+        "tests/index_tool.rs",
+        "tests/server_lifecycle.rs",
+    ] {
+        let src = std::fs::read_to_string(format!("{manifest}/{f}")).unwrap();
+        assert!(
+            src.contains("register_temp_path"),
+            "{f} must register its scratch paths for the TLS sweep"
+        );
+    }
 }

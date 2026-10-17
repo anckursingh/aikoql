@@ -1,0 +1,1034 @@
+FFFFFFFFFFFFF                                                            [100%]
+================================== FAILURES ===================================
+______________________________ test_drop_request ______________________________
+
+    def test_drop_request():
+>       with fault_env("drop-request", "--n", "2") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:137: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 61576, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=14>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (28888) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+_____________________________ test_drop_response ______________________________
+
+    def test_drop_response():
+>       with fault_env("drop-response", "--n", "2") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 61593, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=18>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (32540) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+_____________________________ test_delay_response _____________________________
+
+    def test_delay_response():
+>       with fault_env("delay-response", "--from", "2", "--delay-ms", "400") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:155: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 61611, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=22>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (17532) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+___________________________ test_duplicate_response ___________________________
+
+    def test_duplicate_response():
+>       with fault_env("duplicate-response", "--n", "2") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:167: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 59084, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=26>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (31928) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+____________________________ test_reorder_response ____________________________
+
+    def test_reorder_response():
+>       with fault_env("reorder-response", "--n", "2") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:174: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 59103, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=30>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (20104) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+___________________________ test_truncate_response ____________________________
+
+    def test_truncate_response():
+>       with fault_env("truncate-response", "--n", "2", "--bytes", "8") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:183: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 59120, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=34>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (29920) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+____________________________ test_corrupt_response ____________________________
+
+    def test_corrupt_response():
+>       with fault_env("corrupt-response", "--n", "2") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:192: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 59135, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=38>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (34668) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+__________________________ test_inject_notification ___________________________
+
+    def test_inject_notification():
+>       with fault_env("inject-notification", "--after", "2") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:201: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 59150, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=42>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (30244) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+_________________________ test_inject_stale_response __________________________
+
+    def test_inject_stale_response():
+>       with fault_env("inject-stale-response", "--after", "2") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:208: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 53705, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=46>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (4532) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+______________________________ test_close_after _______________________________
+
+    def test_close_after():
+>       with fault_env("close-after", "--n", "2") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:215: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 53723, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=50>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (26048) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+____________________________ test_half_close_after ____________________________
+
+    def test_half_close_after():
+>       with fault_env("half-close-after", "--n", "2") as addr:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_fault_matrix.py:227: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 53741, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=54>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (34140) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+______________________________ test_slow_server _______________________________
+
+    def test_slow_server():
+>       with fault_env("slow-server", "--from", "2", "--bytes", "4",
+                       "--delay-ms", "25") as addr:
+
+crates\sdk\python\tests\test_fault_matrix.py:239: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 53756, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=58>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (2832) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+___________________________ test_oversized_response ___________________________
+
+    def test_oversized_response():
+>       with fault_env("oversized-response", "--n", "2",
+                       "--claim", str(64 * 1024 * 1024)) as addr:
+
+crates\sdk\python\tests\test_fault_matrix.py:248: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python314\Lib\contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+crates\sdk\python\tests\test_fault_matrix.py:115: in fault_env
+    raise last
+crates\sdk\python\tests\test_fault_matrix.py:99: in fault_env
+    _wait(px, px_port, "aikoql-fault-proxy", px.stderr, timeout=10.0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+proc = <Popen: returncode: 101 args: ['E:\\dreams\\Mnemosyne\\target\\debug\\aikoql...>
+port = 53771, what = 'aikoql-fault-proxy'
+stderr_pipe = <_io.BufferedReader name=62>, timeout = 10.0
+
+    def _wait(proc, port, what, stderr_pipe, timeout=15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                err = stderr_pipe.read().decode(errors="replace")
+>               raise RuntimeError(f"{what} exited early ({proc.returncode}):\n{err}")
+E               RuntimeError: aikoql-fault-proxy exited early (101):
+E               
+E               thread 'main' (17708) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+E               unknown flag --wire
+E               note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+crates\sdk\python\tests\test_fault_matrix.py:66: RuntimeError
+=========================== short test summary info ===========================
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_drop_request - Runt...
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_drop_response - Run...
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_delay_response - Ru...
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_duplicate_response
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_reorder_response - ...
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_truncate_response
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_corrupt_response - ...
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_inject_notification
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_inject_stale_response
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_close_after - Runti...
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_half_close_after - ...
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_slow_server - Runti...
+FAILED crates\sdk\python\tests\test_fault_matrix.py::test_oversized_response
+13 failed in 45.31s
+--- FAIL: TestFaultMatrix (9.13s)
+    --- FAIL: TestFaultMatrix/drop-request (0.78s)
+        fault_test.go:222: proxy never came up: process exited:
+            
+            thread 'main' (3352) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/drop-response (0.69s)
+        fault_test.go:232: proxy never came up: process exited:
+            
+            thread 'main' (31760) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/delay-response (0.69s)
+        fault_test.go:242: proxy never came up: process exited:
+            
+            thread 'main' (4108) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/duplicate-response (0.75s)
+        fault_test.go:258: proxy never came up: process exited:
+            
+            thread 'main' (18840) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/reorder-response (0.70s)
+        fault_test.go:270: proxy never came up: process exited:
+            
+            thread 'main' (34668) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/truncate-response (0.68s)
+        fault_test.go:280: proxy never came up: process exited:
+            
+            thread 'main' (20840) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/corrupt-response (0.68s)
+        fault_test.go:290: proxy never came up: process exited:
+            
+            thread 'main' (33288) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/inject-notification (0.68s)
+        fault_test.go:300: proxy never came up: process exited:
+            
+            thread 'main' (34712) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/inject-stale-response (0.68s)
+        fault_test.go:312: proxy never came up: process exited:
+            
+            thread 'main' (5480) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/close-after (0.73s)
+        fault_test.go:324: proxy never came up: process exited:
+            
+            thread 'main' (24848) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/half-close-after (0.68s)
+        fault_test.go:343: proxy never came up: process exited:
+            
+            thread 'main' (3604) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/slow-server (0.69s)
+        fault_test.go:362: proxy never came up: process exited:
+            
+            thread 'main' (34552) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    --- FAIL: TestFaultMatrix/oversized-response (0.69s)
+        fault_test.go:369: proxy never came up: process exited:
+            
+            thread 'main' (4956) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+            unknown flag --wire
+            note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAIL
+exit status 1
+FAIL	github.com/anckursingh/aikoql/sdk/go	9.159s
+✖ fault matrix: drop-request (792.909ms)
+✖ fault matrix: drop-response (760.2193ms)
+✖ fault matrix: delay-response (743.7048ms)
+✖ fault matrix: duplicate-response (748.2968ms)
+✖ fault matrix: reorder-response (747.7358ms)
+✖ fault matrix: truncate-response (732.7467ms)
+✖ fault matrix: corrupt-response (813.2266ms)
+✖ fault matrix: inject-notification (750.8053ms)
+✖ fault matrix: inject-stale-response (746.0534ms)
+✖ fault matrix: close-after (753.0569ms)
+✖ fault matrix: half-close-after (793.2888ms)
+✖ fault matrix: slow-server (748.4135ms)
+✖ fault matrix: oversized-response (753.6084ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 0
+ℹ fail 13
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10112.3742
+
+✖ failing tests:
+
+test at tests\fault-matrix.test.ts:172:1
+✖ fault matrix: drop-request (792.909ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (14808) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:174:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3)
+
+test at tests\fault-matrix.test.ts:182:1
+✖ fault matrix: drop-response (760.2193ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (32384) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:184:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:192:1
+✖ fault matrix: delay-response (743.7048ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (28844) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:194:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:205:1
+✖ fault matrix: duplicate-response (748.2968ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (33176) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:207:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:214:1
+✖ fault matrix: reorder-response (747.7358ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (30468) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:216:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:223:1
+✖ fault matrix: truncate-response (732.7467ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (15408) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:225:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:232:1
+✖ fault matrix: corrupt-response (813.2266ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (25220) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:234:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:241:1
+✖ fault matrix: inject-notification (750.8053ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (33684) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:243:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:250:1
+✖ fault matrix: inject-stale-response (746.0534ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (13068) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:252:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:259:1
+✖ fault matrix: close-after (753.0569ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (16856) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:261:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:271:1
+✖ fault matrix: half-close-after (793.2888ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (7836) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:273:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:283:1
+✖ fault matrix: slow-server (748.4135ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (21968) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:285:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\fault-matrix.test.ts:291:1
+✖ fault matrix: oversized-response (753.6084ms)
+  Error: aikoql-fault-proxy exited early (101):
+  
+  thread 'main' (14248) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+  unknown flag --wire
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+      at waitUp (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:71:13)
+      at async faultEnv (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:109:7)
+      at async TestContext.<anonymous> (file:///E:/dreams/Mnemosyne/crates/sdk/typescript/tests/fault-matrix.test.ts:293:26)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+[ERROR] Tests run: 13, Failures: 13, Errors: 0, Skipped: 0, Time elapsed: 3.545 s <<< FAILURE! -- in io.aikoql.client.FaultMatrixTest
+[ERROR] io.aikoql.client.FaultMatrixTest.closeAfter -- Time elapsed: 0.388 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (32404) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.closeAfter(FaultMatrixTest.java:295)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.duplicateResponse -- Time elapsed: 0.252 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (17216) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.duplicateResponse(FaultMatrixTest.java:247)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.delayResponse -- Time elapsed: 0.244 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (34444) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.delayResponse(FaultMatrixTest.java:236)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.halfCloseAfter -- Time elapsed: 0.252 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (16996) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.halfCloseAfter(FaultMatrixTest.java:303)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.injectNotification -- Time elapsed: 0.260 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (10616) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.injectNotification(FaultMatrixTest.java:279)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.injectStaleResponse -- Time elapsed: 0.257 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (33208) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.injectStaleResponse(FaultMatrixTest.java:287)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.dropResponse -- Time elapsed: 0.283 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (21512) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.dropResponse(FaultMatrixTest.java:228)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.dropRequest -- Time elapsed: 0.257 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (8484) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.dropRequest(FaultMatrixTest.java:220)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.corruptResponse -- Time elapsed: 0.236 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (14856) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.corruptResponse(FaultMatrixTest.java:271)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.truncateResponse -- Time elapsed: 0.248 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (8284) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.truncateResponse(FaultMatrixTest.java:263)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.oversizedResponse -- Time elapsed: 0.251 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (26652) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.oversizedResponse(FaultMatrixTest.java:318)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.reorderResponse -- Time elapsed: 0.254 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (15016) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.reorderResponse(FaultMatrixTest.java:255)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] io.aikoql.client.FaultMatrixTest.slowServer -- Time elapsed: 0.297 s <<< FAILURE!
+java.lang.AssertionError: 
+aikoql-fault-proxy exited early (101):
+
+thread 'main' (7408) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+	at io.aikoql.client.FaultMatrixTest.waitUp(FaultMatrixTest.java:123)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.slowServer(FaultMatrixTest.java:311)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] Failures: 
+[ERROR]   FaultMatrixTest.closeAfter:295->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (32404) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.corruptResponse:271->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (14856) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.delayResponse:236->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (34444) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.dropRequest:220->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (8484) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.dropResponse:228->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (21512) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.duplicateResponse:247->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (17216) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.halfCloseAfter:303->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (16996) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.injectNotification:279->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (10616) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.injectStaleResponse:287->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (33208) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.oversizedResponse:318->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (26652) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.reorderResponse:255->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (15016) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.slowServer:311->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (7408) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR]   FaultMatrixTest.truncateResponse:263->faultEnv:158->waitUp:123 aikoql-fault-proxy exited early (101):
+
+thread 'main' (8284) panicked at crates\sdk\fault-proxy\src\main.rs:115:22:
+unknown flag --wire
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+[ERROR] Tests run: 13, Failures: 13, Errors: 0, Skipped: 0
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.2:test (default-test) on project aikoql-client: There are test failures.
+[ERROR] 
+[ERROR] See E:\dreams\Mnemosyne\crates\sdk\java\target\surefire-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+EXIT=1

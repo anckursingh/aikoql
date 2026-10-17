@@ -1,0 +1,6 @@
+ARCH: column-1 line inside a workflow block scalar:
+ARCH: .github/workflows/training-data.yml:79:import socket, time
+ARCH: .github/workflows/training-data.yml:86:"
+ARCH: .github/workflows/training-data.yml:123:import socket, time
+ARCH: .github/workflows/training-data.yml:130:"
+EXIT=1

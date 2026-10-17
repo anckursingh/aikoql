@@ -1,0 +1,111 @@
+..............FFFF..........FF                                           [100%]
+================================== FAILURES ===================================
+_____ test_canonical_question_crossing_the_holdout_poisons_publishability _____
+
+tmp_path = WindowsPath('C:/Users/ancku/AppData/Local/Temp/pytest-of-ancku/pytest-131/test_canonical_question_crossi0')
+
+    def test_canonical_question_crossing_the_holdout_poisons_publishability(
+            tmp_path):
+        """TDD-10: the SAME question text in two splits is the review's
+        canonical leakage — the model saw the answer in train, so the test
+        split can never measure it. The canonical tooth is HARD."""
+        # same question text from TWO scenarios (distinct entities):
+        # example_id keys on the question AND the scenario_id, so this is
+        # not a duplicate — but the model has seen the exact question in
+        # one split and the other can never measure it again.
+        a = _ex(split_key="k-1", koids=["a" * 32])
+        b = _ex(split_key="k-2", koids=["b" * 32])
+        b["source"]["scenario_id"] = "factual:policy:p-02"
+        b["example_id"] = compute_id(b)
+        seed = _apart_seed("k-1", "k-2")
+        out = validate_dataset(_placed(tmp_path, [a, b], seed))
+>       assert out["publishable"] is False
+E       assert True is False
+
+training\tests\test_gates.py:257: AssertionError
+______________ test_diagnostic_dimensions_report_but_never_veto _______________
+
+tmp_path = WindowsPath('C:/Users/ancku/AppData/Local/Temp/pytest-of-ancku/pytest-131/test_diagnostic_dimensions_rep0')
+
+    def test_diagnostic_dimensions_report_but_never_veto(tmp_path):
+        """Answer + entity-name overlap across splits is REPORTED, never
+        vetoed: template corpora share answers and names structurally
+        ("Payments Team" owns many services) — the review's own caveat
+        keeps these diagnostic."""
+        a = _ex(split_key="k-1",
+                context={"entities": [{"koid": "a" * 32, "name":
+                                       "settlement"}]})
+        b = _ex(split_key="k-2",
+                question="What is the owner of the checkout service?",
+                context={"entities": [{"koid": "b" * 32, "name":
+                                       "settlement"}]})
+        seed = _apart_seed("k-1", "k-2")
+        out = validate_dataset(_placed(tmp_path, [a, b], seed))
+        assert out["publishable"] is True
+        assert out["gates"]["leakage"]["ok"] is True
+>       assert out["gates"]["leakage"]["dimensions"]["identifier"] >= 1
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'dimensions'
+
+training\tests\test_gates.py:278: KeyError
+_____________ test_clean_dataset_reports_zero_leakage_dimensions ______________
+
+tmp_path = WindowsPath('C:/Users/ancku/AppData/Local/Temp/pytest-of-ancku/pytest-131/test_clean_dataset_reports_zer0')
+
+    def test_clean_dataset_reports_zero_leakage_dimensions(tmp_path):
+        out = validate_dataset(_clean(tmp_path))
+>       assert out["gates"]["leakage"]["dimensions"] == {
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            "canonical": 0, "identifier": 0, "normalized": 0,
+            "answer": 0, "relation_pattern": 0}
+E       KeyError: 'dimensions'
+
+training\tests\test_gates.py:285: KeyError
+________________ test_leakage_dimensions_are_shuffle_invariant ________________
+
+    def test_leakage_dimensions_are_shuffle_invariant():
+        """FZ-08: the dimensions report is a pure function of the example
+        set — input order can never change the counts."""
+>       from aikoql_training.dataset.gates import _leakage_dimensions
+E       ImportError: cannot import name '_leakage_dimensions' from 'aikoql_training.dataset.gates' (E:\dreams\Mnemosyne\training\src\aikoql_training\dataset\gates.py)
+
+training\tests\test_gates.py:293: ImportError
+_____________ test_component_ids_unions_a_group_across_components _____________
+
+    def test_component_ids_unions_a_group_across_components():
+        """PR9 Finding #4: two KOs sharing an anchor value (an ambiguity
+        group) are the same knowledge even with NO edge between them. The
+        group must land in ONE component or ambiguity + factual examples
+        about its members can straddle the holdout under some seed."""
+        from aikoql_training.dataset.splitter import component_ids
+        a, b, c, d = ("k0" + "0" * 30, "k1" + "0" * 30,
+                      "k2" + "0" * 30, "k3" + "0" * 30)
+>       ids = component_ids(
+            [{"from": a, "rel": "DEPENDS_ON", "to": b},
+             {"from": c, "rel": "DEPENDS_ON", "to": d}],
+            groups=[(b, c)],
+        )
+E       TypeError: component_ids() got an unexpected keyword argument 'groups'
+
+training\tests\test_splitter.py:189: TypeError
+______________ test_component_ids_unions_edgeless_group_members _______________
+
+    def test_component_ids_unions_edgeless_group_members():
+        """Group members with no edges at all still form a component: the
+        ambiguity group is knowledge even before any relation exists."""
+        from aikoql_training.dataset.splitter import component_ids
+        a, b = "a" + "0" * 31, "b" + "0" * 31
+>       ids = component_ids([], groups=[(a, b)])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: component_ids() got an unexpected keyword argument 'groups'
+
+training\tests\test_splitter.py:202: TypeError
+=========================== short test summary info ===========================
+FAILED training\tests\test_gates.py::test_canonical_question_crossing_the_holdout_poisons_publishability
+FAILED training\tests\test_gates.py::test_diagnostic_dimensions_report_but_never_veto
+FAILED training\tests\test_gates.py::test_clean_dataset_reports_zero_leakage_dimensions
+FAILED training\tests\test_gates.py::test_leakage_dimensions_are_shuffle_invariant
+FAILED training\tests\test_splitter.py::test_component_ids_unions_a_group_across_components
+FAILED training\tests\test_splitter.py::test_component_ids_unions_edgeless_group_members
+6 failed, 24 passed in 3.97s
+EXIT=1

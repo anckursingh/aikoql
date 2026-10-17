@@ -1,0 +1,16 @@
+                f"case {c['id']} ({c['surface']}): python column drift — "
+                f"got {got!r}, want {want!r}"
+            )
+E           AssertionError: case corp-s02 (notify): python column drift — got {'verdict': 'yield', 'pair': {'done': True}}, want {'verdict': 'skip', 'pair': None}
+E           assert {'pair': {'do...ict': 'yield'} == {'pair': None...dict': 'skip'}
+E             
+E             Differing items:
+E             {'pair': {'done': True}} != {'pair': None}
+E             {'verdict': 'yield'} != {'verdict': 'skip'}
+E             Use -v to get more diff
+
+tests\test_corpus_pin.py:116: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_corpus_pin.py::test_corpus_pin - AssertionError: case corp-...
+1 failed in 0.92s
+EXIT=1

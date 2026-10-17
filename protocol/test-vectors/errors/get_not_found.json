@@ -1,0 +1,10 @@
+{
+  "name": "get_not_found",
+  "operations": [
+    {
+      "op": "get",
+      "koid": "00000000000000000000000000000000",
+      "expect_error": "NOT_FOUND"
+    }
+  ]
+}

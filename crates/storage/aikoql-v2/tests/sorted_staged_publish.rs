@@ -86,6 +86,40 @@ fn staged_sorted_publish_is_byte_identical_to_the_sorting_publish() {
 }
 
 #[test]
+fn staged_sorted_publish_rejects_out_of_order_input() {
+    // L-01 (TDD-001) — the sorted-input contract must be a real precondition
+    // in BOTH profiles (the staged entry's debug_assert panics in debug and
+    // vanishes in release, which used to publish unsorted input silently).
+    // Two violations of publish order (key asc, seq desc within key): a key
+    // inversion and a same-key seq inversion.
+    for corpus in [
+        vec![
+            entry("beta", 8, 2, FLAG_PUT, 0),
+            entry("alpha", 8, 1, FLAG_PUT, 0),
+        ],
+        vec![
+            entry("alpha", 8, 1, FLAG_PUT, 0),
+            entry("alpha", 8, 4, FLAG_PUT, 0),
+        ],
+    ] {
+        let d = dir("sst-unsorted");
+        let path = d.join("SEGMENT-001.log");
+        let mut w = SegmentWriter::new_v4(16 << 10);
+        for e in corpus {
+            w.push(e);
+        }
+        let err = w
+            .publish_with_anchors_sorted_staged(&path, Some("SEGMENT"))
+            .unwrap_err();
+        assert!(
+            matches!(err, FormatError::Invalid(_)),
+            "unsorted input must be Invalid, got {err:?}"
+        );
+        assert!(!path.exists(), "a rejected publish must not write a file");
+    }
+}
+
+#[test]
 fn staged_sorted_publish_rejects_duplicate_key_seq_pairs() {
     let d = dir("sst-dup");
     let path = d.join("SEGMENT-001.log");

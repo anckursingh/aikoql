@@ -276,6 +276,10 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
         Some(ast::TemporalClause::AsOf(at)) => ops.push(IrOp::Temporal {
             op: TemporalOp::AsOf(*at),
         }),
+        // T-58 (P3-008 LOW): AS_OF JOURNAL <n> — journal-seq clock domain.
+        Some(ast::TemporalClause::AsOfJournal(n)) => ops.push(IrOp::Temporal {
+            op: TemporalOp::AsOfJournal(*n),
+        }),
         Some(ast::TemporalClause::Between { from, to }) => ops.push(IrOp::Temporal {
             op: TemporalOp::Between {
                 from: *from,
@@ -284,6 +288,14 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
         }),
         Some(ast::TemporalClause::Historical) => ops.push(IrOp::Temporal {
             op: TemporalOp::Historical,
+        }),
+        // G-001 (POC-3): CHANGESET BETWEEN a AND b — generations minted in
+        // the half-open (a, b] commit window.
+        Some(ast::TemporalClause::Changeset { from, to }) => ops.push(IrOp::Temporal {
+            op: TemporalOp::Changeset {
+                from: *from,
+                to: *to,
+            },
         }),
         None => {}
     }
@@ -474,13 +486,26 @@ fn flatten_predicates(preds: &[ast::Predicate]) -> Vec<Predicate> {
                     right.as_ref().clone(),
                 ]));
             }
-            ast::Predicate::Or { .. } => {
-                // ponytail: OR predicates not yet mapped to IR. Each OR branch
-                // would produce a separate filter scan; add when needed.
+            ast::Predicate::Or { left, right } => {
+                // T-71 (POC-4): a real disjunction — each side flattens to
+                // its own conjunct list and folds into And nodes when it
+                // holds more than one comparison.
+                let l = flatten_predicates(&[left.as_ref().clone()]);
+                let r = flatten_predicates(&[right.as_ref().clone()]);
+                out.push(Predicate::Or(Box::new(and_fold(l)), Box::new(and_fold(r))));
             }
         }
     }
     out
+}
+
+/// Fold a flattened conjunct list into one And tree — the kernel Filter's
+/// Vec is a conjunction, so a multi-conjunct OR branch needs the structure
+/// as a node. A single predicate passes through unchanged.
+fn and_fold(ps: Vec<Predicate>) -> Predicate {
+    ps.into_iter()
+        .reduce(|a, b| Predicate::And(Box::new(a), Box::new(b)))
+        .expect("an OR branch holds at least one comparison")
 }
 
 fn expr_to_value(e: &ast::Expr) -> Value {
@@ -833,6 +858,52 @@ mod tests {
                 assert_eq!(scoring.as_deref(), None);
             }
             _ => panic!("expected TextSearch"),
+        }
+    }
+
+    #[test]
+    fn where_or_parses_to_a_disjunction() {
+        // T-71 (POC-4): `WHERE a == X OR b == Y` compiled as two ANDed
+        // predicates — the OR keyword was a bare clause separator, so the
+        // disjunction silently became a conjunction and matched nothing.
+        // The AST must carry ONE Or node per OR clause.
+        let st = parse("MATCH Fact WHERE a == 1 OR b == 2 RETURN *").unwrap();
+        let ast::Statement::Match(m) = st else {
+            panic!("expected MATCH statement")
+        };
+        assert_eq!(
+            m.predicates.len(),
+            1,
+            "one OR clause is one predicate, not two: {:?}",
+            m.predicates
+        );
+        assert!(
+            matches!(&m.predicates[0], ast::Predicate::Or { .. }),
+            "expected an Or node: {:?}",
+            m.predicates[0]
+        );
+
+        // SQL precedence: a == 1 OR b == 2 AND c == 3 parses as
+        // a == 1 OR (b == 2 AND c == 3) — AND binds tighter than OR.
+        let st2 = parse("MATCH Fact WHERE a == 1 OR b == 2 AND c == 3 RETURN *").unwrap();
+        let ast::Statement::Match(m2) = st2 else {
+            panic!("expected MATCH statement")
+        };
+        assert_eq!(m2.predicates.len(), 1);
+        match &m2.predicates[0] {
+            ast::Predicate::Or { left, right } => {
+                assert!(
+                    matches!(**left, ast::Predicate::Eq { ref property, .. } if property == "a"),
+                    "the left disjunct must be the a == 1 comparison: {:?}",
+                    left
+                );
+                assert!(
+                    matches!(**right, ast::Predicate::And { .. }),
+                    "AND must bind tighter than OR: {:?}",
+                    right
+                );
+            }
+            other => panic!("expected Or node: {other:?}"),
         }
     }
 }

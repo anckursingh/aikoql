@@ -1,0 +1,16 @@
+failures:
+
+---- missing_post_checkpoint_delta_fails_closed stdout ----
+
+thread 'missing_post_checkpoint_delta_fails_closed' (12660) panicked at crates\storage\aikoql-v2\tests\delta_coverage.rs:73:18:
+an incomplete post-checkpoint delta set must fail closed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    missing_post_checkpoint_delta_fails_closed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `--test delta_coverage`
+EXIT=101

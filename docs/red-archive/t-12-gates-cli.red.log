@@ -1,0 +1,38 @@
+﻿
+=================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_config.py ____________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_config.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+training\tests\test_config.py:18: in <module>
+    from aikoql_training.dataset.config import DEFAULT_CONFIG, load_config
+E   ModuleNotFoundError: No module named 'aikoql_training.dataset.config'
+____________________ ERROR collecting tests/test_gates.py _____________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_gates.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+training\tests\test_gates.py:20: in <module>
+    from aikoql_training.dataset.gates import validate_dataset
+E   ModuleNotFoundError: No module named 'aikoql_training.dataset.gates'
+_____________________ ERROR collecting tests/test_cli.py ______________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_cli.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+training\tests\test_cli.py:20: in <module>
+    from aikoql_training.cli import main
+E   ModuleNotFoundError: No module named 'aikoql_training.cli'
+=========================== short test summary info ===========================
+ERROR training\tests\test_config.py
+ERROR training\tests\test_gates.py
+ERROR training\tests\test_cli.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!
+3 errors in 1.27s

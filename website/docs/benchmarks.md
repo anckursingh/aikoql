@@ -1,11 +1,13 @@
 ---
 title: Benchmarks
-description: Certified cross-engine benchmark matrix (memory, redb, aikoql v1, aikoql-v2)
+description: Certified benchmark matrix (aikoql-v2; historical redb/v1 columns)
 ---
 
 # Benchmarks
 
 All numbers below are measured in this repository — nothing is estimated.
+Only **aikoql-v2** ships today (S-02 decommissioned redb and v1); the other
+columns are historical comparison points.
 Source: the certified matrix `artifacts/storage-engine-v2/workloads.md`
 (2026-09-06, release build), the M40 checkpoint probe
 (`directory-checkpoint.md`, 2026-09-07), and the v1-adoption M7 matrix.
@@ -69,8 +71,8 @@ not guessed: one 64 KiB block fetch + soft-SHA-256 per cold get
 v1's zero disk. It is the bounded-RAM trade, priced precisely — and it is
 tunable: block target (64 KiB → 4–16 KiB, priced ~4–8×), cache sizing, and
 the placement-direct hot-read path already cut O(run) scans to O(16)-entry
-decode windows (2,800× on the hot key). Deployments that are pure read-hot
-and RAM-affordant can stay on `storage.backend = aikoql`.
+decode windows (2,800× on the hot key). The block target, cache sizing, and
+the hot-read path are the tuning levers for read-hot deployments today.
 
 ## Gate Status
 

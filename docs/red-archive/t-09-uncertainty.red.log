@@ -1,0 +1,38 @@
+
+=================================== ERRORS ====================================
+___________________ ERROR collecting tests/test_unknown.py ____________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_unknown.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_unknown.py:22: in <module>
+    from aikoql_training.scenarios.unknown import unknown_scenarios
+E   ModuleNotFoundError: No module named 'aikoql_training.scenarios.unknown'
+__________________ ERROR collecting tests/test_ambiguity.py ___________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_ambiguity.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_ambiguity.py:24: in <module>
+    from aikoql_training.scenarios.ambiguity import ambiguity_scenarios
+E   ModuleNotFoundError: No module named 'aikoql_training.scenarios.ambiguity'
+________________ ERROR collecting tests/test_contradiction.py _________________
+ImportError while importing test module 'E:\dreams\Mnemosyne\training\tests\test_contradiction.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+C:\Python314\Lib\importlib\__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_contradiction.py:22: in <module>
+    from aikoql_training.scenarios.contradiction import contradiction_scenarios
+E   ModuleNotFoundError: No module named 'aikoql_training.scenarios.contradiction'
+=========================== short test summary info ===========================
+ERROR tests/test_unknown.py
+ERROR tests/test_ambiguity.py
+ERROR tests/test_contradiction.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!
+3 errors in 1.32s

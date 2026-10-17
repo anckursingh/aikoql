@@ -1,0 +1,8 @@
+{
+  "id": "t72-temp-hygiene-sweep",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test cli_contract t72_",
+  "captured_at": "2026-10-15T11:39:08Z",
+  "captured_head": "97fdfe766d2793ea42f3c1809e1b5401e99c08ad",
+  "exit_code": 101
+}

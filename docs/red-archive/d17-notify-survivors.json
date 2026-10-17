@@ -1,0 +1,8 @@
+{
+  "id": "d17-notify-survivors",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/sdk-mutation-harness.sh all",
+  "captured_at": "2026-10-02T13:31:21Z",
+  "captured_head": "04b10808a66b1c86f301c8bf6edcb444887c384e",
+  "exit_code": 1
+}

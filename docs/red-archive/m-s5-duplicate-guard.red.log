@@ -1,0 +1,16 @@
+failures:
+
+---- duplicate_corpora_are_rejected_identically stdout ----
+
+thread 'duplicate_corpora_are_rejected_identically' (29832) panicked at crates\storage\aikoql-v2\tests\flush_equivalence.rs:156:47:
+called `Result::unwrap_err()` on an `Ok` value: (8495, 13896689569228482833, [SegmentAnchor { replica_id: ReplicaId(7), seq: 17, block_id: BlockId(0), entry_offset: 6 }, SegmentAnchor { replica_id: ReplicaId(9), seq: 17, block_id: BlockId(0), entry_offset: 0 }, SegmentAnchor { replica_id: ReplicaId(8), seq: 13, block_id: BlockId(0), entry_offset: 1 }])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    duplicate_corpora_are_rejected_identically
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `--test flush_equivalence`
+EXIT=101

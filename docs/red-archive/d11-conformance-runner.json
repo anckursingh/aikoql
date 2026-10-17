@@ -1,0 +1,8 @@
+{
+  "id": "d11-conformance-runner",
+  "pre_fix_commit": "HEAD",
+  "command": "E:\dreams\Mnemosyne\crates\sdk\python\tests\test_conformance.py E:\dreams\Mnemosyne\crates\sdk\go\conformance_test.go",
+  "captured_at": "2026-10-01T15:29:57Z",
+  "captured_head": "3f7eeedbf0cccf98481b34caec02730c8b25d6d7",
+  "exit_code": 2
+}

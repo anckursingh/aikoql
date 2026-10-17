@@ -1,0 +1,8 @@
+{
+  "id": "scale-pg-vs-pgvector",
+  "pre_fix_commit": "a4b2a7a9885240941423b80b0c452bcad7686248",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-09-29T19:07:19Z",
+  "captured_head": "a4b2a7a9885240941423b80b0c452bcad7686248",
+  "exit_code": 1
+}

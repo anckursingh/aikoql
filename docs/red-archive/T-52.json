@@ -1,0 +1,8 @@
+{
+  "id": "T-52",
+  "pre_fix_commit": "3e9dda7",
+  "command": "cargo test -p aikoql-kernel --test conformance t06g_idempotency_key_is_tenant_scoped",
+  "captured_at": "2026-10-09T16:40:43Z",
+  "captured_head": "3e9dda75ae5291c8f60c9e020893746e60a9059c",
+  "exit_code": 101
+}

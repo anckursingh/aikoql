@@ -1,0 +1,8 @@
+{
+  "id": "T-63",
+  "pre_fix_commit": "ef48d6c",
+  "command": "bash -c cargo test -p aikoql-mcp --test mcp_real_world abrupt_close_respawn_serves_committed_rows",
+  "captured_at": "2026-10-09T23:13:37Z",
+  "captured_head": "ef48d6c8a9e1722ead6967541f87b84287c1aa44",
+  "exit_code": 101
+}

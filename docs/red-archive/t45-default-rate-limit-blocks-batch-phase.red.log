@@ -1,0 +1,46 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.96s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+[2m2026-10-08T13:09:51.721080Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-08T13:09:51.721198Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-rl-batch-56428 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-08T13:09:51.721902Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T13:09:51.727213Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-08T13:09:51.752764Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 3
+[2m2026-10-08T13:09:51.752876Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 3
+[2m2026-10-08T13:09:51.753001Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T13:09:51.753210Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-08T13:09:51.753252Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-08T13:09:51.834967Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-08T13:09:51.861761Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 134
+[2m2026-10-08T13:09:51.861855Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 134
+[2m2026-10-08T13:09:51.862268Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T13:09:51.862409Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-08T13:09:51.862435Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-08T13:09:51.923829Z[0m [33m WARN[0m [2maikoql_mcp::dispatcher[0m[2m:[0m rate limit exceeded [3mlimit[0m[2m=[0m120 [3mkey[0m[2m=[0m_stdio
+test default_rate_limit_serves_a_batch_ingest_phase ... FAILED
+
+failures:
+
+---- default_rate_limit_serves_a_batch_ingest_phase stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'default_rate_limit_serves_a_batch_ingest_phase' (58520) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:194:13:
+MCP error for remember: Object {"code": Number(-32000), "message": String("rate limit exceeded (max 120 calls/min)")}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    default_rate_limit_serves_a_batch_ingest_phase
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.26s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

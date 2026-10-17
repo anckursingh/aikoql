@@ -243,6 +243,31 @@ mod tests {
     }
 
     #[test]
+    fn s09_unknown_type_hint_names_the_real_registration_paths() {
+        // POC-4 S-9: the AIKOQL1030 hint said "register it with CREATE TYPE"
+        // — CREATE is insert-form in AikoQL and the statement does not exist,
+        // so following the hint changes nothing. Types enter via a
+        // SchemaRegistry or an Ontology KO (Studio: Ontology → Auto-Discover).
+        let r = registry_with_person();
+        let a = SemanticAnalyzer::new(&r);
+        let stmt = crate::parser::parse("MATCH p4d_fact RETURN *").unwrap();
+        let err = a.analyze(&stmt).unwrap_err();
+        let hint = err.hint.as_deref().expect("unknown-type must carry a hint");
+        assert!(
+            !hint.contains("CREATE TYPE"),
+            "the hint must not reference a nonexistent statement: {hint}"
+        );
+        assert!(
+            hint.contains("SchemaRegistry") && hint.contains("Ontology"),
+            "the hint must name the real registration paths: {hint}"
+        );
+        assert!(
+            hint.contains("Auto-Discover"),
+            "the hint must point at the studio discovery flow: {hint}"
+        );
+    }
+
+    #[test]
     fn unknown_property() {
         let r = registry_with_person();
         let a = SemanticAnalyzer::new(&r);

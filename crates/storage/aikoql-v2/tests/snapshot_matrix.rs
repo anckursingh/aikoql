@@ -116,6 +116,34 @@ fn interleave(db: &Arc<Db>, snap: &Path, op: impl FnOnce() + Send + 'static) -> 
     info
 }
 
+/// Row 4's interleave: `op` runs to COMPLETION under the armed pin — the
+/// park releases only after the op joins, so a compact's deletion phase
+/// always runs while the snapshot's guard is armed. The shared
+/// `interleave` releases first: a fast snapshot then disarms the pin
+/// before a slow compact deletes (both orderings are correct product
+/// behavior — the copies are done before disarm — but the count
+/// assertion becomes a timing window; the archived `sfm004-pin-window-
+/// flake` RED is that window firing). The park releases before the op
+/// panic propagates, so the snapshot thread can never leak parked.
+fn interleave_op_under_pin(
+    db: &Arc<Db>,
+    snap: &Path,
+    op: impl FnOnce() + Send + 'static,
+) -> SnapshotInfo {
+    let _serial = PARK_LOCK.lock().unwrap();
+    let _arm = ParkArm::new("during_copy");
+    let snap_t = {
+        let (db, snap) = (Arc::clone(db), snap.to_path_buf());
+        std::thread::spawn(move || db.snapshot_to(&snap))
+    };
+    wait_for(&snap.join("during_copy"), Duration::from_secs(30));
+    let op_t = std::thread::spawn(op);
+    let op_result = op_t.join();
+    std::fs::remove_file(snap.join("during_copy")).expect("release the park");
+    op_result.expect("op thread");
+    snap_t.join().expect("snapshot thread").expect("snapshot")
+}
+
 /// row 1 — write during snapshot → the snapshot stays at the pinned
 /// generation: the write lands concurrently with the lock-free copy, and
 /// is invisible to the snapshot (its WAL frame is beyond the captured
@@ -331,9 +359,11 @@ fn sfm003_checkpoint_during_snapshot_preserves_pinned_generation() {
 
 /// row 4 — compaction during snapshot → the referenced segments remain
 /// available: the interleaved compact merges and swaps the live segments
-/// while the snapshot's copy is in flight, but the deletion skips the
-/// pinned names — they survive on disk as leftovers (the tolerated class)
-/// and the copies restore byte-exact.
+/// while the snapshot's copy is parked mid-flight, but the deletion skips
+/// the pinned names — they survive on disk as leftovers (the tolerated
+/// class) and the copies restore byte-exact. The op runs to completion
+/// under the armed pin (interleave_op_under_pin), so the deletion always
+/// meets the pin — no timing window on the count.
 #[test]
 fn sfm004_compaction_during_snapshot_referenced_segments_remain_available() {
     let d = dir("sfm004-live");
@@ -346,7 +376,7 @@ fn sfm004_compaction_during_snapshot_referenced_segments_remain_available() {
     );
 
     let snap = dir("sfm004-snap");
-    let _info = interleave(&db, &snap, {
+    let _info = interleave_op_under_pin(&db, &snap, {
         let db = Arc::clone(&db);
         move || {
             db.compact().unwrap();

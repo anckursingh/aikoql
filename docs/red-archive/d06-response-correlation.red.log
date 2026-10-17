@@ -1,0 +1,148 @@
+C:\Users\ancku\AppData\Roaming\Python\Python314\site-packages\langsmith\schemas.py:23: UserWarning: Core Pydantic V1 functionality isn't compatible with Python 3.14 or greater.
+  from pydantic.v1 import (
+FFFFFFF                                                                  [100%]
+================================== FAILURES ===================================
+________________ test_notification_before_response_is_skipped _________________
+
+    def test_notification_before_response_is_skipped():
+        with ScriptedServer([[NOTIFY, {"jsonrpc": "2.0", "id": 1, "result": ADA}]]) as s:
+            c = _client(s.port)
+            try:
+>               assert c._rpc("get") == ADA
+E               AssertionError: assert {'jsonrpc': '... 'params': {}} == {'properties'...name': 'Ada'}}
+E                 
+E                 Left contains 3 more items:
+E                 {'jsonrpc': '2.0', 'method': 'notifications/notify', 'params': {}}
+E                 Right contains 1 more item:
+E                 {'properties': {'name': 'Ada'}}
+E                 Use -v to get more diff
+
+crates\sdk\python\tests\test_response_correlation.py:80: AssertionError
+____________ test_notification_and_response_in_one_send_are_split _____________
+
+    def test_notification_and_response_in_one_send_are_split():
+        # "notification between response fragments": both frames arrive in the
+        # same TCP chunk — the client must split them and match the response.
+        with ScriptedServer([[NOTIFY, {"jsonrpc": "2.0", "id": 1, "result": ADA}]]) as s:
+            c = _client(s.port)
+            try:
+>               assert c._rpc("get") == ADA
+E               AssertionError: assert {'jsonrpc': '... 'params': {}} == {'properties'...name': 'Ada'}}
+E                 
+E                 Left contains 3 more items:
+E                 {'jsonrpc': '2.0', 'method': 'notifications/notify', 'params': {}}
+E                 Right contains 1 more item:
+E                 {'properties': {'name': 'Ada'}}
+E                 Use -v to get more diff
+
+crates\sdk\python\tests\test_response_correlation.py:91: AssertionError
+_____________ test_response_for_another_request_is_protocol_error _____________
+
+    def test_response_for_another_request_is_protocol_error():
+        with ScriptedServer([[{"jsonrpc": "2.0", "id": 99, "result": ADA}]]) as s:
+            c = _client(s.port)
+            try:
+>               with pytest.raises(McpError) as exc:
+                     ^^^^^^^^^^^^^^^^^^^^^^^
+E               Failed: DID NOT RAISE <class 'aikoql.mcp_client.McpError'>
+
+crates\sdk\python\tests\test_response_correlation.py:100: Failed
+__________ test_duplicate_response_does_not_poison_the_next_request ___________
+
+    def test_duplicate_response_does_not_poison_the_next_request():
+        dup = {"jsonrpc": "2.0", "id": 1, "result": {"stale": True}}
+        r2 = {"jsonrpc": "2.0", "id": 2, "result": {"fresh": True}}
+        with ScriptedServer([[{"jsonrpc": "2.0", "id": 1, "result": {"first": True}}],
+                             [dup, r2]]) as s:
+            c = _client(s.port)
+            try:
+                assert c._rpc("get") == {"first": True}
+>               assert c._rpc("get") == {"fresh": True}
+E               AssertionError: assert {'stale': True} == {'fresh': True}
+E                 
+E                 Left contains 1 more item:
+E                 {'stale': True}
+E                 Right contains 1 more item:
+E                 {'fresh': True}
+E                 Use -v to get more diff
+
+crates\sdk\python\tests\test_response_correlation.py:115: AssertionError
+_______________________ test_missing_response_times_out _______________________
+
+    def test_missing_response_times_out():
+        with ScriptedServer([[]]) as s:
+            c = _client(s.port)
+            try:
+                with pytest.raises(McpError) as exc:
+>                   c._rpc("get", timeout=0.4)
+E                   TypeError: McpClient._rpc() got an unexpected keyword argument 'timeout'
+
+crates\sdk\python\tests\test_response_correlation.py:125: TypeError
+______ test_late_response_after_timeout_cannot_corrupt_the_next_request _______
+
+    def test_late_response_after_timeout_cannot_corrupt_the_next_request():
+        late = {"jsonrpc": "2.0", "id": 1, "result": {"late": True}}
+        r2 = {"jsonrpc": "2.0", "id": 2, "result": {"fresh": True}}
+        with ScriptedServer([[], [late, r2]]) as s:
+            c = _client(s.port)
+            try:
+                with pytest.raises(McpError) as exc:
+>                   c._rpc("get", timeout=0.4)
+E                   TypeError: McpClient._rpc() got an unexpected keyword argument 'timeout'
+
+crates\sdk\python\tests\test_response_correlation.py:139: TypeError
+____________ test_malformed_frame_before_valid_response_is_skipped ____________
+
+    def test_malformed_frame_before_valid_response_is_skipped():
+        with ScriptedServer([["this is not json",
+                              {"jsonrpc": "2.0", "id": 1, "result": ADA}]]) as s:
+            c = _client(s.port)
+            try:
+>               assert c._rpc("get") == ADA
+                       ^^^^^^^^^^^^^
+
+crates\sdk\python\tests\test_response_correlation.py:151: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+crates\sdk\python\python\aikoql\mcp_client.py:105: in _rpc
+    resp = self._recv()
+           ^^^^^^^^^^^^
+crates\sdk\python\python\aikoql\mcp_client.py:93: in _recv
+    return json.loads(text)
+           ^^^^^^^^^^^^^^^^
+C:\Python314\Lib\json\__init__.py:346: in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python314\Lib\json\decoder.py:345: in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <json.decoder.JSONDecoder object at 0x000002374D51F0E0>
+s = 'this is not json', idx = 0
+
+    def raw_decode(self, s, idx=0):
+        """Decode a JSON document from ``s`` (a ``str`` beginning with
+        a JSON document) and return a 2-tuple of the Python
+        representation and the index in ``s`` where the document ended.
+    
+        This can be used to decode a JSON document from a string that may
+        have extraneous data at the end.
+    
+        """
+        try:
+            obj, end = self.scan_once(s, idx)
+        except StopIteration as err:
+>           raise JSONDecodeError("Expecting value", s, err.value) from None
+E           json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+C:\Python314\Lib\json\decoder.py:363: JSONDecodeError
+=========================== short test summary info ===========================
+FAILED crates\sdk\python\tests\test_response_correlation.py::test_notification_before_response_is_skipped
+FAILED crates\sdk\python\tests\test_response_correlation.py::test_notification_and_response_in_one_send_are_split
+FAILED crates\sdk\python\tests\test_response_correlation.py::test_response_for_another_request_is_protocol_error
+FAILED crates\sdk\python\tests\test_response_correlation.py::test_duplicate_response_does_not_poison_the_next_request
+FAILED crates\sdk\python\tests\test_response_correlation.py::test_missing_response_times_out
+FAILED crates\sdk\python\tests\test_response_correlation.py::test_late_response_after_timeout_cannot_corrupt_the_next_request
+FAILED crates\sdk\python\tests\test_response_correlation.py::test_malformed_frame_before_valid_response_is_skipped
+7 failed in 0.55s
+EXIT=1

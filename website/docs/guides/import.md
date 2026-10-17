@@ -72,7 +72,7 @@ All imports are:
 After import, use the shell or graph browser to verify:
 
 ```bash
-aikoql shell ./kb.redb
+aikoql shell ./kb
 
 aikoql> .tables
   employees

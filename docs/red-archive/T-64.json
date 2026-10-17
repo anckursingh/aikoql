@@ -1,0 +1,8 @@
+{
+  "id": "T-64",
+  "pre_fix_commit": "ee441b1",
+  "command": "bash -c cargo test -p aikoql-mcp --test mcp_real_world tombstoned_rows_stay_asof_and_historical_reconstructable -- --nocapture",
+  "captured_at": "2026-10-09T23:45:55Z",
+  "captured_head": "ee441b1159fee167bb5174040101820cea515f4a",
+  "exit_code": 101
+}

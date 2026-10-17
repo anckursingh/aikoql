@@ -1,0 +1,8 @@
+{
+  "id": "t-26-per-capability-scorecard",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_scorecard.py -q -k capability_breakdown",
+  "captured_at": "2026-10-04T11:05:04Z",
+  "captured_head": "6401c645014054db358911305bb9dc635148867c",
+  "exit_code": 1
+}

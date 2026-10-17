@@ -87,7 +87,10 @@ proptest! {
         match stmt {
             Statement::Match(m) => {
                 assert_eq!(m.entity, entity);
-                assert_eq!(m.predicates.len(), 2);
+                // T-71: one WHERE reads one boolean expression — the AND
+                // is a single And node, not two flat predicates.
+                assert_eq!(m.predicates.len(), 1);
+                assert!(matches!(&m.predicates[0], Predicate::And { .. }));
             }
             _ => panic!("expected Match"),
         }

@@ -1,0 +1,8 @@
+{
+  "id": "s11-ontology-temporal-relationships",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --lib s11_discover",
+  "captured_at": "2026-10-15T11:17:29Z",
+  "captured_head": "a5f51ef1d2632c954b2fcb0ef42c10172abab768",
+  "exit_code": 101
+}

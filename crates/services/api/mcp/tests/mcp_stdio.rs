@@ -28,9 +28,9 @@ impl McpClient {
             "aikoql-mcp not built at {:?}; run cargo build first",
             exe
         );
-        // PRR-4: the default rate limit (120 calls/min) would throttle the
-        // load-heavy scenarios (m11 creates 150 objects) — raise it through
-        // the config pipeline the tests exercise.
+        // PRR-4/T-45: keep the load-heavy scenarios (m11 creates 150
+        // objects) far from the default budget — raise it through the
+        // config pipeline the tests exercise.
         let cfg = db.with_file_name("aikoql-rate.toml");
         std::fs::write(&cfg, "[rate_limit]\nmax_calls_per_minute = 100000\n").unwrap();
         let mut child = Command::new(&exe)
@@ -2209,4 +2209,84 @@ fn m_sum1_summarize_conversation_tool() {
     assert_eq!(con["ts_ms"], 2000);
 
     let _ = std::fs::remove_file(&db);
+}
+
+/// L-25 (launch review): the durable-by-default guarantee at the MCP
+/// boundary. A server hard-killed right after acked tool writes — no stdin
+/// EOF, no Db::drop, no maintainer checkpoint — must have persisted every
+/// one of them: the engine's Sync default fsyncs the WAL before each ack
+/// (SE2-M6). The teeth proof mutates that default to Async and this same
+/// test REDs (archive `abrupt-close-vs-async-durability`); the pin itself
+/// is green against the estate (pin-only, like L-11/L-19).
+#[test]
+fn m_abrupt_kill_preserves_acked_writes() {
+    let db = tmp_db("abrupt-kill");
+    let koid = {
+        let mut c = McpClient::start(&db);
+        c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "abrupt-kill", "version": "0"}}));
+        c.notify("notifications/initialized");
+        let r = c.call_tool(
+            "remember",
+            json!({
+                "subject": "agent-killed",
+                "type_name": "claim",
+                "properties": {"revenue": "$4.2B", "period": "FY2025"},
+                "semantic": {"source": "10k-filing", "confidence": 0.99},
+                "origin": "agent-killed"
+            }),
+        );
+        assert_eq!(r["version"], 1);
+        let koid = r["koid"].as_str().expect("koid").to_string();
+        // The abrupt close: TerminateProcess/SIGKILL — the server never sees
+        // stdin EOF, its shutdown path never runs. Reap so the OS releases
+        // the db handles before the reopen.
+        hard_kill(&c.child);
+        let status = c.child.wait().expect("reap killed server");
+        assert!(
+            !status.success(),
+            "server must have been killed, not exited"
+        );
+        koid
+    };
+
+    // Windows may release the db handles a beat after the reap — poll the
+    // storage open (the crash_kill.rs d05 pattern) before respawning.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db)) {
+            Ok(_engine) => break, // dropped gracefully; the lock is free
+            Err(_) if std::time::Instant::now() <= deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => panic!("store must reopen after a hard kill: {e}"),
+        }
+    }
+
+    // Reopen and read the claim back — every acked write survived.
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "abrupt-kill-reopen", "version": "0"}}));
+    c.notify("notifications/initialized");
+    let ko = c.call_tool("get", json!({"subject": "agent-killed", "koid": koid}));
+    let p = &ko["properties"];
+    assert_eq!(p["revenue"], "$4.2B");
+    assert_eq!(p["period"], "FY2025");
+}
+
+/// Hard-kill the server child: TerminateProcess (/F /T) on Windows, SIGKILL
+/// on Unix — no destructors, no flush, no shutdown path (the crash_kill.rs
+/// d05 idiom). Best-effort: an already-dead child is exactly the state the
+/// asserts want.
+fn hard_kill(child: &std::process::Child) {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &child.id().to_string()])
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &child.id().to_string()])
+            .status();
+    }
 }

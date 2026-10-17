@@ -1,0 +1,4 @@
+ARCH: training/scripts run without a package install: .github/workflows/training-data.yml determinism
+ARCH: training/scripts run without a package install: .github/workflows/training-data.yml integration
+ARCH: training/scripts run without a package install: .github/workflows/training-data.yml gate-teeth
+EXIT=1

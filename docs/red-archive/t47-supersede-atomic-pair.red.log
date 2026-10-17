@@ -1,0 +1,27 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-runtime` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.40s
+     Running unittests src\lib.rs (target\debug\deps\aikoql_runtime-513643ed60a35319.exe)
+
+running 1 test
+test tests::supersede_is_atomic_at_the_successors_instant ... FAILED
+
+failures:
+
+---- tests::supersede_is_atomic_at_the_successors_instant stdout ----
+
+thread 'tests::supersede_is_atomic_at_the_successors_instant' (65700) panicked at crates\runtime\src\lib.rs:1813:9:
+superseded generation still visible at the successor's instant
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::supersede_is_atomic_at_the_successors_instant
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-runtime --lib`
+EXIT=101

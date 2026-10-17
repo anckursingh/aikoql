@@ -1,0 +1,8 @@
+{
+  "name": "version_lineage",
+  "operations": [
+    {"op": "remember", "type": "vs_doc", "properties": {"name": "v1"}, "as": "doc"},
+    {"op": "update", "type": "vs_doc", "koid": "$doc", "properties": {"name": "v2"}},
+    {"op": "trace", "koid": "$doc", "assert": {"versions.0.version": 1, "versions.1.version": 2}}
+  ]
+}

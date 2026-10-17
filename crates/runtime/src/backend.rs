@@ -1,107 +1,53 @@
-//! PR6-005 — the ONE authoritative storage-backend decision path
-//! (docs/STORAGE-BACKENDS.md, 2026-09-07 ADR).
-//!
-//! Every production opener (aikoql-mcp, the python SDK) routes through
-//! `open_engine` here. The contract:
+//! The storage-backend decision path — v2-only since the launch S-02
+//! decommission (docs/IMPLEMENTATION-PLAN-LAUNCH.md). Every production
+//! opener (aikoql-mcp, the python SDK) routes through `open_engine` here.
 //!
 //! ```text
-//! explicit backend            → always use the explicit backend
-//! no explicit backend         → detect the existing on-disk format
 //! missing path                → fresh aikoql-v2 create (the default)
+//! directory with CURRENT      → existing aikoql-v2 database
+//! directory without CURRENT   → error, never a silent fresh create
+//! any existing FILE           → error: a legacy single-file database
 //! ```
 //!
-//! Detection: a directory with `CURRENT` is aikoql-v2; a file with the
-//! native WAL magic ("AKQL") is aikoql; any other existing FILE falls
-//! through to redb (redb validates its own header and fails closed on
-//! anything else); a directory that is not a v2 database is an explicit
-//! error — never a silent fresh create.
+//! A legacy FILE fails closed: the v1 WAL migrator
+//! (`aikoql_storage_v2::migration::migrate_v1_wal`) is the only supported
+//! path from a legacy single-file database; nothing opens those files
+//! anymore (launch S-02).
 
 use aikoql_kernel::storage::store::StorageEngine;
-use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_kernel::{KError, KResult};
-use aikoql_storage::AikoqlStorageEngine;
 use aikoql_storage_v2::engine::StorageAdminApi;
 use aikoql_storage_v2::AikoqlStorageEngineV2;
-use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
-/// An opened engine plus its optional design §22 admin capability (P3-M2 —
-/// only aikoql-v2 implements StorageAdminApi today).
+/// An opened engine plus its design §22 admin capability (P3-M2).
 pub type Opened = (Arc<dyn StorageEngine>, Option<Arc<dyn StorageAdminApi>>);
 
-/// The storage backends an opener can select. Parsing accepts exactly
-/// `"redb"`, `"aikoql"`, `"aikoql-v2"` — anything else fails closed at the
-/// config layer, before any file is touched.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Backend {
-    Redb,
-    Aikoql,
-    AikoqlV2,
-}
-
-impl Backend {
-    pub fn parse(v: &str) -> Result<Backend, String> {
-        match v {
-            "redb" => Ok(Backend::Redb),
-            "aikoql" => Ok(Backend::Aikoql),
-            "aikoql-v2" => Ok(Backend::AikoqlV2),
-            other => Err(format!(
-                "unknown storage backend {other:?}: use \"redb\", \"aikoql\" or \"aikoql-v2\""
-            )),
-        }
-    }
-}
-
-/// Open the engine at `path`. An explicit backend opens exactly that
-/// engine (the value already failed closed at the config layer); `None`
-/// auto-detects via `detect_backend`.
-pub fn open_engine(path: &Path, backend: Option<Backend>) -> KResult<Opened> {
-    let backend = match backend {
-        Some(b) => b,
-        None => detect_backend(path)?,
-    };
-    let p = path.to_string_lossy();
-    match backend {
-        Backend::Redb => Ok((Arc::new(RedbEngine::open(p.as_ref())?), None)),
-        Backend::Aikoql => Ok((Arc::new(AikoqlStorageEngine::open(p.as_ref())?), None)),
-        Backend::AikoqlV2 => {
-            // P3-M2 (design §22): extract the admin capability from the
-            // CONCRETE engine before the StorageEngine coercion — only v2
-            // implements it today.
-            let e = Arc::new(AikoqlStorageEngineV2::open(p.as_ref())?);
-            let admin: Arc<dyn StorageAdminApi> = e.clone();
-            Ok((e, Some(admin)))
-        }
-    }
-}
-
-/// Sniff the on-disk format. A <4-byte or non-AKQL file falls through to
-/// redb, whose own header validation fails closed — the native WAL parser
-/// never truncates or reinterprets a non-AKQL file. A missing path is a
-/// fresh aikoql-v2 create (the 2026-09-07 default flip).
-pub fn detect_backend(path: &Path) -> KResult<Backend> {
-    if path.is_dir() {
-        if path.join("CURRENT").is_file() {
-            return Ok(Backend::AikoqlV2);
-        }
+/// Open the engine at `path` — the ONE opener.
+pub fn open_engine(path: &Path) -> KResult<Opened> {
+    if path.is_dir() && !path.join("CURRENT").is_file() {
         return Err(KError::Store(format!(
-            "{} is a directory but not an aikoql-v2 database (no CURRENT): \
-             name an explicit backend (--backend / AIKOQL_BACKEND / storage.backend)",
+            "{} is a directory but not an aikoql-v2 database (no CURRENT)",
             path.display()
         )));
     }
-    match std::fs::File::open(path) {
-        Ok(mut f) => {
-            let mut magic = [0u8; 4];
-            if f.read(&mut magic).ok() == Some(4) && &magic == b"AKQL" {
-                return Ok(Backend::Aikoql);
-            }
-            Ok(Backend::Redb)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Backend::AikoqlV2),
-        Err(e) => Err(KError::Store(format!("read {}: {e}", path.display()))),
+    if path.exists() && !path.is_dir() {
+        return Err(KError::Store(format!(
+            "{} is a legacy storage file — storage V2 is the only engine \
+             (launch S-02): migrate a v1 WAL with \
+             aikoql_storage_v2::migration::migrate_v1_wal, or start fresh at \
+             a new path",
+            path.display()
+        )));
     }
+    // P3-M2 (design §22): extract the admin capability from the CONCRETE
+    // engine before the StorageEngine coercion.
+    let e = Arc::new(AikoqlStorageEngineV2::open(
+        path.to_string_lossy().as_ref(),
+    )?);
+    let admin: Arc<dyn StorageAdminApi> = e.clone();
+    Ok((e, Some(admin)))
 }
 
 #[cfg(test)]
@@ -125,7 +71,7 @@ mod tests {
             for p in &self.paths {
                 let _ = std::fs::remove_file(p);
                 let _ = std::fs::remove_dir_all(p);
-                // Sidecars next to the registered stem (`{stem}.redb.artifacts`).
+                // Sidecars next to the registered stem.
                 let Some(name) = p.file_name() else { continue };
                 if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(Path::new("."))) {
                     let prefix = format!("{}.", name.to_string_lossy());
@@ -181,11 +127,11 @@ mod tests {
         assert_eq!(engine.get(b"k").unwrap(), Some(b"v".to_vec()));
     }
 
-    /// PR6-005 — the review's five named cases.
     #[test]
-    fn empty_path_defaults_to_v2() {
+    fn empty_path_creates_fresh_v2() {
         let p = scratch("empty-v2");
-        let (engine, _admin) = open_engine(&p, None).unwrap();
+        let (engine, admin) = open_engine(&p).unwrap();
+        assert!(admin.is_some(), "v2 always carries the admin capability");
         put_get(&engine);
         drop(engine);
         assert!(
@@ -195,43 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_redb_autodetects_redb() {
-        let p = scratch("redb-existing");
-        {
-            let e = RedbEngine::open(&p).unwrap();
-            let mut b = WriteBatch::new();
-            b.put(b"k".to_vec(), b"v".to_vec());
-            e.write_batch(&b).unwrap();
-        }
-        let (engine, _admin) = open_engine(&p, None).unwrap();
-        put_get(&engine);
-        drop(engine); // redb holds a live file lock — read the head bytes after close
-        let mut head = [0u8; 4];
-        std::fs::File::open(&p)
-            .unwrap()
-            .read_exact(&mut head)
-            .unwrap();
-        assert_ne!(
-            &head, b"AKQL",
-            "the redb file must not be rewritten as a native WAL"
-        );
-    }
-
-    #[test]
-    fn existing_aikoql_v1_autodetects_v1() {
-        let p = scratch("v1-existing");
-        {
-            let e = AikoqlStorageEngine::open(&p).unwrap();
-            let mut b = WriteBatch::new();
-            b.put(b"k".to_vec(), b"v".to_vec());
-            e.write_batch(&b).unwrap();
-        }
-        let (engine, _admin) = open_engine(&p, None).unwrap();
-        put_get(&engine);
-    }
-
-    #[test]
-    fn existing_aikoql_v2_autodetects_v2() {
+    fn existing_v2_reopens() {
         let p = scratch("v2-existing");
         {
             let e = AikoqlStorageEngineV2::open(&p).unwrap();
@@ -239,38 +149,28 @@ mod tests {
             b.put(b"k".to_vec(), b"v".to_vec());
             e.write_batch(&b).unwrap();
         }
-        let (engine, _admin) = open_engine(&p, None).unwrap();
+        let (engine, _admin) = open_engine(&p).unwrap();
         put_get(&engine);
     }
 
+    /// A legacy FILE (v1 database or WAL) fails closed with the
+    /// migration story — never silently rewritten as v2.
     #[test]
-    fn explicit_backend_overrides_detection() {
-        // A fresh path would DETECT as v2 — an explicit backend must win.
-        let p = scratch("explicit-redb");
-        let (engine, _admin) = open_engine(&p, Some(Backend::Redb)).unwrap();
-        put_get(&engine);
-        drop(engine);
+    fn legacy_file_fails_closed() {
+        let p = scratch("legacy-file");
+        std::fs::write(&p, b"AKQL\x01\x00\x01\x00\x00\x00\x00").unwrap();
+        let err = match open_engine(&p) {
+            Err(e) => e,
+            Ok(_) => panic!("a legacy file must fail closed, not open as v2"),
+        };
         assert!(
-            p.is_file() && !p.join("CURRENT").is_file(),
-            "explicit redb must create a redb file, not a v2 directory"
+            format!("{err}").contains("legacy storage file"),
+            "got: {err}"
         );
-
-        let p = scratch("explicit-v1");
-        let (engine, _admin) = open_engine(&p, Some(Backend::Aikoql)).unwrap();
-        put_get(&engine);
-        drop(engine);
-        let mut head = [0u8; 4];
-        std::fs::File::open(&p)
-            .unwrap()
-            .read_exact(&mut head)
-            .unwrap();
-        assert_eq!(&head, b"AKQL", "explicit aikoql must create a native WAL");
-
-        let p = scratch("explicit-v2");
-        let (engine, _admin) = open_engine(&p, Some(Backend::AikoqlV2)).unwrap();
-        put_get(&engine);
-        drop(engine);
-        assert!(p.join("CURRENT").is_file());
+        assert!(
+            !p.join("CURRENT").is_file(),
+            "the legacy file must stay untouched"
+        );
     }
 
     /// A directory that is NOT a v2 database fails closed — never a
@@ -279,7 +179,7 @@ mod tests {
     fn non_v2_directory_fails_closed() {
         let p = scratch("plain-dir");
         std::fs::create_dir_all(&p).unwrap();
-        let err = match open_engine(&p, None) {
+        let err = match open_engine(&p) {
             Err(e) => e,
             Ok(_) => panic!("a non-v2 directory must fail closed, not become a fresh store"),
         };
@@ -287,15 +187,5 @@ mod tests {
             format!("{err}").contains("not an aikoql-v2 database"),
             "got: {err}"
         );
-    }
-
-    #[test]
-    fn parse_accepts_exact_names_and_fails_closed() {
-        assert_eq!(Backend::parse("redb"), Ok(Backend::Redb));
-        assert_eq!(Backend::parse("aikoql"), Ok(Backend::Aikoql));
-        assert_eq!(Backend::parse("aikoql-v2"), Ok(Backend::AikoqlV2));
-        assert!(Backend::parse("rocksdb")
-            .unwrap_err()
-            .contains("unknown storage backend"));
     }
 }

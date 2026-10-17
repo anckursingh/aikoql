@@ -1,0 +1,29 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.79s
+     Running unittests src\main.rs (target\debug\deps\aikoql_mcp-20a3986fbfc0d4b9.exe)
+
+running 1 test
+test tools::query::tests::aikoql_group_by_surfaces_grouped_rows ... FAILED
+
+failures:
+
+---- tools::query::tests::aikoql_group_by_surfaces_grouped_rows stdout ----
+
+thread 'tools::query::tests::aikoql_group_by_surfaces_grouped_rows' (28424) panicked at crates\services\api\mcp\src\tools\query.rs:488:9:
+assertion `left == right` failed: two dept groups, not an empty result
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tools::query::tests::aikoql_group_by_surfaces_grouped_rows
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 71 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

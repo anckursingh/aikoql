@@ -13,7 +13,7 @@ pub(crate) fn tools_list() -> J {
     let koid = json!({"type": "string", "description": "32-char hex KOID"});
     json!({
         "tools": [
-            {"name": "remember", "description": "Commit a knowledge object (or new version) with provenance. Set embed:true for auto-embedding via SemanticEngine (MRFC-0040). Returns KOID+version.", "inputSchema": {"type": "object", "properties": {"subject": subj, "type_name": {"type": "string"}, "koid": koid, "properties": {"type": "object"}, "semantic": {"type": "object"}, "embed": {"type": "boolean", "description": "Request auto-embedding via configured AI provider (MRFC-0040)"}, "expected_version": {"type": "integer"}, "idempotency_key": {"type": "string"}, "note": {"type": "string"}, "retention_ms": {"type": "integer", "description": "Declare automatic expiry: the kernel stamps valid_to = now + retention_ms (ms). Expired memory drops out of default-time retrieval but stays readable via get/lineage."}}, "required": ["type_name"]}},
+            {"name": "remember", "description": "Commit a knowledge object (or new version) with provenance. Set embed:true for auto-embedding via SemanticEngine (MRFC-0040). Returns KOID+version.", "inputSchema": {"type": "object", "properties": {"subject": subj, "type_name": {"type": "string"}, "koid": koid, "properties": {"type": "object"}, "semantic": {"type": "object"}, "embed": {"type": "boolean", "description": "Request auto-embedding via configured AI provider (MRFC-0040)"}, "expected_version": {"type": "integer"}, "idempotency_key": {"type": "string"}, "note": {"type": "string"}, "retention_ms": {"type": "integer", "description": "Declare automatic expiry: the kernel stamps valid_to = now + retention_ms (ms). Expired memory drops out of default-time retrieval but stays readable via get/lineage."}, "valid_from": {"type": "integer", "description": "Validity start (epoch millis) of the claim in the world (T-60): same surface as extensions.valid_from, which wins when both are given"}}, "required": ["type_name"]}},
             {"name": "forget", "description": "Tombstone or legally erase a knowledge object (audit-preserving).", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "mode": {"type": "string", "enum": ["tombstone", "erase"]}}, "required": ["koid"]}},
             {"name": "summarize_conversation", "description": "Summarize a conversation into a structured summary KO (G13 §38-39). Deterministic verbatim extraction — never invents facts. Buckets: facts/decisions/actions/open_issues/constraints/outcomes/entities, each item carrying speaker + message range + timestamp provenance.", "inputSchema": {"type": "object", "properties": {"subject": subj, "conversation_id": {"type": "string", "description": "Identity of the conversation being summarized (the provenance root)"}, "messages": {"type": "array", "items": {"type": "object", "properties": {"speaker": {"type": "string"}, "ts_ms": {"type": "integer"}, "text": {"type": "string"}}}}, "evidence": {"type": "array", "items": {"type": "object"}, "description": "Canonical evidence entries: {source_artifact, method, location?, revision?, confidence?} — mandatory"}, "note": {"type": "string"}}, "required": ["conversation_id", "messages", "evidence"]}},
             {"name": "evolve", "description": "Transition a knowledge object along its lifecycle (draft->active->verified->archived->deleted).", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "to": {"type": "string"}}, "required": ["koid", "to"]}},
@@ -30,6 +30,7 @@ pub(crate) fn tools_list() -> J {
             {"name": "resolve_conflict_by_authority", "description": "Resolve a Conflict KO by the recorded authority of each assertion — higher authority wins; a tie is an error, never a silent pick.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "rationale": {"type": "string"}}, "required": ["koid", "rationale"]}},
             {"name": "verify", "description": "Check whether a subject may perform an action on an object.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "action": {"type": "string"}}, "required": ["koid", "action"]}},
             {"name": "get", "description": "Fetch a knowledge object by KOID.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid}, "required": ["koid"]}},
+            {"name": "get_by_idem", "description": "Fetch a knowledge object by its idempotency key (the O(1) external-id lookup — remember's exact-once replay path, read-only).", "inputSchema": {"type": "object", "properties": {"subject": subj, "key": {"type": "string", "description": "The idempotency key the object was remembered with"}}, "required": ["key"]}},
             {"name": "find_similar", "description": "Hybrid recall: vector + text + filters with RRF/weighted fusion.", "inputSchema": {"type": "object", "properties": {"subject": subj, "text": {"type": "string"}, "vector": {"type": "array"}, "embedding_model": {"type": "string", "description": "When set, only vectors from this embedding model are considered"}, "k": {"type": "integer"}, "fusion": {"type": "string"}, "type_name": {"type": "string"}, "wait_for_freshness_ms": {"type": "integer", "description": "Opt-in: wait up to this many ms for the index maintainer to drain before querying. Default 0 — query now; every hit reports index_lag_ms."}}}},
             {"name": "trace", "description": "Full lineage of a fact: versions + events.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid}, "required": ["koid"]}},
             {"name": "explain", "description": "Why is this believed: provenance, source, confidence, evidence.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "version": {"type": "integer"}}, "required": ["koid"]}},
@@ -42,15 +43,15 @@ pub(crate) fn tools_list() -> J {
             {"name": "eval_contradictions", "description": "Find same-type, high-similarity object pairs whose property values differ.", "inputSchema": {"type": "object", "properties": {"subject": subj, "type_name": {"type": "string"}, "property": {"type": "string"}, "threshold": {"type": "number"}, "max_results": {"type": "integer"}}, "required": ["type_name", "property"]}},
             {"name": "aikoql", "description": "Execute an aikoql query (text-based knowledge query language). Supports MATCH, WHERE, SIMILAR TO, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, RETURN, CREATE, UPDATE, DELETE.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "aikoql query text"}, "subject": {"type": "string", "description": "Calling principal for ACL (default: query-user)"}}, "required": ["query"]}},
             {"name": "backup", "description": "Create a timestamped backup of the database.", "inputSchema": {"type": "object", "properties": {}}},
-            {"name": "restore", "description": "Restore the database from a backup directory.", "inputSchema": {"type": "object", "properties": {"backup": {"type": "string", "description": "Backup directory name"}}, "required": ["backup"]}},
+            {"name": "restore", "description": "Restore the database from a backup directory.", "inputSchema": {"type": "object", "properties": {"backup": {"type": "string", "description": "Backup path (as returned by `backup`) or entry name from `list_backups`"}}, "required": ["backup"]}},
             {"name": "storage_stats", "description": "Design §22 storage admin: write-path, segment, and cache statistics from the storage engine (v2 only).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "storage_compact", "description": "Design §22 storage admin: trigger a storage-engine compaction and report segment deltas (v2 only).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "index_create", "description": "Declare a property index over a type's properties (P5-M17b): registers it, rebuilds it from committed state, waits for the maintainer to catch up, then analyzes statistics so the query optimizer can use it. Idempotent: re-declaring the same shape refreshes statistics. An index changes plans, never answers.", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "description": "Index name (unique)"}, "type_name": {"type": "string", "description": "Type the index covers"}, "properties": {"type": "array", "items": {"type": "string"}, "description": "Property names the index keys on"}}, "required": ["name", "type_name", "properties"]}},
             {"name": "storage_checkpoint", "description": "Design §22 storage admin: force a storage-engine directory checkpoint (v2 only).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "constraint_diagnostics", "description": "Constraint engine diagnostics (MRFC-0060): the recent violation-event ring (constraint, message, severity, mode, timestamp, koid) plus evaluation counters (evaluated / skipped_disabled / skipped_unaffected).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "register_schema", "description": "Register a constraint-bearing type schema (MRFC-0060). Properties: [{name, value_type, required?, nullable?, provenance_required?}]; uniques: [{properties[], scope(Type|Tenant|Global), timing(Immediate|Deferred), mode(Enforced|Validated|Advisory|Disabled), severity(Error|Warning|Info)}]; checks: [{name, expr, timing?, mode?, severity?}] with expr parsed by CheckExpression::parse (e.g. \"age >= 18\"); cardinality: [{name, relationship_type, min?, max?, mode?, severity?}]; temporal: [{name, start, end, mode?, severity?}].", "inputSchema": {"type": "object", "properties": {"type_name": {"type": "string"}, "schema_version": {"type": "integer"}, "properties": {"type": "array"}, "uniques": {"type": "array"}, "checks": {"type": "array"}, "cardinality": {"type": "array"}, "temporal": {"type": "array"}}, "required": ["type_name"]}},
-            {"name": "list_backups", "description": "List available backups in the current directory.", "inputSchema": {"type": "object", "properties": {}}},
-            {"name": "verify_backup", "description": "Verify a backup by opening it in a temporary kernel and checking journal + object count integrity.", "inputSchema": {"type": "object", "properties": {"backup": {"type": "string", "description": "Backup directory name"}}, "required": ["backup"]}},
+            {"name": "list_backups", "description": "List available backups next to the database file.", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "verify_backup", "description": "Verify a backup by opening it in a temporary kernel and checking journal + object count integrity.", "inputSchema": {"type": "object", "properties": {"backup": {"type": "string", "description": "Backup path (as returned by `backup`) or entry name from `list_backups`"}}, "required": ["backup"]}},
             {"name": "metrics", "description": "Return database metrics: journal sequence, object counts, uptime.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "audit_report", "description": "Generate a compliance audit report with full object inventory and audit chain hash.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "compliance_report", "description": "Generate an encryption compliance report: policies, key inventory, audit events, compliance grade (A/C).", "inputSchema": {"type": "object", "properties": {}}},
@@ -159,12 +160,21 @@ pub(crate) fn tool_batch(k: &Kernel, args: &J) -> Result<J, String> {
             "remember" => tool_remember(k, &resolved_op),
             "relate" => tool_relate(k, &resolved_op),
             "forget" => tool_forget(k, &resolved_op),
+            // T-57 (P3-008): ordered replay carries corrections/retractions
+            // as supersede ops; per-op idempotency_key makes the whole batch
+            // converge on re-send.
+            "supersede" => tool_supersede(k, &resolved_op),
             _ => Err(format!("unknown batch op: {}", name)),
         };
         match r {
             Ok(result) => {
                 if let Some(koid) = result.get("koid").and_then(|v| v.as_str()) {
                     koids.push(koid.to_string());
+                } else if let Some(k) = result.get("new").and_then(|v| v.as_str()) {
+                    // T-57 (P3-008): a supersede's successor is the next
+                    // handle in an ordered replay — later ops may target it
+                    // as $N.koid (a retraction has none).
+                    koids.push(k.to_string());
                 }
                 results.push(json!({"op": name, "ok": true, "result": result}));
             }
@@ -228,6 +238,7 @@ pub(crate) fn call_tool(
         "find_experiences" => tool_find_experiences(k, args),
         "verify" => tool_verify(k, args),
         "get" => tool_get(k, args),
+        "get_by_idem" => tool_get_by_idem(k, args),
         "find_similar" => tool_find_similar(k, args),
         "trace" => tool_trace(k, args),
         "explain" => tool_explain(k, args),
@@ -240,8 +251,8 @@ pub(crate) fn call_tool(
         "eval_contradictions" => tool_eval_contradictions(k, args),
         "aikoql" => tool_aikoql(k, args),
         "backup" => tool_backup(k, db_path, admin),
-        "verify_backup" => tool_verify_backup(args, admin),
-        "restore" => tool_restore(k, args, admin),
+        "verify_backup" => tool_verify_backup(args, db_path),
+        "restore" => tool_restore(args, admin, db_path),
         "list_backups" => tool_list_backups(db_path),
         "metrics" => tool_metrics(k),
         "audit_report" => tool_audit_report(k),

@@ -1,0 +1,36 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.13s
+     Running unittests src\main.rs (target\debug\deps\aikoql_mcp-20a3986fbfc0d4b9.exe)
+
+running 2 tests
+test api_rest::tests::s04_studio_prove_call_carries_the_koid ... FAILED
+test api_rest::tests::s04_get_prove_reads_koid_from_query_string ... FAILED
+
+failures:
+
+---- api_rest::tests::s04_studio_prove_call_carries_the_koid stdout ----
+
+thread 'api_rest::tests::s04_studio_prove_call_carries_the_koid' (12852) panicked at crates\services\api\mcp\src\api_rest.rs:595:9:
+studio prove must carry the koid in the query string
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- api_rest::tests::s04_get_prove_reads_koid_from_query_string stdout ----
+
+thread 'api_rest::tests::s04_get_prove_reads_koid_from_query_string' (29936) panicked at crates\services\api\mcp\src\api_rest.rs:582:9:
+assertion `left == right` failed: GET prove with ?koid= must verify the chain, got: {"error":"missing argument: koid"}
+  left: "400 Bad Request"
+ right: "200 OK"
+
+
+failures:
+    api_rest::tests::s04_get_prove_reads_koid_from_query_string
+    api_rest::tests::s04_studio_prove_call_carries_the_koid
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 72 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

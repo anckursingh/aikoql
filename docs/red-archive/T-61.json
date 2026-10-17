@@ -1,0 +1,8 @@
+{
+  "id": "T-61",
+  "pre_fix_commit": "bb45c67",
+  "command": "bash -c grep -qF 'Temporal Literals (AS_OF / BETWEEN)' docs/MRFC-0010-AIKOQL-Parser-Architecture-v2.md || exit 101",
+  "captured_at": "2026-10-09T22:09:49Z",
+  "captured_head": "bb45c67c4b9f7503335b63e4c5352c7cbeb94806",
+  "exit_code": 101
+}

@@ -1,0 +1,105 @@
+warning: variable does not need to be mutable
+   --> crates\engines\semantic\src\provider.rs:439:13
+    |
+439 |         let mut guard = self.model.lock().unwrap();
+    |             ----^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aikoql-semantic` (lib) generated 1 warning (run `cargo fix --lib -p aikoql-semantic` to apply 1 suggestion)
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.81s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 3 tests
+test compile_context_fails_fast_when_model_busy_with_stored_embeddings ... [2m2026-10-08T12:42:12.723794Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-08T12:42:12.723891Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-cc-busy-39216 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-08T12:42:12.724715Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T12:42:12.729354Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-08T12:42:12.789613Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 3
+[2m2026-10-08T12:42:12.789740Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 3
+[2m2026-10-08T12:42:12.789910Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T12:42:12.790154Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-08T12:42:12.790200Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-08T12:42:12.832111Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-08T12:42:12.874071Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 8
+[2m2026-10-08T12:42:12.874290Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 8
+[2m2026-10-08T12:42:12.875041Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T12:42:12.875411Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-08T12:42:12.875464Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-08T12:42:19.546894Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-08T12:42:19.573889Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 13
+[2m2026-10-08T12:42:19.574037Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 13
+[2m2026-10-08T12:42:19.574722Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T12:42:19.574929Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-08T12:42:19.574968Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-08T12:42:19.575195Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "3e44dfe7c7434f6abd9920c4f4312ebc.term"
+[2m2026-10-08T12:42:19.575246Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "3e44dfe7c7434f6abd9920c4f4312ebc.fast"
+[2m2026-10-08T12:42:19.575380Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "3e44dfe7c7434f6abd9920c4f4312ebc.pos"
+[2m2026-10-08T12:42:19.575429Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "3e44dfe7c7434f6abd9920c4f4312ebc.13.del"
+[2m2026-10-08T12:42:19.575468Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "3e44dfe7c7434f6abd9920c4f4312ebc.idx"
+[2m2026-10-08T12:42:19.575507Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "3e44dfe7c7434f6abd9920c4f4312ebc.fieldnorm"
+[2m2026-10-08T12:42:19.575546Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "3e44dfe7c7434f6abd9920c4f4312ebc.store"
+FAILED
+test compile_context_skips_semantic_embed_without_stored_embeddings ... [2m2026-10-08T12:42:25.289078Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-08T12:42:25.289183Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-cc-skip-39216 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-08T12:42:25.290104Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T12:42:25.294138Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-08T12:42:25.364281Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 3
+[2m2026-10-08T12:42:25.364380Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 3
+[2m2026-10-08T12:42:25.364543Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T12:42:25.364836Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-08T12:42:25.364878Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+FAILED
+test compile_context_stays_bounded_while_enrichment_holds_the_model ... [2m2026-10-08T12:42:30.193829Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-08T12:42:30.193945Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-cc-park-39216 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-08T12:42:30.194802Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T12:42:30.200037Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-08T12:42:30.224869Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 3
+[2m2026-10-08T12:42:30.224995Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 3
+[2m2026-10-08T12:42:30.225101Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-08T12:42:30.225317Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-08T12:42:30.225353Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+FAILED
+
+failures:
+
+---- compile_context_fails_fast_when_model_busy_with_stored_embeddings stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'compile_context_fails_fast_when_model_busy_with_stored_embeddings' (44236) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:222:13:
+compile_context did not respond within 2s — the request queued behind the enrichment worker instead of failing fast
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- compile_context_skips_semantic_embed_without_stored_embeddings stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'compile_context_skips_semantic_embed_without_stored_embeddings' (65864) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:222:13:
+compile_context did not respond within 1s — the request queued behind the enrichment worker instead of failing fast
+
+---- compile_context_stays_bounded_while_enrichment_holds_the_model stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'compile_context_stays_bounded_while_enrichment_holds_the_model' (33120) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:222:13:
+compile_context did not respond within 2s — the request queued behind the enrichment worker instead of failing fast
+
+
+failures:
+    compile_context_fails_fast_when_model_busy_with_stored_embeddings
+    compile_context_skips_semantic_embed_without_stored_embeddings
+    compile_context_stays_bounded_while_enrichment_holds_the_model
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 13 filtered out; finished in 23.26s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

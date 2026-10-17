@@ -67,20 +67,21 @@ dependencies = [
 
 [[package]]
 name = "aikoql-benchmarks"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
  "aikoql-kernel",
  "aikoql-runtime",
  "aikoql-scheduler",
+ "aikoql-storage-v2",
  "aikoql-vector",
  "criterion",
 ]
 
 [[package]]
 name = "aikoql-certification"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
@@ -92,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-compiler"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "criterion",
@@ -102,19 +103,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "aikoql-fault-proxy"
+version = "0.2.2"
+dependencies = [
+ "aikoql-native",
+]
+
+[[package]]
 name = "aikoql-graph"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
 ]
 
 [[package]]
 name = "aikoql-ingestion"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-graph",
  "aikoql-kernel",
  "aikoql-scheduler",
+ "aikoql-storage-v2",
  "criterion",
  "flate2",
  "lopdf",
@@ -136,13 +145,14 @@ dependencies = [
 
 [[package]]
 name = "aikoql-kernel"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aes-gcm",
  "aikoql-compiler",
  "aikoql-graph",
  "aikoql-runtime",
  "aikoql-scheduler",
+ "aikoql-storage-v2",
  "aikoql-vector",
  "argon2",
  "chacha20poly1305",
@@ -150,7 +160,6 @@ dependencies = [
  "hmac 0.12.1",
  "proptest",
  "rand 0.8.7",
- "redb",
  "regex",
  "serde",
  "sha2 0.10.9",
@@ -159,20 +168,20 @@ dependencies = [
 
 [[package]]
 name = "aikoql-mcp"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
  "aikoql-ingestion",
  "aikoql-kernel",
  "aikoql-mongodb",
+ "aikoql-native",
  "aikoql-neo4j",
  "aikoql-postgres",
  "aikoql-runtime",
  "aikoql-scheduler",
  "aikoql-semantic",
  "aikoql-sqlite",
- "aikoql-storage",
  "aikoql-storage-v2",
  "aikoql-vector",
  "argon2",
@@ -192,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-mongodb"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "futures-util",
@@ -201,8 +210,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "aikoql-native"
+version = "0.2.2"
+
+[[package]]
 name = "aikoql-neo4j"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "serde",
@@ -212,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-postgres"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "postgres",
@@ -220,21 +233,20 @@ dependencies = [
 
 [[package]]
 name = "aikoql-provider-sdk"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
 ]
 
 [[package]]
 name = "aikoql-py"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
  "aikoql-kernel",
  "aikoql-runtime",
  "aikoql-scheduler",
- "aikoql-storage",
  "aikoql-storage-v2",
  "aikoql-vector",
  "pyo3",
@@ -242,30 +254,21 @@ dependencies = [
 
 [[package]]
 name = "aikoql-reasoning"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "aikoql-scheduler",
 ]
 
 [[package]]
-name = "aikoql-rocksdb"
-version = "0.1.19"
-dependencies = [
- "aikoql-kernel",
- "rocksdb",
-]
-
-[[package]]
 name = "aikoql-runtime"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
  "aikoql-kernel",
  "aikoql-scheduler",
  "aikoql-semantic",
- "aikoql-storage",
  "aikoql-storage-v2",
  "aikoql-vector",
  "proptest",
@@ -276,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-scheduler"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "aikoql-storage-v2",
@@ -284,8 +287,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "aikoql-sdk"
+version = "0.2.2"
+dependencies = [
+ "aikoql-kernel",
+ "aikoql-native",
+ "aikoql-runtime",
+ "getrandom 0.2.17",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "aikoql-semantic"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "aikoql-scheduler",
@@ -302,33 +319,24 @@ dependencies = [
 
 [[package]]
 name = "aikoql-sqlite"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "rusqlite",
 ]
 
 [[package]]
-name = "aikoql-storage"
-version = "0.1.19"
-dependencies = [
- "aikoql-kernel",
- "aikoql-rocksdb",
- "redb",
-]
-
-[[package]]
 name = "aikoql-storage-v2"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
- "aikoql-storage",
+ "proptest",
  "sha2 0.10.9",
 ]
 
 [[package]]
 name = "aikoql-vector"
-version = "0.1.19"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "fast-hnsw",
@@ -430,44 +438,6 @@ name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
-
-[[package]]
-name = "bindgen"
-version = "0.69.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "271383c67ccabffb7381723dea0672a673f292304fcb45c01cc648c7a8d58088"
-dependencies = [
- "bitflags 2.13.1",
- "cexpr",
- "clang-sys",
- "itertools 0.12.1",
- "lazy_static",
- "lazycell",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash 1.1.0",
- "shlex 1.3.0",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "bindgen"
-version = "0.72.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
-dependencies = [
- "bitflags 2.13.1",
- "cexpr",
- "clang-sys",
- "itertools 0.12.1",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash 2.1.3",
- "shlex 1.3.0",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "bit-set"
@@ -603,9 +573,9 @@ dependencies = [
 
 [[package]]
 name = "btoi"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dd6407f73a9b8b6162d8a2ef999fe6afd7cc15902ebf42c5cd296addf17e0ad"
+checksum = "3b5ab9db53bcda568284df0fd39f6eac24ad6f7ba7ff1168b9e76eba6576b976"
 dependencies = [
  "num-traits",
 ]
@@ -762,7 +732,7 @@ dependencies = [
  "find-msvc-tools",
  "jobserver",
  "libc",
- "shlex 2.0.1",
+ "shlex",
 ]
 
 [[package]]
@@ -770,15 +740,6 @@ name = "census"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f4c707c6a209cbe82d10abd08e1ea8995e9ea937d2550646e02798948992be0"
-
-[[package]]
-name = "cexpr"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fac387a98bb7c37292057cffc56d62ecb629900026402633ae9160df93a8766"
-dependencies = [
- "nom 7.1.3",
-]
 
 [[package]]
 name = "cfg-if"
@@ -874,17 +835,6 @@ dependencies = [
  "crypto-common 0.1.7",
  "inout",
  "zeroize",
-]
-
-[[package]]
-name = "clang-sys"
-version = "1.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "157a8ba7b480713b56f4c09fd13fc3e0a22a5dfab8097ba61cbc5feef950788a"
-dependencies = [
- "glob",
- "libc",
- "libloading",
 ]
 
 [[package]]
@@ -1940,12 +1890,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "glob"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
-
-[[package]]
 name = "h2"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2251,7 +2195,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.5",
+ "socket2",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -2449,7 +2393,7 @@ version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d40460c0ce33d6ce4b0630ad68ff63d6661961c48b6dba35e5a4d81cfb48222"
 dependencies = [
- "socket2 0.6.5",
+ "socket2",
  "widestring",
  "windows-registry",
  "windows-result",
@@ -2648,12 +2592,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
-name = "lazycell"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
-
-[[package]]
 name = "levenshtein_automata"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2664,16 +2602,6 @@ name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
-
-[[package]]
-name = "libloading"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
-dependencies = [
- "cfg-if",
- "windows-link",
-]
 
 [[package]]
 name = "libm"
@@ -2691,37 +2619,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "librocksdb-sys"
-version = "0.16.0+8.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce3d60bc059831dc1c83903fb45c103f75db65c5a7bf22272764d9cc683e348c"
-dependencies = [
- "bindgen 0.69.5",
- "bzip2-sys",
- "cc",
- "glob",
- "libc",
- "libz-sys",
- "lz4-sys",
- "zstd-sys",
-]
-
-[[package]]
 name = "libsqlite3-sys"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c10584274047cb335c23d3e61bcef8e323adae7c5c8c760540f73610177fc3f"
-dependencies = [
- "cc",
- "pkg-config",
- "vcpkg",
-]
-
-[[package]]
-name = "libz-sys"
-version = "1.1.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85bc9657773828b90eeb625adff10eeac83cc21bbfd8e23a03eaa8a33c9e28d9"
 dependencies = [
  "cc",
  "pkg-config",
@@ -2793,12 +2694,6 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
-
-[[package]]
-name = "lru"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f66e8d5d03f609abc3a39e6f08e4164ebf1447a732906d39eb9b99b7919ef39"
@@ -2807,20 +2702,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.18.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
+
+[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
-
-[[package]]
-name = "lz4-sys"
-version = "1.11.1+lz4-1.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bd8c0d6c6ed0cd30b3652886bb8711dc4bb01d637a68105a3d5158039b418e6"
-dependencies = [
- "cc",
- "libc",
-]
 
 [[package]]
 name = "lz4_flex"
@@ -3047,7 +2938,7 @@ dependencies = [
  "serde_with",
  "sha1 0.11.0",
  "sha2 0.11.0",
- "socket2 0.6.5",
+ "socket2",
  "stringprep",
  "strsim",
  "take_mut",
@@ -3102,10 +2993,11 @@ checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
 
 [[package]]
 name = "mysql"
-version = "26.0.1"
+version = "28.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2510a735f601bab18202b07ea0a197bd1d130d3a5ce2edf4577d225f0c3ee4"
+checksum = "7d3d30e2806645e218163f49c2656286061cc91ffce24d93d758fd136e70eb5d"
 dependencies = [
+ "arc-swap",
  "bufstream",
  "bytes",
  "crossbeam-queue",
@@ -3113,21 +3005,21 @@ dependencies = [
  "flate2",
  "io-enum",
  "libc",
- "lru 0.12.5",
+ "lru 0.18.5",
  "mysql_common",
  "named_pipe",
  "pem",
  "percent-encoding",
- "socket2 0.5.10",
+ "socket2",
  "twox-hash",
  "url",
 ]
 
 [[package]]
 name = "mysql_common"
-version = "0.35.5"
+version = "0.37.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbb9f371618ce723f095c61fbcdc36e8936956d2b62832f9c7648689b338e052"
+checksum = "0f27695f286b461da077b8c2f72f47feaa04ce3c3f9c0976257410e90e21208a"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.1",
@@ -3436,11 +3328,11 @@ dependencies = [
 
 [[package]]
 name = "pem"
-version = "3.0.6"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "serde_core",
 ]
 
@@ -3760,9 +3652,9 @@ dependencies = [
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
- "rustc-hash 2.1.3",
+ "rustc-hash",
  "rustls",
- "socket2 0.6.5",
+ "socket2",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
@@ -3781,7 +3673,7 @@ dependencies = [
  "rand 0.10.2",
  "rand_pcg",
  "ring",
- "rustc-hash 2.1.3",
+ "rustc-hash",
  "rustls",
  "rustls-pki-types",
  "slab",
@@ -3800,7 +3692,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.5",
+ "socket2",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -3989,15 +3881,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
-name = "redb"
-version = "2.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8eca1e9d98d5a7e9002d0013e18d5a9b000aee942eb134883a82f06ebffb6c01"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4111,16 +3994,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rocksdb"
-version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bd13e55d6d7b8cd0ea569161127567cd587676c99f4472f779a0279aa60a7a7"
-dependencies = [
- "libc",
- "librocksdb-sys",
-]
-
-[[package]]
 name = "rusqlite"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4143,12 +4016,6 @@ dependencies = [
  "serde",
  "serde_derive",
 ]
-
-[[package]]
-name = "rustc-hash"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
@@ -4453,12 +4320,6 @@ dependencies = [
 
 [[package]]
 name = "shlex"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
-
-[[package]]
-name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
@@ -4521,16 +4382,6 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
-
-[[package]]
-name = "socket2"
-version = "0.5.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
-dependencies = [
- "libc",
- "windows-sys 0.52.0",
-]
 
 [[package]]
 name = "socket2"
@@ -4711,7 +4562,7 @@ dependencies = [
  "rayon",
  "regex",
  "rust-stemmers",
- "rustc-hash 2.1.3",
+ "rustc-hash",
  "serde",
  "serde_json",
  "sketches-ddsketch",
@@ -5017,7 +4868,7 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.6.5",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
 ]
@@ -5053,7 +4904,7 @@ dependencies = [
  "postgres-protocol",
  "postgres-types",
  "rand 0.10.2",
- "socket2 0.6.5",
+ "socket2",
  "tokio",
  "tokio-util",
  "whoami",
@@ -5067,6 +4918,18 @@ checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
  "rustls",
  "tokio",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3d06f0b082ba57c26b79407372e57cf2a1e28124f78e9479fe80322cf53420b"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -6233,7 +6096,6 @@ version = "2.0.16+zstd.1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
 dependencies = [
- "bindgen 0.72.1",
  "cc",
  "pkg-config",
 ]

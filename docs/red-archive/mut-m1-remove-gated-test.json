@@ -1,0 +1,9 @@
+{
+  "id": "mut-m1-remove-gated-test",
+  "pre_fix_commit": "25ea8e5",
+  "command": "bash scripts/mutation-harness.sh m1-remove-gated-test",
+  "captured_at": "2026-09-28T22:39:34Z",
+  "captured_head": "d27f4ccb356ceebcaf4727eb1c65f4a54d2754f3",
+  "exit_code": 1,
+  "note": "mutation RED: a gated test's fn deleted from the tree \u2014 the registry entry goes dead and the CI skip silently un-skips it; caught by check-skip-drift.sh leg 3 (dead names) against a detached worktree at the captured head"
+}

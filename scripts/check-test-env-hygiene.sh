@@ -24,8 +24,6 @@ allowed() { # file|token -> 0 if pinned (patterns fully quoted: the | is literal
     'crates/kernel/tests/index_subsystem.rs|"INDEX_REBUILD_PARK_AT"') return 0 ;; # the park's armed-at timestamp, polled by the same sibling
     'crates/runtime/tests/cbo.rs|"INDEX_DROP_PARK"') return 0 ;; # crash park armed in-process; dropped thread consumes it before cleanup
     'crates/runtime/tests/cbo.rs|"INDEX_DROP_PARK_AT"') return 0 ;; # the park's armed-at timestamp, polled by the same sibling
-    'crates/services/api/mcp/tests/mcp_real_world.rs|"AIKOQL_BACKEND"') return 0 ;; # BackendEnvGuard + immediate clean — the 2026-09-18 leak's fixed site; child spawns under it
-    'crates/storage/aikoql/tests/report_gating.rs|"AIKOQL_REPORT_WRITE"') return 0 ;; # gates the report writer itself; single-test binary
     'crates/storage/aikoql-v2/tests/checkpoint_streaming.rs|"AIKOQL_V2_PLACE_PARK"') return 0 ;; # crash park armed in-process for the library under test
     'crates/storage/aikoql-v2/tests/report_gating.rs|"AIKOQL_REPORT_WRITE"') return 0 ;; # gates the report writer itself; single-test binary
     'crates/storage/aikoql-v2/tests/compaction_lock_scope.rs|PARK_ENV') return 0 ;; # const AIKOQL_V2_COMPACT_PARK; park armed/cleared around the compactor stage under test
@@ -33,6 +31,9 @@ allowed() { # file|token -> 0 if pinned (patterns fully quoted: the | is literal
     'crates/storage/aikoql-v2/tests/snapshot_cells.rs|"AIKOQL_V2_SNAP_CELLS"') return 0 ;; # M34 cell-recorder path — armed once for the binary's single test
     'crates/storage/aikoql-v2/tests/snapshot_redesign.rs|PARK_ENV') return 0 ;; # const AIKOQL_V2_SNAP_PARK; park armed/cleared around each stage
     'crates/storage/aikoql-v2/tests/snapshot_matrix.rs|PARK_ENV') return 0 ;; # const AIKOQL_V2_SNAP_PARK; park armed/cleared around each stage
+    'crates/storage/aikoql-v2/tests/shutdown_matrix.rs|env') return 0 ;; # L-15 shutdown matrix: ParkArm::new(env, stage) arms COMPACT/GROUP parks around each shutdown stage; the static PARK_LOCK serializes the process-wide env
+    'crates/storage/aikoql-v2/tests/shutdown_matrix.rs|COMPACT_ENV') return 0 ;; # the same L-15 ParkArm drop clears both park vars (const AIKOQL_V2_COMPACT_PARK)
+    'crates/storage/aikoql-v2/tests/shutdown_matrix.rs|GROUP_ENV') return 0 ;; # the same L-15 ParkArm drop clears both park vars (const AIKOQL_V2_GROUP_PARK)
     *) return 1 ;;
   esac
 }

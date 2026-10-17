@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.20s
+     Running tests\temporal.rs (target\debug\deps\temporal-28feb0f8e6b8990d.exe)
+
+running 1 test
+test as_of_slice_hides_a_superseded_generation ... FAILED
+
+failures:
+
+---- as_of_slice_hides_a_superseded_generation stdout ----
+
+thread 'as_of_slice_hides_a_superseded_generation' (28664) panicked at crates\kernel\tests\temporal.rs:265:9:
+superseded gen-1 leaked into the AS_OF slice at 20000: Some(KnowledgeObject { koid: KOID(0000000027100000000100000000e915), version: 2, commit_ts: 1310720001, metadata: Metadata { type_name: "fact", tenant: None, schema_version: 1, tags: [] }, properties: {"msg": Int(1)}, semantic: None, relationships: [RelationshipRef { rel_type: "supersedes", target: KOID(000000004e200000000000000000e915), direction: Outbound }], event_refs: [EventRef { seq: 2, kind: Created, commit_ts: 655360001 }, EventRef { seq: 4, kind: EpistemicChanged, commit_ts: 1310720001 }], security: SecurityDescriptor { owner: "alice", acl: [], classification: None }, lifecycle: Lifecycle { state: Draft, origin: Human }, extensions: {"authority": Text("human_approved"), "epistemic_history": List([Map({"at": Int(20000), "by": Text("alice"), "from": Text("asserted"), "reason": Text("replaced by successor"), "to": Text("superseded")})]), "epistemic_status": Text("superseded"), "scope": Text("user"), "valid_to": Int(20000)} })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    as_of_slice_hides_a_superseded_generation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p aikoql-kernel --test temporal`
+EXIT=101

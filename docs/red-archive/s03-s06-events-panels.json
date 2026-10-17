@@ -1,0 +1,8 @@
+{
+  "id": "s03-s06-events-panels",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp -- s03_ s04_studio_prove_renders",
+  "captured_at": "2026-10-15T10:29:45Z",
+  "captured_head": "da945b3c3b7ef47a299868731decd482380de09a",
+  "exit_code": 101
+}

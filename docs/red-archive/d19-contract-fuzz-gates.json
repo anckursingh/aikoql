@@ -1,0 +1,8 @@
+{
+  "id": "d19-contract-fuzz-gates",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-02T14:47:28Z",
+  "captured_head": "fc7591aaef4a748d4e960ca94bfe9ff6b53978a0",
+  "exit_code": 1
+}

@@ -301,7 +301,7 @@ pub(crate) struct State {
 }
 
 /// One queued batch waiting on its group: the ops plus the ack channel
-/// (a fresh bounded(1) per batch — std has no oneshot).
+/// (a fresh one-slot channel per batch — std has no oneshot).
 type Batch = (Vec<Op>, mpsc::SyncSender<Result<u64, FormatError>>);
 
 /// P3-M8 — the write path ↔ compactor handshake. `pending` = a kick was
@@ -473,6 +473,14 @@ pub struct CheckpointInfo {
 impl Db {
     pub fn open(config: Config) -> Result<Db, FormatError> {
         let open_t = Instant::now();
+        // F-01 (PBT-10) — the config trust boundary: a knob value the
+        // format can never serve must fail here, not at the first flush
+        // (an acked memtable that can never persist is a silent-loss
+        // shape). The publish-side check (segment.rs) still guards direct
+        // SegmentWriter users.
+        if config.block_target == 0 {
+            return Err(FormatError::Invalid("target block size must be > 0".into()));
+        }
         let lock = lock_directory(&config.dir)?;
         // P5-M39 — a crash between a merge and its publication can leave
         // a staging directory behind; sweep it at open (the manifest
@@ -1022,6 +1030,26 @@ impl Db {
     pub fn write(&self, ops: &[Op]) -> Result<u64, FormatError> {
         if ops.is_empty() {
             return Err(FormatError::Invalid("empty write batch".into()));
+        }
+        // L-12 (TDD-028) — the segment format's key fields are u16: a
+        // longer key would silently truncate at publish. Reject at the API
+        // trust boundary, before the WAL ack — never a truncated key on
+        // disk. publish carries the same guard for direct callers.
+        for op in ops {
+            let k = match op {
+                Op::Put(k, _) | Op::Delete(k) | Op::PutObject(_, k, _) | Op::DeleteObject(_, k) => {
+                    k
+                }
+                // a CreateObject carries no key (wal.rs Op doc)
+                Op::CreateObject { .. } => continue,
+            };
+            if k.len() > u16::MAX as usize {
+                return Err(FormatError::Invalid(format!(
+                    "key length {} exceeds the {} byte format limit",
+                    k.len(),
+                    u16::MAX
+                )));
+            }
         }
         if self.config.durability == DurabilityMode::GroupCommit {
             let seq = self.writer()?.write(ops)?;
@@ -1718,12 +1746,19 @@ impl Db {
             self.stats
                 .lock_wait_ns
                 .fetch_add(t_lock.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            // L-27 — the guard HOLD, recorded at the same three exits as the
+            // memtable lookup (the guard's scope IS the probes + arc clone —
+            // SE2-M10; the stall pin asserts the hold stays in that class).
+            let t_hold = Instant::now();
             let t0 = Instant::now();
             if let Some(e) = state.active.get(key) {
                 let value = e.value.clone();
                 self.stats
                     .memtable_lookup_ns
                     .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                self.stats
+                    .lock_hold_ns
+                    .fetch_add(t_hold.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
                 return Ok(value);
             }
@@ -1733,6 +1768,9 @@ impl Db {
                     self.stats
                         .memtable_lookup_ns
                         .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    self.stats
+                        .lock_hold_ns
+                        .fetch_add(t_hold.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
                     return Ok(value);
                 }
@@ -1740,6 +1778,9 @@ impl Db {
             self.stats
                 .memtable_lookup_ns
                 .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            self.stats
+                .lock_hold_ns
+                .fetch_add(t_hold.elapsed().as_nanos() as u64, Ordering::Relaxed);
             Arc::clone(&state.segments)
         };
         // SE2-M22 — one key hash per get, shared by every segment's bloom
@@ -2173,7 +2214,7 @@ impl Db {
             // the phase-A capture rides the published segments, so the
             // tail is saved, the file reset, and the tail re-appended —
             // replay sees exactly the frames no segment covers. ponytail:
-            // the tail copy is O(writes interleaved into B's I/O window);
+            // the tail copy is the writes interleaved into B's I/O window;
             // a WAL base-offset in the manifest replaces it if that
             // volume ever dominates.
             let now = wal
@@ -2312,7 +2353,7 @@ impl Db {
 }
 
 /// P5-M39 — the merge staging namespace: a child of the data dir (same
-/// volume, so the C-phase renames are O(1) directory moves). Per-process
+/// volume, so the C-phase renames are directory moves). Per-process
 /// nonce so concurrent merges never share a namespace.
 static COMPACT_STAGING_NONCE: AtomicU64 = AtomicU64::new(0);
 
@@ -2452,7 +2493,7 @@ fn compact_impl(
     }
     // Fresh: allocate real ids under the lock and rename the staged files
     // into the real namespace (same volume — the staging dir is a child
-    // of the data dir, so the renames are O(1) directory moves; the open
+    // of the data dir, so the renames are directory moves; the open
     // readers stay valid — their handles were opened with share-delete).
     let mut remap: HashMap<u64, u64> = HashMap::new();
     let mut chunks = chunks;
@@ -3372,7 +3413,7 @@ fn lock_directory(dir: &Path) -> Result<File, FormatError> {
         .map_err(|e| FormatError::Io(format!("open LOCK {}: {e}", path.display())))?;
     // CI observed a Locked on a reopen microseconds after the previous
     // holder's drop (Linux, one run in three) — a hold-over the code
-    // cannot produce. Retry a bounded window on WouldBlock; a live second
+    // cannot produce. Retry a short window on WouldBlock; a live second
     // writer still fails closed (§19), and the OS reason rides the error
     // so a recurrence names its real cause.
     let mut attempt = 0;

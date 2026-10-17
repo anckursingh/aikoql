@@ -1,0 +1,249 @@
+[ERROR] Tests run: 13, Failures: 0, Errors: 13, Skipped: 0, Time elapsed: 5.508 s <<< FAILURE! -- in io.aikoql.client.FaultMatrixTest
+[ERROR] io.aikoql.client.FaultMatrixTest.closeAfter -- Time elapsed: 0.554 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.closeAfter(FaultMatrixTest.java:297)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.duplicateResponse -- Time elapsed: 0.399 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.duplicateResponse(FaultMatrixTest.java:249)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.delayResponse -- Time elapsed: 0.389 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.delayResponse(FaultMatrixTest.java:238)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.halfCloseAfter -- Time elapsed: 0.395 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.halfCloseAfter(FaultMatrixTest.java:305)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.injectNotification -- Time elapsed: 0.483 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.injectNotification(FaultMatrixTest.java:281)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.injectStaleResponse -- Time elapsed: 0.385 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.injectStaleResponse(FaultMatrixTest.java:289)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.dropResponse -- Time elapsed: 0.392 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.dropResponse(FaultMatrixTest.java:230)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.dropRequest -- Time elapsed: 0.496 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.dropRequest(FaultMatrixTest.java:222)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.corruptResponse -- Time elapsed: 0.391 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.corruptResponse(FaultMatrixTest.java:273)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.truncateResponse -- Time elapsed: 0.383 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.truncateResponse(FaultMatrixTest.java:265)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.oversizedResponse -- Time elapsed: 0.394 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.oversizedResponse(FaultMatrixTest.java:320)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.reorderResponse -- Time elapsed: 0.388 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.reorderResponse(FaultMatrixTest.java:257)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] io.aikoql.client.FaultMatrixTest.slowServer -- Time elapsed: 0.396 s <<< ERROR!
+java.io.IOException: Cannot run program "": CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1170)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1089)
+	at io.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at io.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at io.aikoql.client.FaultMatrixTest.slowServer(FaultMatrixTest.java:313)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+Caused by: java.io.IOException: CreateProcess error=87, The parameter is incorrect
+	at java.base/java.lang.ProcessImpl.create(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:506)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:159)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1126)
+	... 7 more
+
+[ERROR] Errors: 
+[ERROR]   FaultMatrixTest.closeAfter:297->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.corruptResponse:273->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.delayResponse:238->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.dropRequest:222->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.dropResponse:230->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.duplicateResponse:249->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.halfCloseAfter:305->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.injectNotification:281->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.injectStaleResponse:289->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.oversizedResponse:320->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.reorderResponse:257->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.slowServer:313->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR]   FaultMatrixTest.truncateResponse:265->faultEnv:158->spawn:110 » IO Cannot run program "": CreateProcess error=87, The parameter is incorrect
+[ERROR] Tests run: 13, Failures: 0, Errors: 13, Skipped: 0
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.2:test (default-test) on project aikoql-client: 
+[ERROR] 
+[ERROR] See E:\dreams\Mnemosyne\crates\sdk\java\target\surefire-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+EXIT=1

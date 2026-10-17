@@ -1,0 +1,89 @@
+{
+  "api_major": 1,
+  "codes": [
+    {
+      "code": "AUTHENTICATION_FAILED",
+      "message": "Credentials were rejected by the server.",
+      "retryable": false,
+      "suggestion": "Verify the token and its roles, then retry with corrected credentials."
+    },
+    {
+      "code": "AUTHORIZATION_FAILED",
+      "message": "The authenticated principal lacks permission for this action.",
+      "retryable": false,
+      "suggestion": "Grant the required role or use a principal that holds it."
+    },
+    {
+      "code": "NOT_FOUND",
+      "message": "The requested object does not exist.",
+      "retryable": false,
+      "suggestion": "Check the identifier; remember the object first if this is a write-before-read."
+    },
+    {
+      "code": "INVALID_ARGUMENT",
+      "message": "An argument is malformed or out of range.",
+      "retryable": false,
+      "suggestion": "Fix the argument; the server will reject it unchanged."
+    },
+    {
+      "code": "INVALID_QUERY",
+      "message": "The query failed to compile.",
+      "retryable": false,
+      "suggestion": "Use compile/explain to see the compiler error."
+    },
+    {
+      "code": "CONFLICT",
+      "message": "The operation conflicts with current state (constraint or version).",
+      "retryable": false,
+      "suggestion": "Re-read the object and re-apply against the current version."
+    },
+    {
+      "code": "VERSION_MISMATCH",
+      "message": "Server version is older than the SDK minimum.",
+      "retryable": false,
+      "suggestion": "Upgrade the server, or pin an older SDK."
+    },
+    {
+      "code": "TIMEOUT",
+      "message": "The operation exceeded its deadline.",
+      "retryable": true,
+      "suggestion": "Retry with backoff; consider a longer deadline."
+    },
+    {
+      "code": "CANCELLED",
+      "message": "The operation was cancelled by the caller.",
+      "retryable": false,
+      "suggestion": "Re-issue only if the cancelled work is known not to have committed."
+    },
+    {
+      "code": "RESOURCE_EXHAUSTED",
+      "message": "A server limit was reached (pool, memory, concurrency).",
+      "retryable": true,
+      "suggestion": "Retry with backoff; reduce concurrency or batch size."
+    },
+    {
+      "code": "UNAVAILABLE",
+      "message": "The server is unreachable or not ready.",
+      "retryable": true,
+      "suggestion": "Retry with backoff; verify the transport and server health."
+    },
+    {
+      "code": "INTERNAL",
+      "message": "The server hit an internal error.",
+      "retryable": false,
+      "suggestion": "Report with the request_id; the outcome is unknown."
+    },
+    {
+      "code": "PROTOCOL_ERROR",
+      "message": "The peer violated the protocol (framing, correlation, type).",
+      "retryable": false,
+      "suggestion": "Check SDK/server version pairing; never retried blindly."
+    },
+    {
+      "code": "DATA_CORRUPTION",
+      "message": "Stored data failed integrity checks.",
+      "retryable": false,
+      "suggestion": "Restore from backup; surface the affected object."
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "arch-hygiene-storage-v1-estate",
+  "pre_fix_commit": "6c999ea",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-09-24T17:45:22Z",
+  "captured_head": "6c999ea49273069e52da44be8bebee8b3c59deed",
+  "exit_code": 1
+}

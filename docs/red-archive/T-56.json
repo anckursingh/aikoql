@@ -1,0 +1,8 @@
+{
+  "id": "T-56",
+  "pre_fix_commit": "9659942",
+  "command": "bash -c cargo test -p aikoql-mcp --test cli_contract cl05_help_documents_rate_cap",
+  "captured_at": "2026-10-09T18:57:40Z",
+  "captured_head": "9659942be6e2e0091f1895a7949cf6201a505c5b",
+  "exit_code": 101
+}

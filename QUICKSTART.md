@@ -22,8 +22,8 @@ aikoql-mcp shell
 
 From there, serve it to agents:
 
-- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql-mcp@0.1.19 serve ./kb`
-- **TCP + Studio UI:** `aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091` → open http://127.0.0.1:9091/studio (login `admin` / `admin`)
+- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql-mcp@0.2.2 serve ./kb`
+- **TCP + Studio UI:** `aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091` → open http://127.0.0.1:9091/studio (no default credentials — set `AIKOQL_ADMIN_PASSWORD` on first start to bootstrap the admin login)
 
 ## Usage Modes
 
@@ -34,8 +34,9 @@ The MCP server runs over stdin/stdout. Ideal for desktop AI tools (Claude Code, 
 aikoql-mcp serve [database_path]
 ```
 
-A fresh path creates an `aikoql-v2` directory (the default since SE2-M41);
-an existing `.redb` file or v1 WAL auto-detects as its own backend.
+A fresh path creates an `aikoql-v2` directory — the only engine since
+SE2-M41. Legacy `.redb` files and v1 WALs are no longer readable: opening
+one fails closed with an explicit error.
 
 ### TCP Mode
 Accepts multiple MCP client connections over TCP. Requires a token — `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]]` (repeatable; also `AIKOQL_TCP_TOKEN` env, `AIKOQL_TCP_TOKEN_FILE`, or `tcp_tokens` in `aikoql.toml`). Refuses to start without one — and a bare `TOKEN` (no roles) exits 2, roles are mandatory.
@@ -58,12 +59,8 @@ For local use where you only need the Studio web interface and REST API (no MCP 
 aikoql-mcp serve --metrics-addr 127.0.0.1:9191
 ```
 
-> **Note:** In metrics-only mode, the process must have an open stdin to stay alive.
-> Run with: `sleep 99999 | aikoql-mcp serve --metrics-addr 127.0.0.1:9191`
-
 (A fresh `serve` with no path creates the `./aikoql-v2` database directory —
-the canonical default. Name an existing redb file explicitly to keep using
-it.)
+the canonical default.)
 
 Endpoints available on the metrics port:
 | Endpoint | Description |
@@ -84,13 +81,16 @@ aikoql includes a built-in web-based Studio for visual knowledge management. No 
 ```bash
 # Start with metrics-addr (any port):
 # Windows:
-sleep 99999 | aikoql-mcp serve .\aikoql.redb --metrics-addr 127.0.0.1:9191
+aikoql-mcp serve .\kb --metrics-addr 127.0.0.1:9191
 
 # Linux:
-sleep 99999 | ./aikoql-mcp serve ./aikoql.redb --metrics-addr 127.0.0.1:9191
+./aikoql-mcp serve ./kb --metrics-addr 127.0.0.1:9191
 ```
 
-Open **http://127.0.0.1:9191/studio** in your browser. Login with `admin` / `admin`.
+Open **http://127.0.0.1:9191/studio** in your browser. There are no default
+credentials: set `AIKOQL_ADMIN_PASSWORD` on first start to bootstrap an
+admin login, or configure users under `[auth]` in `aikoql.toml` (argon2id
+hashes — `aikoql-mcp hash-password` prints one).
 
 ### Studio Panels
 
@@ -106,6 +106,10 @@ Open **http://127.0.0.1:9191/studio** in your browser. Login with `admin` / `adm
 | **⏳ Timeline** | Temporal view of knowledge mutations |
 | **🔗 Provenance** | Trace evidence chains and data lineage |
 | **📄 Documents** | **Document ingestion and knowledge compilation** |
+| **🐛 Program Debugger** | Inspect deployed programs |
+| **⏱ Benchmark Center** | Versioned, replayable performance benchmarks |
+| **📊 Query Profiler** | Profile queries and EXPLAIN a KOID |
+| **🔌 Provider Manager** | Manage providers/connectors |
 
 ### Document Explorer Workflow
 
@@ -128,8 +132,7 @@ The **📄 Documents** panel implements the full D1-D9 pipeline:
 
 The compilation results display all phases: stats, IR entities, ontology proposals, resolution matches, commit plan actions, evidence trail, and embedded chunks.
 
-Try it with the sample invoice PDF at:
-`C:/Users/ancku/CascadeProjects/ai-crm-platform/services/billing-processor/output/invoice_9655.pdf`
+Try it with any PDF on your machine.
 
 ## Key MCP Tools (subset — run `tools/list` for the full registry)
 
@@ -143,7 +146,7 @@ Try it with the sample invoice PDF at:
 | **Audit** | `trace`, `explain`, `prove`, `verify`, `audit_report` |
 | **Backup** | `backup`, `verify_backup`, `restore`, `list_backups` |
 | **Compliance** | `compliance_report` (encryption audit) |
-| **Ops** | `health`, `metrics`, `ping`, `eval_recall`, `eval_staleness`, `eval_contradictions` |
+| **Ops** | `health`, `metrics`, `eval_recall`, `eval_staleness`, `eval_contradictions` |
 
 ### Document Pipeline Tools
 
@@ -164,8 +167,8 @@ Environment variables:
 - `AIKOQL_DB`, `AIKOQL_LISTEN`, `AIKOQL_METRICS_ADDR` — override TOML settings.
 - `AIKOQL_PASSPHRASE` — KMS passphrase for encryption (if enabled).
 
-MCP calls are rate-limited by default (120 calls/min, per PRR-4). A
-busy agent loop hits that fast — raise it in config:
+MCP calls are rate-limited by default (300 calls/min). A busy agent loop
+can hit that — raise it in config:
 
 ```toml
 [rate_limit]
@@ -235,8 +238,9 @@ cargo test -p aikoql-ingestion --test multi_source_ontology
 ## Connecting from Code
 
 MCP is the blessed integration surface (P3-M9): the server ships as a single
-binary or npm package, and every language uses its standard MCP client —
-no hand-rolled SDKs to drift.
+binary or npm package, plus first-party SDKs — Python, TypeScript
+(`@aikoql/client`), Go, and Java. Any other language uses its standard MCP
+client.
 
 ### Python (first-party SDK)
 ```python
@@ -261,20 +265,20 @@ await client.connect(new StdioClientTransport({ command: 'aikoql-mcp', args: ['s
 const result = await client.callTool({ name: 'remember', arguments: { type_name: 'note', properties: { body: 'Hello' } } });
 ```
 
-### Go / Java / any language
+### Go / Java
 
-Same pattern: run `aikoql-mcp serve` (stdio or TCP with `--tcp-token`) and
-use the standard MCP client for that ecosystem. See `docs/first-class-db-roadmap.md`
-for when first-party drivers return.
+First-party zero-dependency SDKs: the Go module and the Java client
+(`com.aikoql.client`) speak the same MCP contract as the TypeScript client —
+see `crates/sdk/` for each and its conformance suite. Any other language:
+run `aikoql-mcp serve` (stdio or TCP with `--tcp-token`) and use the
+standard MCP client for that ecosystem.
 
 ## Data Storage
 
-A fresh path creates an **aikoql-v2** directory — the native engine (the
-default since SE2-M41): WAL + tiered compacted segments, and the only
-backend with the full feature set. The engine auto-detects what is already
-on disk: an existing `.redb` file opens as [redb](https://github.com/cberner/redb), a v1 WAL opens
-as v1 — each format reads as itself, never reinterpreted. Either way it is
-embedded ACID storage — no external database server required.
+A fresh path creates an **aikoql-v2** directory — the only engine since
+SE2-M41: WAL + tiered compacted segments. Legacy `.redb` files and v1 WALs
+are no longer readable — opening one fails closed with an explicit error.
+Embedded ACID storage — no external database server required.
 
 - Backups: `backup` tool creates verified snapshots. `restore` recovers with PITR metadata.
 - Encryption: All data encrypted at rest when enabled (AES-256-GCM, ChaCha20-Poly1305 available).
@@ -285,15 +289,14 @@ embedded ACID storage — no external database server required.
 Release images are multi-arch (linux/amd64 + linux/arm64) and published on every release tag alongside the binaries:
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.1.19   # pin the immutable release tag
+docker pull ghcr.io/anckursingh/aikoql:0.2.2   # pin the immutable release tag
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=TOKEN::admin \
-  -p 9090:9090 -p 9091:9091 \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.1.19
+  ghcr.io/anckursingh/aikoql:0.2.2
 ```
 
-Container contract: config at `/etc/aikoql/aikoql.toml`; all state under the `/data` volume — `/data/aikoql.redb`, `memory/`, and the local embedding model store (`/data/models`, installable with `docker exec aikoql aikoql model install`). The image is stateless: upgrades are pull + recreate, the knowledge base survives in the volume. TCP auth is fail-closed — the container refuses to listen without a token (and a token without roles exits 2). Health check: `curl http://127.0.0.1:9091/health`. Compose variant: `AIKOQL_VERSION=0.1.19 AIKOQL_TCP_TOKEN=TOKEN::admin docker compose -f docker-compose.release.yml up -d`.
+Container contract: config at `/etc/aikoql/aikoql.toml`; state under the `/data` volume — the `aikoql-v2` database directory and the local embedding model store (`/data/models`, install with `docker exec aikoql aikoql model install --model-dir /data/models`); the memory directory defaults to `./memory` (that is `/memory` in the image). The image is stateless: upgrades are pull + recreate, the knowledge base survives in the volume. TCP auth is fail-closed — the container refuses to listen without a token (and a token without roles exits 2). The server binds loopback-only inside the container, so published ports don't reach it — probe from inside: `docker exec aikoql curl -fsS http://127.0.0.1:9091/health`. Compose variant: `AIKOQL_VERSION=0.2.2 AIKOQL_TCP_TOKEN=TOKEN::admin docker compose -f docker-compose.release.yml up -d`.
 
 ## Platform Support
 

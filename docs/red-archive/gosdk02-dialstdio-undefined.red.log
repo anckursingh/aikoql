@@ -1,0 +1,8 @@
+# github.com/ancku/aikoql-sdk [github.com/ancku/aikoql-sdk.test]
+.\client_test.go:333:12: undefined: DialStdio
+.\client_test.go:355:12: undefined: DialStdio
+.\integration_test.go:177:12: undefined: DialStdio
+FAIL	github.com/ancku/aikoql-sdk [build failed]
+?   	github.com/ancku/aikoql-sdk/examples/web-service	[no test files]
+FAIL
+EXIT=1

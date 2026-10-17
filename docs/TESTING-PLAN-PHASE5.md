@@ -1,5 +1,7 @@
 # AIKOQL Phase 5 — Testing Plan (Database 1.0)
 
+> HISTORICAL (S-04, 2026-09-25): pre-launch plan record — kept for reference, not updated.
+
 Mirror discipline of `docs/TESTING-PLAN-PHASE3.md`: one row per milestone; status flips to ✅ only with real evidence (test names + green counts + artifacts). Requirement numbering: phase 3 ended at §73 — phase 5 sections get numbered §74+ when the architect spec is written; the roadmap's ND-xx ids are the working ids until then. Companion: `docs/IMPLEMENTATION-PLAN-PHASE5.md`.
 
 ## Rules carried from phase 3 (binding) + phase-5 amendments

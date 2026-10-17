@@ -1,0 +1,34 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.12s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+[2m2026-10-09T19:20:11.190418Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-09T19:20:11.190548Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-t57-replay-68104 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-09T19:20:11.191187Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-09T19:20:11.216345Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+test t57_ordered_replay_through_batch_converges ... FAILED
+
+failures:
+
+---- t57_ordered_replay_through_batch_converges stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 't57_ordered_replay_through_batch_converges' (65596) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:1848:9:
+batch A op 2 must apply through the bulk path: {"results":[{"op":"remember","ok":true,"result":{"koid":"01a1221bd2cc0000000000000000a9c9","version":1,"commit_ts":1791573611212}},{"op":"remember","ok":true,"result":{"koid":"01a1221bd2ce0000000000000000a9c9","version":1,"commit_ts":1791573611214}},{"op":"supersede","ok":false,"error":"unknown batch op: supersede"}],"count":3}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    t57_ordered_replay_through_batch_converges
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.08s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

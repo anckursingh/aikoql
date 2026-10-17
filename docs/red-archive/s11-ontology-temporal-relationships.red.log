@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.83s
+     Running unittests src\lib.rs (target\debug\deps\aikoql_kernel-403e5775366ed1ac.exe)
+
+running 1 test
+test knowledge::ontology::tests::s11_discover_infers_temporal_relationships ... FAILED
+
+failures:
+
+---- knowledge::ontology::tests::s11_discover_infers_temporal_relationships stdout ----
+
+thread 'knowledge::ontology::tests::s11_discover_infers_temporal_relationships' (19256) panicked at crates\kernel\src\knowledge\ontology.rs:1900:14:
+discovery must infer a retracts relationship
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    knowledge::ontology::tests::s11_discover_infers_temporal_relationships
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 253 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-kernel --lib`
+EXIT=101

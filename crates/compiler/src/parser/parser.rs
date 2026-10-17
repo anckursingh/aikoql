@@ -49,8 +49,10 @@ fn token_name(t: &Token) -> String {
         Token::Commit => "COMMIT".into(),
         Token::Explain => "EXPLAIN".into(),
         Token::AsOf => "AS_OF".into(),
+        Token::Journal => "JOURNAL".into(),
         Token::Between => "BETWEEN".into(),
         Token::Historical => "HISTORICAL".into(),
+        Token::Changeset => "CHANGESET".into(),
         Token::Epistemic => "EPISTEMIC".into(),
         Token::Source => "SOURCE".into(),
         Token::Limit => "LIMIT".into(),
@@ -180,7 +182,14 @@ impl Parser {
         let mut join = None;
         loop {
             match &self.current {
-                Token::Where | Token::And | Token::Or => {
+                Token::Where => {
+                    self.advance();
+                    // T-71 (POC-4): WHERE introduces one boolean expression
+                    // with SQL precedence (AND binds tighter than OR) — a
+                    // disjunction must not flatten into ANDed predicates.
+                    preds.push(self.parse_or_expr()?);
+                }
+                Token::And | Token::Or => {
                     self.advance();
                     preds.push(self.parse_predicate()?);
                 }
@@ -206,7 +215,8 @@ impl Parser {
                     }
                     trav = Some(TraverseClause { relation, depth });
                 }
-                Token::AsOf | Token::Between | Token::Historical => {
+                Token::AsOf | Token::Between | Token::Historical
+                | Token::Changeset => {
                     if temporal.is_some() {
                         return Err(unexpected(&self.current, self.line, self.col)
                             .with_hint("duplicate temporal clause"));
@@ -302,7 +312,7 @@ impl Parser {
                 }
                 _ => {
                     return Err(unexpected(&self.current, self.line, self.col).with_hint(
-                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, SOURCE, LIMIT, ORDER, GROUP, JOIN, or RETURN",
+                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, CHANGESET, EPISTEMIC, SOURCE, LIMIT, ORDER, GROUP, JOIN, or RETURN",
                     ))
                 }
             }
@@ -310,11 +320,19 @@ impl Parser {
     }
 
     /// v0.3 K2: `AS_OF <time>` | `BETWEEN <time> AND <time>` | `HISTORICAL`.
+    /// T-58 (P3-008 LOW): `AS_OF JOURNAL <n>` — the journal-seq clock domain.
+    /// G-001 (POC-3): `CHANGESET BETWEEN <a> AND <b>` — generations minted
+    /// in the half-open (a, b] commit window.
     fn parse_temporal_clause(&mut self) -> Result<TemporalClause, ParseError> {
         match self.current {
             Token::AsOf => {
                 self.advance();
-                Ok(TemporalClause::AsOf(self.parse_time_millis()?))
+                if let Token::Journal = &self.current {
+                    self.advance();
+                    Ok(TemporalClause::AsOfJournal(self.parse_time_millis()?))
+                } else {
+                    Ok(TemporalClause::AsOf(self.parse_time_millis()?))
+                }
             }
             Token::Between => {
                 self.advance();
@@ -329,6 +347,17 @@ impl Parser {
             Token::Historical => {
                 self.advance();
                 Ok(TemporalClause::Historical)
+            }
+            Token::Changeset => {
+                self.advance();
+                self.expect(Token::Between)?;
+                let from = self.parse_time_millis()?;
+                self.expect(Token::And)?;
+                let to = self.parse_time_millis()?;
+                if from >= to {
+                    return Err(diagnostics::invalid_temporal_range(self.line, self.col));
+                }
+                Ok(TemporalClause::Changeset { from, to })
             }
             _ => unreachable!("parse_temporal_clause called on non-temporal token"),
         }
@@ -572,6 +601,35 @@ impl Parser {
             }
         }
         Ok((score, using))
+    }
+
+    /// T-71 (POC-4): `a OR b` — lowest precedence, so it gathers the
+    /// higher-precedence AND chains as its operands.
+    fn parse_or_expr(&mut self) -> Result<Predicate, ParseError> {
+        let mut left = self.parse_and_expr()?;
+        while let Token::Or = self.current {
+            self.advance();
+            let right = self.parse_and_expr()?;
+            left = Predicate::Or {
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    /// `a AND b` — binds tighter than OR; each operand is one comparison.
+    fn parse_and_expr(&mut self) -> Result<Predicate, ParseError> {
+        let mut left = self.parse_predicate()?;
+        while let Token::And = self.current {
+            self.advance();
+            let right = self.parse_predicate()?;
+            left = Predicate::And {
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
     }
 
     fn parse_predicate(&mut self) -> Result<Predicate, ParseError> {
@@ -1064,6 +1122,28 @@ mod tests {
         assert_eq!(m.temporal, Some(TemporalClause::Historical));
     }
 
+    // G-001 (POC-3): native changeset window — generations minted in the
+    // half-open commit window (from, to].
+    #[test]
+    fn parse_match_changeset_between() {
+        let m = parse_match("MATCH device CHANGESET BETWEEN 5000 AND 13000 RETURN *");
+        assert_eq!(
+            m.temporal,
+            Some(TemporalClause::Changeset {
+                from: 5_000,
+                to: 13_000
+            })
+        );
+    }
+
+    #[test]
+    fn parse_match_changeset_rejects_non_increasing_range() {
+        let e = Parser::new("MATCH device CHANGESET BETWEEN 2000 AND 1000 RETURN *")
+            .parse_statement()
+            .unwrap_err();
+        assert_eq!(e.code, diagnostics::Code::InvalidTemporalRange);
+    }
+
     #[test]
     fn parse_match_epistemic_filter() {
         let m = parse_match("MATCH Fact EPISTEMIC verified, asserted RETURN *");
@@ -1189,6 +1269,48 @@ mod tests {
         assert!(Parser::new("MATCH X AS_OF 12.5 RETURN *")
             .parse_statement()
             .is_err());
+    }
+
+    // T-61 (POC-3 MINOR/doc): the temporal literal surface — epoch millis
+    // integers and strict ISO "YYYY-MM-DD" / "YYYY-MM-DDTHH:MM:SS" (UTC) are
+    // the only accepted spellings (MRFC-0010 §5.2). The POC hit the rejected
+    // shape (fractional seconds + offset) and found it undocumented; the
+    // behavior itself is pinned here so the doc can never drift past it.
+    #[test]
+    fn parse_time_millis_t61_literal_surface() {
+        assert_eq!(
+            parse_match("MATCH X AS_OF 1791582896539 RETURN *").temporal,
+            Some(TemporalClause::AsOf(1_791_582_896_539)),
+        );
+        assert_eq!(
+            parse_match("MATCH X AS_OF \"2026-10-09\" RETURN *").temporal,
+            Some(TemporalClause::AsOf(iso_to_millis("2026-10-09").unwrap())),
+        );
+        assert_eq!(
+            parse_match("MATCH X AS_OF \"2026-10-09T05:15:32\" RETURN *").temporal,
+            Some(TemporalClause::AsOf(
+                iso_to_millis("2026-10-09T05:15:32").unwrap()
+            )),
+        );
+        assert_eq!(
+            parse_match("MATCH X BETWEEN 1791582896000 AND 1791582896539 RETURN *").temporal,
+            Some(TemporalClause::Between {
+                from: 1_791_582_896_000,
+                to: 1_791_582_896_539,
+            }),
+        );
+        // Rejected: the POC's exact shape (fractional + offset), offset alone.
+        for bad in [
+            "MATCH X AS_OF \"2026-10-09T05:15:32.488000+00:00\" RETURN *",
+            "MATCH X AS_OF \"2026-10-09T05:15:32+00:00\" RETURN *",
+            "MATCH X BETWEEN \"2026-10-09T05:15:32.488000+00:00\" AND 1791582896539 RETURN *",
+        ] {
+            assert!(
+                Parser::new(bad).parse_statement().is_err(),
+                "expected rejection: {}",
+                bad
+            );
+        }
     }
 
     #[test]

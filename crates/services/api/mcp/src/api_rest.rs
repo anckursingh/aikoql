@@ -16,6 +16,26 @@ pub fn route_v1(
 ) -> (String, String, String) {
     let clean_path = path.split('?').next().unwrap_or(path);
 
+    // S-4 (POC-4): GET routes carry tool args in the query string (?koid=…).
+    // Fold them into a JSON body so every tool reads one args shape — the
+    // studio prove call is the first caller. The auth `token` pair stays out
+    // of tool args (it is consumed by extract_token).
+    let folded_body = if method == "GET" {
+        let mut map = serde_json::Map::new();
+        if let Some(qs) = path.split_once('?').map(|(_, q)| q) {
+            for pair in qs.split('&') {
+                if let Some((key, val)) = pair.split_once('=') {
+                    if key != "token" {
+                        map.insert(key.to_string(), json!(crate::http::url_decode(val)));
+                    }
+                }
+            }
+        }
+        serde_json::to_string(&json!(map)).unwrap_or_default()
+    } else {
+        body.to_string()
+    };
+
     // PRR-4: [rate_limit] config applies to the REST surface — 60s window,
     // keyed per token (anonymous callers share one bucket).
     if let Err(max) = rate_limit
@@ -32,7 +52,7 @@ pub fn route_v1(
     let result: Result<J, String> = route_inner(
         method,
         clean_path,
-        body,
+        &folded_body,
         kernel,
         db_path,
         sessions,
@@ -164,7 +184,14 @@ fn route_inner(
 
         ("POST", "/api/v1/remember") => {
             need_auth()?;
-            tool_remember(k, &args())
+            let args = args();
+            let r = tool_remember(k, &args)?;
+            // S-8 (POC-4): the studio's manual Save Ontology flow — a
+            // remembered Ontology KO republishes the compile-time registry.
+            if args.get("type_name").and_then(|t| t.as_str()) == Some("Ontology") {
+                crate::http::install_ontology(crate::http::load_ontology_registry(k));
+            }
+            Ok(r)
         }
         ("POST", "/api/v1/forget") => {
             need_auth()?;
@@ -336,11 +363,11 @@ fn route_inner(
         }
         ("POST", "/api/v1/restore") => {
             need_auth()?;
-            tool_restore(k, &args(), admin)
+            tool_restore(&args(), admin, db_path)
         }
         ("POST", "/api/v1/verify-backup") => {
             need_auth()?;
-            tool_verify_backup(&args(), admin)
+            tool_verify_backup(&args(), db_path)
         }
         ("POST", "/api/v1/eval/recall") => {
             need_auth()?;
@@ -522,6 +549,257 @@ fn openapi_spec() -> Result<J, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn s04_get_prove_reads_koid_from_query_string() {
+        // POC-4 S-4: the studio calls GET /api/v1/prove?koid=…; the REST
+        // layer must fold query args into tool args (GET carries no body) or
+        // the call dies with "missing argument: koid".
+        let db = std::env::temp_dir().join(format!("mnemo-s04-prove-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&db);
+        let k = crate::Kernel::open(
+            std::sync::Arc::new(
+                aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                    .expect("open store"),
+            ),
+            std::sync::Arc::new(crate::SystemClock),
+            0,
+        )
+        .expect("open kernel");
+        let r = k
+            .remember(crate::RememberRequest::create(
+                crate::Subject::with_roles("admin", &["admin"]),
+                crate::Metadata {
+                    type_name: "Fact".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+            ))
+            .expect("remember");
+        let koid = r.koid.to_hex();
+
+        let sessions = Mutex::new(HashMap::new());
+        sessions.lock().unwrap().insert(
+            "tok".into(),
+            crate::HttpSession {
+                username: "admin".into(),
+                roles: vec!["admin".into()],
+                created: std::time::Instant::now(),
+                ttl_secs: 86_400,
+            },
+        );
+        let rate = Mutex::new(crate::rate_limiter::RateLimiter::new(false, 1));
+
+        let (status, _ct, body) = route_v1(
+            "GET",
+            &format!("/api/v1/prove?koid={koid}"),
+            "",
+            &k,
+            &db.to_string_lossy(),
+            &sessions,
+            Some("tok".into()),
+            &rate,
+            None,
+        );
+        drop(k);
+        let _ = std::fs::remove_dir_all(&db);
+        let _ = std::fs::remove_file(format!("{}.audit.log", db.to_string_lossy()));
+
+        assert_eq!(
+            status, "200 OK",
+            "GET prove with ?koid= must verify the chain, got: {body}"
+        );
+        let j: serde_json::Value = serde_json::from_str(&body).expect("json body");
+        assert_eq!(j["data"]["chain_valid"], true, "chain must verify: {body}");
+    }
+
+    #[test]
+    fn s04_studio_prove_call_carries_the_koid() {
+        // POC-4 S-4: the studio's Prove button must send the inspected KOID
+        // and guard the empty-input case instead of a blind GET /api/v1/prove.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("/api/v1/prove?koid=' + encodeURIComponent"),
+            "studio prove must carry the koid in the query string"
+        );
+        assert!(
+            html.contains("Enter a KOID"),
+            "studio prove must guard the empty-input case"
+        );
+    }
+
+    #[test]
+    fn s03_studio_panels_render_events_with_kind_actor_note_and_formatted_times() {
+        // POC-4 S-3/S-6: provenance + timeline must render events[] with
+        // kind/actor/note/audit_hash and human-readable times (ISO + relative),
+        // plus the event-time column when the version carries valid_from.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("function fmtTime("),
+            "studio needs a time formatter"
+        );
+        assert!(
+            html.contains("data.events || data.versions"),
+            "panels must prefer events[] over versions[]"
+        );
+        assert!(
+            html.contains("event time: '"),
+            "timeline must label the event-time column"
+        );
+        assert!(
+            html.contains(";color:var(--muted);\">Actor: '"),
+            "provenance must show the actor"
+        );
+        assert!(
+            html.contains(";color:var(--muted);\">Note: '"),
+            "provenance must show the note"
+        );
+        assert!(
+            html.contains("e.audit_hash"),
+            "provenance must show the audit hash"
+        );
+        assert!(
+            html.contains("'s ago'"),
+            "formatter must render relative time"
+        );
+    }
+
+    #[test]
+    fn s04_studio_prove_renders_the_response_fields() {
+        // POC-4 S-4 follow-through: the prove panel must render the
+        // response's actual fields — the chain_valid verdict and the
+        // hex-joined head hash — not fields the response never carries.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("chain_valid"),
+            "prove panel must show the chain_valid verdict"
+        );
+        assert!(
+            html.contains("padStart(2,'0')"),
+            "prove panel must hex-join the head-hash array"
+        );
+        assert!(
+            html.contains("(data.events||0)"),
+            "prove panel must render the events count (events is a number, not an array)"
+        );
+    }
+
+    #[test]
+    fn s01_graph_nodes_style_from_epistemic_status_not_lifecycle() {
+        // POC-4 S-1: retracted rows keep lifecycle.state "draft" — the graph
+        // must style nodes from extensions.epistemic_status (superseded →
+        // dashed border + muted palette) and surface the epistemic_history
+        // transition in the tooltip.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("n.extensions&&n.extensions.epistemic_status"),
+            "node styling must read extensions.epistemic_status"
+        );
+        assert!(
+            html.contains("borderDashes:[4,3]"),
+            "superseded nodes must get a dashed border"
+        );
+        assert!(
+            html.contains("epistemic_history"),
+            "the tooltip must surface the epistemic transition"
+        );
+    }
+
+    #[test]
+    fn s02_graph_derives_virtual_retraction_edges() {
+        // POC-4 S-2: retraction creates no SUPERSEDES edge (B3-3) — the
+        // studio derives virtual "retracts" edges: same tenant + case_id +
+        // kind, with the successor's valid_from equal to the predecessor's
+        // valid_to_asserted.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("valid_to_asserted"),
+            "the virtual-edge heuristic must key on valid_to_asserted"
+        );
+        assert!(
+            html.contains("label:'retracts'"),
+            "virtual edges must be labeled retracts"
+        );
+        assert!(
+            html.contains("params.push('detail=1')"),
+            "the graph load must request detail payloads (extensions)"
+        );
+    }
+
+    #[test]
+    fn s08_editor_1030_error_surface_points_at_auto_discover() {
+        // POC-4 S-8: when the query editor surfaces an AIKOQL1030, it must
+        // point at the discovery flow instead of leaving a dead end.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("includes('AIKOQL1030')"),
+            "the editor must detect the unknown-type error"
+        );
+        assert!(
+            html.contains("run Ontology → Auto-Discover"),
+            "the editor must point at the discovery flow"
+        );
+    }
+
+    #[test]
+    fn s05_editor_labels_the_timebases() {
+        // POC-4 S-5: AS_OF (wall-clock MVCC over commit_ts) and BETWEEN
+        // (asserted event-time over valid_from/valid_to_asserted) are
+        // different timebases that the editor presented as one "time travel"
+        // — against 2023-event/2026-ingest corpora, event-anchored AS_OF
+        // always looked broken. The editor label must name each timebase.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("AS_OF = wall-clock"),
+            "the editor must label AS_OF's timebase"
+        );
+        assert!(
+            html.contains("BETWEEN = event-time"),
+            "the editor must label BETWEEN's timebase"
+        );
+    }
+
+    #[test]
+    fn s10_api_helper_401_shows_login_overlay() {
+        // POC-4 S-10: after a server restart invalidates the session, the
+        // studio kept the stale "admin (admin)" badge and printed the raw
+        // "login required" body into the results panel — a manual reload was
+        // the only way back. A 401 from the api helper must drop the stale
+        // session and return the user to the login overlay with a message.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            html.contains("res.status === 401"),
+            "the api helper must detect a 401"
+        );
+        assert!(
+            html.contains("Session expired"),
+            "a 401 must explain the session expiry"
+        );
+        assert!(
+            html.contains("showLogin()"),
+            "a 401 must return the user to the login overlay"
+        );
+    }
+
+    #[test]
+    fn s13_sidebar_does_not_animate_its_width() {
+        // POC-4 S-13: the sidebar's hover expansion animated its width, so
+        // the nav buttons' hit area moved under a probing mouse — Playwright
+        // reported "element not stable / intercepts pointer events" with the
+        // sidebar div itself as the interceptor, and a slow-machine user
+        // sees the same flakiness. The audit found no overlay: the moving
+        // hit area is the width transition, so the rule must not carry one.
+        let html = crate::studio::STUDIO_HTML;
+        assert!(
+            !html.contains("transition: width"),
+            "the sidebar must not animate its width under the cursor"
+        );
+        assert!(
+            html.contains("#sidebar:hover { width: 190px; }"),
+            "the hover expansion itself stays (icons → labels)"
+        );
+    }
 
     #[test]
     fn with_principal_token_overrides_body() {

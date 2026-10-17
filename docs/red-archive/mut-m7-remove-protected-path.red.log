@@ -1,0 +1,2 @@
+ARCH: .github/workflows/benchmark.yml trigger paths lack the CI-06 protected path: crates/kernel
+EXIT=1

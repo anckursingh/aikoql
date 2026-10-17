@@ -1,0 +1,9 @@
+{
+  "name": "graph_edges",
+  "operations": [
+    {"op": "remember", "type": "g_node", "properties": {"name": "a"}, "as": "a"},
+    {"op": "remember", "type": "g_node", "properties": {"name": "b"}, "as": "b"},
+    {"op": "relate", "from": "$a", "to": "$b", "rel_type": "next", "assert": {"koid": "$a"}},
+    {"op": "traverse", "koid": "$a", "assert": {"hits.0.koid": "$b", "hits.0.rel_type": "next"}}
+  ]
+}

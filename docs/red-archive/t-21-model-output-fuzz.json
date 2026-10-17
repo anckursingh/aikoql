@@ -1,0 +1,8 @@
+{
+  "id": "t-21-model-output-fuzz",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_protocol_fuzz.py -q",
+  "captured_at": "2026-10-04T10:01:48Z",
+  "captured_head": "1061b8217548aea686cebba7b18acb922a1f9571",
+  "exit_code": 1
+}

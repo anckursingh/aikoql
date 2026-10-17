@@ -17,11 +17,18 @@ ci="$root/.github/workflows/ci.yml"
 fail=0
 
 # 1. wiring: the derivation exists and no inline --skip remains
-if ! grep -q 'scripts/skip-list.sh' "$ci"; then
+# Live invocation lines only: a comment quoting the path (ci.yml carries
+# one next to the test jobs) would keep a raw grep green after the
+# derivation itself is dropped in a bad merge — the L-20 mutation harness
+# caught exactly that (m3-remove-skip-wiring).
+if ! grep -n 'scripts/skip-list.sh' "$ci" 2>/dev/null | grep -vE '^[0-9]+:\s*#' | grep -q .; then
   echo "SKIP DRIFT: ci.yml does not use scripts/skip-list.sh — the registry is not wired" >&2
   fail=1
 fi
-if grep -n -- '--skip' "$ci" 2>/dev/null; then
+# Comment lines are prose, not args: a comment quoting the old error text
+# (ci.yml round 4) re-tripped this raw grep on main's dag job — the gate
+# matches live argument lines only.
+if grep -n -- '--skip' "$ci" 2>/dev/null | grep -vE '^[0-9]+:\s*#'; then
   echo "SKIP DRIFT: inline --skip args in ci.yml — the registry is the only skip source" >&2
   fail=1
 fi
@@ -40,13 +47,28 @@ for k in '^test = ' '^reason = ' '^ungated_by = ' '^verified_at = '; do
   fi
 done
 
-# 3. every registered name exists in the tracked tree
+# 3. every registered name exists in the tracked tree — anchored at the
+# signature boundary: a rename that keeps the old name as a prefix
+# (fn x() -> fn x_renamed()) would keep a bare "fn $t" substring grep
+# green — the L-20 mutation harness caught exactly that
+# (m2-rename-gated-test).
 dead="$(grep '^test = ' "$toml" | sed 's/^test = "\(.*\)"$/\1/' | while read -r t; do
-  grep -rlF "fn $t" "$root/crates" --include='*.rs' --exclude-dir=target 2>/dev/null | grep -q . || echo "$t"
+  grep -rlF "fn $t(" "$root/crates" --include='*.rs' --exclude-dir=target 2>/dev/null | grep -q . || echo "$t"
 done)"
 if [ -n "$dead" ]; then
   echo "SKIP DRIFT: gated test(s) no longer exist in the tree:" >&2
   printf '%s\n' "$dead" >&2
+  fail=1
+fi
+
+# 4. no duplicate test names (TDD-032): two rows for one name pass legs
+# 1-3 untouched — the shape counts still match, and the name exists —
+# while one row's reason can rot behind the other and the accounting
+# disagrees. RED archived: docs/red-archive/skip-drift-vs-duplicate-entry.
+dup="$(grep '^test = ' "$toml" | sort | uniq -d)"
+if [ -n "$dup" ]; then
+  echo "SKIP DRIFT: duplicate test name(s) in the registry:" >&2
+  printf '%s\n' "$dup" >&2
   fail=1
 fi
 

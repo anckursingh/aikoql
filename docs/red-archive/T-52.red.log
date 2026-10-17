@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.12s
+     Running tests\conformance.rs (target\debug\deps\conformance-aba032c60b058777.exe)
+
+running 1 test
+test t06g_idempotency_key_is_tenant_scoped ... FAILED
+
+failures:
+
+---- t06g_idempotency_key_is_tenant_scoped stdout ----
+
+thread 't06g_idempotency_key_is_tenant_scoped' (74732) panicked at crates\kernel\tests\conformance.rs:240:5:
+assertion `left != right` failed: idempotency must not replay across tenants
+  left: KOID(00000000271000000001000000c0ffee)
+ right: KOID(00000000271000000001000000c0ffee)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    t06g_idempotency_key_is_tenant_scoped
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 109 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-kernel --test conformance`
+EXIT=101

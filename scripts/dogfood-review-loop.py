@@ -123,6 +123,20 @@ def tool_result(res):
     )
 
 
+async def call(s, name, args):
+    """call_tool with one retry after the server's windowed 120/min cap —
+    a `full` run over a growing dispositions doc crosses it mid-run."""
+    for attempt in (0, 1):
+        try:
+            return await s.call_tool(name, args)
+        except Exception as e:
+            if attempt == 0 and "rate limit" in str(e).lower():
+                print("rate-limited — waiting out the 60s window")
+                await asyncio.sleep(61)
+                continue
+            raise
+
+
 def expect_ok(what, text):
     try:
         if json.loads(text).get("ok") is False:
@@ -177,19 +191,19 @@ async def bootstrap(s, state=None):
                  "disposition": disp, "status": status,
                  "fix_commit": fix, "evidence": ev}
         if fid in state["kos"]:
-            res = await s.call_tool("get", {
+            res = await call(s, "get", {
                 "koid": state["kos"][fid], "subject": "dogfood",
             })
             if '"ok":false' in tool_result(res):
                 state["kos"].pop(fid)  # stale KOID (kb rebuilt) → recreate
         if fid in state["kos"]:
-            res = await s.call_tool("remember", {
+            res = await call(s, "remember", {
                 "type_name": "Requirement", "koid": state["kos"][fid],
                 "properties": props, "subject": "dogfood",
                 "note": "P1-8 review-loop dogfood (upsert)",
             })
         else:
-            res = await s.call_tool("remember", {
+            res = await call(s, "remember", {
                 "type_name": "Requirement", "properties": props,
                 "subject": "dogfood", "note": "P1-8 review-loop dogfood",
             })
@@ -210,14 +224,14 @@ async def compile_doc(s, state):
         # self-reference catch, again.
         text = re.sub(rf"{BEGIN}.*?{END}\n?", "", text, flags=re.DOTALL)
     b64 = base64.b64encode(text.encode("utf-8")).decode()
-    res = await s.call_tool("document_ingest", {
+    res = await call(s, "document_ingest", {
         "filename": "PR6-TDD-DISPOSITIONS.md", "content_base64": b64,
         "mime_type": "text/markdown", "subject": "dogfood",
     })
     koid = json.loads(expect_ok("document_ingest", tool_result(res))).get("koid")
     if not koid:
         sys.exit(f"document_ingest: no koid: {tool_result(res)[:200]}")
-    res = await s.call_tool("document_compile", {"koid": koid,
+    res = await call(s, "document_compile", {"koid": koid,
                                                  "subject": "dogfood"})
     out = expect_ok("document_compile", tool_result(res))
     print("document_compile: %s" % out.splitlines()[0] if out else "done")
@@ -231,7 +245,7 @@ async def reconcile(s, state):
     for sha in commits:
         files = sh(["git", "diff-tree", "--no-commit-id", "--name-only",
                     "-r", sha]).split()
-        res = await s.call_tool("reconcile", {
+        res = await call(s, "reconcile", {
             "koid": state["doc_koid"], "files": files, "subject": "dogfood",
         })
         text = expect_ok("reconcile", tool_result(res))
@@ -248,7 +262,7 @@ async def do_trace(s, opts, checks, state=None):
             sys.exit("trace: no compiled knowledge document — run `full` first")
     answers = {}
     for rid, token in checks:
-        res = await s.call_tool("trace_requirement", {
+        res = await call(s, "trace_requirement", {
             "koid": state["doc_koid"], "requirement": rid,
             "subject": "dogfood",
         })
@@ -286,7 +300,7 @@ async def verify(s, opts, checks):
         koid = state["kos"].get(fid)
         if not koid:
             sys.exit(f"verify: no KOID recorded for {fid}")
-        res = await s.call_tool("get", {"koid": koid, "subject": "dogfood"})
+        res = await call(s, "get", {"koid": koid, "subject": "dogfood"})
         got = json.loads(tool_result(res))
         if got.get("type_name") != "Requirement" or \
                 got.get("properties", {}).get("id") != fid:

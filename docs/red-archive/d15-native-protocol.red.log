@@ -1,0 +1,19 @@
+    Checking aikoql-sdk v0.2.0 (E:\dreams\Mnemosyne\crates\sdk\rust)
+error[E0599]: no associated function or constant named `connect_native` found for struct `aikoql_sdk::Client` in the current scope
+   --> crates\sdk\rust\tests\native.rs:572:21
+    |
+572 |     let c = Client::connect_native(addr)
+    |                     ^^^^^^^^^^^^^^ associated function or constant not found in `aikoql_sdk::Client`
+
+error[E0599]: no associated function or constant named `connect_native` found for struct `aikoql_sdk::Client` in the current scope
+   --> crates\sdk\rust\src\bin\sdk-conformance.rs:160:21
+    |
+160 |             Client::connect_native(&self.addr).await?
+    |                     ^^^^^^^^^^^^^^ associated function or constant not found in `aikoql_sdk::Client`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `aikoql-sdk` (bin "sdk-conformance" test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `aikoql-sdk` (bin "sdk-conformance") due to 1 previous error
+error: could not compile `aikoql-sdk` (test "native") due to 1 previous error
+EXIT=101

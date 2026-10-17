@@ -1,0 +1,3 @@
+ARCH: ci.yml lost the sdk-contract gate (D-19)
+ARCH: ci.yml lost the sdk-fuzz-smoke gate (D-19)
+EXIT=1

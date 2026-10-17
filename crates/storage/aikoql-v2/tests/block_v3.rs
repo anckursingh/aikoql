@@ -47,8 +47,9 @@ fn sorted(
 #[test]
 fn block_v3_roundtrip_with_rids() {
     // Entries across two blocks (tiny target), several rids, multi-key
-    // objects: every read surface returns the rid the writer was given —
-    // the v3 decode is lossless.
+    // objects: the rid surface returns the rid the writer was given —
+    // the v3 decode is lossless. The byte surface (`get`) must NOT answer
+    // identity rows (TDD-006/L-04): rid ≠ 0 rows are another layer's data.
     let mut w = SegmentWriter::new_v3(64);
     w.push(e3("a1", "v1", 5, FLAG_PUT, 11));
     w.push(e3("a2", "v2", 7, FLAG_VERSION, 22));
@@ -57,14 +58,22 @@ fn block_v3_roundtrip_with_rids() {
     let path = tmp("blockv3-roundtrip");
     w.publish(&path).unwrap();
     let reader = SegmentReader::open(&path).unwrap();
-    let got = reader.get(b"a1").unwrap().unwrap();
+    let got = reader.get_by_rid(b"a1", ReplicaId(11)).unwrap().unwrap();
     assert_eq!(got.replica_id, ReplicaId(11));
     assert_eq!(got.value, b"v1".to_vec());
-    let got = reader.get(b"a3").unwrap().unwrap();
+    assert!(
+        reader.get(b"a1").unwrap().is_none(),
+        "the byte surface never answers an identity row"
+    );
+    let got = reader.get_by_rid(b"a3", ReplicaId(11)).unwrap().unwrap();
     assert_eq!(
         got.replica_id,
         ReplicaId(11),
         "rids are per entry, not per key"
+    );
+    assert!(
+        reader.get(b"a3").unwrap().is_none(),
+        "the byte surface never answers an identity row (a tombstone either)"
     );
     let versions = reader.versions(b"a2").unwrap();
     assert_eq!(versions.len(), 1);

@@ -1,6 +1,7 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
+use crate::helpers::commit_ts_millis;
 use crate::session::*;
 use crate::{json, Kernel, KnowledgeContext, Value, J, KOID};
 pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
@@ -159,7 +160,7 @@ pub(crate) fn tool_document_status(k: &Kernel, args: &J) -> Result<J, String> {
         "status": ko.properties.get("status").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }),
         "lifecycle": ko.lifecycle.state.to_string(),
         "version": ko.version,
-        "commit_ts": ko.commit_ts,
+        "commit_ts": commit_ts_millis(ko.commit_ts),
     }))
 }
 

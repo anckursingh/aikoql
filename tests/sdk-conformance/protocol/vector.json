@@ -1,0 +1,9 @@
+{
+  "name": "session_surface",
+  "operations": [
+    {"op": "connect"},
+    {"op": "health", "assert": {"status": "healthy", "ready": true}},
+    {"op": "metrics"},
+    {"op": "close"}
+  ]
+}

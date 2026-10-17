@@ -1,0 +1,16 @@
+---- corpus_pin stdout ----
+
+thread 'corpus_pin' (26836) panicked at crates\sdk\rust\tests\fuzz_corpus_pin.rs:129:9:
+assertion `left == right` failed: case corp-v02 (version): rust column drift — got [0], want [-1]
+  left: Array [Number(0)]
+ right: Array [Number(-1)]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    corpus_pin
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test fuzz_corpus_pin`
+EXIT=101

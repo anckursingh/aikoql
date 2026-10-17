@@ -14,7 +14,7 @@ use crate::knowledge::kom::{KError, KResult, Value};
 // Predicates
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PredOp {
     Eq,
     Neq,
@@ -24,54 +24,75 @@ pub enum PredOp {
     Lte,
 }
 
+/// One Filter predicate. A Filter's `Vec<Predicate>` is a conjunction; the
+/// tree nodes carry the boolean structure of each conjunct. T-71 (POC-4):
+/// `Or`/`And` nodes exist so `WHERE a == X OR b == Y` survives the
+/// compiler as a disjunction instead of silently lowering to a conjunction.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Predicate {
-    pub property: String,
-    pub op: PredOp,
-    pub value: Value,
+pub enum Predicate {
+    Cmp {
+        property: String,
+        op: PredOp,
+        value: Value,
+    },
+    And(Box<Predicate>, Box<Predicate>),
+    Or(Box<Predicate>, Box<Predicate>),
 }
 
 impl Predicate {
     pub fn eq(property: impl Into<String>, value: Value) -> Self {
-        Predicate {
+        Predicate::Cmp {
             property: property.into(),
             op: PredOp::Eq,
             value,
         }
     }
     pub fn neq(property: impl Into<String>, value: Value) -> Self {
-        Predicate {
+        Predicate::Cmp {
             property: property.into(),
             op: PredOp::Neq,
             value,
         }
     }
     pub fn gt(property: impl Into<String>, value: Value) -> Self {
-        Predicate {
+        Predicate::Cmp {
             property: property.into(),
             op: PredOp::Gt,
             value,
         }
     }
     pub fn lt(property: impl Into<String>, value: Value) -> Self {
-        Predicate {
+        Predicate::Cmp {
             property: property.into(),
             op: PredOp::Lt,
             value,
         }
     }
     pub fn gte(property: impl Into<String>, value: Value) -> Self {
-        Predicate {
+        Predicate::Cmp {
             property: property.into(),
             op: PredOp::Gte,
             value,
         }
     }
     pub fn lte(property: impl Into<String>, value: Value) -> Self {
-        Predicate {
+        Predicate::Cmp {
             property: property.into(),
             op: PredOp::Lte,
             value,
+        }
+    }
+    /// The comparison when this node is one; `None` for And/Or branches.
+    /// Callers that answer only comparisons from an index route through
+    /// here — a boolean branch is never index-assisted.
+    pub fn as_cmp(&self) -> Option<(&str, PredOp, &Value)> {
+        match self {
+            Predicate::Cmp {
+                property,
+                op,
+                value,
+            } => Some((property, *op, value)),
+            Predicate::And(..) | Predicate::Or(..) => None,
         }
     }
 }
@@ -96,11 +117,19 @@ pub enum FuseMode {
 /// MVCC reconstruction of the versions the kernel had committed. `Between`
 /// is valid time — rows whose [valid_from, valid_to) interval overlaps the
 /// half-open [from, to) window (timeless facts overlap any window).
+/// T-58 (P3-008 LOW): `AsOfJournal(n)` is the journal-seq clock domain —
+/// the ke/ event at seq n pins the exact commit_ts of the nth apply, so a
+/// corpus replay slices between applies without synthesizing wall markers.
+/// G-001 (POC-3): `Changeset { from, to }` enumerates the generations
+/// MINTED in the half-open (from, to] commit window (KOID created_ms) —
+/// the native one-call change-detection delta.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TemporalOp {
     AsOf(u64),
+    AsOfJournal(u64),
     Between { from: u64, to: u64 },
     Historical,
+    Changeset { from: u64, to: u64 },
 }
 
 // ---------------------------------------------------------------------------

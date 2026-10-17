@@ -1,0 +1,6 @@
+--- FAIL: TestCorpusPin (0.00s)
+    corpus_test.go:185: case corp-c02 (correlation): go column drift — got "skip", want "protocol"
+FAIL
+FAIL	github.com/anckursingh/aikoql/sdk/go	0.054s
+FAIL
+EXIT=1

@@ -1,0 +1,8 @@
+{
+  "id": "ci08-no-section13-schema",
+  "pre_fix_commit": "b7ffac1",
+  "command": "grep -q cpu_seconds scripts/competitor_bench/bench.py",
+  "captured_at": "2026-09-25T09:11:18Z",
+  "captured_head": "b7ffac1ac8977d07c3622f2319cb04ffe45618e9",
+  "exit_code": 1
+}

@@ -34,7 +34,7 @@ fn probes(key: &[u8], m: u32) -> [u32; 4] {
 
 /// A key of prefix `p` whose bloom has all four probes in the low half of
 /// `m` — any target probing the high half is provably rejected. The search
-/// is bounded and deterministic (sha256 is).
+/// is deterministic (sha256 is).
 fn low_half_key(prefix: &str, seed: u32, m: u32) -> String {
     for i in 0..10_000u32 {
         let k = format!("{prefix}{seed}-{i}");

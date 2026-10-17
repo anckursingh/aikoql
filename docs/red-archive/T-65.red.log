@@ -1,0 +1,39 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+   Compiling aikoql-mcp v0.2.2 (E:\dreams\Mnemosyne\crates\services\api\mcp)
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 24s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+Using binary: E:\dreams\Mnemosyne\target/release\aikoql-mcp.exe
+[2m2026-10-10T07:11:19.558723Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-10T07:11:19.559317Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-t65cl-18696 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-10T07:11:19.560128Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-10T07:11:19.562544Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-10T07:11:19.567255Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 3
+[2m2026-10-10T07:11:19.567290Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 3
+[2m2026-10-10T07:11:19.567424Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-10T07:11:19.567468Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-10T07:11:19.567494Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+
+thread 'between_enumerates_asserted_closed_generations' (27056) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:3063:5:
+assertion `left == right` failed: the window straddling the asserted closure must hold both generations: {"results":[{"koid":"01a124a6e40a0000000000000000a9c9","type_name":"device","version":1,"properties":{"key":"dev_b3","value":"new"},"extensions":{"authority":"agent_derived","epistemic_status":"asserted","evidence":[{"confidence":0.800000011920929,"method":"runtime_observation","source_artifact":"probe"}],"scope":"session","valid_from":5050}}]}
+  left: ["new"]
+ right: ["new", "old"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test between_enumerates_asserted_closed_generations ... FAILED
+
+failures:
+
+failures:
+    between_enumerates_asserted_closed_generations
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

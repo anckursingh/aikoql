@@ -1,0 +1,8 @@
+{
+  "id": "d03-compat-contract",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-sdk-compat.sh",
+  "captured_at": "2026-10-01T13:13:58Z",
+  "captured_head": "abb287621a1af02a5ff6c4ca11ed6490e84a873c",
+  "exit_code": 1
+}

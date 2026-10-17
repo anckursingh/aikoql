@@ -1,0 +1,8 @@
+{
+  "id": "f12-asof-valid-to",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test temporal as_of_slice_hides_a_superseded_generation",
+  "captured_at": "2026-10-07T20:06:30Z",
+  "captured_head": "5111ed14ca7c2e0545da8a1f52f5c84412b7c328",
+  "exit_code": 101
+}

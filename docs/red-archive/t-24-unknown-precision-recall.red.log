@@ -1,0 +1,157 @@
+F.FFF.                                                                   [100%]
+================================== FAILURES ===================================
+______ test_compute_scorecard_returns_the_six_metrics_with_exact_values _______
+
+tmp_path = WindowsPath('C:/Users/ancku/AppData/Local/Temp/pytest-of-ancku/pytest-183/test_compute_scorecard_returns0')
+
+    def test_compute_scorecard_returns_the_six_metrics_with_exact_values(tmp_path):
+        ex1 = _base()
+        ex2 = _base(expected={"answer": "Payments Team", "koids": ["b" * 32],
+                              "evidence_ids": [evidence_id(_EV)]},
+                    input={"question": "What is the owner of the checkout "
+                                       "service?"},
+                    query_target={"language": "aikoql",
+                                  "query": 'MATCH service WHERE name == '
+                                           '"checkout" RETURN name'})
+        ex3 = _base(task={"type": "unknown", "difficulty": "factual",
+                          "requires": []},
+                    expected={"answer": "UNKNOWN: no such service", "koids": [],
+                              "evidence_ids": []},
+                    labels={"grounded": False, "answerable": False,
+                            "ambiguous": False, "contradictory": False})
+        ex4 = _base(expected={"answer": "Payments Team", "koids": ["c" * 32],
+                              "evidence_ids": [evidence_id(_EV)]},
+                    input={"question": "What is the owner of the ledger "
+                                       "service?"},
+                    query_target={"language": "aikoql",
+                                  "query": 'MATCH service WHERE name == '
+                                           '"ledger" RETURN name'})
+        out = compute_scorecard(_preds(ex1, ex2, ex3, ex4),
+                                _ds(tmp_path, ex1, ex2, ex3, ex4), split="test")
+    
+        assert out["example_count"] == 4
+        assert out["missing_predictions"] == 0
+>       assert sorted(out["metrics"]) == sorted(_METRICS)
+E       AssertionError: assert ['groundednes...et_leak_rate'] == ['false_refus...ak_rate', ...]
+E         
+E         At index 0 diff: 'groundedness' != 'false_refusal_rate'
+E         Right contains 2 more items, first extra item: 'unknown_precision'
+E         Use -v to get more diff
+
+training\tests\test_scorecard.py:131: AssertionError
+_________________ test_false_refusal_moves_precision_and_rate _________________
+
+tmp_path = WindowsPath('C:/Users/ancku/AppData/Local/Temp/pytest-of-ancku/pytest-183/test_false_refusal_moves_preci0')
+
+    def test_false_refusal_moves_precision_and_rate(tmp_path):
+        """A false refusal (UNKNOWN: on an answerable example) must move
+        unknown_precision down and false_refusal_rate up — that is the
+        refusal-quality signal the combined number could not show."""
+        u1 = _base(task={"type": "unknown", "difficulty": "factual",
+                         "requires": []},
+                   expected={"answer": "UNKNOWN: no such service", "koids": [],
+                             "evidence_ids": []},
+                   labels={"grounded": False, "answerable": False,
+                           "ambiguous": False, "contradictory": False})
+        u2 = _base(task={"type": "unknown", "difficulty": "factual",
+                         "requires": []},
+                   input={"question": "What is the owner of the checkout "
+                                      "service?"},
+                   query_target={"language": "aikoql",
+                                 "query": 'MATCH service WHERE name == '
+                                          '"checkout" RETURN name'},
+                   expected={"answer": "UNKNOWN: no such service", "koids": [],
+                             "evidence_ids": []},
+                   labels={"grounded": False, "answerable": False,
+                           "ambiguous": False, "contradictory": False})
+        a1 = _base(expected={"answer": "Payments Team", "koids": ["b" * 32],
+                             "evidence_ids": [evidence_id(_EV)]},
+                   input={"question": "What is the owner of the ledger "
+                                      "service?"},
+                   query_target={"language": "aikoql",
+                                 "query": 'MATCH service WHERE name == '
+                                          '"ledger" RETURN name'})
+        preds = [
+            {"example_id": u1["example_id"],
+             "query": 'MATCH service WHERE name == "settlement" RETURN name',
+             "answer": "UNKNOWN: no record"},
+            {"example_id": u2["example_id"],
+             "query": 'MATCH service WHERE name == "checkout" RETURN name',
+             "answer": "UNKNOWN: no record"},
+            # a false refusal: the example is answerable, the model refused
+            {"example_id": a1["example_id"],
+             "query": 'MATCH service WHERE name == "ledger" RETURN name',
+             "answer": "UNKNOWN: no record"},
+        ]
+        out = compute_scorecard(preds, _ds(tmp_path, u1, u2, a1), split="test")
+>       assert out["metrics"]["unknown_recall"]["value"] == 1.0
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'unknown_recall'
+
+training\tests\test_scorecard.py:201: KeyError
+___________________ test_undefined_denominators_report_none ___________________
+
+tmp_path = WindowsPath('C:/Users/ancku/AppData/Local/Temp/pytest-of-ancku/pytest-183/test_undefined_denominators_re0')
+
+    def test_undefined_denominators_report_none(tmp_path):
+        """A metric whose class is absent from the split is None, never a
+        silent 0.0: recall/precision over no unknown examples, precision
+        over no refusals at all (a model that never refuses), and the
+        false-refusal rate over a split with no answerable examples."""
+        ex1 = _base()
+        ex2 = _base(expected={"answer": "Payments Team", "koids": ["b" * 32],
+                              "evidence_ids": [evidence_id(_EV)]},
+                    input={"question": "What is the owner of the checkout "
+                                       "service?"},
+                    query_target={"language": "aikoql",
+                                  "query": 'MATCH service WHERE name == '
+                                           '"checkout" RETURN name'})
+        preds = [
+            {"example_id": ex1["example_id"],
+             "query": 'MATCH service WHERE name == "settlement" RETURN name',
+             "answer": "Payments Team"},
+            {"example_id": ex2["example_id"],
+             "query": 'MATCH service WHERE name == "checkout" RETURN name',
+             "answer": "Payments Team"},
+        ]
+        out = compute_scorecard(preds, _ds(tmp_path, ex1, ex2), split="test")
+        # no unknown examples: recall and precision over the absent class
+        # are undefined; no false refusals happened, so that rate is 0.0
+>       assert out["metrics"]["unknown_recall"]["value"] is None
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'unknown_recall'
+
+training\tests\test_scorecard.py:236: KeyError
+___________________ test_scorecard_artifacts_are_committed ____________________
+
+    def test_scorecard_artifacts_are_committed():
+        """The GREEN run commits at least one scorecard artifact (design law:
+        no training run without a scorecard)."""
+        root = Path(__file__).parents[2]
+        files = sorted((root / "training" / "artifacts" / "scorecards")
+                       .glob("*.json"))
+        assert files
+        for f in files:
+            sc = json.loads(f.read_text(encoding="utf-8"))
+            assert sc["model_id"]
+            assert sc["model_class"] in ("baseline", "finetuned")
+            assert sc["example_count"] > 0
+>           assert set(sc["metrics"]) == set(_METRICS)
+E           AssertionError: assert {'groundednes...et_leak_rate'} == {'false_refus...ak_rate', ...}
+E             
+E             Extra items in the left set:
+E             'refusal_rate'
+E             Extra items in the right set:
+E             'unknown_precision'
+E             'false_refusal_rate'
+E             'unknown_recall'
+E             Use -v to get more diff
+
+training\tests\test_scorecard.py:271: AssertionError
+=========================== short test summary info ===========================
+FAILED training\tests\test_scorecard.py::test_compute_scorecard_returns_the_six_metrics_with_exact_values
+FAILED training\tests\test_scorecard.py::test_false_refusal_moves_precision_and_rate
+FAILED training\tests\test_scorecard.py::test_undefined_denominators_report_none
+FAILED training\tests\test_scorecard.py::test_scorecard_artifacts_are_committed
+4 failed, 2 passed in 1.39s
+EXIT=1

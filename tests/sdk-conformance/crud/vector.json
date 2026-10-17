@@ -1,0 +1,11 @@
+{
+  "name": "crud_lifecycle",
+  "operations": [
+    {"op": "remember", "type": "crud_person", "properties": {"name": "bee"}, "as": "bee", "assert": {"version": 1}},
+    {"op": "get", "assert": {"properties.name": "bee"}},
+    {"op": "update", "type": "crud_person", "koid": "$bee", "properties": {"name": "bee", "age": 30}, "assert": {"version": 2}},
+    {"op": "get", "assert": {"properties.age": 30}},
+    {"op": "delete", "koid": "$bee", "assert": {"koid": "$bee"}},
+    {"op": "get", "assert": {"state": "deleted"}}
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "m-k11-java-error",
+  "pre_fix_commit": "71a2f74",
+  "command": "bash scripts/sdk-mutation-harness.sh m-k11-java-error",
+  "captured_at": "2026-10-02T13:45:36Z",
+  "captured_head": "4a015d734b3de561502bab378523e09c53caa118",
+  "exit_code": 1
+}

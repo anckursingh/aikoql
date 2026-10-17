@@ -50,7 +50,7 @@
 //! Footer: `AKFT | version u16 | entry_count u64 | sha256-8(skeleton)`.
 //! The skeleton covers the header, every 28-byte block header, the index
 //! and bloom blocks whole, and the footer fields — but not data payloads,
-//! so open() stays O(block count) no matter the file size. Torn segments
+//! so open() reads metadata only, no matter the file size. Torn segments
 //! are impossible (atomic publication); data payloads are validated lazily
 //! on the read that touches the block. Structural damage fails at open,
 //! payload damage fails on access.
@@ -250,12 +250,6 @@ impl SegmentWriter {
         path: &Path,
     ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
         let mut entries = std::mem::take(&mut self.entries);
-        debug_assert!(
-            entries
-                .windows(2)
-                .all(|w| (&w[0].key, w[0].seq) <= (&w[1].key, w[1].seq)),
-            "sorted publish requires memtable order (key asc, seq asc within key)"
-        );
         let mut run_start = 0;
         while run_start < entries.len() {
             let mut run_end = run_start + 1;
@@ -278,12 +272,6 @@ impl SegmentWriter {
         stage: Option<&str>,
     ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
         let entries = std::mem::take(&mut self.entries);
-        debug_assert!(
-            entries
-                .windows(2)
-                .all(|w| { w[0].key < w[1].key || (w[0].key == w[1].key && w[0].seq >= w[1].seq) }),
-            "sorted staged publish requires publish order (key asc, seq desc within key)"
-        );
         self.publish_sorted_entries(path, stage, entries)
     }
 
@@ -304,11 +292,37 @@ impl SegmentWriter {
                 "cannot publish an empty segment".into(),
             ));
         }
+        // L-12 (TDD-028) — the format's key fields are u16: reject an
+        // oversized key here too — publish is the choke point for callers
+        // that bypass Db::write (the API rejects first, this is the format
+        // boundary).
+        if let Some(e) = entries.iter().find(|e| e.key.len() > u16::MAX as usize) {
+            return Err(FormatError::Invalid(format!(
+                "key length {} exceeds the {} byte format limit",
+                e.key.len(),
+                u16::MAX
+            )));
+        }
         if entries
             .windows(2)
             .any(|w| w[0].key == w[1].key && w[0].seq == w[1].seq)
         {
             return Err(FormatError::Invalid("duplicate (key, seq) pair".into()));
+        }
+        // L-01 (TDD-001) — the sorted-input precondition is a REAL check in
+        // both profiles: release builds used to publish unsorted input
+        // silently (the entry-point debug_asserts vanish in release). Any
+        // memtable-order violation fed to the sorted entry is mangled by its
+        // run-reversal into one of these two detectable shapes (an equal
+        // pair lands on the duplicate guard above), so this one check covers
+        // every entry point.
+        if entries
+            .windows(2)
+            .any(|w| w[0].key > w[1].key || (w[0].key == w[1].key && w[0].seq < w[1].seq))
+        {
+            return Err(FormatError::Invalid(
+                "entries not in publish order (key asc, seq desc within key)".into(),
+            ));
         }
 
         let entry_count = entries.len() as u64;
@@ -669,8 +683,8 @@ fn encode_block(kind: u8, entries: u32, payload: &[u8], version: u16) -> Vec<u8>
 }
 
 /// A read-only handle on a published segment. Open reads only the skeleton
-/// (header, block headers, index, bloom, footer) — O(block count), never
-/// O(file size) — and defers data-block payloads to the read that touches
+/// (header, block headers, index, bloom, footer) — never the data
+/// payloads — and defers data-block payloads to the read that touches
 /// the block, which validates that block's checksum on first touch.
 #[derive(Debug)]
 pub struct SegmentReader {
@@ -1123,7 +1137,7 @@ impl SegmentReader {
 
         // Footer checksum over the skeleton (the index header + index
         // payload + bloom header + bloom payload are contiguous in the
-        // file, so one bounded read covers that span).
+        // file, so one read covers that span).
         let mut skeleton = Vec::with_capacity(
             header.len()
                 + data.len() * BLOCK_HEADER_LEN
@@ -1244,6 +1258,8 @@ impl SegmentReader {
     }
 
     /// The head version of `key` (highest seq — entries sort seq-descending).
+    /// Byte surface: the newest rid-0 row — identity rows (rid ≠ 0) are
+    /// another layer's data and never answer (§11, TDD-006/L-04).
     pub fn get(&self, key: &[u8]) -> Result<Option<SegmentEntry>, FormatError> {
         let t0 = self.stats.as_ref().map(|_| Instant::now());
         let located = self.locate(key);
@@ -1292,7 +1308,7 @@ impl SegmentReader {
             let payload = &raw[BLOCK_HEADER_LEN..];
             for pos in positions {
                 let t1 = self.stats.as_ref().map(|_| Instant::now());
-                let res = self.block_get_v2(keys[pos], payload, b, None)?;
+                let res = self.block_get_v2(keys[pos], payload, b, Some(ReplicaId(0)))?;
                 if let (Some(st), Some(t1)) = (&self.stats, t1) {
                     st.block_decode_ns
                         .fetch_add(t1.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -1352,7 +1368,7 @@ impl SegmentReader {
     /// payload), served from the shared cache when present (SE2-M7, now raw
     /// bytes — SE2-M9). Only validated bytes enter the cache, so a decode
     /// failure reproduces deterministically on a hit. Lazy: open() stays
-    /// O(block count); the payload is validated on the first read that
+    /// metadata-only; the payload is validated on the first read that
     /// touches it.
     fn block_raw(&self, i: usize) -> Result<std::sync::Arc<Vec<u8>>, FormatError> {
         let b = &self.data[i];
@@ -1429,7 +1445,7 @@ impl SegmentReader {
         }
         let raw = self.block_raw(i)?;
         let t0 = self.stats.as_ref().map(|_| Instant::now());
-        let out = self.block_get_v2(key, &raw[BLOCK_HEADER_LEN..], b, None)?;
+        let out = self.block_get_v2(key, &raw[BLOCK_HEADER_LEN..], b, Some(ReplicaId(0)))?;
         if let (Some(st), Some(t0)) = (&self.stats, t0) {
             st.block_decode_ns
                 .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -1576,6 +1592,14 @@ impl SegmentReader {
             None => {
                 // Benign race (the SE2-M4 validated pattern): the loser's
                 // parsed copy drops; parse is pure, so either copy is fine.
+                // L-13 (TDD-008) — the race is the price of the P5-M44
+                // representation (compact blob ~17 B/restart vs ~41 B
+                // boxed): a cold storm may parse up to N times, once the
+                // winner publishes the reuse is exact. `restart_parses`
+                // pins the bound.
+                if let Some(st) = &self.stats {
+                    st.restart_parses.fetch_add(1, Ordering::Relaxed);
+                }
                 let parsed = RestartIndex::parse(offs, payload, table_len)?;
                 b.restart.get_or_init(|| parsed)
             }
@@ -1888,8 +1912,8 @@ fn restart_key(payload: &[u8], o: usize) -> Result<&[u8], FormatError> {
 }
 
 /// Streaming iterator over every entry in key order — compaction's k-way
-/// merge pulls one entry at a time, so the merge is O(k) memory, not
-/// O(dataset). Blocks load (and validate) as the cursor reaches them.
+/// merge pulls one entry at a time — memory per key, never the whole
+/// dataset. Blocks load (and validate) as the cursor reaches them.
 pub struct SegmentIter<'a> {
     reader: &'a SegmentReader,
     block: usize,
@@ -2061,7 +2085,11 @@ impl<'a> Iterator for SegmentScan<'a> {
                 self.pos += cur.pos();
                 continue;
             }
-            let value = match cur.vec() {
+            let value_len = match cur.u32() {
+                Ok(v) => v as usize,
+                Err(e) => return Some(Err(e)),
+            };
+            let value = match cur.take(value_len) {
                 Ok(v) => v,
                 Err(e) => return Some(Err(e)),
             };
@@ -2082,11 +2110,20 @@ impl<'a> Iterator for SegmentScan<'a> {
                 ReplicaId(0)
             };
             self.pos += cur.pos();
+            // L-12 (TDD-027) — the byte surface: an object row never
+            // answers a byte scan. Skip it WITHOUT recording `last`, so an
+            // older byte version of the same key still yields as the head
+            // (stor006's semantic — the memtable prefix_heads filter has
+            // it, the segment path didn't). Only yielded heads allocate;
+            // skipped rows ride the borrowed value slice.
+            if replica_id != ReplicaId(0) {
+                continue;
+            }
             let key = self.scratch.clone();
             self.last = Some(key.clone());
             return Some(Ok(SegmentEntry {
                 key,
-                value,
+                value: value.to_vec(),
                 seq,
                 flags,
                 replica_id,

@@ -1,0 +1,24 @@
+    Blocking waiting for file lock on build directory
+   Compiling aikoql-runtime v0.2.2 (E:\dreams\Mnemosyne\crates\runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 07s
+     Running tests\cpl_execution.rs (target\debug\deps\cpl_execution-a1dd8a40c52333ba.exe)
+
+running 1 test
+test cpl005_projection_applied_after_similarity ... FAILED
+
+failures:
+
+---- cpl005_projection_applied_after_similarity stdout ----
+
+thread 'cpl005_projection_applied_after_similarity' (37500) panicked at crates\runtime\tests\cpl_execution.rs:193:58:
+called `Result::unwrap()` on an `Err` value: InvalidQuery("Project requires Object input")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cpl005_projection_applied_after_similarity
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-runtime --test cpl_execution`
+EXIT=101

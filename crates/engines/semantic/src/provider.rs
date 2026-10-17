@@ -156,6 +156,13 @@ pub struct CandleEmbedding {
     model: std::sync::Mutex<candle_transformers::models::bert::BertModel>,
     tokenizer: tokenizers::Tokenizer,
     device: candle_core::Device,
+    // Test hook (P5-M11 park pattern): when `AIKOQL_EMBED_PARK_AT` names
+    // this instance's Nth embed, that embed parks holding the model lock so
+    // a deterministic pin can prove callers fail fast instead of queueing.
+    // Instance-scoped on purpose — the ingest path builds its own embedder
+    // and must never park.
+    park_at: Option<usize>,
+    park_count: std::sync::atomic::AtomicUsize,
 }
 
 /// Model id of the bundled offline embedding model (PRR-3).
@@ -384,7 +391,20 @@ impl CandleEmbedding {
             model: std::sync::Mutex::new(model),
             tokenizer,
             device,
+            park_at: None,
+            park_count: std::sync::atomic::AtomicUsize::new(0),
         })
+    }
+}
+
+#[cfg(feature = "embedding-candle")]
+impl CandleEmbedding {
+    /// Arm the test park on this instance: the `n`th embed parks while
+    /// holding the model lock (writes `AIKOQL_EMBED_PARK_MARKER` first).
+    /// Inert without the env marker; never armed on ingest's own embedder.
+    pub fn with_park_at(mut self, n: usize) -> Self {
+        self.park_at = Some(n);
+        self
     }
 }
 
@@ -416,13 +436,37 @@ impl EmbeddingProvider for CandleEmbedding {
         // mask and type_ids feeds an all-zero attention mask, making every
         // token attend to all [PAD] positions and collapsing every text onto
         // the pad vector (measured: cosine 0.93-0.95 between unrelated texts).
-        let output = self
-            .model
-            .lock()
-            .unwrap()
+        // T-44: fail fast when the enrichment worker holds the model —
+        // a queueing caller degrades to lexical instead of blocking for
+        // one scalar-CPU forward pass (~seconds) inside its socket budget.
+        let guard = match self.model.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(KError::Retryable("embedding model busy".into()));
+            }
+            // justified: Mutex poison is unrecoverable
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                panic!("embedding model mutex poisoned")
+            }
+        };
+        if let Some(n) = self.park_at {
+            let seen = self
+                .park_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            if seen == n {
+                // Test park: hold the model lock so a bounded-call pin can
+                // prove queueing callers degrade instead of blocking behind
+                // the enrichment worker.
+                if let Ok(m) = std::env::var("AIKOQL_EMBED_PARK_MARKER") {
+                    let _ = std::fs::write(&m, b"parked");
+                }
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+        }
+        let output = guard
             .forward(&ids, &type_ids, Some(&mask))
             .map_err(|e| KError::Store(format!("forward: {e}")))?;
-
         // Mean-pool over sequence dim, masked by attention to exclude padding.
         let mask_f32 = mask
             .to_dtype(candle_core::DType::F32)

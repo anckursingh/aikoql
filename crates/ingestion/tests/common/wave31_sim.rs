@@ -357,7 +357,7 @@ pub fn supersede_claim(
     req.properties = properties;
     req.reason = Some(reason.into());
     req.evidence = vec![ev(src)];
-    k.supersede(req).unwrap().new
+    k.supersede(req).unwrap().new.expect("fresh successor")
 }
 
 /// The kernel-computed stale set: every claim whose KO is superseded

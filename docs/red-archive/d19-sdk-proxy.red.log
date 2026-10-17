@@ -1,0 +1,5 @@
+ARCH: the ts-sdk job lost the fault-proxy build (D-19)
+ARCH: the python-sdk job lost the fault-proxy build (D-19)
+ARCH: the rust-sdk job lost the fault-proxy build (D-19)
+ARCH: benchmark.yml lost the sdk-nightly job (D-19)
+EXIT=1

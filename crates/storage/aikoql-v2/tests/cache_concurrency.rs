@@ -10,7 +10,7 @@
 //! error today — BlockCache has no set_wait_tracking/wait_ns). The
 //! feat is the instrumentation; sharding ships only on evidence.
 //!
-//! Cells (AIKOQL_V2_CACHE_CELLS=1): threads 1/2/4/8/16/32 × regimes
+//! Cells (AIKOQL_V2_CACHE_CELLS=1): threads 1/2/4/8/16/32/64 × regimes
 //!   - hot: every thread hammers the same block (the worst case for
 //!     the lock — all hits, one entry);
 //!   - random: 256 blocks, each thread walks an LCG sequence — hits
@@ -66,7 +66,7 @@ fn cache_concurrency_matrix() {
     assert!(db.get(HOT).unwrap().is_some(), "warm get fills the cache");
 
     let mut cells: Vec<String> = Vec::new();
-    for &threads in &[1usize, 2, 4, 8, 16, 32] {
+    for &threads in &[1usize, 2, 4, 8, 16, 32, 64] {
         // hot: one block, one reader id, every thread hits it.
         let hot = BlockCache::new(4 * BLOCK);
         hot.insert(1, 0, Arc::new(vec![7u8; BLOCK]));

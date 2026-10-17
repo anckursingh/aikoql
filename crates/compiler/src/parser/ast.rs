@@ -134,11 +134,18 @@ pub struct JoinOn {
 
 /// v0.3 K2: temporal query clause. `AsOf`/`Historical` are transaction time
 /// (millis since epoch); `Between` is a valid-time interval [from, to).
+/// T-58 (P3-008 LOW): `AsOfJournal(n)` is the journal-seq clock domain — a
+/// client replaying a synthetic corpus reads health()["journal_seq"] after
+/// each apply and slices on that exact per-apply marker (no wall synthesis).
+/// G-001 (POC-3): `Changeset { from, to }` — the generations minted in the
+/// half-open (from, to] commit window (KOID created_ms).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TemporalClause {
     AsOf(u64),
+    AsOfJournal(u64),
     Between { from: u64, to: u64 },
     Historical,
+    Changeset { from: u64, to: u64 },
 }
 
 /// v0.3 K1 leftover: protocol-level epistemic filter — keep rows whose

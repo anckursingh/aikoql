@@ -23,7 +23,11 @@
 //!   the merge is discarded (stale), CURRENT stays at the flush's
 //!   generation, the input segment files survive (today the flush
 //!   blocks on the state lock the merge holds — the scenario cannot
-//!   run. RED: the marker never appears).
+//!   run. RED: the marker never appears);
+//! csc004 — the challenge's literal window: parked AFTER the merge built
+//!   its staged output, BEFORE the publish — the staged files exist when
+//!   the newer flush lands, and the stale discard must sweep that BUILT
+//!   staging (csc003 parks at in_io — its staging is still empty).
 //!
 //! One binary: the park env is process-wide, so EVERY test in the binary
 //! serializes on PARK_LOCK — not just the park-arming ones: a sibling's
@@ -82,14 +86,14 @@ fn segment_file_count(d: &Path) -> usize {
         .count()
 }
 
-fn wait_for_park(d: &Path) {
-    let marker = d.join(PARK_STAGE);
+fn wait_for_park(d: &Path, stage: &str) {
+    let marker = d.join(stage);
     let start = Instant::now();
     while !marker.exists() {
         assert!(
             start.elapsed() < Duration::from_secs(30),
             "the compaction must have an unlocked merge phase \
-             ({PARK_ENV}={PARK_STAGE}) — today its merge runs under \
+             ({PARK_ENV}={stage}) — today its merge runs under \
              the state lock and no such window exists (the RED)"
         );
         std::thread::sleep(Duration::from_millis(20));
@@ -108,8 +112,8 @@ fn park_lock() -> std::sync::MutexGuard<'static, ()> {
 struct ParkArm;
 
 impl ParkArm {
-    fn new() -> Self {
-        std::env::set_var(PARK_ENV, PARK_STAGE);
+    fn new(stage: &'static str) -> Self {
+        std::env::set_var(PARK_ENV, stage);
         ParkArm
     }
 }
@@ -125,12 +129,12 @@ impl Drop for ParkArm {
 /// window; release the park and join. The release always runs, so
 /// today's blocked op cannot hang the suite — the RED is the flag.
 fn complete_while_parked(db: &Arc<Db>, d: &Path, op: impl FnOnce() + Send + 'static) -> bool {
-    let _arm = ParkArm::new();
+    let _arm = ParkArm::new(PARK_STAGE);
     let compact_t = {
         let db = Arc::clone(db);
         std::thread::spawn(move || db.compact().unwrap())
     };
-    wait_for_park(d);
+    wait_for_park(d, PARK_STAGE);
     let done = Arc::new(AtomicBool::new(false));
     let op_t = {
         let done = Arc::clone(&done);
@@ -244,12 +248,12 @@ fn csc003_a_flush_completing_during_the_merge_makes_the_compaction_stale() {
     let gen_before = Current::read(&d.join("CURRENT"))
         .unwrap()
         .manifest_generation;
-    let _arm = ParkArm::new();
+    let _arm = ParkArm::new(PARK_STAGE);
     let compact_t = {
         let db = Arc::clone(&db);
         std::thread::spawn(move || db.compact().unwrap())
     };
-    wait_for_park(&d);
+    wait_for_park(&d, PARK_STAGE);
     // The flush that makes the parked merge stale. Today it blocks behind
     // the merge's state lock — the RED fires at wait_for_park above.
     put_range(&db, 40, 60);
@@ -320,5 +324,109 @@ fn csc003_a_flush_completing_during_the_merge_makes_the_compaction_stale() {
         walk(&reopened),
         want,
         "the stale discard must lose nothing — all three flushes' data survives the reopen"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// csc004 — the challenge's exact window: parked before publish, staging built
+// ---------------------------------------------------------------------------
+
+#[test]
+fn csc004_stale_discard_after_segment_sweeps_the_built_staging() {
+    let _serial = park_lock();
+    let d = dir("csc004-stale-built-staging");
+    let db = Arc::new(open_quiet(&d));
+    put_range(&db, 0, 20);
+    db.flush().unwrap();
+    put_range(&db, 20, 40);
+    db.flush().unwrap();
+    let gen_before = Current::read(&d.join("CURRENT"))
+        .unwrap()
+        .manifest_generation;
+    // "T1 pauses before publish": after_segment parks with the merged
+    // output already staged — the files must EXIST in the parked window
+    // (csc003's in_io park has nothing built yet).
+    let _arm = ParkArm::new("after_segment");
+    let compact_t = {
+        let db = Arc::clone(&db);
+        std::thread::spawn(move || db.compact().unwrap())
+    };
+    wait_for_park(&d, "after_segment");
+    let staging_dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&d)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".compact-staging-")
+        })
+        .collect();
+    assert_eq!(
+        staging_dirs.len(),
+        1,
+        "exactly one staging dir at the parked merge"
+    );
+    let staged_segments: Vec<String> = std::fs::read_dir(&staging_dirs[0])
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("SEGMENT-"))
+        .collect();
+    assert!(
+        !staged_segments.is_empty(),
+        "the merge must have staged its output before the publish window"
+    );
+    // T2 flushes a newer L0 segment while T1 is parked.
+    put_range(&db, 40, 60);
+    db.flush().unwrap();
+    let flushed_gen = Current::read(&d.join("CURRENT"))
+        .unwrap()
+        .manifest_generation;
+    drop(_arm);
+    std::fs::remove_file(d.join("after_segment")).expect("release the park");
+    let stats = compact_t.join().expect("compact thread");
+    assert!(
+        stats.stale,
+        "the interleaved flush must discard the merge parked before its publish"
+    );
+    assert_eq!(
+        stats.segments_in, 2,
+        "the merge consumed the two seeded segments before the discard"
+    );
+    assert!(flushed_gen > gen_before, "the flush published");
+    drop(db);
+    // The four asserts at the literal window: T1 does not advance CURRENT,
+    // T2 survives, the BUILT staging is swept, the inputs remain.
+    assert_eq!(
+        Current::read(&d.join("CURRENT"))
+            .unwrap()
+            .manifest_generation,
+        flushed_gen,
+        "a stale merge must not advance CURRENT past the interleaved flush"
+    );
+    assert_eq!(
+        segment_file_count(&d),
+        3,
+        "inputs and the flush's segment must all survive on disk"
+    );
+    assert!(
+        !staging_dirs[0].exists(),
+        "the stale discard must sweep the built staging — files and dir"
+    );
+    let reopened = open_quiet(&d);
+    let want: BTreeMap<Vec<u8>, Vec<u8>> = (0..60)
+        .map(|i| {
+            (
+                format!("k{i:05}").into_bytes(),
+                format!("v{i}").into_bytes(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        walk(&reopened),
+        want,
+        "the stale discard must lose nothing — T2's data survives the reopen"
     );
 }

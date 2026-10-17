@@ -1,0 +1,16 @@
+---- object_placement_and_direct_read_agree_through_every_stage stdout ----
+
+thread 'object_placement_and_direct_read_agree_through_every_stage' (23776) panicked at crates\storage\aikoql-v2\tests\placement_equivalence.rs:64:9:
+assertion `left == right` failed: the anchor carries the right rid
+  left: ReplicaId(1)
+ right: ReplicaId(2)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    object_placement_and_direct_read_agree_through_every_stage
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `--test placement_equivalence`
+EXIT=101

@@ -1,0 +1,8 @@
+{
+  "id": "d04-module-identity",
+  "pre_fix_commit": "HEAD",
+  "command": "bash -c cd crates/sdk/go && go test ./... -run TestModuleIdentity",
+  "captured_at": "2026-10-01T13:12:51Z",
+  "captured_head": "92aeab91e60e1d08f36914737c793035738b8a35",
+  "exit_code": 1
+}

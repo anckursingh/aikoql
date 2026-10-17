@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.01s
+     Running tests\kse_m7_v2_workloads.rs (target\debug\deps\kse_m7_v2_workloads-25a3230c07b9801e.exe)
+
+running 1 test
+test v2_m7_workloads ... FAILED
+
+failures:
+
+---- v2_m7_workloads stdout ----
+
+thread 'v2_m7_workloads' (9060) panicked at crates\storage\aikoql-v2\tests\kse_m7_v2_workloads.rs:632:17:
+index out of bounds: the len is 0 but the index is 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    v2_m7_workloads
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-storage-v2 --test kse_m7_v2_workloads`
+EXIT=101

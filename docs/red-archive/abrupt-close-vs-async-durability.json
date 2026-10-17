@@ -1,0 +1,9 @@
+{
+  "id": "abrupt-close-vs-async-durability",
+  "pre_fix_commit": "0b3c126",
+  "command": "cargo test -p aikoql-mcp --test mcp_stdio m_abrupt_kill_preserves_acked_writes -- --test-threads=1",
+  "captured_at": "2026-09-29T08:49:06Z",
+  "captured_head": "0b3c1260420d736c6c74e052797b2ac6ac945708",
+  "exit_code": 101,
+  "note": "L-25 teeth proof for the durable-by-default pin (m_abrupt_kill_preserves_acked_writes): the pin is GREEN against the estate — the engine's Sync default fsyncs the WAL before every ack, so a server hard-killed (TerminateProcess, no stdin EOF, no Db::drop) right after acked tool writes keeps them all. The teeth mutation removes the WAL append from the write path (crates/storage/aikoql-v2/src/db.rs write(): the frame is dropped, the ack rides the memtable alone — a hypothetical non-durable write) and the SAME test REDs: the reopen finds no trace of the acked claim, the get tool errors, the assert on the properties fails (exit 101). The mutation was uncommitted and reverted after the capture; the pin re-run against the restored tree is green. Note on the flips: Async mode (no fsync) would NOT lose writes across a process kill — page-cache WAL appends survive TerminateProcess; the teeth mutation is the no-WAL-append ack, which is exactly the class of loss the pin guards against."
+}

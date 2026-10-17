@@ -1,0 +1,9 @@
+{
+  "id": "mut-m8-remove-nightly-install",
+  "pre_fix_commit": "7d09fe73db2a84d02446d3fbe7840e818634903f",
+  "command": "bash scripts/mutation-harness.sh m8-remove-nightly-install",
+  "captured_at": "2026-09-28T23:01:07Z",
+  "captured_head": "7d09fe73db2a84d02446d3fbe7840e818634903f",
+  "exit_code": 1,
+  "note": "TDD-033 (L-22): the pinned-nightly install step drops from the shuffle job \u2014 the run lands on stable, where -Z unstable-options errors, and the randomized-order run never starts. The gate's YAML mapping pin (^ +toolchain: nightly-) catches it; an unpinned nightly would also break rust-cache's toolchain key, so the pin is pinned by DATE."
+}

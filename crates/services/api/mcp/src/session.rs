@@ -100,6 +100,7 @@ impl Default for McpSession {
     }
 }
 pub(crate) fn tool_session_init(args: &J, session: &mut McpSession) -> Result<J, String> {
+    reject_empty_tenant(args)?;
     if session.trust_mode == TrustMode::Tcp {
         // PRR-2: TCP identity is server-assigned from --tcp-token. On the
         // tools/call path tenant/roles arrive already forced to the session's
@@ -162,19 +163,57 @@ pub(crate) fn tool_session_init(args: &J, session: &mut McpSession) -> Result<J,
     }))
 }
 
+/// P2c (P3-009 LOW): a tenant that is present but empty is an invisible
+/// namespace — rows land where no scoped reader can ever reach them.
+/// Reject at the boundary: session init and the write entry points
+/// (remember covers tool_batch ops, which resolve through tool_remember).
+pub(crate) fn reject_empty_tenant(args: &J) -> Result<(), String> {
+    if let Some(t) = args.get("tenant") {
+        match t.as_str() {
+            Some(s) if !s.is_empty() => {}
+            _ => return Err("invalid tenant: must be a non-empty string when provided".into()),
+        }
+    }
+    Ok(())
+}
+
+/// Fill identity into one args object and recurse into the `operations`
+/// array of tool_batch, so every batch op carries the session identity
+/// (F2: ops without a subject landed as mcp-agent and the submitting
+/// session then hit ACCESS_DENIED on its own KOs).
+fn fill_identity(a: &mut J, session: &McpSession, forced: bool) {
+    if forced {
+        a["subject"] = json!(session.agent_id);
+        a["roles"] = json!(session.roles);
+        if let Some(t) = &session.tenant {
+            a["tenant"] = json!(t);
+        } else {
+            // Token without tenant: strip any client-supplied tenant entirely.
+            a.as_object_mut().map(|o| o.remove("tenant"));
+        }
+    } else {
+        if a.get("subject").is_none() {
+            a["subject"] = json!(session.agent_id);
+        }
+        if a.get("roles").is_none() && !session.roles.is_empty() {
+            a["roles"] = json!(session.roles);
+        }
+        // R9: session tenant scope → every kernel call built from these args.
+        if a.get("tenant").is_none() && session.tenant.is_some() {
+            a["tenant"] = json!(session.tenant);
+        }
+    }
+    if let Some(ops) = a.get_mut("operations").and_then(|o| o.as_array_mut()) {
+        for op in ops {
+            fill_identity(op, session, forced);
+        }
+    }
+}
+
 /// Inject session identity into args if not overridden per-call (MRFC-0040).
 pub(crate) fn inject_session(args: &J, session: &McpSession) -> J {
     let mut a = args.clone();
-    if a.get("subject").is_none() {
-        a["subject"] = json!(session.agent_id);
-    }
-    if a.get("roles").is_none() && !session.roles.is_empty() {
-        a["roles"] = json!(session.roles);
-    }
-    // R9: session tenant scope → every kernel call built from these args.
-    if a.get("tenant").is_none() && session.tenant.is_some() {
-        a["tenant"] = json!(session.tenant);
-    }
+    fill_identity(&mut a, session, false);
     a
 }
 
@@ -182,14 +221,7 @@ pub(crate) fn inject_session(args: &J, session: &McpSession) -> J {
 /// cannot smuggle roles:["admin"] or another tenant through tools/call.
 pub(crate) fn inject_session_forced(args: &J, session: &McpSession) -> J {
     let mut a = args.clone();
-    a["subject"] = json!(session.agent_id);
-    a["roles"] = json!(session.roles);
-    if let Some(t) = &session.tenant {
-        a["tenant"] = json!(t);
-    } else {
-        // Token without tenant: strip any client-supplied tenant entirely.
-        a.as_object_mut().map(|o| o.remove("tenant"));
-    }
+    fill_identity(&mut a, session, true);
     a
 }
 

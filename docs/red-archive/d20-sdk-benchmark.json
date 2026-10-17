@@ -1,0 +1,8 @@
+{
+  "id": "d20-sdk-benchmark",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-02T18:56:48Z",
+  "captured_head": "12cfd4ab53232e75ff971e2dd048a0546cb7a04e",
+  "exit_code": 1
+}

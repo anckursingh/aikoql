@@ -1,0 +1,8 @@
+{
+  "id": "d10-prepared-statements",
+  "pre_fix_commit": "HEAD",
+  "command": "/e/dreams/Mnemosyne/.venv/Scripts/python.exe -m pytest crates/sdk/python/tests/test_prepared.py -q",
+  "captured_at": "2026-10-01T15:06:37Z",
+  "captured_head": "ececbfded4c4b46d9ce83321a15b44a0d061f5c1",
+  "exit_code": 2
+}

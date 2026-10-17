@@ -1,0 +1,48 @@
+warning: variable does not need to be mutable
+   --> crates\runtime\src\lib.rs:399:21
+    |
+399 |                 let mut kos = match self.assist.take() {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aikoql-runtime` (lib) generated 1 warning (run `cargo fix --lib -p aikoql-runtime` to apply 1 suggestion)
+   Compiling aikoql-mcp v0.2.2 (E:\dreams\Mnemosyne\crates\services\api\mcp)
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.19s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+[2m2026-10-09T17:32:35.384488Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-09T17:32:35.387057Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-t53sc-40184 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-09T17:32:35.389582Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-09T17:32:35.397884Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+test superseded_generations_stay_out_of_plain_match ... FAILED
+
+failures:
+
+---- superseded_generations_stay_out_of_plain_match stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'superseded_generations_stay_out_of_plain_match' (27156) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:2441:5:
+assertion `left == right` failed: plain MATCH must show only the current generation: {"results":[{"koid":"01a121b950bc0000000000000000a9c9","type_name":"device","version":2,"properties":{"key":"dev_053","value":"v1"},"extensions":{"authority":"agent_derived","epistemic_history":[{"at":1791567155394,"by":"admin","from":"asserted","reason":"superseded by 01a121b950c20000000100000000a9c9","to":"superseded"}],"epistemic_status":"superseded","scope":"session","valid_to":1791567155394}},{"koid":"01a121b950c20000000100000000a9c9","type_name":"device","version":2,"properties":{"key":"dev_053","value":"v2"},"extensions":{"authority":"agent_derived","epistemic_history":[{"at":1791567155401,"by":"admin","from":"asserted","reason":"superseded by 01a121b950c90000000000000000a9c9","to":"superseded"}],"epistemic_status":"superseded","evidence":[{"confidence":0.800000011920929,"method":"runtime_observation","source_artifact":"probe"}],"scope":"session","valid_from":1791567155394,"valid_to":1791567155401}},{"koid":"01a121b950c90000000000000000a9c9","type_name":"device","version":2,"properties":{"key":"dev_053","value":"v3"},"extensions":{"authority":"agent_derived","epistemic_history":[{"at":1791567155409,"by":"admin","from":"asserted","reason":"superseded by 01a121b950d20000000000000000a9c9","to":"superseded"}],"epistemic_status":"superseded","evidence":[{"confidence":0.800000011920929,"method":"runtime_observation","source_artifact":"probe"}],"scope":"session","valid_from":1791567155401,"valid_to":1791567155409}},{"koid":"01a121b950d20000000000000000a9c9","type_name":"device","version":2,"properties":{"key":"dev_053","value":"v4"},"extensions":{"authority":"agent_derived","epistemic_history":[{"at":1791567155417,"by":"admin","from":"asserted","reason":"superseded by 01a121b950d90000000000000000a9c9","to":"superseded"}],"epistemic_status":"superseded","evidence":[{"confidence":0.800000011920929,"method":"runtime_observation","source_artifact":"probe"}],"scope":"session","valid_from":1791567155409,"valid_to":1791567155417}},{"koid":"01a121b950d90000000000000000a9c9","type_name":"device","version":1,"properties":{"key":"dev_053","value":"v5"},"extensions":{"authority":"agent_derived","epistemic_status":"asserted","evidence":[{"confidence":0.800000011920929,"method":"runtime_observation","source_artifact":"probe"}],"scope":"session","valid_from":1791567155417}}]}
+  left: 5
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    superseded_generations_stay_out_of_plain_match
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 3.46s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

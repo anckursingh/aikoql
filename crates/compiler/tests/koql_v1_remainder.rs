@@ -107,7 +107,13 @@ fn kq002_order_direction_binds_to_nearest_key() {
 fn kq002_where_terminates_before_order_by() {
     // The WHERE predicate ends at the ORDER keyword — no greedy predicate parse.
     let m = as_match(parser::parse("MATCH X WHERE a == 1 AND b == 2 ORDER BY a RETURN *").unwrap());
-    assert_eq!(m.predicates.len(), 2);
+    // T-71: one WHERE reads one boolean expression — the AND is a single
+    // And node; the clause still ends at ORDER.
+    assert_eq!(m.predicates.len(), 1);
+    assert!(matches!(
+        &m.predicates[0],
+        aikoql_compiler::parser::ast::Predicate::And { .. }
+    ));
     assert_eq!(m.order_by.as_ref().unwrap().keys[0].field, "a");
 }
 
@@ -329,7 +335,10 @@ fn kq010_integral_literal_lowers_to_int() {
     let plan = compiled("MATCH fact WHERE temp == 35 RETURN *");
     match &plan.operators[1] {
         IrOp::Filter { predicates } => {
-            assert_eq!(predicates[0].value, Value::Int(35));
+            assert_eq!(
+                predicates[0].as_cmp().map(|(_, _, v)| v),
+                Some(&Value::Int(35))
+            );
         }
         _ => panic!("expected Filter"),
     }
@@ -340,7 +349,10 @@ fn kq010_fractional_literal_stays_float() {
     let plan = compiled("MATCH fact WHERE temp == 35.5 RETURN *");
     match &plan.operators[1] {
         IrOp::Filter { predicates } => {
-            assert_eq!(predicates[0].value, Value::Float(35.5));
+            assert_eq!(
+                predicates[0].as_cmp().map(|(_, _, v)| v),
+                Some(&Value::Float(35.5))
+            );
         }
         _ => panic!("expected Filter"),
     }
@@ -352,8 +364,8 @@ fn kq010_out_of_i64_range_stays_float() {
     match &plan.operators[1] {
         IrOp::Filter { predicates } => {
             assert_eq!(
-                predicates[0].value,
-                Value::Float(9_223_372_036_854_775_808.0)
+                predicates[0].as_cmp().map(|(_, _, v)| v),
+                Some(&Value::Float(9_223_372_036_854_775_808.0))
             );
         }
         _ => panic!("expected Filter"),

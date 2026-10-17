@@ -1,0 +1,8 @@
+{
+  "id": "l06-footer-masks-structural-arms",
+  "pre_fix_commit": "HEAD",
+  "command": "bash -c set -o pipefail; cd crates/storage/aikoql-v2 && cargo test --test restart_corruption every_corruption_class_fails_closed -- --exact 2>&1 | tail -20",
+  "captured_at": "2026-10-01T11:21:09Z",
+  "captured_head": "f0caaaea2f1e189dc2c1916ff4752a365b15bf69",
+  "exit_code": 101
+}

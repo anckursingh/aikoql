@@ -52,7 +52,7 @@ pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
             })
             .map_err(|e| e.to_string())?;
         return Ok(
-            json!({"koid": r.koid.to_hex(), "version": r.version, "commit_ts": r.commit_ts}),
+            json!({"koid": r.koid.to_hex(), "version": r.version, "commit_ts": commit_ts_millis(r.commit_ts)}),
         );
     }
 
@@ -72,6 +72,10 @@ pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
                 "koid": ko.koid.to_hex(),
                 "type_name": ko.metadata.type_name,
                 "version": ko.version,
+                // T-69 (POC T-67 follow-up): every row carries its tenant
+                // (null for a tenantless row) so one unscoped call assembles
+                // tenant-prefixed results without per-tenant scoped calls.
+                "tenant": ko.metadata.tenant,
                 "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
                 // v0.3 K1: epistemic metadata must survive the QL query
                 // boundary too — no silent drops.
@@ -86,7 +90,36 @@ pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
                 "version": ver
             })).collect::<Vec<_>>()
         })),
-        _ => Ok(json!({"results": []})),
+        aikoql_runtime::RowSet::Traversal(hits) => Ok(json!({
+            "results": hits.iter().map(|(koid, rt, depth)| json!({
+                "koid": koid.to_hex(),
+                "rel_type": rt,
+                "depth": depth
+            })).collect::<Vec<_>>()
+        })),
+        // T-32: group rows carry properties only (no KO identity) — the tool
+        // must surface them, not empty out.
+        aikoql_runtime::RowSet::Grouped(groups) => Ok(json!({
+            "results": groups.iter().map(|g| json!({
+                "properties": g.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+            })).collect::<Vec<_>>()
+        })),
+        // T-32: one row per join pair — left object plus the right match
+        // (or null on an unmatched LEFT row).
+        aikoql_runtime::RowSet::Joined(pairs) => Ok(json!({
+            "results": pairs.iter().map(|(l, r)| json!({
+                "koid": l.koid.to_hex(),
+                "type_name": l.metadata.type_name,
+                "version": l.version,
+                "properties": l.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+                "joined": r.as_ref().map(|ro| json!({
+                    "koid": ro.koid.to_hex(),
+                    "type_name": ro.metadata.type_name,
+                    "version": ro.version,
+                    "properties": ro.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+                }))
+            })).collect::<Vec<_>>()
+        })),
     }
 }
 
@@ -111,6 +144,9 @@ pub(crate) fn execute_stream_query(
             "koid": ko.koid.to_hex(),
             "type_name": ko.metadata.type_name,
             "version": ko.version,
+            // T-69: the row's tenant — null for a tenantless row (see the
+            // non-stream serializer).
+            "tenant": ko.metadata.tenant,
             "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
             // v0.3 K1: epistemic metadata must survive the QL query
             // boundary too — no silent drops.
@@ -122,7 +158,30 @@ pub(crate) fn execute_stream_query(
             "type_name": tn,
             "version": ver
         })).collect(),
-        _ => vec![],
+        aikoql_runtime::RowSet::Traversal(hits) => hits.iter().map(|(koid, rt, depth)| json!({
+            "koid": koid.to_hex(),
+            "rel_type": rt,
+            "depth": depth
+        })).collect(),
+        // T-32 (DI-006 re-verification): group rows carry properties only
+        // (no KO identity) — the tool must surface them, not empty out.
+        aikoql_runtime::RowSet::Grouped(groups) => groups.iter().map(|g| json!({
+            "properties": g.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+        })).collect(),
+        // T-32: one row per join pair — left object plus the right match
+        // (or null on an unmatched LEFT row).
+        aikoql_runtime::RowSet::Joined(pairs) => pairs.iter().map(|(l, r)| json!({
+            "koid": l.koid.to_hex(),
+            "type_name": l.metadata.type_name,
+            "version": l.version,
+            "properties": l.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+            "joined": r.as_ref().map(|ro| json!({
+                "koid": ro.koid.to_hex(),
+                "type_name": ro.metadata.type_name,
+                "version": ro.version,
+                "properties": ro.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+            }))
+        })).collect(),
     };
 
     const CHUNK_SIZE: usize = 100;
@@ -296,8 +355,11 @@ pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
         "koid": lin.koid.to_hex(),
         "versions": lin.versions.iter().map(|v| json!({
             "version": v.version,
-            "commit_ts": v.commit_ts,
-            "state": v.state.to_string()
+            "commit_ts": commit_ts_millis(v.commit_ts),
+            "state": v.state.to_string(),
+            // POC-4 S-6: the asserted event-time start, when the version
+            // carried one — the timeline's event-time column.
+            "valid_from": v.valid_from
         })).collect::<Vec<_>>(),
         "events": lin.events.iter().map(ke_json).collect::<Vec<_>>(),
         "derivation": derivation,
@@ -343,7 +405,7 @@ pub(crate) fn tool_explain(k: &Kernel, args: &J) -> Result<J, String> {
         "confidence": ex.confidence,
         "verified": ex.verified,
         "evidence": ex.evidence.iter().map(|(t, id)| json!({"rel_type": t, "target": id.to_hex()})).collect::<Vec<_>>(),
-        "event_refs": ex.event_refs.iter().map(|e| json!({"seq": e.seq, "commit_ts": e.commit_ts})).collect::<Vec<_>>()
+        "event_refs": ex.event_refs.iter().map(|e| json!({"seq": e.seq, "commit_ts": commit_ts_millis(e.commit_ts)})).collect::<Vec<_>>()
     }))
 }
 
@@ -384,7 +446,9 @@ pub(crate) fn tool_provenance(k: &Kernel, args: &J) -> Result<J, String> {
         for evt in &trace.events {
             md.push_str(&format!(
                 "- `{:?}` @ seq={} commit_ts={}\n",
-                evt.kind, evt.seq, evt.commit_ts
+                evt.kind,
+                evt.seq,
+                commit_ts_millis(evt.commit_ts)
             ));
         }
     }
@@ -438,6 +502,62 @@ mod tests {
             std::thread::sleep(timeout);
             Ok(())
         }
+    }
+
+    /// T-32 (DI-006 re-verification): the interpreter computes GROUP BY
+    /// correctly, but the tool layer dropped RowSet::Grouped to an empty
+    /// result — both tool paths must surface group rows.
+    #[test]
+    fn aikoql_group_by_surfaces_grouped_rows() {
+        let k = Kernel::open(
+            Arc::new(MemoryEngine::new()),
+            Arc::new(ManualClock::new(10_000)),
+            0xBEEF,
+        )
+        .unwrap();
+        for (name, dept) in [("a", "eng"), ("b", "eng"), ("c", "sales")] {
+            let mut props = PropertyMap::new();
+            props.insert("name".into(), Value::Text(name.into()));
+            props.insert("dept".into(), Value::Text(dept.into()));
+            k.remember(RememberRequest {
+                context: subject_of(&json!({"subject": "alice"})).into(),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: None,
+                metadata: Metadata {
+                    type_name: "Scratch".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: None,
+                relationships: vec![],
+                security: None,
+                extensions: ExtensionMap::new(),
+                origin: Origin::Human,
+                note: None,
+                referential_policy: ReferentialPolicy::default(),
+            })
+            .unwrap();
+        }
+
+        let q = "MATCH Scratch GROUP BY dept, COUNT(*) RETURN *";
+        // Streaming tool path (MRFC-0040 #5).
+        let (chunks, _sid) = execute_stream_query(&k, q, "alice", &[], None).unwrap();
+        let rows: Vec<J> = chunks
+            .into_iter()
+            .flat_map(|c| c.as_array().cloned().unwrap_or_default())
+            .collect();
+        assert_eq!(rows.len(), 2, "two dept groups, not an empty result");
+
+        // Non-stream tool path.
+        let res = tool_aikoql(&k, &json!({"query": q, "subject": "alice"})).unwrap();
+        assert_eq!(
+            res["results"].as_array().map(|a| a.len()),
+            Some(2),
+            "non-stream tool surfaces groups too"
+        );
     }
 
     /// P5-M27 (IDX-P1-02) — RED: the default find_similar blocks ~2s behind

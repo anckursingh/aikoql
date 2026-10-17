@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import sys; sys.path.insert(0, 'scripts'); from artifact_schema import validate_1m; validate_1m('artifacts/storage-engine-v2/result-1m-aikoql-v2.json', fresh=False); print('baseline schema OK')
+                                                                                        ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\dreams\Mnemosyne\scripts\artifact_schema.py", line 103, in validate_1m
+    raise SchemaError(f"{where}: missing field: p50_ns (label {label!r})")
+artifact_schema.SchemaError: artifacts/storage-engine-v2/result-1m-aikoql-v2.json: backends[0].rows[0]: missing field: p50_ns (label 'KO get (W1)')
+EXIT=1

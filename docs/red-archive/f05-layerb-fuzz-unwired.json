@@ -1,0 +1,8 @@
+{
+  "id": "f05-layerb-fuzz-unwired",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-02T20:19:39Z",
+  "captured_head": "5e8f9df7a64fb61baaa43214164d9923c0ce19a6",
+  "exit_code": 1
+}

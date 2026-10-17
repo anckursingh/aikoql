@@ -8,17 +8,23 @@ description: Install and run aikoql in 5 minutes
 ## CLI Commands
 
 ```
-aikoql comes with 10 CLI commands:
+aikoql comes with 16 CLI commands:
   shell [DB]             Interactive knowledge shell
   serve [OPTIONS] [DB]   Start MCP server (stdio by default; --listen for TCP)
+  query <AIKOQL> [DB]    Run one aikoql statement (CREATE/MATCH/...)
+  explain <KOID> [DB]    Explain an object (provenance + evidence)
+  schema [DB]            List types in the knowledge base
+  index [DB]             Storage/index statistics
+  status [DB]            Health, metrics, and ABI version of a knowledge base
   ingest-dir [PATH] [DB] Ingest directory into knowledge base
   report [PATH]          Print knowledge report for directory (read-only)
   backup [DB]            Create verified backup
   restore BACKUP [DB]    Restore from backup
   audit [DB]             Print encryption compliance report
   keygen [PATH]          Generate master encryption key
-  import <SOURCE> [ARGS] Import from postgres / sqlite / mongodb
+  import <SOURCE> [ARGS] Import from postgres / sqlite / mongodb / neo4j
   model install [MODEL]  Install an embedding model for offline use
+  hash-password PASSWORD Print an argon2id hash for [auth].users
 ```
 
 ### Ingest a Codebase
@@ -31,9 +37,9 @@ aikoql report ~/my-project
 aikoql ingest-dir ~/my-project ./kb
 ```
 
-A fresh path creates an **aikoql-v2** database directory — the default since
-2026-09-07. Existing `*.redb` files still open as redb and a v1 WAL still
-opens as v1: auto-detection never reinterprets an existing database.
+A fresh path creates an **aikoql-v2** database directory — the only engine
+since 2026-09-07. Legacy `*.redb` files and v1 WALs are no longer readable:
+opening one fails closed with an explicit error.
 
 Every entity (file, module, function, test, section) becomes its own Knowledge
 Object with kernel relationships between them (`depends_on`, `implements`,
@@ -65,13 +71,13 @@ aikoql ships as a single, self-contained binary. No dependencies, no installers.
 
 **Windows:**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp.exe
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp.exe
 .\aikoql-mcp.exe --help
 ```
 
 **Linux (static musl — any distro):**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-linux-musl
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp-linux-musl
 chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql-mcp
 ```
 
@@ -80,29 +86,30 @@ A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dyn
 **macOS (Apple Silicon / Intel):**
 ```bash
 # Apple Silicon
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-macos-arm64
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp-macos-arm64
 chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql-mcp
 
 # Intel
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-macos
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp-macos
 chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql-mcp
 ```
 
 ### Docker (multi-arch: amd64 + arm64)
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.1.19
+docker pull ghcr.io/anckursingh/aikoql:0.2.2
 
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.1.19
+  ghcr.io/anckursingh/aikoql:0.2.2
 ```
 
 `AIKOQL_TCP_TOKEN` is required — TCP auth is fail-closed
-(`TOKEN[:TENANT[:ROLES]]`). Everything mutable lives under the `/data` volume
-(db at `/data/aikoql.redb`, models in `/data/models`). Tags: `0.1.19` (pin
-this), `0.1`, `latest`.
+(`TOKEN[:TENANT[:ROLES]]`). State lives under the `/data` volume (the
+`aikoql-v2` database directory, models in `/data/models`); the memory
+directory defaults to `./memory` (`/memory` in the image). Tags: `0.2.2`
+(pin this), `0.2`, `latest`.
 
 The server binds loopback-only inside the container (plaintext bearer tokens
 never leave the host), so published ports don't reach it — probe and use it
@@ -111,7 +118,7 @@ from inside:
 ```bash
 docker exec aikoql curl -fsS http://127.0.0.1:9091/health
 docker exec aikoql aikoql --version
-docker exec aikoql aikoql model install   # optional: offline embeddings
+docker exec aikoql aikoql model install --model-dir /data/models   # optional: offline embeddings
 ```
 
 For MCP over TCP from another process, share the container's network
@@ -123,7 +130,7 @@ from the host, use the npm binary instead. A compose file
 
 ```bash
 aikoql-mcp --version
-# aikoql-mcp 0.1.19
+# aikoql-mcp 0.2.2
 ```
 
 ## 5-Second Start
@@ -237,8 +244,9 @@ Ollama/OpenAI-compatible endpoint to use a remote model instead
 
 ## Connecting from Code
 
-MCP is the blessed integration surface (P3-M9): every language uses its
-standard MCP client, plus a first-party Python SDK.
+MCP is the blessed integration surface (P3-M9): first-party SDKs exist for
+Python, TypeScript, Go, and Java; any other language uses its standard MCP
+client.
 
 ### Python
 ```python
@@ -248,7 +256,12 @@ db = Agent.connect("./kb")  # embedded — fresh path = aikoql-v2 database direc
 result = db.remember("Note", {"body": "Hello"})
 ```
 
-### TypeScript / Go / any language
+### TypeScript, Go, Java
+
+First-party packages: `@aikoql/client` (TypeScript), the Go module, and the
+Java client (`com.aikoql.client`) — see `crates/sdk/` for each. They speak
+the same MCP wire, so a plain MCP client also works:
+
 ```typescript
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -256,9 +269,6 @@ const client = new Client({ name: 'my-agent', version: '1.0.0' });
 await client.connect(new StdioClientTransport({ command: 'aikoql-mcp', args: ['serve', './kb'] }));
 const result = await client.callTool({ name: 'remember', arguments: { type_name: 'Note', properties: { body: 'Hello' } } });
 ```
-
-First-party drivers for other languages return with the primary-DB roadmap
-(`docs/first-class-db-roadmap.md`).
 
 ## Encryption (Optional)
 
@@ -285,19 +295,13 @@ aikoql serve --listen :9090 --tcp-token mytoken:acme:admin --metrics-addr :9091 
 
 See [Encryption Guide](/docs/guides/encryption) for details on key hierarchy, field-level encryption, restart behavior, and compliance.
 
-## Storage Backends
+## Storage
 
-Three engines behind one `StorageEngine` trait, default **aikoql-v2**:
-
-| backend | profile |
-|---|---|
-| `aikoql-v2` | the default — segmented LSM, bounded memory + recovery, best write-mixed throughput |
-| `aikoql` | read-hot, RAM-affordant, bounded dataset |
-| `redb` | compatibility fallback — snapshots and pre-v2 files |
-
-Select with `--backend`, `AIKOQL_BACKEND`, or `storage.backend` in TOML; the
-default auto-detects what is already at the path. Details in
-[Architecture](/docs/architecture), numbers in [Benchmarks](/docs/benchmarks).
+One engine: **aikoql-v2** (segmented LSM, bounded memory + recovery). The
+redb and v1 engines were decommissioned (S-02), and there is no backend
+knob — no `--backend` flag, no `AIKOQL_BACKEND`, no `storage.backend` key.
+Details in [Architecture](/docs/architecture), historical numbers in
+[Benchmarks](/docs/benchmarks).
 
 ## Next Steps
 

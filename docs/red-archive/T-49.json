@@ -1,0 +1,8 @@
+{
+  "id": "T-49",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world supersede_honors_extensions_valid_from",
+  "captured_at": "2026-10-09T14:42:12Z",
+  "captured_head": "9a5ef758721539c2f90f42473f4d2ff37f275ee5",
+  "exit_code": 101
+}

@@ -1,0 +1,36 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.21s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+[2m2026-10-09T14:56:33.065836Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-09T14:56:33.066160Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-t50tn-65512 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-09T14:56:33.068653Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-09T14:56:33.081134Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+test supersede_successor_inherits_tenant ... FAILED
+
+failures:
+
+---- supersede_successor_inherits_tenant stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'supersede_successor_inherits_tenant' (38760) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:2273:5:
+assertion `left == right` failed: tenant_b must not see tenant_a's successor: {"results":[{"koid":"01a1212a75320000000000000000a9c9","type_name":"device","version":1,"properties":{"key":"d1","value":"v2"},"extensions":{"authority":"agent_derived","epistemic_status":"asserted","evidence":[{"confidence":0.800000011920929,"method":"runtime_observation","source_artifact":"probe"}],"scope":"session","valid_from":1791557793074}}]}
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    supersede_successor_inherits_tenant
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.15s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

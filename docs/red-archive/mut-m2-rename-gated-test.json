@@ -1,0 +1,9 @@
+{
+  "id": "mut-m2-rename-gated-test",
+  "pre_fix_commit": "25ea8e5",
+  "command": "bash scripts/mutation-harness.sh m2-rename-gated-test",
+  "captured_at": "2026-09-28T22:39:40Z",
+  "captured_head": "d27f4ccb356ceebcaf4727eb1c65f4a54d2754f3",
+  "exit_code": 1,
+  "note": "mutation RED: a gated test renamed with the old name kept as a prefix (x -> x_renamed) \u2014 invisible to a bare substring grep; caught after leg 3 anchors the signature boundary (fn x()"
+}

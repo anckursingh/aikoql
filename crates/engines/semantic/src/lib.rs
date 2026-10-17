@@ -10,7 +10,7 @@
 
 use aikoql_kernel::knowledge::kom::*;
 use aikoql_kernel::knowledge::notify::EventFilter;
-use aikoql_kernel::transaction::kernel::{Kernel, RememberRequest, Subject};
+use aikoql_kernel::transaction::kernel::{Kernel, Subject};
 use aikoql_kernel::KError;
 use aikoql_scheduler::SchedulerJob;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -103,20 +103,18 @@ impl SemanticEngine {
             summary: enrichment.summary,
         };
 
-        let mut req = RememberRequest::update(
+        // Dedicated kernel path (device-eval N2): mutates ONLY the semantic
+        // field. A remember-update would replace caller-created relationship
+        // edges wholesale — the catch-up used to destroy the graph.
+        kernel.attach_semantic(
             // System service: admin role so ACL-filtered scans see every KO
             // and the enrichment write is authorized (dogfood ingest found
             // plain "semantic-engine" was silently denied read on owned KOs).
             Subject::with_roles("semantic-engine", &["admin"]),
             ko.koid,
-            ko.metadata.clone(),
-        );
-        req.properties = ko.properties.clone();
-        req.semantic = Some(semantic);
-        req.expected_version = Some(ko.version);
-        req.note = Some("semantic enrichment".into());
-
-        kernel.remember(req)?;
+            semantic,
+            Some(ko.version),
+        )?;
         Ok(())
     }
 }
@@ -165,7 +163,24 @@ impl SchedulerJob for SemanticEngine {
                                 provider: provider.clone(),
                                 inner: inner.clone(),
                             };
-                            if engine.enrich_one(&k, &ko).is_ok() {
+                            // T-44: a query's embed can hold the model for one
+                            // forward pass (try_lock fail-fast). Retry in place
+                            // — a dropped event silently leaves the KO
+                            // unenriched forever.
+                            let mut enriched = false;
+                            for _ in 0..40 {
+                                match engine.enrich_one(&k, &ko) {
+                                    Ok(()) => {
+                                        enriched = true;
+                                        break;
+                                    }
+                                    Err(KError::Retryable(_)) => {
+                                        std::thread::sleep(Duration::from_millis(250));
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                            if enriched {
                                 inner.water.store(ke.seq, Ordering::Relaxed);
                             }
                         }
@@ -224,6 +239,7 @@ impl SchedulerJob for SemanticEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aikoql_kernel::transaction::kernel::RememberRequest;
     use aikoql_kernel::{ManualClock, MemoryEngine, Metadata};
     use aikoql_scheduler::Scheduler;
     use std::sync::Arc;

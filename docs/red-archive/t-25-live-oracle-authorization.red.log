@@ -1,0 +1,203 @@
+.FFFFFFFFFF                                                              [100%]
+================================== FAILURES ===================================
+___________________ test_scenario_carries_the_live_verdict ____________________
+
+    def test_scenario_carries_the_live_verdict():
+        [s] = authorization_scenarios(
+            [ko(_K, name="settlement")], [_decision()])
+>       assert s.decision is True
+               ^^^^^^^^^^
+E       AttributeError: 'Scenario' object has no attribute 'decision'
+
+training\tests\test_authorization.py:104: AttributeError
+_______________ test_denied_scenario_carries_the_kernel_reason ________________
+
+    def test_denied_scenario_carries_the_kernel_reason():
+        denied = _decision(allowed=False, reason="Denied by policy: " + "c" * 32)
+        [s] = authorization_scenarios([ko(_K, name="settlement")], [denied])
+>       assert s.decision is False
+               ^^^^^^^^^^
+E       AttributeError: 'Scenario' object has no attribute 'decision'
+
+training\tests\test_authorization.py:111: AttributeError
+__________________ test_policy_of_emits_the_verdict_metadata __________________
+
+    def test_policy_of_emits_the_verdict_metadata():
+        from aikoql_training.plan import policy_of
+    
+        [s] = authorization_scenarios(
+            [ko(_K, name="settlement")], [_decision()])
+>       assert policy_of(s) == {
+            "authorization_required": True,
+            "subject": "reader",
+            "action": "read",
+            "resource": "service",
+            "decision": True,
+            "reason": "allowed",
+        }
+E       AssertionError: assert {'authorizati...tion': 'read'} == {'authorizati...service', ...}
+E         
+E         Omitting 3 identical items, use -vv to show
+E         Right contains 3 more items:
+E         {'decision': True, 'reason': 'allowed', 'resource': 'service'}
+E         Use -v to get more diff
+
+training\tests\test_authorization.py:120: AssertionError
+______________ test_validator_rejects_verdict_decision_mismatch _______________
+
+    def test_validator_rejects_verdict_decision_mismatch():
+        # the answer says ALLOWED but the recorded kernel decision is a
+        # denial — the dataset never asserts what the ACL does not
+        ex = _example(policy={"authorization_required": True,
+                              "subject": "reader", "action": "read",
+                              "resource": "service",
+                              "decision": False,
+                              "reason": "Denied by policy: " + "c" * 32})
+        out = validate_grounding(ex)
+>       assert out["ok"] is False
+E       assert True is False
+
+training\tests\test_authorization.py:214: AssertionError
+___________ test_validator_rejects_denial_without_the_kernel_reason ___________
+
+    def test_validator_rejects_denial_without_the_kernel_reason():
+        denied = _decision(allowed=False, reason="Denied by policy: " + "c" * 32)
+        ex = _example(decision=denied, policy={
+            "authorization_required": True, "subject": "reader", "action": "read",
+            "resource": "service", "decision": False})
+        out = validate_grounding(ex)
+>       assert out["ok"] is False
+E       assert True is False
+
+training\tests\test_authorization.py:224: AssertionError
+_______________ test_validator_rejects_reason_not_in_the_answer _______________
+
+    def test_validator_rejects_reason_not_in_the_answer():
+        # the recorded reason differs from the reason the answer preserves —
+        # a stale or forged denial reason is rejected
+        denied = _decision(allowed=False, reason="Denied by policy: " + "c" * 32)
+        ex = _example(decision=denied, policy={
+            "authorization_required": True, "subject": "reader", "action": "read",
+            "resource": "service", "decision": False,
+            "reason": "Denied by policy: " + "d" * 32})
+        out = validate_grounding(ex)
+>       assert out["ok"] is False
+E       assert True is False
+
+training\tests\test_authorization.py:237: AssertionError
+___________________ test_schema_accepts_authorization_type ____________________
+
+    def test_schema_accepts_authorization_type():
+>       validate_schema(_example())
+                        ^^^^^^^^^^
+
+training\tests\test_authorization.py:277: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+decision = {'principal': 'reader', 'action': 'read', 'resource_type': 'service', 'allowed': True, ...}
+facts = None, labels = None, policy = None, answer = None
+
+    def _example(decision=None, facts=None, labels=None, policy=None, answer=None):
+        decision = decision or _decision()
+        kos = [ko(_K, name="settlement")]
+        [s] = authorization_scenarios(kos, [decision])
+        return make_example(
+            task={"type": "authorization", "difficulty": "factual", "requires": []},
+            input={"question": s.question},
+            query_target={"language": "aikoql",
+                          "query": 'MATCH service WHERE name == "settlement" '
+                                   "RETURN name"},
+            context={
+                "entities": [], "relations": [], "evidence": [_EV],
+                "facts": facts or [
+                    {"statement": "Policy decision: " + s.expected_answer,
+                     "evidence": _EV},
+                ],
+            },
+            expected={"answer": answer if answer is not None else s.expected_answer,
+                      "koids": list(s.koids),
+                      "evidence_ids": [evidence_id(_EV)]},
+            policy=policy or {"authorization_required": True,
+                              "subject": s.subject, "action": s.action,
+                              "resource": s.type_name,
+>                             "decision": s.decision, "reason": s.reason},
+                                          ^^^^^^^^^^
+            labels=labels or _VERDICT_LABELS,
+        )
+E       AttributeError: 'Scenario' object has no attribute 'decision'
+
+training\tests\test_authorization.py:188: AttributeError
+_________ test_verify_authorization_examples_agrees_with_the_live_acl _________
+
+mcp_server = ('127.0.0.1:65302', 'test-token')
+
+    def test_verify_authorization_examples_agrees_with_the_live_acl(mcp_server):
+        """The dataset-level live-oracle leg (P0.6): every committed
+        authorization example's policy.decision and denial reason are
+        re-proved against the kernel's evaluate_policies — a tampered or
+        stale verdict is reported, never silently shipped."""
+>       from aikoql_training.validation.execution import (
+            verify_authorization_examples,
+        )
+E       ImportError: cannot import name 'verify_authorization_examples' from 'aikoql_training.validation.execution' (E:\dreams\Mnemosyne\training\src\aikoql_training\validation\execution.py)
+
+training\tests\test_authorization.py:388: ImportError
+__________ test_policy_authorization_demands_full_decision_metadata ___________
+
+    def test_policy_authorization_demands_full_decision_metadata():
+        # TDD-01 (T-25): authorization_required demands the complete
+        # machine-readable verdict — subject, action, resource, the kernel
+        # decision and the preserved reason — or the example is invalid.
+        base = {"authorization_required": True, "subject": "reader",
+                "action": "read", "resource": "service",
+                "decision": True, "reason": "allowed"}
+        for missing in ("subject", "action", "resource", "decision", "reason"):
+            example = make_example()
+            policy = dict(base)
+            del policy[missing]
+            example["policy"] = policy
+>           with pytest.raises(SchemaError, match="authorization"):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError: Regex pattern did not match.
+E             Expected regex: 'authorization'
+E             Actual message: 'unknown field: policy.resource'
+
+training\tests\test_schema.py:185: AssertionError
+______________ test_corpus_reaches_the_target_and_is_publishable ______________
+
+mcp_server = ('127.0.0.1:65305', 'test-token')
+tmp_path = WindowsPath('C:/Users/ancku/AppData/Local/Temp/pytest-of-ancku/pytest-194/test_corpus_reaches_the_target0')
+
+    def test_corpus_reaches_the_target_and_is_publishable(mcp_server, tmp_path):
+        host, token = mcp_server
+        out, artifacts = tmp_path / "ds", tmp_path / "artifacts"
+        proc = _run(host, token, out, target=40, seeds=2, artifacts=artifacts)
+        assert proc.returncode == 0, proc.stderr
+        report = _report(proc)
+        assert report["publishable"] is True, report
+        assert report["example_count"] >= 40, report
+        # the leakage gate holds at corpus scale: zero cross-holdout pairs
+        assert report["gates"]["leakage"]["count"] == 0, report
+        # the corpus-time secret binding holds: secret_scan evaluated and 0
+        assert report["gates"]["secret_scan"]["ok"] is True, report
+        # T-25: the live-oracle authorization leg ran over the committed
+        # dataset (fail-loud wiring — the leg's verdict teeth live in
+        # test_authorization.py against the real ACL)
+>       assert report["authorization"]["ok"] is True, report
+               ^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'authorization'
+
+training\tests\test_corpus.py:69: KeyError
+=========================== short test summary info ===========================
+FAILED training\tests\test_authorization.py::test_scenario_carries_the_live_verdict
+FAILED training\tests\test_authorization.py::test_denied_scenario_carries_the_kernel_reason
+FAILED training\tests\test_authorization.py::test_policy_of_emits_the_verdict_metadata
+FAILED training\tests\test_authorization.py::test_validator_rejects_verdict_decision_mismatch
+FAILED training\tests\test_authorization.py::test_validator_rejects_denial_without_the_kernel_reason
+FAILED training\tests\test_authorization.py::test_validator_rejects_reason_not_in_the_answer
+FAILED training\tests\test_authorization.py::test_schema_accepts_authorization_type
+FAILED training\tests\test_authorization.py::test_verify_authorization_examples_agrees_with_the_live_acl
+FAILED training\tests\test_schema.py::test_policy_authorization_demands_full_decision_metadata
+FAILED training\tests\test_corpus.py::test_corpus_reaches_the_target_and_is_publishable
+10 failed, 1 passed, 44 deselected in 34.57s
+EXIT=1

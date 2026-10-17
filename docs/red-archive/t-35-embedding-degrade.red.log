@@ -1,0 +1,37 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-runtime` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.52s
+     Running unittests src\lib.rs (target\debug\deps\aikoql_runtime-513643ed60a35319.exe)
+
+running 5 tests
+test tests::ann_search_with_query_text_falls_back_to_text ... ok
+test tests::ann_search_without_provider_falls_back_to_jaccard ... ok
+test tests::ann_search_with_provider_uses_real_embedding ... ok
+test tests::ann_search_errors_when_no_ko_in_scope_has_an_embedding ... FAILED
+test tests::ann_search_readiness_sweep ... FAILED
+
+failures:
+
+---- tests::ann_search_errors_when_no_ko_in_scope_has_an_embedding stdout ----
+
+thread 'tests::ann_search_errors_when_no_ko_in_scope_has_an_embedding' (23320) panicked at crates\runtime\src\lib.rs:1779:22:
+expected Retryable, got Ok(Scored([(KOID(000000004e200000000100000000cafe), 0.0, "note", 1), (KOID(000000004e200000000200000000cafe), 0.0, "note", 1)]))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::ann_search_readiness_sweep stdout ----
+
+thread 'tests::ann_search_readiness_sweep' (64216) panicked at crates\runtime\src\lib.rs:1822:26:
+case 0: expected err=true, got (Ok(Scored([(KOID(000000004e200000000100000000cafe), 0.0, "note", 1), (KOID(000000004e200000000200000000cafe), 0.0, "note", 1)])), true)
+
+
+failures:
+    tests::ann_search_errors_when_no_ko_in_scope_has_an_embedding
+    tests::ann_search_readiness_sweep
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-runtime --lib`
+EXIT=101
