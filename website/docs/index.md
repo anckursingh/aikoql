@@ -36,8 +36,8 @@ aikoql-mcp shell :memory:
 - **Context Compiler** — 40-60% reduction in agent discovery tokens. Compiles code + docs into minimum sufficient context.
 - **Schema Discovery** — Agents learn what types and properties exist before composing queries.
 - **Idempotent Mutations** — Safe to retry. Same `idempotency_key` = exact-once commit.
-- **REST API** — 40+ endpoints with JSON, Bearer auth, OpenAPI 3.0 spec.
-- **SDKs** — Python (PyO3 + MCP client); every other language via standard MCP clients (P3-M9).
+- **REST API** — 60+ endpoints with JSON, Bearer auth, OpenAPI 3.0 spec.
+- **SDKs** — First-party Python (PyO3), TypeScript, Go, and Java; any other language via standard MCP clients.
 - **Knowledge Transactions (v0.3)** — observe, assert, verify, contradict, supersede, merge, invalidate, resolve — every operation evidence-backed and lineage-stamped.
 - **Agent Experience Reuse (v0.3)** — record execution outcomes as TTL-bounded experience KOs; match them to new tasks under reuse conditions; injected into `compile_context`.
 
@@ -78,7 +78,7 @@ Knowledge Runtime (Compiler → KVM · Orchestrator · Policy Engine)
         ↓
 Knowledge Kernel (MVCC · OCC · HLC · RBAC · Audit · CDC · Epistemic · Valid-Time · Evidence)
         ↓
-Storage Kernel (aikoql-v2 LSM · redb · EncryptedStore)
+Storage Kernel (aikoql-v2 LSM · EncryptedStore)
 ```
 
 **Everything is a Knowledge Object.** Data, programs, workflows, policies, triggers, agents — unified lifecycle.
@@ -86,7 +86,8 @@ Storage Kernel (aikoql-v2 LSM · redb · EncryptedStore)
 ## Quick Links
 
 - [Getting Started](/docs/getting-started) — Install and run in 5 minutes
-- [API Reference](/docs/api-reference) — All MCP tools + 40+ REST endpoints
+- [Query Language](/docs/query-language) — The complete AikoQL (KOQL) reference: statements, clauses, operators, examples
+- [API Reference](/docs/api-reference) — MCP tools + 60+ REST endpoints
 - [Architecture](/docs/architecture) — Deep dive into the Knowledge OS
 - [Benchmarks](/docs/benchmarks) — Certified cross-engine matrix (W1–W8 + resources)
 - [Development](/docs/development) — Build, test and extend from source

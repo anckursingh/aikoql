@@ -78,7 +78,7 @@ curl -X POST http://localhost:9091/api/v1/remember \
 Every version remains queryable:
 
 ```aikoql
-SHOW HISTORY FindEngineers
+MATCH aikoql:program WHERE name == "FindEngineers" HISTORICAL RETURN *
 ```
 
 ## Compose Workflows
@@ -126,11 +126,11 @@ Programs execute with the **caller's identity**. If the caller doesn't have Read
 
 ## Audit Trail
 
-Every program execution is recorded:
+Every program execution is recorded. Use the `trace` MCP tool (or
+`GET /api/v1/trace/{koid}`) on the program's KOID:
 
-```aikoql
-MATCH aikoql:program WHERE name == "FindEngineers"
-TRACE EACH
+```json
+{"method":"tools/call","params":{"name":"trace","arguments":{"koid":"019fdc..."}}}
 ```
 
 Shows who deployed it, who executed it, when, and what versions exist.

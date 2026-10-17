@@ -26,7 +26,7 @@ employee = ["salary", "ssn"]
 EOF
 
 # 3. Start — the passphrase comes from the env (env beats TOML)
-aikoql serve --metrics-addr :9091 ./encrypted.redb
+aikoql serve --metrics-addr :9091 ./encrypted-kb
 ```
 
 `enabled = true` with no reachable passphrase (no env, no TOML) fails closed — aikoql refuses to open the database in silent plaintext mode.

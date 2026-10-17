@@ -1,11 +1,11 @@
 ---
 title: API Reference
-description: Complete reference for all MCP tools and REST endpoints
+description: Core MCP tools and REST endpoints
 ---
 
 # API Reference
 
-aikoql exposes its full MCP tool registry (autodiscovered via `tools/list`) and 40+ REST endpoints.
+aikoql exposes 103 MCP tools (the authoritative registry is `tools/list`) and 60+ REST endpoints. This page documents the core tools and endpoints.
 
 ## Authentication
 
@@ -15,7 +15,7 @@ All mutation endpoints require a Bearer token:
 # Get a token
 curl -X POST http://localhost:9091/api/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin"}'
+  -d '{"username":"admin","password":"<your-password>"}'
 
 # Use the token
 curl http://localhost:9091/api/v1/remember \
@@ -24,7 +24,9 @@ curl http://localhost:9091/api/v1/remember \
   -d '{"type_name":"Note","properties":{"body":"Hello"}}'
 ```
 
-**Default credentials:** `admin/admin` (full access), `user/user` (read-only).
+**There are no default credentials.** Configure users under `[auth]` in
+`aikoql.toml` (argon2id hashes — `aikoql hash-password PASSWORD` prints
+one), or set `AIKOQL_ADMIN_PASSWORD` on first start to bootstrap an admin.
 
 ## Knowledge CRUD
 
@@ -312,7 +314,7 @@ MCP: deploy_trigger
 ```
 POST /api/v1/backup
 MCP: backup
-CLI: aikoql backup ./kb.redb
+CLI: aikoql backup ./kb
 ```
 
 ### `restore` — PITR restore
@@ -415,7 +417,7 @@ MCP: compile_context
 ```
 
 ```json
-{"task": "Fix the login bug in auth.rs", "token_budget": 8000}
+{"koid": "<task koid>", "task": "Fix the login bug in auth.rs", "token_budget": 8000}
 ```
 
 Returns ranked, deduplicated context package with entities, facts, and relationships.
@@ -428,7 +430,7 @@ MCP: reconcile
 ```
 
 ```json
-{"git_diff": "...", "knowledge_base_path": "./kb.redb"}
+{"git_diff": "...", "knowledge_base_path": "./kb"}
 ```
 
 ### `agent/connector-bridge` — DB schema metadata → KnowledgeIr
@@ -517,7 +519,7 @@ MCP: document_ingest
 ```
 
 ```json
-{"path": "/uploads/architecture-decision.pdf", "title": "ADR-0042"}
+{"filename": "architecture-decision.pdf", "content_base64": "...", "mime_type": "application/pdf"}
 ```
 
 Runs the full D1-D9 pipeline: Upload → OCR → Document AST → KnowledgeIr → Ontology → Resolution → Commit.

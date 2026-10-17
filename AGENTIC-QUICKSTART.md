@@ -2,7 +2,7 @@
 
 A quickstart for coding agents — Claude Code, Codex, Cursor, and any
 harness that speaks MCP. Everything below is validated against the real
-binary by `artifacts/plugin-test/agentic-smoke.mjs` (97 tools, full loop
+binary by `artifacts/plugin-test/agentic-smoke.mjs` (103 tools, full loop
 green).
 
 ---
@@ -30,29 +30,29 @@ versioned knowledge you can query and prove**.
 | Model the codebase | `relate`/`traverse` — module→function→test edges; `register_schema` + `constraint_diagnostics` — enforce invariants |
 | Private vs shared knowledge | tenants, roles, ACLs — private agent memory vs team knowledge base |
 
-**The surface is MCP.** 97 tools over stdio (local, trusted, no token) or
-TCP (shared, token-scoped). Python gets a first-party SDK (`from aikoql
-import Agent`); every other language uses its standard MCP client —
-`docs/sdk-proxy-decision.md` explains why hand-rolled SDKs were deleted.
+**The surface is MCP.** 103 tools over stdio (local, trusted, no token) or
+TCP (shared, token-scoped). First-party SDKs exist for Python (`from aikoql
+import Agent`), TypeScript (`@aikoql/client`), Go, and Java; every other
+language uses its standard MCP client.
 
 ## Install
 
 ```bash
 npm i -g aikoql-mcp            # npm launcher (downloads the right binary)
 # or grab the binary from https://github.com/anckursingh/aikoql/releases
-# or Docker: ghcr.io/anckursingh/aikoql:0.1.19  (state under /data volume)
+# or Docker: ghcr.io/anckursingh/aikoql:0.2.2  (state under /data volume)
 ```
 
-A fresh path creates an **aikoql-v2** directory (native engine: WAL +
-tiered compacted segments). An existing `.redb` file or v1 WAL
-auto-detects as its own backend.
+A fresh path creates an **aikoql-v2** directory (the only engine: WAL +
+tiered compacted segments). Legacy `.redb` files and v1 WALs fail closed —
+they are no longer readable.
 
 ## Wire it into your harness
 
 **Claude Code:**
 
 ```bash
-claude mcp add aikoql -- npx -y aikoql-mcp@0.1.19 serve ./kb
+claude mcp add aikoql -- npx -y aikoql-mcp@0.2.2 serve ./kb
 ```
 
 (A packaged aikoql plugin also exists for Claude Code — it runs this same
@@ -61,7 +61,7 @@ server, with the knowledge-base path pinned via `userConfig.KB_PATH`.)
 **Codex:**
 
 ```bash
-codex mcp add aikoql -- npx -y aikoql-mcp@0.1.19 serve ./kb
+codex mcp add aikoql -- npx -y aikoql-mcp@0.2.2 serve ./kb
 ```
 
 **Anything else** (Cursor, Windsurf, VS Code, custom harnesses) — the
@@ -72,7 +72,7 @@ portable MCP config block, e.g. `.vscode/mcp.json` / `.cursor/mcp.json`:
   "mcpServers": {
     "aikoql": {
       "command": "npx",
-      "args": ["-y", "aikoql-mcp@0.1.19", "serve", "./kb"]
+      "args": ["-y", "aikoql-mcp@0.2.2", "serve", "./kb"]
     }
   }
 }
@@ -81,9 +81,10 @@ portable MCP config block, e.g. `.vscode/mcp.json` / `.cursor/mcp.json`:
 **Shared team KB over TCP** (server on a host, many agents/clients):
 
 ```bash
-aikoql-mcp serve --listen 0.0.0.0:9090 --tcp-token s3cret:team:admin /data/kb
+aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token s3cret:team:admin /data/kb
 ```
 
+The TCP listener is loopback-only — binding a non-loopback address exits 2.
 TCP auth is fail-closed: the token is `TOKEN[:TENANT[:ROLE1,ROLE2]]` and a
 bare `TOKEN` (no roles) **exits 2**. In production use `AIKOQL_TCP_TOKEN`
 or `AIKOQL_TCP_TOKEN_FILE` (CLI flags leak into the process list). On TCP,
@@ -188,7 +189,7 @@ session.
 
 Bringing a new harness online (5 min, matches the smoke script):
 
-- [ ] `tools/list` returns 97 tools and contains `remember`, `aikoql`,
+- [ ] `tools/list` returns 103 tools and contains `remember`, `aikoql`,
       `session_init`, `find_similar`, `explain`, `trace`, `reason`,
       `approve_job`
 - [ ] `session_init` establishes identity
@@ -206,8 +207,8 @@ Bringing a new harness online (5 min, matches the smoke script):
 
 Known gotchas (all confirmed, not folklore):
 
-- **Rate limit:** 120 MCP calls/min by default — a busy agent loop hits it
-  fast. Raise in `aikoql.toml`:
+- **Rate limit:** 300 MCP calls/min by default — a busy agent loop can hit
+  it. Raise in `aikoql.toml`:
   `[rate_limit] max_calls_per_minute = 100000`
 - **Evidence methods** are the fixed enum above; unknown methods are
   rejected (`unknown evidence method`).
@@ -235,6 +236,6 @@ Known gotchas (all confirmed, not folklore):
 
 `docs/first-class-db-roadmap.md`: phase-gated path from knowledge layer to
 first-class primary database (performance parity vs Postgres/Neo4j,
-replication/HA, sharding), with first-party drivers returning at Phase 4
-when the demand signal exists. Today: one binary, MCP, 97 tools, proven
-durability — start with the 10-minute flow above.
+replication/HA, sharding). Today: one binary, MCP, 103 tools, first-party
+Python/TypeScript/Go/Java SDKs, proven durability — start with the 10-minute
+flow above.
