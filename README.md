@@ -1,4 +1,4 @@
-# AIKOQL — Mnemosyne
+# AIKOQL
 
 A knowledge database with built-in encryption, hybrid vector+text
 search, and an MCP (Model Context Protocol) interface for AI agents.

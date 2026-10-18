@@ -681,7 +681,7 @@ if ! grep -qF 'os: [ubuntu-latest, windows-latest, macos-14]' "$REL"; then
   echo "ARCH: release.yml lost the 3-OS pypi wheel matrix (D-18)" >&2
   fail=1
 fi
-if ! grep -qF 'maturin build --release --out dist --universal2' "$REL"; then
+if ! grep -qF 'maturin build --release --out dist --target universal2-apple-darwin' "$REL"; then
   echo "ARCH: release.yml lost the universal2 mac wheel (macos-13 retirement)" >&2
   fail=1
 fi
@@ -713,6 +713,10 @@ fi
 if grep -q '^  sdk-release-cert:' "$REL" && \
    ! sed -n '/^  sdk-release-cert:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'syft'; then
   echo "ARCH: the sdk-release-cert job lost the SBOM leg (D-18)" >&2
+  fail=1
+fi
+if ! grep -q 'export VIRTUAL_ENV=/tmp/aikoql-cert-venv' scripts/sdk-release-cert.sh; then
+  echo "ARCH: sdk-release-cert.sh lost the VIRTUAL_ENV export before maturin develop (v0.2.3 release failure)" >&2
   fail=1
 fi
 

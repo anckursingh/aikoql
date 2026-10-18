@@ -3,7 +3,7 @@ name: rust-coding
 description: Rust coding rules for this repo — error classification, correctness-first optimization, scalability patterns, and the trap ledger of things that have actually bitten this codebase. Use when writing or reviewing any Rust under crates/ or benchmarks/.
 ---
 
-# Rust coding — Mnemosyne/AikoQL
+# Rust coding — AikoQL
 
 What makes agent-written Rust effective here: match the patterns this
 codebase has already proven, and never repeat a trap on the ledger below.

@@ -193,7 +193,7 @@ jobs:
           set -euo pipefail
           cargo build --release -p aikoql-mcp
           python -m venv .venv
-          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client pymongo
+          .venv/bin/pip install -q "maturin==1.14.1" psutil psycopg neo4j qdrant-client pymongo
           export VIRTUAL_ENV="$PWD/.venv"
           cd crates/sdk/python
           "$VIRTUAL_ENV/bin/maturin" develop --release
@@ -282,7 +282,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m venv .venv
-          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client pymongo
+          .venv/bin/pip install -q "maturin==1.14.1" psutil psycopg neo4j qdrant-client pymongo
           export VIRTUAL_ENV="$PWD/.venv"
           cd crates/sdk/python
           "$VIRTUAL_ENV/bin/maturin" develop --release
@@ -892,12 +892,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pip install -q maturin
+          pip install -q "maturin==1.14.1"
           cd crates/sdk/python
           rm -rf dist  # stale wheels (e.g. pre-rename builds) ride the
                         # upload glob and PyPI rejects the batch
           if [[ "${{ matrix.os }}" == macos-14 ]]; then
-            maturin build --release --out dist --universal2
+            maturin build --release --out dist --target universal2-apple-darwin
           else
             maturin build --release --out dist
           fi

@@ -22,7 +22,7 @@ aikoql-mcp shell
 
 From there, serve it to agents:
 
-- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql-mcp@0.2.2 serve ./kb`
+- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql-mcp@0.2.4 serve ./kb`
 - **TCP + Studio UI:** `aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091` → open http://127.0.0.1:9091/studio (no default credentials — set `AIKOQL_ADMIN_PASSWORD` on first start to bootstrap the admin login)
 
 ## Usage Modes
@@ -289,14 +289,14 @@ Embedded ACID storage — no external database server required.
 Release images are multi-arch (linux/amd64 + linux/arm64) and published on every release tag alongside the binaries:
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.2.2   # pin the immutable release tag
+docker pull ghcr.io/anckursingh/aikoql:0.2.4   # pin the immutable release tag
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=TOKEN::admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.2.2
+  ghcr.io/anckursingh/aikoql:0.2.4
 ```
 
-Container contract: config at `/etc/aikoql/aikoql.toml`; state under the `/data` volume — the `aikoql-v2` database directory and the local embedding model store (`/data/models`, install with `docker exec aikoql aikoql model install --model-dir /data/models`); the memory directory defaults to `./memory` (that is `/memory` in the image). The image is stateless: upgrades are pull + recreate, the knowledge base survives in the volume. TCP auth is fail-closed — the container refuses to listen without a token (and a token without roles exits 2). The server binds loopback-only inside the container, so published ports don't reach it — probe from inside: `docker exec aikoql curl -fsS http://127.0.0.1:9091/health`. Compose variant: `AIKOQL_VERSION=0.2.2 AIKOQL_TCP_TOKEN=TOKEN::admin docker compose -f docker-compose.release.yml up -d`.
+Container contract: config at `/etc/aikoql/aikoql.toml`; state under the `/data` volume — the `aikoql-v2` database directory and the local embedding model store (`/data/models`, install with `docker exec aikoql aikoql model install --model-dir /data/models`); the memory directory defaults to `./memory` (that is `/memory` in the image). The image is stateless: upgrades are pull + recreate, the knowledge base survives in the volume. TCP auth is fail-closed — the container refuses to listen without a token (and a token without roles exits 2). The server binds loopback-only inside the container, so published ports don't reach it — probe from inside: `docker exec aikoql curl -fsS http://127.0.0.1:9091/health`. Compose variant: `AIKOQL_VERSION=0.2.4 AIKOQL_TCP_TOKEN=TOKEN::admin docker compose -f docker-compose.release.yml up -d`.
 
 ## Platform Support
 

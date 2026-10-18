@@ -71,13 +71,13 @@ aikoql ships as a single, self-contained binary. No dependencies, no installers.
 
 **Windows:**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp.exe
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.4/aikoql-mcp.exe
 .\aikoql-mcp.exe --help
 ```
 
 **Linux (static musl — any distro):**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp-linux-musl
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.4/aikoql-mcp-linux-musl
 chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql-mcp
 ```
 
@@ -86,29 +86,29 @@ A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dyn
 **macOS (Apple Silicon / Intel):**
 ```bash
 # Apple Silicon
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp-macos-arm64
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.4/aikoql-mcp-macos-arm64
 chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql-mcp
 
 # Intel
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp-macos
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.4/aikoql-mcp-macos
 chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql-mcp
 ```
 
 ### Docker (multi-arch: amd64 + arm64)
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.2.2
+docker pull ghcr.io/anckursingh/aikoql:0.2.4
 
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.2.2
+  ghcr.io/anckursingh/aikoql:0.2.4
 ```
 
 `AIKOQL_TCP_TOKEN` is required — TCP auth is fail-closed
 (`TOKEN[:TENANT[:ROLES]]`). State lives under the `/data` volume (the
 `aikoql-v2` database directory, models in `/data/models`); the memory
-directory defaults to `./memory` (`/memory` in the image). Tags: `0.2.2`
+directory defaults to `./memory` (`/memory` in the image). Tags: `0.2.4`
 (pin this), `0.2`, `latest`.
 
 The server binds loopback-only inside the container (plaintext bearer tokens
@@ -130,7 +130,7 @@ from the host, use the npm binary instead. A compose file
 
 ```bash
 aikoql-mcp --version
-# aikoql-mcp 0.2.2
+# aikoql-mcp 0.2.4
 ```
 
 ## 5-Second Start
