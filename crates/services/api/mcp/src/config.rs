@@ -14,6 +14,10 @@ pub(crate) struct RuntimeConfig {
     /// loopback-only + token rules as the MCP TCP listener; CLI-only for
     /// now (add a [server] TOML key when someone asks).
     pub native_port: Option<String>,
+    /// MRFC-0080 R3a: the replication stream listener (`--replicate-listen`).
+    /// Same loopback-only + token rules as `--listen`; standbys need an
+    /// `admin` token. Turns on log retention. CLI-only.
+    pub replicate_listen: Option<String>,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -249,6 +253,7 @@ pub(crate) fn load(
         db_path: DEFAULT_DB_PATH.into(),
         listen_addr: None,
         native_port: None,
+        replicate_listen: None,
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -460,6 +465,13 @@ pub(crate) fn load(
                 );
                 i += 2;
             }
+            "--replicate-listen" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.replicate_listen = Some(v.clone());
+                    i += 2;
+                }
+                None => return Err("--replicate-listen requires an address".into()),
+            },
             "--tcp-token" => match args.get(i + 1) {
                 Some(v) => {
                     cli_tcp_tokens.push(v.clone());

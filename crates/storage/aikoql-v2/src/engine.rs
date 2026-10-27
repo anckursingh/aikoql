@@ -20,7 +20,7 @@ use crate::compaction::CompactStats;
 use crate::db::{CheckpointInfo, Config, Db};
 use crate::snapshot::{RestoreInfo, SnapshotInfo};
 use crate::stats::{DbStats, ReadPathStats};
-use crate::wal::Op;
+use crate::wal::{Op, WalFrame};
 use aikoql_kernel::knowledge::kom::{KError, KResult};
 use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
 use std::path::Path;
@@ -41,6 +41,11 @@ pub trait StorageAdminApi: Send + Sync {
     fn storage_checkpoint(&self) -> KResult<CheckpointInfo>;
     fn snapshot_to(&self, dir: &Path) -> KResult<SnapshotInfo>;
     fn restore_from(&self, dir: &Path) -> KResult<RestoreInfo>;
+    /// MRFC-0080 R3a — the leader side of the replication stream (see
+    /// `Db::log_since` / `release_log` / `last_seq`).
+    fn log_since(&self, after: u64, max: usize) -> KResult<Vec<WalFrame>>;
+    fn release_log(&self, upto: u64) -> KResult<()>;
+    fn last_seq(&self) -> u64;
 }
 
 /// AIKOQL v2 engine: WAL → memtable → immutable segments, served
@@ -101,6 +106,18 @@ impl StorageAdminApi for AikoqlStorageEngineV2 {
 
     fn snapshot_to(&self, dir: &Path) -> KResult<SnapshotInfo> {
         self.db.snapshot_to(dir).map_err(se)
+    }
+
+    fn log_since(&self, after: u64, max: usize) -> KResult<Vec<WalFrame>> {
+        self.db.log_since(after, max).map_err(se)
+    }
+
+    fn release_log(&self, upto: u64) -> KResult<()> {
+        self.db.release_log(upto).map_err(se)
+    }
+
+    fn last_seq(&self) -> u64 {
+        self.db.last_seq()
     }
 
     fn restore_from(&self, dir: &Path) -> KResult<RestoreInfo> {

@@ -20,9 +20,11 @@ use std::sync::Arc;
 pub(crate) fn open_kernel(
     db_path: &str,
     enc: &RuntimeEncryption,
+    retain_log: bool,
 ) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
     // The runtime's ONE opener; every subcommand funnels through here.
-    let (engine, admin) = aikoql_runtime::backend::open_engine(std::path::Path::new(db_path))?;
+    let (engine, admin) =
+        aikoql_runtime::backend::open_engine_with(std::path::Path::new(db_path), retain_log)?;
     if !enc.enabled {
         return Ok((Kernel::open(engine, Arc::new(SystemClock), 0xA9C9)?, admin));
     }
@@ -56,7 +58,7 @@ pub(crate) fn open_kernel_auto(
     db_path: &str,
 ) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
     let cfg = crate::config::load(&[], None, None).map_err(KError::Store)?;
-    open_kernel(db_path, &cfg.encryption)
+    open_kernel(db_path, &cfg.encryption, false)
 }
 
 #[cfg(test)]

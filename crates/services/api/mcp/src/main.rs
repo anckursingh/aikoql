@@ -211,6 +211,7 @@ fn main() {
     }
     let listen_addr = cfg.listen_addr;
     let native_addr = cfg.native_port;
+    let replicate_listen = cfg.replicate_listen;
     let metrics_addr = cfg.metrics_addr;
     let tcp_tokens = cfg.tcp_tokens;
     let db_path = cfg.db_path;
@@ -264,13 +265,14 @@ fn main() {
         None => None,
     };
 
-    let (kernel, admin) = match engine::open_kernel(&db_path, &cfg.encryption) {
-        Ok((k, admin)) => (k, admin),
-        Err(e) => {
-            eprintln!("open kernel: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let (kernel, admin) =
+        match engine::open_kernel(&db_path, &cfg.encryption, replicate_listen.is_some()) {
+            Ok((k, admin)) => (k, admin),
+            Err(e) => {
+                eprintln!("open kernel: {}", e);
+                std::process::exit(1);
+            }
+        };
 
     #[cfg(feature = "embedding-openai")]
     let url = if embedding_base_url.is_empty() {
@@ -461,6 +463,50 @@ fn main() {
             http_auth.clone(),
             admin.clone(),
         );
+    }
+
+    if let Some(addr) = replicate_listen {
+        // MRFC-0080 R3a: the replication stream rides beside any serve mode
+        // (stdio included) under the TCP gates — tokens required, loopback
+        // bind only (the stream is the whole database, in plaintext).
+        if tcp_tokens.is_empty() {
+            eprintln!("--replicate-listen requires a --tcp-token with the admin role for standbys");
+            std::process::exit(2);
+        }
+        let auth = match TcpAuthTable::parse(&tcp_tokens) {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                eprintln!("invalid --tcp-token: {e}");
+                std::process::exit(2);
+            }
+        };
+        let addr = match validate_listen(&addr) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        };
+        let listener = match TcpListener::bind(&addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("bind replication listener {}: {}", addr, e);
+                std::process::exit(1);
+            }
+        };
+        let Some(source) = admin.clone() else {
+            eprintln!("--replicate-listen needs the storage admin surface");
+            std::process::exit(2);
+        };
+        info!(%addr, "replication stream listening");
+        thread::spawn(move || {
+            replication::serve_replication(
+                listener,
+                source,
+                auth,
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            )
+        });
     }
 
     if listen_addr.is_some() || native_addr.is_some() {

@@ -42,7 +42,7 @@ pub const OP_PUT_OBJECT: u8 = 4;
 pub const OP_DELETE_OBJECT: u8 = 5;
 
 const WAL_MAGIC: &[u8; 4] = b"AKWF";
-const FRAME_HEADER_LEN: usize = 19; // magic 4 + version 2 + type 1 + seq 8 + payload_len 4
+pub const FRAME_HEADER_LEN: usize = 19; // magic 4 + version 2 + type 1 + seq 8 + payload_len 4
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {

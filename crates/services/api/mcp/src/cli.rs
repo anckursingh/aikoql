@@ -31,6 +31,8 @@ pub(crate) fn print_usage() {
         "  report [PATH]          Print knowledge report for directory\n",
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
+        "  follow DIR --leader ADDR [--token T]  Stream a leader's log into a standby DIR\n",
+        "                         (token: an admin --tcp-token of the leader, or AIKOQL_REPLICATION_TOKEN)\n",
         "\n",
         "Server options (serve mode):\n",
         "  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090; empty host = loopback)\n",
@@ -39,6 +41,7 @@ pub(crate) fn print_usage() {
         "                         (dev-only: tokens hit the process list — set AIKOQL_TCP_TOKEN or\n",
         "                         AIKOQL_TCP_TOKEN_FILE in production instead; env replaces flags)\n",
         "  --metrics-addr ADDR    HTTP metrics + health endpoint (e.g., 127.0.0.1:9091)\n",
+        "  --replicate-listen ADDR  Replication stream for standbys (loopback-only; admin --tcp-token)\n",
         "  --embedding-provider P  Embedding provider: \"candle\" (default), \"http\", or \"ollama\"\n",
         "  --embedding-base-url U  OpenAI-compatible base URL (default: http://localhost:11434)\n",
         "  --embedding-model M     Model name (default: nomic-embed-text)\n",
@@ -115,6 +118,49 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 }
             }
             crate::shell::run_shell(db, tenant);
+            true
+        }
+        Some("follow") => {
+            // MRFC-0080 R3a: aikoql-mcp follow <STANDBY_DIR> --leader ADDR
+            // [--token TOKEN] — the token falls back to
+            // AIKOQL_REPLICATION_TOKEN (keeps it out of the process list).
+            let tail: Vec<&str> = subcmd_idx
+                .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
+                .unwrap_or_default();
+            let (mut dir, mut leader, mut token) = (None, None, None);
+            let mut it = tail.iter();
+            while let Some(a) = it.next() {
+                match *a {
+                    "--leader" => leader = it.next().map(|s| s.to_string()),
+                    "--token" => token = it.next().map(|s| s.to_string()),
+                    _ => dir = Some(a.to_string()),
+                }
+            }
+            let token = token.or_else(|| std::env::var("AIKOQL_REPLICATION_TOKEN").ok());
+            let (Some(dir), Some(leader), Some(token)) = (dir, leader, token) else {
+                eprintln!(
+                    "Usage: aikoql-mcp follow <STANDBY_DIR> --leader HOST:PORT [--token TOKEN]\n  (or set AIKOQL_REPLICATION_TOKEN)"
+                );
+                std::process::exit(2);
+            };
+            let standby = match aikoql_storage_v2::db::Db::open(aikoql_storage_v2::db::Config::new(
+                dir.clone().into(),
+            )) {
+                Ok(db) => db,
+                Err(e) => {
+                    eprintln!("open standby {dir}: {e}");
+                    std::process::exit(1);
+                }
+            };
+            eprintln!(
+                "following {leader} into {dir} from seq {}",
+                standby.last_seq()
+            );
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            if let Err(e) = crate::replication::follow(&leader, &token, &standby, &stop) {
+                eprintln!("follow stopped: {e}");
+                std::process::exit(1);
+            }
             true
         }
         Some("backup") => {
