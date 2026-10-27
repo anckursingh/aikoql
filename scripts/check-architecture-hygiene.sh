@@ -621,18 +621,27 @@ if bad:
 fi
 
 # workflow test 20 — test_go_module_tag_wired (D-18, SDK plan §27): the
-# release must tag the Go module at sdk/go/v<version> — pkg.go.dev serves
+# release must tag the Go module at crates/sdk/go/v<version> (the prefix
+# must equal the module directory, V-05) — pkg.go.dev serves
 # the module from that tag; a module that only exists at the repo tag is
 # invisible to the Go ecosystem (the D-18 row's RED: "Go has no tagged
 # module"). The job gates on github-release success (a module tag for a
 # release that never landed is a phantom version).
-if ! sed -n '/^  go-tag:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'sdk/go/'; then
-  echo "ARCH: release.yml has no go-tag job pushing the sdk/go/ module tag (D-18)" >&2
+if ! sed -n '/^  go-tag:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'TAG: crates/sdk/go/v'; then
+  echo "ARCH: release.yml has no go-tag job pushing the crates/sdk/go/ module tag (D-18, V-05)" >&2
   fail=1
 fi
 if grep -q '^  go-tag:' "$REL" && \
    ! sed -n '/^  go-tag:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'github-release'; then
   echo "ARCH: the go-tag job is not gated on the github-release job (D-18)" >&2
+  fail=1
+fi
+
+# workflow test 20b — test_pypi_publish_needs_every_wheel (V-05): v0.2.3
+# reached PyPI without the mac wheel — always() published the survivors of
+# a failed matrix leg. The publish job must gate on the whole matrix.
+if ! sed -n '/^  pypi-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q "needs.pypi-wheel-matrix.result == 'success'"; then
+  echo "ARCH: pypi-publish is not gated on every wheel-matrix leg succeeding (V-05)" >&2
   fail=1
 fi
 
