@@ -152,6 +152,15 @@ impl IdGen {
         }
     }
 
+    /// MRFC-0080 R2 — never mint at or below `ms`, the millisecond of the
+    /// newest committed timestamp: every committed KOID was minted before
+    /// its commit, so its ms is ≤ that one. A reopened or promoted kernel
+    /// whose clock reads the same ms — or lags — then cannot re-issue one.
+    pub fn skip_past(&mut self, ms: u64) {
+        self.last_ms = ms + 1;
+        self.counter = 0;
+    }
+
     pub fn next(&mut self, now_ms: u64) -> KOID {
         let ms = if now_ms > self.last_ms {
             self.counter = 0;

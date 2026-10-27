@@ -68,5 +68,8 @@ fn snapshot_bootstrap_then_log_catch_up() {
         );
     }
     let fresh = follower.create_object().unwrap();
-    assert!(!oids.contains(&fresh), "promoted follower reused an object id");
+    assert!(
+        !oids.contains(&fresh),
+        "promoted follower reused an object id"
+    );
 }

@@ -754,7 +754,13 @@ impl Kernel {
             store,
             clock,
             hlc: Arc::new(Hlc::starting_at(last_ts)),
-            idgen: Arc::new(Mutex::new(IdGen::new(id_seed))),
+            idgen: Arc::new(Mutex::new({
+                let mut idgen = IdGen::new(id_seed);
+                if last_ts > 0 {
+                    idgen.skip_past(last_ts >> 16); // the HLC packs ms << 16
+                }
+                idgen
+            })),
             pipe: Arc::new(Mutex::new(Pipeline {
                 seq,
                 audit,

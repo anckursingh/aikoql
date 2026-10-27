@@ -64,6 +64,12 @@ impl AikoqlStorageEngineV2 {
         Ok(AikoqlStorageEngineV2 { db })
     }
 
+    /// MRFC-0080 R2 — the Db under the kernel: a leader serves
+    /// `log_since` / `release_log` from it while the kernel writes.
+    pub fn db(&self) -> &Db {
+        &self.db
+    }
+
     /// SE2-M21 — the Db's cumulative read-path counters, reachable through
     /// the adapter: the attribution probe measures the kernel leg (kernel
     /// op → engine gets) against the engine leg (this engine's gets) on
