@@ -29,6 +29,7 @@ mod model;
 mod native;
 mod protocol;
 mod rate_limiter;
+mod replication;
 mod session;
 mod shell;
 mod studio;
