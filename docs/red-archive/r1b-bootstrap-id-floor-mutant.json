@@ -1,0 +1,8 @@
+{
+  "id": "r1b-bootstrap-id-floor-mutant",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-storage-v2 --test replication_bootstrap",
+  "captured_at": "2026-10-27T21:03:30Z",
+  "captured_head": "570ff916e24eed5b57343f02ce3d920a9baca9b5",
+  "exit_code": 101
+}

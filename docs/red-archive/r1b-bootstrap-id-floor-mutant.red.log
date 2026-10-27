@@ -1,0 +1,23 @@
+   Compiling aikoql-storage-v2 v0.2.4 (/Users/pukku/coding/aikoql/crates/storage/aikoql-v2)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.47s
+     Running tests/replication_bootstrap.rs (target/r1b/debug/deps/replication_bootstrap-42bbcdfef15827d9)
+
+running 1 test
+test snapshot_bootstrap_then_log_catch_up ... FAILED
+
+failures:
+
+---- snapshot_bootstrap_then_log_catch_up stdout ----
+
+thread 'snapshot_bootstrap_then_log_catch_up' (166638) panicked at crates/storage/aikoql-v2/tests/replication_bootstrap.rs:71:5:
+promoted follower reused an object id
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    snapshot_bootstrap_then_log_catch_up
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s
+
+error: test failed, to rerun pass `-p aikoql-storage-v2 --test replication_bootstrap`
+EXIT=101
