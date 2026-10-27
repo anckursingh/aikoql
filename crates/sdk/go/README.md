@@ -3,7 +3,7 @@
 The first-party Go client for the [aikoql](https://github.com/anckursingh/aikoql) knowledge database: the canonical Database API (remember, get, query, traverse, hybrid search, context compile, prepare/execute) over the MCP transport, with a pooled client and stdio dialing.
 
 ```go
-import "github.com/anckursingh/aikoql/sdk/go"
+import "github.com/anckursingh/aikoql/crates/sdk/go"
 
 client, err := aikoql.Dial(ctx, "127.0.0.1:9090", aikoql.WithToken("s3cret"))
 defer client.Close()

@@ -19,7 +19,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/anckursingh/aikoql/sdk/go"
+	"github.com/anckursingh/aikoql/crates/sdk/go"
 )
 
 func main() {

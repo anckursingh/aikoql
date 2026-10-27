@@ -50,7 +50,7 @@ const MIN_SERVER_VERSION = "0.2.4"
 
 // Version is the SDK's own version, advertised as the client identity by
 // default. Distributors pin it at build time: -ldflags
-// "-X github.com/anckursingh/aikoql/sdk/go.Version=<version>". The default
+// "-X github.com/anckursingh/aikoql/crates/sdk/go.Version=<version>". The default
 // is the honest marker — a library cannot know its own module version at
 // runtime (debug.ReadBuildInfo reports the MAIN module's).
 var Version = "dev"
