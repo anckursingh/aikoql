@@ -1,6 +1,6 @@
 # MRFC-0080 — Replication (roadmap Phase 2)
 
-Status: R0 accepted, R1 in progress. Branch `feature/aikoql-db-launch`.
+Status: R0 accepted, R1 done (RED `r1-replication-log`), R1b done (pin; mutant `r1b-bootstrap-id-floor-mutant`). Branch `feature/aikoql-db-launch`.
 Gate (roadmap Phase 2): crash-window certs on a 2-node setup.
 
 ## Decision
@@ -33,7 +33,7 @@ an exact copy, which the verifiable-knowledge claim requires.
 | WAL truncated at every flush — a lagging follower has nothing to catch up from | R1 |
 | no "frames after seq N" read surface | R1 |
 | no apply path that keeps the leader's seq and advances the id allocators | R1 |
-| follower bootstrap (snapshot export/import) | R1b |
+| follower bootstrap (snapshot export/import) | R1b ✅ |
 | kernel has no read-only follower mode; in-memory state (journal head, caches, tenant directory) must follow applied frames | R2 |
 | transport, lag metrics, read-your-writes via seq tokens | R3 |
 | semi-sync ack (RPO = 0) and manual promotion with term fencing | R4 |
@@ -41,7 +41,7 @@ an exact copy, which the verifiable-knowledge claim requires.
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
 
-## R1 — storage replication log (`aikoql-v2`)
+## R1 — storage replication log (`aikoql-v2`) ✅
 
 - `Config::retain_log` (default false). When on, flush phase C first
   publishes the covered WAL prefix to `rlog/<first_seq>.wal` (tmp →
@@ -70,3 +70,22 @@ is truncated to the new leader's history.
   forced flushes ships to a follower; byte keys and object rows agree,
   follower ids never collide after promotion, re-delivery is a no-op, a
   gap fails closed, `release_log` prunes, follower restart resumes.
+
+## R1b — follower bootstrap ✅
+
+No new code: `leader.snapshot_to(dir)` (P5-M33, crash-protocol pinned)
+then `restore_from(dir, follower_dir)` yields a follower at a consistent
+`last_seq`; `log_since(follower.last_seq())` catches it up. Required when
+the leader's early history was truncated before `retain_log` or released.
+Pinned by `tests/replication_bootstrap.rs`. R3 moves the snapshot
+directory over the wire; locally it is a directory copy.
+
+## R1 known limits (shortcut comments in `db.rs`)
+
+- The archive copy runs inside flush phase C under the WAL lock; writers
+  wait one memtable's worth of WAL bytes. Move it to phase B if measured.
+- `log_since` reads every archive file per call; seek by file name once
+  catch-up volume matters (R3 batches calls with `max`).
+- `apply_replicated` requires `DurabilityMode::Sync` on the follower.
+- No crash-window cert yet for the archive → truncate window (dedup by seq
+  makes it safe by construction); it lands with the R4 2-node certs.
