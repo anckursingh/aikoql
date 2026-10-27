@@ -55,6 +55,10 @@ pub(crate) struct RuntimeConfig {
     /// P5-M11 (ND-11): concurrent TCP connection cap — the accept loop
     /// rejects the overflow with -32000.
     pub max_connections: u64,
+    /// MRFC-0080 R3b: with `--replicate-listen`, the leader checkpoints its
+    /// indexes this often and ships each checkpoint to its standbys, so a
+    /// promotion replays only the journal tail since the last one.
+    pub index_checkpoint_secs: u64,
     /// The TOML path that took effect (for diagnostics).
     pub config_path: Option<String>,
 }
@@ -280,6 +284,7 @@ pub(crate) fn load(
         },
         request_timeout_secs: 30,
         max_connections: 64,
+        index_checkpoint_secs: 30,
         config_path: None,
     };
 
@@ -541,6 +546,16 @@ pub(crate) fn load(
                     i += 2;
                 }
                 None => return Err("--request-timeout-secs requires a value".into()),
+            },
+            "--index-checkpoint-secs" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.index_checkpoint_secs =
+                        v.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+                            format!("--index-checkpoint-secs requires a positive number, got {v:?}")
+                        })?;
+                    i += 2;
+                }
+                None => return Err("--index-checkpoint-secs requires a value".into()),
             },
             "--max-connections" => match args.get(i + 1) {
                 Some(v) => {

@@ -6,7 +6,9 @@
 //! `{"error":..}` and closes. Then leader → standby is a stream of tagged
 //! messages — `1` + a raw WAL frame (self-delimiting, checksummed), `2` +
 //! u64 LE leader seq (heartbeat), `3` + u32 LE len + reason (the log no
-//! longer holds what the standby needs: re-bootstrap). Standby → leader is
+//! longer holds what the standby needs: re-bootstrap), `4` + an index
+//! checkpoint (R3b: u64 water, u32 file count, per file u32 path len +
+//! relative path + u64 size + bytes). Standby → leader is
 //! a stream of u64 LE acked seqs; the leader releases its archive to the
 //! slowest connected standby's ack.
 
@@ -17,6 +19,7 @@ use aikoql_storage_v2::wal::{decode_frame, encode_frame, FRAME_HEADER_LEN};
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -26,6 +29,10 @@ const PROTO: &str = "aikoql-repl/1";
 const TAG_FRAME: u8 = 1;
 const TAG_HEARTBEAT: u8 = 2;
 const TAG_GAP: u8 = 3;
+const TAG_CHECKPOINT: u8 = 4;
+/// How often a caught-up sender looks for a newer index checkpoint.
+const CHECKPOINT_POLL: Duration = Duration::from_secs(1);
+const MAX_CHECKPOINT_FILES: usize = 1 << 20;
 const HEARTBEAT: Duration = Duration::from_secs(1);
 /// A standby that hears nothing — not even a heartbeat — this long
 /// reconnects: the leader is gone or the link is dead.
@@ -37,6 +44,15 @@ const MAX_REASON: usize = 64 << 10;
 /// Frames per log read.
 const BATCH: usize = 256;
 
+/// MRFC-0080 R3b — the leader's index checkpoint directory, shipped to
+/// standbys whenever its water moves. `lock` is held by every checkpoint
+/// writer: the sender never reads a directory mid-swap.
+#[derive(Clone)]
+pub(crate) struct ShippedCheckpoint {
+    pub(crate) dir: PathBuf,
+    pub(crate) lock: Arc<Mutex<()>>,
+}
+
 /// Serve the replication stream until `stop`. Every standby must present
 /// a `--tcp-token` carrying the `admin` role: the stream is the whole
 /// database, across tenants.
@@ -45,6 +61,7 @@ pub(crate) fn serve_replication(
     source: Arc<dyn StorageAdminApi>,
     auth: Arc<TcpAuthTable>,
     stop: Arc<AtomicBool>,
+    checkpoint: Option<ShippedCheckpoint>,
 ) {
     if let Err(e) = listener.set_nonblocking(true) {
         warn!("replication listener: {e}");
@@ -56,10 +73,17 @@ pub(crate) fn serve_replication(
         match listener.accept() {
             Ok((stream, _)) => {
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
-                let (source, auth, acks, stop) =
-                    (source.clone(), auth.clone(), acks.clone(), stop.clone());
+                let (source, auth, acks, stop, ckpt) = (
+                    source.clone(),
+                    auth.clone(),
+                    acks.clone(),
+                    stop.clone(),
+                    checkpoint.clone(),
+                );
                 std::thread::spawn(move || {
-                    if let Err(e) = serve_standby(&stream, id, &*source, &auth, &acks, &stop) {
+                    let served =
+                        serve_standby(&stream, id, &*source, &auth, &acks, &stop, ckpt.as_ref());
+                    if let Err(e) = served {
                         warn!("replication standby {id}: {e}");
                     }
                     // justified: Mutex poison is unrecoverable
@@ -82,6 +106,7 @@ fn serve_standby(
     auth: &TcpAuthTable,
     acks: &Arc<Mutex<HashMap<u64, u64>>>,
     stop: &AtomicBool,
+    checkpoint: Option<&ShippedCheckpoint>,
 ) -> std::io::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(LEADER_SILENCE))?;
@@ -128,6 +153,8 @@ fn serve_standby(
 
     let mut released = 0;
     let mut last_send = Instant::now();
+    let mut shipped_water = None;
+    let mut last_ckpt_look = Instant::now() - CHECKPOINT_POLL;
     while !stop.load(Ordering::Relaxed) {
         // justified: Mutex poison is unrecoverable
         let slowest = acks.lock().unwrap().values().copied().min().unwrap_or(0);
@@ -161,6 +188,17 @@ fn serve_standby(
             w.write_all(&buf)?;
             last_send = Instant::now();
         } else {
+            // R3b: only when caught up — every frame up to the head precedes
+            // the checkpoint on the wire, so its water is already applied.
+            if let Some(c) = checkpoint {
+                if last_ckpt_look.elapsed() >= CHECKPOINT_POLL {
+                    last_ckpt_look = Instant::now();
+                    if let Some(water) = send_checkpoint(&mut w, c, shipped_water)? {
+                        shipped_water = Some(water);
+                        last_send = Instant::now();
+                    }
+                }
+            }
             if last_send.elapsed() >= HEARTBEAT {
                 let mut msg = vec![TAG_HEARTBEAT];
                 msg.extend_from_slice(&head.to_le_bytes());
@@ -173,6 +211,151 @@ fn serve_standby(
         }
     }
     Ok(())
+}
+
+/// Send the checkpoint when it is complete and its water differs from
+/// `shipped`; returns the water sent.
+fn send_checkpoint(
+    w: &mut &TcpStream,
+    c: &ShippedCheckpoint,
+    shipped: Option<u64>,
+) -> std::io::Result<Option<u64>> {
+    // justified: Mutex poison is unrecoverable
+    let _g = c.lock.lock().unwrap();
+    if !c.dir.join("COMPLETE").exists() {
+        return Ok(None);
+    }
+    let water: u64 = match std::fs::read_to_string(c.dir.join("water.txt"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+    {
+        Some(w) if Some(w) != shipped => w,
+        _ => return Ok(None),
+    };
+    let mut files = Vec::new();
+    collect_files(&c.dir, &c.dir, &mut files)?;
+    let mut head = vec![TAG_CHECKPOINT];
+    head.extend_from_slice(&water.to_le_bytes());
+    head.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    w.write_all(&head)?;
+    for (rel, path) in files {
+        let mut f = std::fs::File::open(&path)?;
+        let size = f.metadata()?.len();
+        let mut entry = (rel.len() as u32).to_le_bytes().to_vec();
+        entry.extend_from_slice(rel.as_bytes());
+        entry.extend_from_slice(&size.to_le_bytes());
+        w.write_all(&entry)?;
+        // shortcut: ships the whole checkpoint each time its water moves;
+        // send only changed files (by name + size) once indexes get large.
+        let copied = std::io::copy(&mut (&mut f).take(size), w)?;
+        if copied != size {
+            return Err(std::io::Error::new(
+                ErrorKind::UnexpectedEof,
+                "checkpoint file shrank while shipping",
+            ));
+        }
+    }
+    Ok(Some(water))
+}
+
+/// Every file under `dir`, as ('/'-joined path relative to `root`, path).
+fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)? {
+        let path = e?.path();
+        if path.is_dir() {
+            collect_files(root, &path, out)?;
+        } else {
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            let parts: Vec<String> = rel
+                .iter()
+                .map(|c| c.to_string_lossy().into_owned())
+                .collect();
+            out.push((parts.join("/"), path));
+        }
+    }
+    Ok(())
+}
+
+/// Receive a checkpoint into `{dir}.recv`, then swap it in as `dir` — a
+/// crash mid-swap leaves no checkpoint (promotion then replays in full),
+/// never a torn one. `None`: read and discard.
+fn receive_checkpoint(r: &mut Reader, dir: Option<&Path>) -> Result<u64, End> {
+    let mut b8 = [0u8; 8];
+    let mut b4 = [0u8; 4];
+    r.fill(&mut b8)?;
+    let water = u64::from_le_bytes(b8);
+    r.fill(&mut b4)?;
+    let count = u32::from_le_bytes(b4) as usize;
+    if count > MAX_CHECKPOINT_FILES {
+        return Err(End::Fatal(format!(
+            "checkpoint of {count} files exceeds the bound"
+        )));
+    }
+    let fatal = |e: std::io::Error| End::Fatal(format!("store checkpoint: {e}"));
+    let tmp = dir.map(|d| PathBuf::from(format!("{}.recv", d.display())));
+    if let Some(t) = &tmp {
+        let _ = std::fs::remove_dir_all(t);
+        std::fs::create_dir_all(t).map_err(fatal)?;
+    }
+    let mut chunk = vec![0u8; 64 << 10];
+    for _ in 0..count {
+        r.fill(&mut b4)?;
+        let len = u32::from_le_bytes(b4) as usize;
+        if len > MAX_LINE {
+            return Err(End::Fatal("checkpoint path too long".into()));
+        }
+        let mut rel = vec![0u8; len];
+        r.fill(&mut rel)?;
+        let rel = String::from_utf8(rel)
+            .map_err(|_| End::Fatal("checkpoint path is not UTF-8".into()))?;
+        // trust boundary: plain relative components only — never `..`, a
+        // root or a drive prefix that would write outside the directory
+        let rel_path = Path::new(&rel);
+        if rel.is_empty()
+            || !rel_path
+                .components()
+                .all(|c| matches!(c, Component::Normal(_)))
+        {
+            return Err(End::Fatal(format!(
+                "checkpoint path {rel:?} is not a plain relative path"
+            )));
+        }
+        r.fill(&mut b8)?;
+        let mut left = u64::from_le_bytes(b8);
+        let mut out = match &tmp {
+            Some(t) => {
+                let p = t.join(rel_path);
+                if let Some(parent) = p.parent() {
+                    std::fs::create_dir_all(parent).map_err(fatal)?;
+                }
+                Some(std::fs::File::create(p).map_err(fatal)?)
+            }
+            None => None,
+        };
+        while left > 0 {
+            let n = left.min(chunk.len() as u64) as usize;
+            r.fill(&mut chunk[..n])?;
+            if let Some(f) = out.as_mut() {
+                f.write_all(&chunk[..n]).map_err(fatal)?;
+            }
+            left -= n as u64;
+        }
+        if let Some(f) = out {
+            f.sync_all().map_err(fatal)?;
+        }
+    }
+    if let (Some(dir), Some(tmp)) = (dir, tmp) {
+        if !tmp.join("COMPLETE").exists() {
+            return Err(End::Fatal(
+                "checkpoint arrived without its COMPLETE marker".into(),
+            ));
+        }
+        if dir.exists() {
+            std::fs::remove_dir_all(dir).map_err(fatal)?;
+        }
+        std::fs::rename(&tmp, dir).map_err(fatal)?;
+    }
+    Ok(water)
 }
 
 /// How one connection ended, from the standby's side.
@@ -189,15 +372,18 @@ enum End {
 /// Follow the leader at `addr` into `standby` until `stop` (Ok) or a fatal
 /// end (Err): a refusal, a gap that needs a re-bootstrap, a bad frame.
 /// Link failures reconnect with backoff, resuming from `last_seq`.
+/// `checkpoint`: where shipped index checkpoints land (R3b) — the
+/// standby's `{dir}.ckpt`, which `serve` resumes from at promotion.
 pub(crate) fn follow(
     addr: &str,
     token: &str,
     standby: &Db,
+    checkpoint: Option<&Path>,
     stop: &AtomicBool,
 ) -> Result<(), String> {
     let mut backoff = Duration::from_millis(100);
     while !stop.load(Ordering::Relaxed) {
-        match follow_once(addr, token, standby, stop) {
+        match follow_once(addr, token, standby, checkpoint, stop) {
             End::Stopped => return Ok(()),
             End::Fatal(e) => return Err(e),
             End::Retry(e) => {
@@ -210,7 +396,13 @@ pub(crate) fn follow(
     Ok(())
 }
 
-fn follow_once(addr: &str, token: &str, standby: &Db, stop: &AtomicBool) -> End {
+fn follow_once(
+    addr: &str,
+    token: &str,
+    standby: &Db,
+    checkpoint: Option<&Path>,
+    stop: &AtomicBool,
+) -> End {
     let mut s = match TcpStream::connect(addr) {
         Ok(s) => s,
         Err(e) => return End::Retry(format!("connect: {e}")),
@@ -308,6 +500,14 @@ fn follow_once(addr: &str, token: &str, standby: &Db, stop: &AtomicBool) -> End 
                     String::from_utf8_lossy(&reason)
                 ));
             }
+            TAG_CHECKPOINT => match receive_checkpoint(&mut r, checkpoint) {
+                Ok(water) => {
+                    if checkpoint.is_some() {
+                        eprintln!("standby index checkpoint at water {water}");
+                    }
+                }
+                Err(end) => return end,
+            },
             t => return End::Fatal(format!("unknown replication message tag {t}")),
         }
     }
@@ -410,7 +610,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let source: Arc<dyn StorageAdminApi> = engine.clone();
         let s = stop.clone();
-        std::thread::spawn(move || serve_replication(listener, source, auth, s));
+        std::thread::spawn(move || serve_replication(listener, source, auth, s, None));
         Leader {
             engine,
             addr,
@@ -444,7 +644,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let run = |stop: Arc<AtomicBool>| {
             let (addr, sb) = (l.addr.clone(), standby.clone());
-            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &stop))
+            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, None, &stop))
         };
         let h = run(stop.clone());
         write(&l, 100, 200); // live writes while streaming
@@ -477,7 +677,7 @@ mod tests {
         let standby = Db::open(Config::new(tmp("auth-standby"))).unwrap();
         let stop = AtomicBool::new(false);
         for tok in ["user-tok", "nope"] {
-            let err = follow(&l.addr, tok, &standby, &stop).unwrap_err();
+            let err = follow(&l.addr, tok, &standby, None, &stop).unwrap_err();
             assert!(err.contains("refused"), "{tok}: {err}");
         }
         assert_eq!(
@@ -505,10 +705,10 @@ mod tests {
         let source: Arc<dyn StorageAdminApi> = engine.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let s = stop.clone();
-        std::thread::spawn(move || serve_replication(listener, source, auth, s));
+        std::thread::spawn(move || serve_replication(listener, source, auth, s, None));
 
         let standby = Db::open(Config::new(tmp("gap-standby"))).unwrap();
-        let err = follow(&addr, "t", &standby, &AtomicBool::new(false)).unwrap_err();
+        let err = follow(&addr, "t", &standby, None, &AtomicBool::new(false)).unwrap_err();
         assert!(err.contains("re-bootstrap"), "{err}");
         stop.store(true, Ordering::SeqCst);
     }

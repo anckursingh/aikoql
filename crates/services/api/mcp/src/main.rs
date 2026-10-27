@@ -422,6 +422,9 @@ fn main() {
         },
     });
     let ckpt_dir = std::path::PathBuf::from(format!("{db_path}.ckpt"));
+    // MRFC-0080 R3b: a checkpoint swaps the directory (remove + rename), so
+    // the replication sender reads it only under this lock.
+    let ckpt_lock = Arc::new(Mutex::new(()));
     {
         let kernel_work = kernel.clone();
         let server_work = server_ctx.clone();
@@ -499,13 +502,38 @@ fn main() {
             std::process::exit(2);
         };
         info!(%addr, "replication stream listening");
+        let shipped = replication::ShippedCheckpoint {
+            dir: ckpt_dir.clone(),
+            lock: ckpt_lock.clone(),
+        };
         thread::spawn(move || {
             replication::serve_replication(
                 listener,
                 source,
                 auth,
                 Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                Some(shipped),
             )
+        });
+        // R3b: a leader that crashes leaves no shutdown checkpoint — take
+        // one on a timer so standbys always hold a recent one.
+        let (k, ctx, dir, lock) = (
+            kernel.clone(),
+            server_ctx.clone(),
+            ckpt_dir.clone(),
+            ckpt_lock.clone(),
+        );
+        let every = std::time::Duration::from_secs(cfg.index_checkpoint_secs);
+        thread::spawn(move || loop {
+            thread::sleep(every);
+            // justified: Mutex poison is unrecoverable
+            let m = ctx.db.maintainer.lock().unwrap().clone();
+            if let Some(m) = m {
+                let _g = lock.lock().unwrap();
+                if let Err(e) = m.checkpoint(&k, &dir) {
+                    warn!("periodic index checkpoint: {e}");
+                }
+            }
         });
     }
 
@@ -645,6 +673,8 @@ fn main() {
         };
         if let Some(m) = maintainer {
             let t0 = std::time::Instant::now();
+            // justified: Mutex poison is unrecoverable
+            let _g = ckpt_lock.lock().unwrap();
             if let Err(e) = m.checkpoint(&kernel, &ckpt_dir) {
                 warn!("maintainer checkpoint failed: {e}");
             }
@@ -665,31 +695,48 @@ fn resume_or_start_maintainer(
     ckpt_dir: &std::path::Path,
 ) -> KResult<Arc<aikoql_scheduler::IndexMaintainer>> {
     if let Some(water) = aikoql_scheduler::IndexMaintainer::checkpoint_water(ckpt_dir)? {
-        let vectors = HnswVectorIndex::load(&ckpt_dir.join("vectors"));
-        let text = TantivyTextIndex::load(&ckpt_dir.join("text"));
-        if let (Ok(v), Ok(t)) = (vectors, text) {
-            let vectors: Arc<dyn VectorIndex> = Arc::new(v);
-            let text: Arc<dyn TextIndex> = Arc::new(t);
-            if let Ok(m) = aikoql_scheduler::IndexMaintainer::start_at(
-                kernel,
-                vectors,
-                text,
-                Some(water),
-                Some(ckpt_dir),
-            ) {
+        // the reason rides the warning — an operator must see WHY a
+        // promotion fell back to a full replay
+        let resumed = HnswVectorIndex::load(&ckpt_dir.join("vectors"))
+            .map_err(|e| format!("vectors: {e}"))
+            .and_then(|v| {
+                let t = TantivyTextIndex::load(&ckpt_dir.join("text"))
+                    .map_err(|e| format!("text: {e}"))?;
+                let vectors: Arc<dyn VectorIndex> = Arc::new(v);
+                let text: Arc<dyn TextIndex> = Arc::new(t);
+                aikoql_scheduler::IndexMaintainer::start_at(
+                    kernel,
+                    vectors,
+                    text,
+                    Some(water),
+                    Some(ckpt_dir),
+                )
+                .map_err(|e| format!("resume: {e}"))
+            });
+        match resumed {
+            Ok(m) => {
+                let (head, _) = kernel.journal_head()?;
+                info!(
+                    water,
+                    replayed = head.saturating_sub(water),
+                    "index maintainer resumed from checkpoint"
+                );
                 return Ok(m);
             }
+            Err(why) => warn!(
+                "checkpoint at {} unusable ({why}) — starting fresh with a full replay",
+                ckpt_dir.display()
+            ),
         }
-        warn!(
-            "checkpoint at {} unusable — starting fresh with a full replay",
-            ckpt_dir.display()
-        );
     }
-    aikoql_scheduler::IndexMaintainer::start(
+    let m = aikoql_scheduler::IndexMaintainer::start(
         kernel,
         Arc::new(HnswVectorIndex::new(0, 10_000)),
         Arc::new(TantivyTextIndex::new()?),
-    )
+    )?;
+    let (head, _) = kernel.journal_head()?;
+    info!(replayed = head, "index maintainer full replay");
+    Ok(m)
 }
 
 /// PRR-2 + R1 (review round 3): `--listen :9090` (empty host) binds

@@ -132,10 +132,25 @@ fn lines(err: std::process::ChildStderr) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         for line in BufReader::new(err).lines().map_while(Result::ok) {
-            let _ = tx.send(line);
+            let _ = tx.send(strip_ansi(&line));
         }
     });
     rx
+}
+
+/// The log colors fields on unix (`use_ansi`); tests read plain text.
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::new();
+    let mut esc = false;
+    for c in line.chars() {
+        match (esc, c) {
+            (false, '\x1b') => esc = true,
+            (false, c) => out.push(c),
+            (true, 'm') => esc = false,
+            (true, _) => {}
+        }
+    }
+    out
 }
 
 /// The first line containing `needle`, or a panic after 30 s.
@@ -267,8 +282,15 @@ fn promotion_resumes_indexes_from_the_shipped_checkpoint() {
     let history = 150;
     let mut koids: Vec<String> = (0..history).map(|i| leader.remember(i)).collect();
     let (mut f, rx) = follow(&sdir, &addr);
-    wait_caught_up(&rx);
-    wait_line(&rx, "standby index checkpoint at water");
+    // a shipped checkpoint that covers the history (an early periodic one
+    // may predate the writes; the next one, with a moved water, ships too)
+    loop {
+        let line = wait_line(&rx, "standby index checkpoint at water");
+        let water: u64 = line.rsplit(' ').next().unwrap().parse().unwrap();
+        if water >= history as u64 {
+            break;
+        }
+    }
     koids.extend((history..history + 5).map(|i| leader.remember(i))); // the tail
     wait_caught_up(&rx);
     drop(leader);
@@ -283,6 +305,7 @@ fn promotion_resumes_indexes_from_the_shipped_checkpoint() {
         "the promoted node rebuilt its indexes from scratch: {line}"
     );
     let n = replayed(&line);
+    eprintln!("R3b metric: promotion replayed {n} journal events (history {history} + tail 5)");
     assert!(
         n < history as u64 / 2,
         "replayed {n} events at promotion — the whole history, not the tail"
