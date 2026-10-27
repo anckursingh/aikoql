@@ -35,8 +35,8 @@ use crate::checkpoint::{
 };
 use crate::compaction::{merge, CompactStats, KeepAll, RetentionPolicy};
 use crate::format::{
-    chain_extend, crash_park, validate_manifest, verify_pair, Current, FormatError, Manifest,
-    SegmentRecord, FORMAT_VERSION,
+    chain_extend, crash_park, publish_atomic, validate_manifest, verify_pair, Current, FormatError,
+    Manifest, SegmentRecord, FORMAT_VERSION,
 };
 use crate::identity::directory::{
     identity_log_path, load_identity_logs, load_replica_logs, orphan_identity_logs,
@@ -59,7 +59,7 @@ use crate::stats::{
     record_latency_us, ControlStats, DbStats, ReadPathStats, ReadTraceRecord, SegmentStats, Stats,
     WriteStats,
 };
-use crate::wal::{encode_frame, replay_reader, Op};
+use crate::wal::{encode_frame, replay_frames, replay_reader, Op, WalFrame};
 use aikoql_kernel::knowledge::kom::sha256;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -72,6 +72,9 @@ use std::time::{Duration, Instant};
 
 pub const LOCK_FILE: &str = "LOCK";
 pub const WAL_FILE: &str = "WAL-000001.log";
+/// MRFC-0080 R1 — the replication log archive: `rlog/<first seq>.wal`
+/// files holding the frames a flush truncated from the WAL.
+pub const RLOG_DIR: &str = "rlog";
 
 /// One scan row — a key and its current value.
 pub type ScanRow = (Vec<u8>, Vec<u8>);
@@ -198,6 +201,10 @@ pub struct Config {
     /// tests would race on). Lets a test observe an unacknowledged
     /// reservation across a restart.
     pub wal_fail_next: bool,
+    /// MRFC-0080 R1 — keep the frames each flush truncates from the WAL in
+    /// `rlog/` so followers can catch up (`log_since`); the leader drops
+    /// them with `release_log`. Off by default: a lone node pays nothing.
+    pub retain_log: bool,
 }
 
 impl Config {
@@ -219,6 +226,7 @@ impl Config {
             checkpoint_bytes: DEFAULT_CHECKPOINT_BYTES,
             trace_every: 0,
             wal_fail_next: false,
+            retain_log: false,
         }
     }
 }
@@ -687,6 +695,10 @@ impl Db {
         // end under the wal lock — the state lock held across a write
         // (SE-05) keeps exactly one writer in the append window.
         let wal_path = config.dir.join(WAL_FILE);
+        if config.retain_log {
+            std::fs::create_dir_all(config.dir.join(RLOG_DIR))
+                .map_err(|e| FormatError::Io(format!("create rlog: {e}")))?;
+        }
         let mut wal = OpenOptions::new()
             .create(true)
             .truncate(false) // the WAL holds acked batches — never truncate on open
@@ -1028,6 +1040,103 @@ impl Db {
     /// order (replay enforces strictly increasing seqs) and apply-before-
     /// ack visibility. Lock order is state → wal, never the reverse.
     pub fn write(&self, ops: &[Op]) -> Result<u64, FormatError> {
+        self.write_at(ops, None)
+    }
+
+    /// MRFC-0080 R1 — apply one leader frame under the leader's seq.
+    /// `seq` below the next seq is a re-delivery (no-op), above it a gap
+    /// (error — the follower never holds a hole). Sync mode only.
+    pub fn apply_replicated(&self, seq: u64, ops: &[Op]) -> Result<u64, FormatError> {
+        if self.config.durability != DurabilityMode::Sync {
+            return Err(FormatError::Invalid(
+                "apply_replicated requires DurabilityMode::Sync".into(),
+            ));
+        }
+        self.write_at(ops, Some(seq))
+    }
+
+    /// MRFC-0080 R1 — the newest committed seq (0 on an empty db): a
+    /// follower's resume point.
+    pub fn last_seq(&self) -> u64 {
+        self.state.read().unwrap().next_seq - 1
+    }
+
+    /// MRFC-0080 R1 — up to `max` frames with seq > `after`, contiguous
+    /// from `after + 1`, from the archive then the active WAL. A frame no
+    /// longer held (released, or truncated before `retain_log` was on) is
+    /// a gap error: the follower must re-bootstrap.
+    pub fn log_since(&self, after: u64, max: usize) -> Result<Vec<WalFrame>, FormatError> {
+        // The WAL is read first, under its lock: a flush archives THEN
+        // truncates under the same lock, so the archive listing taken
+        // afterwards can only overlap the WAL bytes (deduped by seq below),
+        // never miss a frame between them.
+        let wal_bytes = {
+            let mut wal = self.wal.lock().unwrap();
+            let mut buf = Vec::new();
+            wal.seek(SeekFrom::Start(0))
+                .and_then(|_| wal.read_to_end(&mut buf))
+                .map_err(|e| FormatError::Io(format!("WAL read: {e}")))?;
+            buf
+        };
+        let next = self.last_seq() + 1;
+        let mut sources = Vec::new();
+        if self.config.retain_log {
+            // shortcut: reads every archive file per call; seek by file
+            // name (first seq) once catch-up volume makes it matter.
+            for (_, path) in rlog_files(&self.config.dir)? {
+                sources.push(
+                    std::fs::read(&path)
+                        .map_err(|e| FormatError::Io(format!("read {}: {e}", path.display())))?,
+                );
+            }
+        }
+        sources.push(wal_bytes);
+        let mut out = Vec::new();
+        let mut last = after;
+        'sources: for bytes in &sources {
+            let (frames, _) = replay_frames(bytes)?;
+            for f in frames {
+                if f.seq <= last {
+                    continue;
+                }
+                if f.seq != last + 1 {
+                    return Err(FormatError::Invalid(format!(
+                        "replication log gap: frame {} after {last} (re-bootstrap the follower)",
+                        f.seq
+                    )));
+                }
+                last = f.seq;
+                out.push(f);
+                if out.len() >= max {
+                    break 'sources;
+                }
+            }
+        }
+        if out.is_empty() && after + 1 < next {
+            return Err(FormatError::Invalid(format!(
+                "replication log gap: frames {}..{next} are no longer held",
+                after + 1
+            )));
+        }
+        Ok(out)
+    }
+
+    /// MRFC-0080 R1 — drop archive files every frame of which is at or
+    /// below `upto` (the slowest follower's acked seq). A file's range ends
+    /// where the next file starts, so the newest file is always kept.
+    pub fn release_log(&self, upto: u64) -> Result<(), FormatError> {
+        let files = rlog_files(&self.config.dir)?;
+        for pair in files.windows(2) {
+            if pair[1].0 <= upto + 1 {
+                std::fs::remove_file(&pair[0].1).map_err(|e| {
+                    FormatError::Io(format!("release {}: {e}", pair[0].1.display()))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_at(&self, ops: &[Op], expected: Option<u64>) -> Result<u64, FormatError> {
         if ops.is_empty() {
             return Err(FormatError::Invalid("empty write batch".into()));
         }
@@ -1051,7 +1160,7 @@ impl Db {
                 )));
             }
         }
-        if self.config.durability == DurabilityMode::GroupCommit {
+        if expected.is_none() && self.config.durability == DurabilityMode::GroupCommit {
             let seq = self.writer()?.write(ops)?;
             // The committer applied and (if the threshold fired) flushed
             // before the ack — the L0 count is current. SE2-M10 trigger.
@@ -1060,6 +1169,15 @@ impl Db {
         }
         let mut state = self.state.write().unwrap();
         let seq = state.next_seq;
+        match expected {
+            Some(e) if e < seq => return Ok(e), // re-delivery: already applied
+            Some(e) if e > seq => {
+                return Err(FormatError::Invalid(format!(
+                    "replicated frame {e} skips {seq}: the follower never holds a hole"
+                )))
+            }
+            _ => {}
+        }
         state.next_seq += 1;
         let frame = encode_frame(seq, ops)?;
         {
@@ -1142,6 +1260,12 @@ impl Db {
                     pgen,
                 } => {
                     merge_identity(&mut state.identity, *oid, *lid)?;
+                    // MRFC-0080 R1 — a replicated create carries the
+                    // leader's ids: allocate past them (a no-op on the
+                    // leader, whose reservation already did).
+                    state.next_logical_id = state.next_logical_id.max(lid.0 + 1);
+                    state.next_replica_id = state.next_replica_id.max(rid.0 + 1);
+                    state.next_placement_generation = state.next_placement_generation.max(pgen + 1);
                     state.pending_identity.push(IdentityRecord {
                         oid: *oid,
                         lid: *lid,
@@ -2231,6 +2355,20 @@ impl Db {
             } else {
                 Vec::new()
             };
+            // MRFC-0080 R1 — archive the covered prefix BEFORE it is
+            // truncated: a crash between the two leaves the frames in both
+            // places, and log_since dedups by seq.
+            // shortcut: the copy runs under the wal lock (writers wait one
+            // memtable's WAL bytes); move it to phase B if that shows up.
+            if config.retain_log && wal_truncate_len > 0 {
+                let mut covered = vec![0u8; wal_truncate_len as usize];
+                wal.seek(SeekFrom::Start(0))
+                    .map_err(|e| FormatError::Io(format!("WAL archive seek: {e}")))?;
+                wal.read_exact(&mut covered)
+                    .map_err(|e| FormatError::Io(format!("WAL archive read: {e}")))?;
+                let first = crate::wal::decode_frame(&covered)?.0.seq;
+                publish_atomic(&rlog_path(&config.dir, first), &covered)?;
+            }
             wal.set_len(0)
                 .map_err(|e| FormatError::Io(format!("WAL truncate: {e}")))?;
             if !tail.is_empty() {
@@ -3432,4 +3570,38 @@ fn lock_directory(dir: &Path) -> Result<File, FormatError> {
             }
         }
     }
+}
+
+/// MRFC-0080 R1 — `rlog/<first seq, zero-padded>.wal`: lexical = seq order.
+fn rlog_path(dir: &Path, first_seq: u64) -> PathBuf {
+    dir.join(RLOG_DIR).join(format!("{first_seq:020}.wal"))
+}
+
+/// The archive files as (first seq, path), oldest first; none when the
+/// directory was never created.
+fn rlog_files(dir: &Path) -> Result<Vec<(u64, PathBuf)>, FormatError> {
+    let rd = match std::fs::read_dir(dir.join(RLOG_DIR)) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(FormatError::Io(format!("read rlog: {e}"))),
+    };
+    let mut files = Vec::new();
+    for entry in rd {
+        let path = entry
+            .map_err(|e| FormatError::Io(format!("read rlog: {e}")))?
+            .path();
+        // only published `.wal` files — publish_atomic's staging names differ
+        if path.extension().and_then(|x| x.to_str()) != Some("wal") {
+            continue;
+        }
+        if let Some(seq) = path
+            .file_stem()
+            .and_then(|x| x.to_str())
+            .and_then(|x| x.parse().ok())
+        {
+            files.push((seq, path));
+        }
+    }
+    files.sort();
+    Ok(files)
 }

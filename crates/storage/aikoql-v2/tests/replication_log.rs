@@ -48,7 +48,10 @@ fn follower_matches_leader_across_flush_truncations() {
     let leader = Db::open(leader_config(dir("repl-lead"))).unwrap();
     let follower = Db::open(Config::new(dir("repl-follow"))).unwrap();
     let oids = seed(&leader);
-    assert!(leader.stats().segments.count > 1, "the seed must cross flushes");
+    assert!(
+        leader.stats().segments.count > 1,
+        "the seed must cross flushes"
+    );
 
     ship(&leader, &follower);
 
@@ -62,7 +65,10 @@ fn follower_matches_leader_across_flush_truncations() {
     }
     // promotion: the follower allocates past every copied id
     let fresh = follower.create_object().unwrap();
-    assert!(!oids.contains(&fresh), "promoted follower reused an object id");
+    assert!(
+        !oids.contains(&fresh),
+        "promoted follower reused an object id"
+    );
 }
 
 #[test]
@@ -75,14 +81,24 @@ fn redelivery_is_a_no_op_and_a_gap_fails_closed() {
     let frames = leader.log_since(0, usize::MAX).unwrap();
     assert_eq!(frames.len(), 3);
 
-    follower.apply_replicated(frames[0].seq, &frames[0].ops).unwrap();
-    follower.apply_replicated(frames[0].seq, &frames[0].ops).unwrap(); // re-delivery
+    follower
+        .apply_replicated(frames[0].seq, &frames[0].ops)
+        .unwrap();
+    follower
+        .apply_replicated(frames[0].seq, &frames[0].ops)
+        .unwrap(); // re-delivery
     assert!(
-        follower.apply_replicated(frames[2].seq, &frames[2].ops).is_err(),
+        follower
+            .apply_replicated(frames[2].seq, &frames[2].ops)
+            .is_err(),
         "skipping a frame must fail, not leave a hole"
     );
-    follower.apply_replicated(frames[1].seq, &frames[1].ops).unwrap();
-    follower.apply_replicated(frames[2].seq, &frames[2].ops).unwrap();
+    follower
+        .apply_replicated(frames[1].seq, &frames[1].ops)
+        .unwrap();
+    follower
+        .apply_replicated(frames[2].seq, &frames[2].ops)
+        .unwrap();
     assert_eq!(follower.scan(b"").unwrap(), leader.scan(b"").unwrap());
 
     // max bounds a catch-up batch
@@ -122,7 +138,11 @@ fn release_log_prunes_and_follower_resumes_after_restart() {
 
     seed(&leader); // more history after the release
     let follower = Db::open(Config::new(fdir)).unwrap();
-    assert_eq!(follower.last_seq(), acked, "restart resumes at the acked seq");
+    assert_eq!(
+        follower.last_seq(),
+        acked,
+        "restart resumes at the acked seq"
+    );
     ship(&leader, &follower);
     assert_eq!(follower.scan(b"").unwrap(), leader.scan(b"").unwrap());
     assert!(
