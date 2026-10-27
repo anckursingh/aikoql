@@ -113,9 +113,6 @@ impl HnswVectorIndex {
             .as_u64()
             .ok_or_else(|| KError::Store("hnsw meta capacity".into()))?
             as usize;
-        let index =
-            hnsw::labeled::LabeledIndex::load(dir.join("index.hnsw"), hnsw::distance::Cosine)
-                .map_err(|e| KError::Store(format!("hnsw load: {}", e)))?;
         let tombstones: BTreeSet<KOID> = meta["tombstones"]
             .as_array()
             .ok_or_else(|| KError::Store("hnsw meta tombstones".into()))?
@@ -141,6 +138,14 @@ impl HnswVectorIndex {
             }
         }
         let physical = meta["physical"].as_u64().unwrap_or(model_map.len() as u64);
+        // MRFC-0080 R3b: fast-hnsw cannot load a zero-point file — an index
+        // that never held a vector (no embedding model) starts fresh.
+        let index = if physical == 0 {
+            build_index(capacity)
+        } else {
+            hnsw::labeled::LabeledIndex::load(dir.join("index.hnsw"), hnsw::distance::Cosine)
+                .map_err(|e| KError::Store(format!("hnsw load: {}", e)))?
+        };
         Ok(HnswVectorIndex {
             dim: AtomicUsize::new(dim),
             capacity,
