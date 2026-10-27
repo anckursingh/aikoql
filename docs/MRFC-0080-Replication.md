@@ -1,6 +1,6 @@
 # MRFC-0080 — Replication (roadmap Phase 2)
 
-Status: R0 accepted, R1 done (RED `r1-replication-log`), R1b done (pin; mutant `r1b-bootstrap-id-floor-mutant`). Branch `feature/aikoql-db-launch`.
+Status: R0 accepted, R1 done (RED `r1-replication-log`), R1b done (pin; mutant `r1b-bootstrap-id-floor-mutant`), R2 done (RED `r2-promotion-koid-collision`). Branch `feature/aikoql-db-launch`.
 Gate (roadmap Phase 2): crash-window certs on a 2-node setup.
 
 ## Decision
@@ -34,7 +34,8 @@ an exact copy, which the verifiable-knowledge claim requires.
 | no "frames after seq N" read surface | R1 |
 | no apply path that keeps the leader's seq and advances the id allocators | R1 |
 | follower bootstrap (snapshot export/import) | R1b ✅ |
-| kernel has no read-only follower mode; in-memory state (journal head, caches, tenant directory) must follow applied frames | R2 |
+| promotion: a kernel opened over the standby's storage must continue the leader's state and never re-mint a committed KOID | R2 ✅ |
+| follower reads (read replicas): a live kernel whose in-memory state follows applied frames | R3 |
 | transport, lag metrics, read-your-writes via seq tokens | R3 |
 | semi-sync ack (RPO = 0) and manual promotion with term fencing | R4 |
 | automatic failover via an external lease (k8s/etcd or S3 conditional put) | R5 |
@@ -79,6 +80,42 @@ then `restore_from(dir, follower_dir)` yields a follower at a consistent
 the leader's early history was truncated before `retain_log` or released.
 Pinned by `tests/replication_bootstrap.rs`. R3 moves the snapshot
 directory over the wire; locally it is a directory copy.
+
+## R2 — standby + promotion through the kernel ✅
+
+Design, narrowed from the analysis: the standby is a bare `Db` applying
+frames (R1) — it runs no kernel, so it cannot accept a write by
+construction. Promotion = drop the standby `Db`, open the kernel over its
+directory. `Kernel::open` already rebuilds every in-memory structure from
+storage (journal head + audit chain, HLC re-seed, auth, schemas, jobs,
+catalog, property indexes) — the crash-recovery path, so promotion is
+correct by the same certification as a restart.
+
+The one defect found and fixed: **KOID re-issue**. A KOID is
+`clock ms | counter | id_seed`; `IdGen` restarted at (ms 0, counter 0)
+on every open and the MCP seed is fixed (`0xA9C9`), so a node opened in
+the same millisecond as, or with a clock behind, the leader's commits
+minted an existing KOID — `VersionConflict` on create (OCC kept the data;
+every create failed until the clock passed the history). Fix:
+`Kernel::open` calls `IdGen::skip_past(last_ts >> 16)` — a committed
+KOID's ms is ≤ its commit's HLC ms. The same path also hit single-node
+restarts after a backward clock step.
+
+`AikoqlStorageEngineV2::db()` exposes the Db so a kernel-driven leader
+serves `log_since` while it writes. Pinned by
+`tests/replication_kernel.rs` (same-ms + lagging-clock promotion, live
+shipping across flushes with update + tombstone, then promotion).
+
+R2 limits, carried forward:
+- Derived indexes (text/vector/property) are rebuilt at promotion — the
+  standby has no `{db}.ckpt`; failover time grows with data. R3 runs the
+  `IndexMaintainer` on the standby (or ships its checkpoint).
+- The standby needs the leader's KMS master key (`security/kms.rs`)
+  provisioned out of band: frames carry ciphertext.
+- The MCP tool-call audit file (`mcp/src/audit.rs`) and backup
+  `meta.json` stay per node — the in-DB hash-chained audit ships.
+- A promoted node must reopen with `retain_log` to feed new followers
+  (R3 server config).
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
