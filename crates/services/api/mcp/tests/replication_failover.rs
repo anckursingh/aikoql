@@ -36,25 +36,41 @@ struct Mcp {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
+    /// the server's log (stderr) lines, when started with `start_logged`
+    log: Option<mpsc::Receiver<String>>,
 }
 
 impl Mcp {
     fn start(db: &Path, extra: &[&str]) -> Self {
+        Self::spawn(db, extra, false)
+    }
+
+    fn start_logged(db: &Path, extra: &[&str]) -> Self {
+        Self::spawn(db, extra, true)
+    }
+
+    fn spawn(db: &Path, extra: &[&str], logged: bool) -> Self {
         let mut child = Command::new(bin())
             .args(extra)
             .arg(db)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(if logged {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .spawn()
             .expect("spawn aikoql-mcp");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
+        let log = child.stderr.take().map(lines);
         let mut m = Mcp {
             child,
             stdin,
             stdout,
             next_id: 0,
+            log,
         };
         m.request(
             "initialize",
@@ -111,6 +127,30 @@ impl Drop for Mcp {
     }
 }
 
+/// A child's stderr, line by line, on a channel.
+fn lines(err: std::process::ChildStderr) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(err).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    rx
+}
+
+/// The first line containing `needle`, or a panic after 30 s.
+fn wait_line(rx: &mpsc::Receiver<String>, needle: &str) -> String {
+    loop {
+        let line = rx
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap_or_else(|_| panic!("no log line containing {needle:?}"));
+        assert!(!line.contains("follow stopped"), "follow failed: {line}");
+        if line.contains(needle) {
+            return line;
+        }
+    }
+}
+
 /// `follow` as a child; its stderr lines arrive on the channel.
 fn follow(standby: &Path, addr: &str) -> (Child, mpsc::Receiver<String>) {
     let mut child = Command::new(bin())
@@ -123,26 +163,23 @@ fn follow(standby: &Path, addr: &str) -> (Child, mpsc::Receiver<String>) {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn follow");
-    let err = BufReader::new(child.stderr.take().unwrap());
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        for line in err.lines().map_while(Result::ok) {
-            let _ = tx.send(line);
-        }
-    });
+    let rx = lines(child.stderr.take().unwrap());
     (child, rx)
 }
 
 fn wait_caught_up(rx: &mpsc::Receiver<String>) {
-    loop {
-        let line = rx
-            .recv_timeout(Duration::from_secs(30))
-            .expect("the standby never reported catching up");
-        assert!(!line.contains("follow stopped"), "follow failed: {line}");
-        if line.contains("standby caught up") {
-            return;
-        }
-    }
+    wait_line(rx, "standby caught up");
+}
+
+/// `replayed=N` from the promoted node's maintainer start line.
+fn replayed(line: &str) -> u64 {
+    let at = line.find("replayed=").expect("replayed= field") + "replayed=".len();
+    line[at..]
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
 }
 
 #[test]
@@ -207,4 +244,51 @@ fn replicate_listen_rejects_a_non_loopback_bind() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
+}
+
+/// R3b — fast failover: the leader checkpoints its indexes on a timer and
+/// ships each checkpoint down the stream, so the promoted node resumes
+/// them and replays only the journal tail — not the whole history.
+#[test]
+fn promotion_resumes_indexes_from_the_shipped_checkpoint() {
+    let (ldir, sdir) = (tmp("ckpt-leader"), tmp("ckpt-standby"));
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut leader = Mcp::start(
+        &ldir,
+        &[
+            "--replicate-listen",
+            &addr,
+            "--tcp-token",
+            "repl-secret::admin",
+            "--index-checkpoint-secs",
+            "1",
+        ],
+    );
+    let history = 150;
+    let mut koids: Vec<String> = (0..history).map(|i| leader.remember(i)).collect();
+    let (mut f, rx) = follow(&sdir, &addr);
+    wait_caught_up(&rx);
+    wait_line(&rx, "standby index checkpoint at water");
+    koids.extend((history..history + 5).map(|i| leader.remember(i))); // the tail
+    wait_caught_up(&rx);
+    drop(leader);
+    let _ = f.kill();
+    let _ = f.wait();
+
+    let mut promoted = Mcp::start_logged(&sdir, &[]);
+    let log = promoted.log.take().unwrap();
+    let line = wait_line(&log, "index maintainer");
+    assert!(
+        line.contains("resumed from checkpoint"),
+        "the promoted node rebuilt its indexes from scratch: {line}"
+    );
+    let n = replayed(&line);
+    assert!(
+        n < history as u64 / 2,
+        "replayed {n} events at promotion — the whole history, not the tail"
+    );
+    for (i, koid) in koids.iter().enumerate() {
+        let got = promoted.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
 }
