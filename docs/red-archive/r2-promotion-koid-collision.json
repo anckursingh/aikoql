@@ -1,0 +1,8 @@
+{
+  "id": "r2-promotion-koid-collision",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-storage-v2 --test replication_kernel",
+  "captured_at": "2026-10-27T21:23:17Z",
+  "captured_head": "3d58089d95a988a44bb298940f3e56e4bc44a6fa",
+  "exit_code": 101
+}
