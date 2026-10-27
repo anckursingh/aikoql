@@ -1,6 +1,6 @@
 # MRFC-0080 — Replication (roadmap Phase 2)
 
-Status: R0 accepted, R1 done (RED `r1-replication-log`), R1b done (pin; mutant `r1b-bootstrap-id-floor-mutant`), R2 done (RED `r2-promotion-koid-collision`). Branch `feature/aikoql-db-launch`.
+Status: R0 accepted, R1 done (RED `r1-replication-log`), R1b done (pin; mutant `r1b-bootstrap-id-floor-mutant`), R2 done (RED `r2-promotion-koid-collision`), R3a + R3b done (REDs `r3a-replication-stream`, `r3b-promotion-full-reindex`, `r3b-empty-hnsw-checkpoint`). Branch `feature/aikoql-db-launch`.
 Gate (roadmap Phase 2): crash-window certs on a 2-node setup.
 
 ## Decision
@@ -35,8 +35,10 @@ an exact copy, which the verifiable-knowledge claim requires.
 | no apply path that keeps the leader's seq and advances the id allocators | R1 |
 | follower bootstrap (snapshot export/import) | R1b ✅ |
 | promotion: a kernel opened over the standby's storage must continue the leader's state and never re-mint a committed KOID | R2 ✅ |
-| follower reads (read replicas): a live kernel whose in-memory state follows applied frames | R3 |
-| transport, lag metrics, read-your-writes via seq tokens | R3 |
+| follower reads (read replicas): a live kernel whose in-memory state follows applied frames | later (needs a write-free kernel open) |
+| transport + manual failover | R3a ✅ |
+| failover time: promotion rebuilt every index from the whole journal | R3b ✅ |
+| TLS for cross-host links; lag metrics endpoint | R3c |
 | semi-sync ack (RPO = 0) and manual promotion with term fencing | R4 |
 | automatic failover via an external lease (k8s/etcd or S3 conditional put) | R5 |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
@@ -116,6 +118,71 @@ R2 limits, carried forward:
   `meta.json` stay per node — the in-DB hash-chained audit ships.
 - A promoted node must reopen with `retain_log` to feed new followers
   (R3 server config).
+
+## R3a — the replication stream ✅
+
+`aikoql-mcp serve --replicate-listen ADDR --tcp-token T::admin <db>` runs
+the leader side beside any serve mode (stdio included) and turns on log
+retention; `aikoql-mcp follow <standby> --leader ADDR` (token from
+`--token` or `AIKOQL_REPLICATION_TOKEN`) runs the standby.
+
+Wire `aikoql-repl/1` (`crates/services/api/mcp/src/replication.rs`): a
+JSON handshake line (proto, token, resume seq) answered `{"ok":true}` or
+`{"error":..}`; then tagged messages — raw checksummed WAL frames,
+1 s heartbeats, a gap notice, index checkpoints — down, u64 acks up. The
+leader releases its archive to the slowest **connected** standby's ack.
+Standbys reconnect with backoff and resume from `last_seq`; refusals,
+gaps and undecodable frames are fatal (re-bootstrap with R1b). Every
+length read off the wire is bounded.
+
+Security: standbys need an `admin` token (the stream is every tenant's
+data); the listener is loopback-only and refuses to start without
+tokens — the `--listen` rules. Cross-host links need a tunnel until R3c.
+
+## R3b — fast failover ✅
+
+Failover time was dominated by the derived indexes: the leader
+checkpointed them only at shutdown, so after a crash the promoted node
+replayed the whole journal. Now:
+
+- the leader checkpoints every `--index-checkpoint-secs` (default 30);
+  one lock serializes checkpoint writers and the sender (publication is
+  remove + rename);
+- a caught-up sender ships the checkpoint whenever its water moves —
+  frames to the head precede it on the wire, so the water is already
+  applied on the standby;
+- the standby writes `{dir}.ckpt.recv` (paths validated: plain relative
+  components only) and swaps it in as `{dir}.ckpt`, which `serve` resumes.
+
+The pin found an older defect on the same path: an empty HNSW (no
+embedding model) checkpoint could not be loaded (`fast-hnsw`: "file
+contains no payload section"), so **every** restart — single-node too —
+replayed the journal. Fixed: `physical == 0` loads as a fresh index.
+
+Measured (`replication_failover.rs`, structural — events replayed by the
+maintainer at promotion): **156 → 0** (history 150 + tail 5; the tail is
+bounded by one checkpoint interval). The resume-fallback warning now
+names its cause.
+
+### Failover runbook (manual, until R4/R5)
+
+1. Confirm the leader is down (a still-running leader keeps accepting
+   writes the standby will never see — R4 adds fencing).
+2. Stop `follow` on the standby (it is crash-safe; kill is fine).
+3. `aikoql-mcp serve --replicate-listen ADDR --tcp-token … <standby>` —
+   the kernel opens over the standby's storage, the indexes resume from
+   `<standby>.ckpt`, and new standbys can follow it.
+4. Point clients at the new leader. Re-bootstrap the old leader as a
+   standby (R1b) before it rejoins — never restart it as a leader.
+
+R3 limits, carried forward:
+- No fencing: a partitioned old leader can still take writes (R4).
+- Async only: writes acked in the last moments before a crash may not
+  have shipped (RPO > 0 until R4's semi-sync).
+- Checkpoints ship whole each time their water moves; incremental by
+  file once indexes are large (shortcut comment in `send_checkpoint`).
+- Release follows connected standbys only: a standby away longer than
+  the retained log re-bootstraps.
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
