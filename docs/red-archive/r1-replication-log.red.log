@@ -1,0 +1,115 @@
+   Compiling aikoql-storage-v2 v0.2.4 (/Users/pukku/coding/aikoql/crates/storage/aikoql-v2)
+error[E0609]: no field `retain_log` on type `Config`
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:14:7
+   |
+14 |     c.retain_log = true;
+   |       ^^^^^^^^^^ unknown field
+   |
+   = note: available fields are: `dir`, `memtable_bytes`, `block_target`, `durability`, `max_batch_ops` ... and 11 others
+
+error[E0599]: no method named `log_since` found for reference `&Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:21:25
+   |
+21 |     let frames = leader.log_since(follower.last_seq(), usize::MAX).unwrap();
+   |                         ^^^^^^^^^ method not found in `&Db`
+
+error[E0599]: no method named `last_seq` found for reference `&Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:21:44
+   |
+21 |     let frames = leader.log_since(follower.last_seq(), usize::MAX).unwrap();
+   |                                            ^^^^^^^^ method not found in `&Db`
+
+error[E0599]: no method named `apply_replicated` found for reference `&Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:23:18
+   |
+23 |         follower.apply_replicated(f.seq, &f.ops).unwrap();
+   |                  ^^^^^^^^^^^^^^^^ method not found in `&Db`
+
+error[E0599]: no method named `last_seq` found for struct `Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:55:25
+   |
+55 |     assert_eq!(follower.last_seq(), leader.last_seq());
+   |                         ^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `last_seq` found for struct `Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:55:44
+   |
+55 |     assert_eq!(follower.last_seq(), leader.last_seq());
+   |                                            ^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `log_since` found for struct `Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:75:25
+   |
+75 |     let frames = leader.log_since(0, usize::MAX).unwrap();
+   |                         ^^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `apply_replicated` found for struct `Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:78:14
+   |
+78 |     follower.apply_replicated(frames[0].seq, &frames[0].ops).unwrap();
+   |              ^^^^^^^^^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `apply_replicated` found for struct `Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:79:14
+   |
+79 |     follower.apply_replicated(frames[0].seq, &frames[0].ops).unwrap(); // re-delivery
+   |              ^^^^^^^^^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `apply_replicated` found for struct `Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:81:18
+   |
+81 |         follower.apply_replicated(frames[2].seq, &frames[2].ops).is_err(),
+   |                  ^^^^^^^^^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `apply_replicated` found for struct `Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:84:14
+   |
+84 |     follower.apply_replicated(frames[1].seq, &frames[1].ops).unwrap();
+   |              ^^^^^^^^^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `apply_replicated` found for struct `Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:85:14
+   |
+85 |     follower.apply_replicated(frames[2].seq, &frames[2].ops).unwrap();
+   |              ^^^^^^^^^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `log_since` found for struct `Db` in the current scope
+  --> crates/storage/aikoql-v2/tests/replication_log.rs:89:23
+   |
+89 |     assert_eq!(leader.log_since(0, 2).unwrap().len(), 2);
+   |                       ^^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `log_since` found for struct `Db` in the current scope
+   --> crates/storage/aikoql-v2/tests/replication_log.rs:102:16
+    |
+102 |         leader.log_since(0, usize::MAX).is_err(),
+    |                ^^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `last_seq` found for struct `Db` in the current scope
+   --> crates/storage/aikoql-v2/tests/replication_log.rs:115:26
+    |
+115 |     let acked = follower.last_seq();
+    |                          ^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `release_log` found for struct `Db` in the current scope
+   --> crates/storage/aikoql-v2/tests/replication_log.rs:120:12
+    |
+120 |     leader.release_log(acked).unwrap();
+    |            ^^^^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `last_seq` found for struct `Db` in the current scope
+   --> crates/storage/aikoql-v2/tests/replication_log.rs:125:25
+    |
+125 |     assert_eq!(follower.last_seq(), acked, "restart resumes at the acked seq");
+    |                         ^^^^^^^^ method not found in `Db`
+
+error[E0599]: no method named `log_since` found for struct `Db` in the current scope
+   --> crates/storage/aikoql-v2/tests/replication_log.rs:129:16
+    |
+129 |         leader.log_since(0, usize::MAX).is_err(),
+    |                ^^^^^^^^^ method not found in `Db`
+
+Some errors have detailed explanations: E0599, E0609.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `aikoql-storage-v2` (test "replication_log") due to 18 previous errors
+EXIT=101
