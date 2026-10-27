@@ -1034,6 +1034,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// MRFC-0080 R3b — a node with no embedding model checkpoints an empty
+    /// HNSW; fast-hnsw cannot load a zero-point file, so every restart and
+    /// every promotion fell back to a full journal replay.
+    #[test]
+    fn vec_empty_checkpoint_loads() {
+        // justified: test-thread names contain `::` (invalid on Windows paths)
+        let dir = std::env::temp_dir().join(format!("aikoql-vec-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        HnswVectorIndex::new(0, 100).checkpoint(&dir).unwrap();
+        let loaded = HnswVectorIndex::load(&dir).unwrap();
+        assert_eq!(loaded.len(), 0);
+        loaded.upsert(kid(1), "m", &[1.0, 0.0, 0.5]); // the loaded index still grows
+        assert_eq!(loaded.search(&[1.0, 0.0, 0.5], 5, None).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // --- P5-M27 (IDX-P1-03) — dimension mismatches are observable. RED: the
     // health struct has no mismatch signal — E0609, the missing-seam RED (the
     // cbo_default_001 pattern). The wrong-dim drop is behavior-pinned at
