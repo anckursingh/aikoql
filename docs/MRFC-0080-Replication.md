@@ -39,8 +39,8 @@ an exact copy, which the verifiable-knowledge claim requires.
 | transport + manual failover | R3a ✅ |
 | failover time: promotion rebuilt every index from the whole journal | R3b ✅ |
 | TLS for cross-host links; lag metrics endpoint | R3c |
-| semi-sync ack (RPO = 0) and manual promotion with term fencing | R4 |
-| automatic failover via an external lease (k8s/etcd or S3 conditional put) | R5 |
+| terms + fencing in the data path, semi-sync ack (RPO = 0), diverged-tail rejoin, `NOT_LEADER` | R4 |
+| automatic failover: lease agent (S3 first, then k8s), self-fencing, in-process promotion, client leader discovery | R5 (designed below) |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
 
@@ -183,6 +183,91 @@ R3 limits, carried forward:
   file once indexes are large (shortcut comment in `send_checkpoint`).
 - Release follows connected standbys only: a standby away longer than
   the retained log re-bootstraps.
+
+## R5 — automatic failover (design, accepted; builds on R4)
+
+Detection is the easy half; **fencing** is the hard half. Automating
+promotion without a guarantee that the old leader has stopped writing
+turns every network partition into two leaders with diverging histories
+— the worst outcome for a verifiable-knowledge database. R5 therefore
+sits on R4 (terms enforced in the data path) and adds a lease.
+
+### Model: one lease, one term (Patroni-style)
+
+A single record in an external store holds
+`{leader, term, address, expires}`. A node becomes leader **only** by a
+conditional write (compare-and-swap) that bumps `term`. Every node runs
+`serve` with an HA flag and the lease location; an in-process agent
+does the rest.
+
+| lease backend | fits | extra infra | order |
+|---|---|---|---|
+| S3 conditional writes (`If-Match` / `If-None-Match`) | the enterprise S3 tier, any cloud | none beyond S3 | R5a |
+| Kubernetes `Lease` object | k8s deployments | none on k8s | R5b |
+| etcd / Consul | on-prem shops already running them | a cluster | later |
+
+S3 first: it is the dependency the enterprise storage tier already
+brings, so HA costs no new infrastructure.
+
+### Rules
+
+1. **Self-fencing (leader).** Renew every TTL/3 (e.g. TTL 10 s → 3 s).
+   Unable to renew within `TTL − drift margin`, the leader stops
+   accepting writes on its own — it cannot rely on being told during a
+   partition. Hence: when a standby may take the lease, the old leader
+   has already stopped writing.
+2. **Takeover (standby).** Only after the lease has expired — judged by
+   the store's clock where the backend offers one — and only when the
+   standby is current: with R4's semi-sync every acked write is already
+   on it (RPO = 0). Win the CAS with `term + 1`, then promote
+   **in-process** (stop applying → open the kernel → serve); today
+   `follow` and `serve` are separate processes, so the agent adds the
+   mode switch.
+3. **Terms in the data path (R4).** The term rides the replication
+   handshake; every node persists the highest term it has seen; frames
+   and writes from a lower term are refused. A returning old leader
+   compares `(last_seq, frame checksum)` with the new leader, truncates
+   its diverged tail, and rejoins as a follower without operator help.
+4. **Client discovery.** Followers answer writes with `NOT_LEADER` +
+   the leader's address (from the lease); the SDKs follow the hint and
+   retry. A leader-updated DNS name or a thin proxy is the alternative.
+   Without one of these, failover is automatic for the database and
+   manual for every application.
+
+**Expected failover time:** ≈ TTL (10 s) + promotion (< 1 s since R3b
+removed the index rebuild) → ~10–15 s, tunable through the TTL.
+
+### Alternatives considered
+
+- **Raft / built-in consensus** — no external store, but three voters
+  and the largest build; pays off only with multi-writer (Phase 3).
+- **Two data nodes + a witness voter** (MongoDB-arbiter style) — a
+  2-of-3 majority without a third full copy; a sound later option for
+  on-prem deployments without S3 or k8s, behind the same lease interface.
+- **External manager only** (operator / scripts) — fine operationally,
+  but the database still needs R4's term checks, so it saves nothing.
+
+### Milestones
+
+- **R4** — terms, data-path fencing, semi-sync acks, diverged-tail
+  rejoin, `NOT_LEADER`.
+- **R5a** — lease agent with the S3 backend, self-fencing, in-process
+  promotion.
+- **R5b** — k8s `Lease` backend; SDKs follow leader hints.
+- **R5c** — split-brain certs on the fault proxy: partition the leader,
+  kill it mid-write, skew its clock; prove no acked write is lost and
+  never more than one writer per term.
+
+### Risks to settle before R5a
+
+- **Clock drift** is the safety-critical parameter: the self-fencing
+  margin must cover the worst drift between the leader and the lease
+  store's clock. TTL and margin are set deliberately, never defaulted
+  blindly. k8s leases compare node clocks (renewTime), so they need
+  bounded drift by assumption.
+- S3 conditional-write support differs across providers and
+  S3-compatible stores (MinIO, R2, …) — verify per backend before
+  claiming it.
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
