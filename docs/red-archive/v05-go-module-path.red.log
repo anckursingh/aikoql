@@ -1,0 +1,8 @@
+--- FAIL: TestModuleIdentity (0.00s)
+    identity_test.go:25: go.mod declares "module github.com/anckursingh/aikoql/sdk/go", want "module github.com/anckursingh/aikoql/crates/sdk/go"
+FAIL
+FAIL	github.com/anckursingh/aikoql/sdk/go	0.238s
+?   	github.com/anckursingh/aikoql/sdk/go/cmd/sdk-conformance	[no test files]
+?   	github.com/anckursingh/aikoql/sdk/go/examples/web-service	[no test files]
+FAIL
+EXIT=1
