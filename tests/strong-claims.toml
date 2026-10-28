@@ -755,7 +755,7 @@ evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/snapshot_restore.rs"
-line = 715
+line = 716
 text = "/// 100K-key db must be O(disk) file copies — measured, never asserted — and"
 evidence = "p3m3_snapshot_copy_time_cell"
 

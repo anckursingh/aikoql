@@ -21,10 +21,15 @@ use aikoql_storage_v2::placement::directory::{
 };
 use aikoql_storage_v2::segment::{segment_path, SegmentReader};
 use common::dir;
+#[cfg(windows)]
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+#[cfg(windows)]
+use std::process::Stdio;
+use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 const NIGHTLY: &str = "SE2M38_NIGHTLY";
 

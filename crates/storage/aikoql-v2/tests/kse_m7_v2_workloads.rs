@@ -628,7 +628,7 @@ fn measure_rss(backend: &str, sz: Size) -> Option<u64> {
     #[cfg(not(windows))]
     {
         let _ = (backend, sz);
-        return None;
+        None
     }
     #[cfg(windows)]
     {
@@ -1011,7 +1011,7 @@ fn ram_bytes() -> Option<u64> {
         let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
         let total = meminfo.lines().find(|l| l.starts_with("MemTotal"))?;
         let kb = total.split_whitespace().nth(1)?.parse::<u64>().ok()?;
-        return Some(kb * 1024);
+        Some(kb * 1024)
     }
     #[cfg(windows)]
     {

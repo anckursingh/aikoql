@@ -24,6 +24,7 @@ use aikoql_storage_v2::snapshot::{
 use aikoql_storage_v2::wal::Op;
 use common::{dir, hex, report_write};
 use std::collections::BTreeMap;
+#[cfg(windows)]
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -806,15 +807,13 @@ fn self_peak_over(pid: u32, ms: u32) -> u64 {
 
 #[test]
 fn r2_011_restore_peak_rss_is_file_size_independent() {
-    if std::env::var_os("RESTORE_NIGHTLY").is_none() {
-        return; // strict opt-in: writes a ~128 MiB segment
-    }
-    #[cfg(not(windows))]
-    {
-        return; // WorkingSet64 polling is Windows-only (the mem001 precedent)
-    }
+    // WorkingSet64 polling is Windows-only (the mem001 precedent): elsewhere
+    // the test is empty.
     #[cfg(windows)]
     {
+        if std::env::var_os("RESTORE_NIGHTLY").is_none() {
+            return; // strict opt-in: writes a ~128 MiB segment
+        }
         let d = dir("r2-011-live");
         let db = Db::open(Config::new(d.clone())).unwrap();
         // 8 × 16 MiB values → one ~128 MiB segment after the flush.

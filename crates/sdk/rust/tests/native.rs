@@ -250,7 +250,12 @@ fn spawn_native(bin: &str, token: &str) -> NativeServer {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("native-{}-{nanos}", std::process::id()));
+    // the clock alone collides: macOS SystemTime is microsecond-grained, and
+    // parallel tests spawning in one µs shared a dir — one test's Drop then
+    // deleted the other's database mid-open
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("native-{}-{nanos}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let db = dir.join("db.aikoql"); // does not exist → auto-create (aikoql-v2)
     let addr = format!("127.0.0.1:{port}");
@@ -265,21 +270,23 @@ fn spawn_native(bin: &str, token: &str) -> NativeServer {
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn aikoql-mcp with --native-port");
+    // owned by the guard from the start: a server that never comes up is
+    // killed and reaped by its Drop when the assert below panics
+    let srv = NativeServer {
+        child: Some(child),
+        addr,
+        dir,
+    };
     let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if TcpStream::connect(&addr).is_ok() {
-            return NativeServer {
-                child: Some(child),
-                addr,
-                dir,
-            };
-        }
+    while TcpStream::connect(&srv.addr).is_err() {
         assert!(
             Instant::now() < deadline,
-            "server did not come up on {addr}"
+            "server did not come up on {}",
+            srv.addr
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+    srv
 }
 
 fn mcp_bin() -> Option<String> {

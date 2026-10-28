@@ -817,7 +817,7 @@ fn measure_rss(sz: Size) -> Option<u64> {
     #[cfg(not(windows))]
     {
         let _ = sz;
-        return None;
+        None
     }
     #[cfg(windows)]
     {
