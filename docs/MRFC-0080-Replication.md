@@ -44,7 +44,7 @@ an exact copy, which the verifiable-knowledge claim requires.
 | diverged-tail rejoin (and automatic re-bootstrap) | R4c ✅ |
 | `NOT_LEADER` + leader hint | R4d ✅ |
 | automatic failover: lease agent (file + S3), self-fencing, in-process promotion | R5a ✅ |
-| k8s `Lease` backend, SDKs follow leader hints | R5b ✅ (Java SDK pending) |
+| k8s `Lease` backend, SDKs follow leader hints | R5b ✅ |
 | standby serving reads: read replicas (`serve --follow`) and HA standbys | ✅ |
 | split-brain certs: partition, kill mid-write, rejected store | R5c ✅ |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 ✅ |
@@ -548,7 +548,7 @@ aws-lc-rs stays out), the API server from `KUBERNETES_SERVICE_HOST/PORT`,
 a TTL/3 request timeout. RBAC: the pod's service account needs `get`,
 `create`, `update` on `leases` in that namespace.
 
-**R5b-2 — SDKs follow `NOT_LEADER`.** Go, Rust, Python, TypeScript: a TCP
+**R5b-2 — SDKs follow `NOT_LEADER`.** Go, Rust, Python, TypeScript, Java: a TCP
 client whose tool call is refused with `NOT_LEADER` and a `leader` hint
 reconnects to that address with the same token and client identity,
 re-runs `initialize` and retries the call **once**; it then stays on the
@@ -563,8 +563,7 @@ fenced one answering NOT_LEADER + hint, the leader) — the leader sees
 RED: `r5b-k8s-lease`, `r5b-sdk-hint-{go,rust,python,ts}`.
 
 R5b limits:
-- **Java SDK not done**: no JDK on the build machine; the same change is
-  pending there.
+- ~~Java SDK not done~~ — done (`LeaderHintTest`; RED `r5b-sdk-hint-java`).
 - The Kubernetes store is verified against a fake API only; the
   in-cluster TLS/token path has not run in a real cluster.
 - `session_init` identity (run_id) is not replayed on the new
