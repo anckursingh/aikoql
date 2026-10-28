@@ -801,9 +801,16 @@ conditional writes (412 on a repeated `If-None-Match: *` and on a stale
 `If-Match`), so it is a valid lease target — an emulator that ignored
 them would fail the lease cert. CI: `s3-compat-moto` (pinned, no Docker)
 gates; `s3-compat` (MinIO containers) is `continue-on-error` until its
-images are pinned. Still open: AWS S3 itself (needs credentials — the
-tests always set an endpoint, so AWS's virtual-hosted URL path is not yet
-exercised), R2.
+images are pinned.
+
+**AWS:** the virtual-hosted request targets AWS uses are pinned by unit
+tests (`s3.rs`), and the same certs run on AWS itself with
+`S3_IT_BACKEND=aws AIKOQL_TEST_S3_BUCKET=… AWS_ACCESS_KEY_ID=…
+AWS_SECRET_ACCESS_KEY=… AWS_REGION=… scripts/s3-it.sh` (no endpoint —
+virtual-hosted; the script refuses without explicit credentials, bucket
+and region; use a throwaway bucket and short-lived, bucket-scoped
+credentials — objects stay under `it-*`). **Not yet run on AWS.** R2:
+not a target until someone needs it (same script, its endpoint).
 
 ## Archive retention ✅
 
