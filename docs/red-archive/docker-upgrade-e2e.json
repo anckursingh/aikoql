@@ -1,0 +1,8 @@
+{
+  "id": "docker-upgrade-e2e",
+  "pre_fix_commit": "HEAD",
+  "command": "node scripts/e2e-docker-upgrade.js ghcr.io/anckursingh/aikoql:0.2.3",
+  "captured_at": "2026-10-28T18:26:37Z",
+  "captured_head": "f43461318d3f902b00f3babff4897ca6a3a762c2",
+  "exit_code": 1
+}
