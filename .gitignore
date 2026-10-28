@@ -40,6 +40,8 @@ build/
 
 # Aikoql runtime artifacts
 *.key
+# a throwaway test-only TLS key (its README), not a runtime artifact
+!crates/services/api/mcp/tests/fixtures/tls/server.key
 *.backup.*/
 /aikoql/
 .mnemosyne/
