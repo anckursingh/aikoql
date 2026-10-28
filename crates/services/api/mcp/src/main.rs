@@ -311,10 +311,8 @@ fn main() {
     };
     // MRFC-0080 standby reads: `--follow LEADER` serves a read replica —
     // never promoted by `serve`, finishing a re-bootstrap it recorded.
-    if cfg.follow.is_some()
-        && (cfg.ha_lease.is_some() || replicate_listen.is_some() || cfg.archive.is_some())
-    {
-        eprintln!("--follow (a read replica) does not combine with --ha-lease, --replicate-listen or --archive");
+    if cfg.follow.is_some() && (cfg.ha_lease.is_some() || cfg.archive.is_some()) {
+        eprintln!("--follow (a read replica) does not combine with --ha-lease or --archive");
         std::process::exit(2);
     }
     // a serving standby (read replica, HA standby) that exited for a
@@ -387,6 +385,10 @@ fn main() {
         None => (None, None),
     };
     let serving_standby = cfg.follow.is_some() || ha_standby.is_some();
+    // cascading replicas: a leader serves the stream, and so may a
+    // `--follow` replica (downstream replicas follow it); an HA standby
+    // does not — the lease names only the leader
+    let serves_stream = replicate_listen.is_some() && ha_standby.is_none();
     let claimed = if serving_standby {
         replication::load_term(std::path::Path::new(&db_path))
     } else {
@@ -404,7 +406,7 @@ fn main() {
         match engine::open_kernel(
             &db_path,
             &cfg.encryption,
-            !serving_standby && (replicate_listen.is_some() || cfg.archive.is_some()),
+            serves_stream || (cfg.archive.is_some() && !serving_standby),
             serving_standby.then(|| {
                 format!(
                     "this node is a standby{}",
@@ -719,8 +721,9 @@ fn main() {
             }
         }
     }
-    // a standby serves no stream; its promoted (re-executed) process does
-    if let Some(addr) = replicate_listen.filter(|_| !serving_standby) {
+    // an HA standby serves no stream (its promoted, re-executed process
+    // does); a `--follow` replica may — downstream replicas cascade off it
+    if let Some(addr) = replicate_listen.filter(|_| serves_stream) {
         // MRFC-0080 R3a: the replication stream rides beside any serve mode
         // (stdio included) under the TCP gates — tokens required, loopback
         // bind only (the stream is the whole database, in plaintext).
