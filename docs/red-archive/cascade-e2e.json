@@ -1,0 +1,8 @@
+{
+  "id": "cascade-e2e",
+  "pre_fix_commit": "HEAD",
+  "command": "perl -e alarm 200; exec @ARGV cargo test -p aikoql-mcp --test replication_failover feed_another",
+  "captured_at": "2026-10-28T13:19:13Z",
+  "captured_head": "6ba5a21967fbd826b99b2bb8d42d31e14c495e65",
+  "exit_code": 101
+}

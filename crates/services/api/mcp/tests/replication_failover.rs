@@ -1325,3 +1325,76 @@ fn a_read_replica_serves_converging_reads_and_refuses_writes() {
     assert_eq!(err["error"]["code"], json!("NOT_LEADER"), "{err}");
     assert_eq!(err["error"]["leader"], json!("db1.internal:7070"), "{err}");
 }
+
+/// Cascading replicas — a read replica that also serves the stream:
+/// leader → R1 (`--follow` + `--replicate-listen`) → R2. A write on the
+/// leader reaches R2 through R1, and R2's NOT_LEADER names the real
+/// leader (the hint passes down the chain), not R1.
+#[test]
+fn a_replica_can_feed_another_replica() {
+    let (ldir, r1dir, r2dir) = (tmp("cascade-leader"), tmp("cascade-r1"), tmp("cascade-r2"));
+    let (lrepl, r1repl) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let mut leader = Mcp::start(
+        &ldir,
+        &[
+            "--replicate-listen",
+            &lrepl,
+            "--tcp-token",
+            "repl-secret::admin",
+            "--advertise",
+            "db1.internal:7070",
+        ],
+    );
+    let first = leader.remember(1);
+    let env = [(
+        "AIKOQL_REPLICATION_TOKEN".to_string(),
+        "repl-secret".to_string(),
+    )];
+    let mut r1 = Mcp::spawn_env(
+        &r1dir,
+        &[
+            "--follow",
+            &lrepl,
+            "--replicate-listen",
+            &r1repl,
+            "--tcp-token",
+            "repl-secret::admin",
+        ],
+        false,
+        &env,
+    );
+    r1.init();
+    let mut r2 = Mcp::spawn_env(&r2dir, &["--follow", &r1repl], false, &env);
+    r2.init();
+    let serves = |m: &mut Mcp, koid: &str| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let res = m.request(
+                "tools/call",
+                json!({"name": "get", "arguments": {"subject": "admin", "koid": koid}}),
+            );
+            if res["isError"] == json!(false) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{koid} never reached the replica: {res}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    serves(&mut r2, &first);
+    let second = leader.remember(2); // written while the chain streams
+    serves(&mut r2, &second);
+    let res = r2.request(
+        "tools/call",
+        json!({"name": "remember", "arguments": {"subject": "admin", "type_name": "note", "properties": {"n": 3}}}),
+    );
+    let err: J = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(err["error"]["code"], json!("NOT_LEADER"), "{err}");
+    assert_eq!(err["error"]["leader"], json!("db1.internal:7070"), "{err}");
+    drop(r1);
+}
