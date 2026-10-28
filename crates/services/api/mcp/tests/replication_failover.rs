@@ -290,6 +290,20 @@ fn strip_ansi(line: &str) -> String {
     out
 }
 
+/// B, having won the lease, serving as the leader. Unix re-execs in place
+/// (same pid, same pipes); elsewhere B exits FENCED_EXIT (75) for its
+/// supervisor (ha::reexec) — `restart` is that supervisor.
+fn promoted(b: &mut Mcp, log: &mut mpsc::Receiver<String>, restart: impl FnOnce() -> Mcp) {
+    if cfg!(unix) {
+        let _ = restart;
+    } else {
+        assert_eq!(b.child.wait().unwrap().code(), Some(75), "promotion exit");
+        *b = restart();
+        *log = b.log.take().unwrap();
+    }
+    wait_line(log, "aikoql-mcp ready");
+}
+
 /// The first line containing `needle`, or a panic after 30 s.
 fn wait_line(rx: &mpsc::Receiver<String>, needle: &str) -> String {
     loop {
@@ -660,8 +674,9 @@ fn ha_standby_takes_over_when_the_leader_dies() {
     .concat();
     let mut a = Mcp::start(&adir, &strs(&a_args));
     let koids: Vec<String> = (0..10).map(|i| a.remember(i)).collect();
-    let mut b = Mcp::spawn_raw(&bdir, &strs(&ha_args(&lease, "b", &rb)), true);
-    let log = b.log.take().unwrap();
+    let b_args = ha_args(&lease, "b", &rb);
+    let mut b = Mcp::spawn_raw(&bdir, &strs(&b_args), true);
+    let mut log = b.log.take().unwrap();
     wait_line(&log, "standby caught up");
 
     // standby reads: B serves before any failover...
@@ -694,7 +709,9 @@ fn ha_standby_takes_over_when_the_leader_dies() {
     drop(a); // a crash
              // B wins and re-executes itself as the leader: a fresh MCP session
     wait_line(&log, "won the lease");
-    wait_line(&log, "aikoql-mcp ready");
+    promoted(&mut b, &mut log, || {
+        Mcp::spawn_raw(&bdir, &strs(&b_args), true)
+    });
     b.init();
     eprintln!("R5a metric: failover took {:?} (ttl 3000 ms)", t.elapsed());
     for (i, koid) in koids.iter().enumerate() {
@@ -950,7 +967,7 @@ fn split_brain_a_leader_cut_off_from_its_lease_fences_before_the_standby_takes_o
     );
     let alog = a.log.take().unwrap();
     let mut b = Mcp::spawn_env(&bdir, &strs(&s3_node("b", &rb)), true, &s3_env(&s3));
-    let blog = b.log.take().unwrap();
+    let mut blog = b.log.take().unwrap();
     wait_line(&blog, "standby caught up");
     let mut acked: Vec<(usize, String)> = (0..5).map(|i| (i, a.remember(i))).collect();
 
@@ -974,7 +991,9 @@ fn split_brain_a_leader_cut_off_from_its_lease_fences_before_the_standby_takes_o
     );
     let fenced = stamped(&alog, "fenced; exiting");
     let taking_over = stamped(&blog, "taking over");
-    wait_line(&blog, "aikoql-mcp ready"); // the promoted, re-executed B
+    promoted(&mut b, &mut blog, || {
+        Mcp::spawn_env(&bdir, &strs(&s3_node("b", &rb)), true, &s3_env(&s3))
+    });
     assert!(
         fenced < taking_over,
         "two writers: the standby began taking over at {taking_over}, the old leader fenced at {fenced}"
@@ -1013,12 +1032,9 @@ fn split_brain_a_leader_killed_mid_write_loses_no_acked_write() {
         &adir,
         &strs(&[ha_args(&lease, "a", &ra), sync.to_vec()].concat()),
     );
-    let mut b = Mcp::spawn_raw(
-        &bdir,
-        &strs(&[ha_args(&lease, "b", &rb), sync.to_vec()].concat()),
-        true,
-    );
-    let blog = b.log.take().unwrap();
+    let b_args = [ha_args(&lease, "b", &rb), sync.to_vec()].concat();
+    let mut b = Mcp::spawn_raw(&bdir, &strs(&b_args), true);
+    let mut blog = b.log.take().unwrap();
     wait_line(&blog, "standby caught up");
     let acked: Vec<String> = (0..30).map(|i| a.remember(i)).collect();
     // one more write in flight, then the crash
@@ -1033,7 +1049,9 @@ fn split_brain_a_leader_killed_mid_write_loses_no_acked_write() {
     let _ = a.child.kill();
     let _ = a.child.wait();
     wait_line(&blog, "won the lease");
-    wait_line(&blog, "aikoql-mcp ready"); // the promoted, re-executed B
+    promoted(&mut b, &mut blog, || {
+        Mcp::spawn_raw(&bdir, &strs(&b_args), true)
+    });
     b.init();
     for (i, koid) in acked.iter().enumerate() {
         let got = b.tool("get", json!({"subject": "admin", "koid": koid}));
