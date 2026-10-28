@@ -1,0 +1,8 @@
+{
+  "id": "r4b-semi-sync-e2e",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test replication_failover",
+  "captured_at": "2026-10-28T08:05:08Z",
+  "captured_head": "75e87b49c8d0dd9d486e1911ab7feabc20261eb2",
+  "exit_code": 101
+}

@@ -346,3 +346,32 @@ fn a_fenced_node_refuses_writes_after_a_restart() {
     );
     assert!(res.to_string().contains("not leader"), "{res}");
 }
+
+/// R4b — `--replicate-sync-ms`: a client write is acked only once a
+/// standby holds it; with none connected it fails after the timeout.
+#[test]
+fn a_sync_leader_acks_writes_only_once_a_standby_holds_them() {
+    let (ldir, sdir) = (tmp("sync-leader"), tmp("sync-standby"));
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut leader = Mcp::start(
+        &ldir,
+        &[
+            "--replicate-listen",
+            &addr,
+            "--tcp-token",
+            "repl-secret::admin",
+            "--replicate-sync-ms",
+            "300",
+        ],
+    );
+    let res = leader.request(
+        "tools/call",
+        json!({"name": "remember", "arguments": {"subject": "admin", "type_name": "note", "properties": {"n": 0}}}),
+    );
+    assert_eq!(res["isError"], json!(true), "acked with no standby: {res}");
+    assert!(res.to_string().contains("not replicated"), "{res}");
+
+    let (_f, rx) = follow(&sdir, &addr);
+    wait_caught_up(&rx);
+    leader.remember(1);
+}

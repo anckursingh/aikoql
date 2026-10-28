@@ -713,6 +713,7 @@ mod tests {
         addr: String,
         dir: PathBuf,
         stop: Arc<AtomicBool>,
+        acked: Arc<Acked>,
     }
 
     fn leader(tag: &str) -> Leader {
@@ -730,12 +731,15 @@ mod tests {
         let source: Arc<dyn StorageAdminApi> = engine.clone();
         let s = stop.clone();
         let d = dir.clone();
-        std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d));
+        let acked = Arc::new(Acked::default());
+        let a = acked.clone();
+        std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d, a));
         Leader {
             engine,
             addr,
             dir,
             stop,
+            acked,
         }
     }
 
@@ -828,7 +832,17 @@ mod tests {
         let source: Arc<dyn StorageAdminApi> = engine.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let s = stop.clone();
-        std::thread::spawn(move || serve_replication(listener, source, auth, s, None, gap_dir));
+        std::thread::spawn(move || {
+            serve_replication(
+                listener,
+                source,
+                auth,
+                s,
+                None,
+                gap_dir,
+                Arc::new(Acked::default()),
+            )
+        });
 
         let sdir = tmp("gap-standby");
         let standby = Db::open(Config::new(sdir.clone())).unwrap();
@@ -898,6 +912,46 @@ mod tests {
         h.join().unwrap().unwrap();
         assert_eq!(load_term(&sdir).unwrap(), (3, Role::Standby));
         assert_eq!(load_term(&tmp("no-term")).unwrap(), (0, Role::Leader));
+        l.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// R4b — under the sync gate a client write returns only once a
+    /// standby holds it: a failover right after the ack loses nothing.
+    #[test]
+    fn a_sync_write_returns_only_after_a_standby_holds_it() {
+        let l = leader("sync");
+        l.engine
+            .db()
+            .set_commit_gate(sync_gate(l.acked.clone(), Duration::from_secs(10)));
+        let sdir = tmp("sync-standby");
+        let standby = Arc::new(Db::open(Config::new(sdir.clone())).unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+        let h = {
+            let (addr, sb, d, st) = (l.addr.clone(), standby.clone(), sdir.clone(), stop.clone());
+            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st))
+        };
+        for i in 0..50u32 {
+            let seq = l.engine.db().put(format!("s{i}").as_bytes(), b"v").unwrap();
+            assert!(
+                standby.last_seq() >= seq,
+                "write {seq} was acked before any standby held it"
+            );
+        }
+        stop.store(true, Ordering::SeqCst);
+        h.join().unwrap().unwrap();
+        l.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// R4b — no standby acks within the timeout: the write fails rather
+    /// than ack a write a failover would lose.
+    #[test]
+    fn a_sync_write_with_no_standby_fails_after_the_timeout() {
+        let l = leader("sync-alone");
+        l.engine
+            .db()
+            .set_commit_gate(sync_gate(l.acked.clone(), Duration::from_millis(200)));
+        let e = l.engine.db().put(b"k", b"v").unwrap_err();
+        assert!(e.to_string().contains("not replicated"), "{e}");
         l.stop.store(true, Ordering::SeqCst);
     }
 }
