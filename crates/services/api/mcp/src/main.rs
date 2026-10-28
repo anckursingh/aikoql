@@ -650,6 +650,7 @@ fn main() {
         };
         let repl_dir = std::path::PathBuf::from(db_path.as_str());
         let acked = Arc::new(replication::Acked::default());
+        let _ = replication::LEADER.set(acked.clone()); // the lag series
         if let Some(ms) = cfg.replicate_sync_ms {
             source.set_commit_gate(replication::sync_gate(
                 acked.clone(),

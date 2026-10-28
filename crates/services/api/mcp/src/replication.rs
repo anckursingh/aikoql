@@ -311,6 +311,40 @@ pub(crate) fn follow_loop(
 pub(crate) struct Acked {
     seq: Mutex<u64>,
     cv: Condvar,
+    /// R3c-2 — each connected standby: (peer address, acked seq). The
+    /// slowest one bounds log release; all of them feed the lag series.
+    standbys: Mutex<HashMap<u64, (String, u64)>>,
+}
+
+/// R3c-2 — the serving leader's acks, for the /metrics scrape (set once
+/// by `serve`; each test leader keeps its own).
+pub(crate) static LEADER: std::sync::OnceLock<Arc<Acked>> = std::sync::OnceLock::new();
+
+/// R3c-2 — the replication series in Prometheus text format: the head,
+/// the connected standbys, and per standby the frames it has not acked.
+pub(crate) fn metrics(acked: &Acked, head: u64) -> String {
+    // justified: Mutex poison is unrecoverable
+    let standbys = acked.standbys.lock().unwrap();
+    let mut out = format!(
+        "# HELP aikoql_replication_head_seq The newest committed log seq on this leader.\n\
+         # TYPE aikoql_replication_head_seq gauge\n\
+         aikoql_replication_head_seq {head}\n\
+         # HELP aikoql_replication_standbys Standbys connected to this leader.\n\
+         # TYPE aikoql_replication_standbys gauge\n\
+         aikoql_replication_standbys {}\n\
+         # HELP aikoql_replication_standby_lag_frames Frames a standby has not acked.\n\
+         # TYPE aikoql_replication_standby_lag_frames gauge\n",
+        standbys.len()
+    );
+    let mut rows: Vec<_> = standbys.iter().collect();
+    rows.sort_by_key(|(id, _)| **id);
+    for (id, (peer, seq)) in rows {
+        out.push_str(&format!(
+            "aikoql_replication_standby_lag_frames{{standby=\"{id}\",peer=\"{peer}\"}} {}\n",
+            head.saturating_sub(*seq)
+        ));
+    }
+    out
 }
 
 impl Acked {
@@ -371,16 +405,14 @@ pub(crate) fn serve_replication(
         warn!("replication listener: {e}");
         return;
     }
-    let acks: Arc<Mutex<HashMap<u64, u64>>> = Arc::new(Mutex::new(HashMap::new()));
     let next_id = AtomicU64::new(0);
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok((stream, peer)) => {
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
-                let (source, auth, acks, stop, ckpt, dir, acked, tls) = (
+                let (source, auth, stop, ckpt, dir, acked, tls) = (
                     source.clone(),
                     auth.clone(),
-                    acks.clone(),
                     stop.clone(),
                     checkpoint.clone(),
                     dir.clone(),
@@ -393,7 +425,7 @@ pub(crate) fn serve_replication(
                         id,
                         &*source,
                         &auth,
-                        &acks,
+                        peer.to_string(),
                         &stop,
                         ckpt.as_ref(),
                         &dir,
@@ -404,7 +436,7 @@ pub(crate) fn serve_replication(
                         warn!("replication standby {id}: {e}");
                     }
                     // justified: Mutex poison is unrecoverable
-                    acks.lock().unwrap().remove(&id);
+                    acked.standbys.lock().unwrap().remove(&id);
                 });
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
@@ -420,7 +452,7 @@ fn serve_standby(
     id: u64,
     source: &dyn StorageAdminApi,
     auth: &TcpAuthTable,
-    acks: &Arc<Mutex<HashMap<u64, u64>>>,
+    peer: String,
     stop: &AtomicBool,
     checkpoint: Option<&ShippedCheckpoint>,
     dir: &Path,
@@ -505,7 +537,7 @@ fn serve_standby(
         return send_snapshot(&mut w, source, dir, id);
     }
     // justified: Mutex poison is unrecoverable
-    acks.lock().unwrap().insert(id, sent);
+    acked.standbys.lock().unwrap().insert(id, (peer, sent));
 
     // R3c: acks are read on this thread, between sends — a TLS connection
     // has one owner — and the ack wait doubles as the idle poll.
@@ -516,7 +548,14 @@ fn serve_standby(
     let mut last_ckpt_look = Instant::now() - CHECKPOINT_POLL;
     while !stop.load(Ordering::Relaxed) {
         // justified: Mutex poison is unrecoverable
-        let slowest = acks.lock().unwrap().values().copied().min().unwrap_or(0);
+        let slowest = acked
+            .standbys
+            .lock()
+            .unwrap()
+            .values()
+            .map(|(_, seq)| *seq)
+            .min()
+            .unwrap_or(0);
         if slowest > released {
             if let Err(e) = source.release_log(slowest) {
                 warn!("release replication log to {slowest}: {e}");
@@ -546,7 +585,7 @@ fn serve_standby(
             }
             w.write_all(&buf)?;
             last_send = Instant::now();
-            if !poll_acks(&mut w, &mut ack_buf, BUSY_ACK_WAIT, id, acks, acked)? {
+            if !poll_acks(&mut w, &mut ack_buf, BUSY_ACK_WAIT, id, acked)? {
                 return Ok(());
             }
         } else {
@@ -570,7 +609,7 @@ fn serve_standby(
             // shortcut: polls the log head every 10 ms (here, waiting for
             // acks); a commit notify from the Db replaces it when replication
             // lag must drop below.
-            if !poll_acks(&mut w, &mut ack_buf, IDLE_ACK_WAIT, id, acks, acked)? {
+            if !poll_acks(&mut w, &mut ack_buf, IDLE_ACK_WAIT, id, acked)? {
                 return Ok(());
             }
         }
@@ -585,7 +624,6 @@ fn poll_acks(
     buf: &mut Vec<u8>,
     wait: Duration,
     id: u64,
-    acks: &Mutex<HashMap<u64, u64>>,
     acked: &Acked,
 ) -> std::io::Result<bool> {
     link.tcp().set_read_timeout(Some(wait))?;
@@ -613,7 +651,9 @@ fn poll_acks(
     buf.drain(..whole);
     if let Some(seq) = newest {
         // justified: Mutex poison is unrecoverable
-        acks.lock().unwrap().insert(id, seq);
+        if let Some(entry) = acked.standbys.lock().unwrap().get_mut(&id) {
+            entry.1 = seq;
+        }
         acked.record(seq);
     }
     Ok(true)

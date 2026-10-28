@@ -1155,6 +1155,11 @@ pub(crate) fn prometheus_metrics(
         }
     }
 
+    // MRFC-0080 R3c-2: a serving leader's replication lag rides the scrape
+    if let (Some(acked), Some(admin)) = (crate::replication::LEADER.get(), admin) {
+        storage_metrics.push_str(&crate::replication::metrics(acked, admin.last_seq()));
+    }
+
     format!(
         "# HELP aikoql_journal_seq Monotonically increasing journal sequence number.\n\
          # TYPE aikoql_journal_seq counter\n\
