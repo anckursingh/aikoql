@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-a0f0414a7eb71cd6)
+
+running 3 tests
+test split_brain_a_leader_whose_store_rejects_it_fences_itself ... ok
+test split_brain_a_leader_killed_mid_write_loses_no_acked_write ... ok
+test split_brain_a_leader_cut_off_from_its_lease_fences_before_the_standby_takes_over ... FAILED
+
+failures:
+
+---- split_brain_a_leader_cut_off_from_its_lease_fences_before_the_standby_takes_over stdout ----
+
+thread 'split_brain_a_leader_cut_off_from_its_lease_fences_before_the_standby_takes_over' (710868) panicked at crates/services/api/mcp/tests/replication_failover.rs:202:33:
+no log line containing "taking over"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    split_brain_a_leader_cut_off_from_its_lease_fences_before_the_standby_takes_over
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 37.09s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+EXIT=101

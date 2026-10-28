@@ -58,7 +58,12 @@ impl Mcp {
     /// Started, not yet initialized — an HA standby answers nothing until
     /// it is promoted.
     fn spawn_raw(db: &Path, extra: &[&str], logged: bool) -> Self {
+        Self::spawn_env(db, extra, logged, &[])
+    }
+
+    fn spawn_env(db: &Path, extra: &[&str], logged: bool, env: &[(String, String)]) -> Self {
         let mut child = Command::new(bin())
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .args(extra)
             .arg(db)
             .stdin(Stdio::piped())
@@ -109,6 +114,32 @@ impl Mcp {
             if frame["id"].as_u64() == Some(id) {
                 assert!(frame.get("error").is_none(), "json-rpc error: {frame}");
                 return frame["result"].clone();
+            }
+        }
+    }
+
+    /// One remember that may fail: Some(koid) when acked, None when
+    /// refused or when the server is gone (a write it never acked).
+    fn try_remember(&mut self, i: usize) -> Option<String> {
+        self.next_id += 1;
+        let id = self.next_id;
+        let req = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "remember",
+            "arguments": {"subject": "admin", "type_name": "note", "properties": {"n": i}}}});
+        writeln!(self.stdin, "{req}").ok()?;
+        self.stdin.flush().ok()?;
+        loop {
+            let mut line = String::new();
+            if self.stdout.read_line(&mut line).ok()? == 0 {
+                return None;
+            }
+            let frame: J = serde_json::from_str(line.trim()).ok()?;
+            if frame["id"].as_u64() == Some(id) {
+                if frame["result"]["isError"] != json!(false) {
+                    return None;
+                }
+                let text = frame["result"]["content"][0]["text"].as_str()?;
+                let body: J = serde_json::from_str(text).ok()?;
+                return body["koid"].as_str().map(str::to_string);
             }
         }
     }
@@ -552,5 +583,337 @@ fn ha_leader_fences_itself_when_its_lease_is_taken() {
     assert_eq!(
         std::fs::read_to_string(dir.join("REPL-LEADER")).unwrap(),
         "10.0.0.7:7070\n"
+    );
+}
+
+// ---------------------------------------------------------------- R5c
+// Split-brain certs. A fake S3 (conditional PUT) holds the lease; a Gate
+// in front of one node's S3 endpoint cuts that node off (blackhole: the
+// connection hangs, like a partition) or rejects it (403: what AWS sends a
+// request signed with a skewed clock). The ordering proof uses the two
+// nodes' log timestamps — one machine, one clock: the old leader logs
+// "fenced" after its fence took effect, the standby logs "taking over"
+// before its CAS, so fenced < taking-over proves the writers never overlap.
+
+#[derive(Default)]
+struct S3Object {
+    body: Option<(Vec<u8>, u64)>,
+    next: u64,
+}
+
+/// One HTTP/1.1 request off a connection: (method, headers, body).
+fn read_http(
+    conn: &std::net::TcpStream,
+) -> Option<(String, std::collections::HashMap<String, String>, Vec<u8>)> {
+    use std::io::Read;
+    let mut r = BufReader::new(conn);
+    let mut line = String::new();
+    r.read_line(&mut line).ok()?;
+    let method = line.split_whitespace().next()?.to_string();
+    let mut headers = std::collections::HashMap::new();
+    loop {
+        let mut h = String::new();
+        r.read_line(&mut h).ok()?;
+        let h = h.trim_end();
+        if h.is_empty() {
+            break;
+        }
+        let (k, v) = h.split_once(':')?;
+        headers.insert(k.to_ascii_lowercase(), v.trim().to_string());
+    }
+    let len: usize = headers
+        .get("content-length")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let mut body = vec![0u8; len];
+    r.read_exact(&mut body).ok()?;
+    Some((method, headers, body))
+}
+
+fn http_reply(mut conn: &std::net::TcpStream, status: &str, etag: Option<String>, body: &[u8]) {
+    let etag = etag.map(|e| format!("ETag: {e}\r\n")).unwrap_or_default();
+    let head = format!(
+        "HTTP/1.1 {status}\r\n{etag}Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = conn.write_all(head.as_bytes());
+    let _ = conn.write_all(body);
+}
+
+/// A fake S3 with conditional PUT (If-None-Match: * / If-Match → 412).
+fn fake_s3() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let state = std::sync::Arc::new(std::sync::Mutex::new(S3Object::default()));
+    std::thread::spawn(move || {
+        for conn in listener.incoming().flatten() {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let Some((method, headers, body)) = read_http(&conn) else {
+                    return;
+                };
+                let mut s = state.lock().unwrap();
+                let etag = |n: u64| format!("\"v{n}\"");
+                if method == "GET" {
+                    match &s.body {
+                        Some((b, n)) => http_reply(&conn, "200 OK", Some(etag(*n)), b),
+                        None => http_reply(&conn, "404 Not Found", None, b"<Error/>"),
+                    }
+                    return;
+                }
+                let current = s.body.as_ref().map(|(_, n)| etag(*n));
+                let ok = match (headers.get("if-none-match"), headers.get("if-match")) {
+                    (Some(_), _) => current.is_none(),
+                    (_, Some(m)) => current.as_deref() == Some(m.as_str()),
+                    _ => true,
+                };
+                if ok {
+                    s.next += 1;
+                    let n = s.next;
+                    s.body = Some((body, n));
+                    http_reply(&conn, "200 OK", Some(etag(n)), b"");
+                } else {
+                    http_reply(&conn, "412 Precondition Failed", None, b"<Error/>");
+                }
+            });
+        }
+    });
+    endpoint
+}
+
+const GATE_OPEN: u8 = 0;
+const GATE_BLACKHOLE: u8 = 1;
+const GATE_REJECT: u8 = 2;
+
+/// A switchable forwarder in front of one node's S3 endpoint.
+struct Gate {
+    endpoint: String,
+    mode: std::sync::Arc<std::sync::atomic::AtomicU8>,
+}
+
+impl Gate {
+    fn start(target: &str) -> Self {
+        use std::sync::atomic::Ordering;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let mode = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(GATE_OPEN));
+        let (m, target) = (
+            mode.clone(),
+            target.trim_start_matches("http://").to_string(),
+        );
+        std::thread::spawn(move || {
+            for conn in listener.incoming().flatten() {
+                let (m, target) = (m.clone(), target.clone());
+                std::thread::spawn(move || match m.load(Ordering::SeqCst) {
+                    GATE_OPEN => {
+                        let Ok(up) = std::net::TcpStream::connect(&target) else {
+                            return;
+                        };
+                        let (mut c1, mut u1) = (conn.try_clone().unwrap(), up.try_clone().unwrap());
+                        std::thread::spawn(move || {
+                            let _ = std::io::copy(&mut c1, &mut u1);
+                        });
+                        let (mut u2, mut c2) = (up, conn);
+                        let _ = std::io::copy(&mut u2, &mut c2);
+                        let _ = c2.shutdown(std::net::Shutdown::Both);
+                    }
+                    GATE_BLACKHOLE => {
+                        // hold the connection, answer nothing, until reopened
+                        while m.load(Ordering::SeqCst) == GATE_BLACKHOLE {
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                    _ => {
+                        let _ = read_http(&conn);
+                        http_reply(
+                            &conn,
+                            "403 Forbidden",
+                            None,
+                            b"<Error><Code>RequestTimeTooSkewed</Code></Error>",
+                        );
+                    }
+                });
+            }
+        });
+        Gate { endpoint, mode }
+    }
+
+    fn set(&self, mode: u8) {
+        self.mode.store(mode, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn s3_env(endpoint: &str) -> Vec<(String, String)> {
+    [
+        ("AWS_ACCESS_KEY_ID", "AKIDTEST"),
+        ("AWS_SECRET_ACCESS_KEY", "secret"),
+        ("AWS_REGION", "us-east-1"),
+        ("AIKOQL_S3_ENDPOINT", endpoint),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
+}
+
+/// A node's HA args on the S3 lease, with synchronous acks (R4b) so every
+/// acked write is on the standby.
+fn s3_node(node: &str, repl: &str) -> Vec<String> {
+    let mut args = ha_args(Path::new("s3://ha-bucket/lease.json"), node, repl);
+    args.extend(["--replicate-sync-ms".to_string(), "3000".to_string()]);
+    args
+}
+
+/// The first log line containing `needle`, and its timestamp (the
+/// line's first token, RFC 3339 UTC — comparable as text).
+fn stamped(rx: &mpsc::Receiver<String>, needle: &str) -> String {
+    let line = wait_line(rx, needle);
+    line.split_whitespace().next().unwrap().to_string()
+}
+
+/// R5c — partition the leader from the lease store. It must fence
+/// itself before the standby takes over (one writer per term), and
+/// every write it acked — before or during the partition — must be on
+/// the new leader.
+#[test]
+fn split_brain_a_leader_cut_off_from_its_lease_fences_before_the_standby_takes_over() {
+    let s3 = fake_s3();
+    let gate = Gate::start(&s3);
+    let (adir, bdir) = (tmp("sb-a"), tmp("sb-b"));
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let mut a = Mcp::spawn_env(
+        &adir,
+        &strs(&s3_node("a", &ra)),
+        true,
+        &s3_env(&gate.endpoint),
+    );
+    a.init();
+    let alog = a.log.take().unwrap();
+    let mut b = Mcp::spawn_env(&bdir, &strs(&s3_node("b", &rb)), true, &s3_env(&s3));
+    let blog = b.log.take().unwrap();
+    wait_line(&blog, "standby caught up");
+    let mut acked: Vec<(usize, String)> = (0..5).map(|i| (i, a.remember(i))).collect();
+
+    gate.set(GATE_BLACKHOLE); // the partition
+    let cut = std::time::Instant::now();
+    let mut i = 100;
+    while a.child.try_wait().unwrap().is_none() {
+        assert!(
+            cut.elapsed() < Duration::from_secs(20),
+            "the cut-off leader never fenced"
+        );
+        if let Some(k) = a.try_remember(i) {
+            acked.push((i, k));
+        }
+        i += 1;
+    }
+    assert_eq!(
+        a.child.wait().unwrap().code(),
+        Some(75),
+        "self-fence exit code"
+    );
+    let fenced = stamped(&alog, "fenced; exiting");
+    let taking_over = stamped(&blog, "taking over");
+    assert!(
+        fenced < taking_over,
+        "two writers: the standby began taking over at {taking_over}, the old leader fenced at {fenced}"
+    );
+    eprintln!(
+        "R5c metric: fenced at {fenced}, standby took over at {taking_over} ({} writes acked)",
+        acked.len()
+    );
+    b.init();
+    for (n, koid) in &acked {
+        let got = b.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(n), "acked write {koid} lost");
+    }
+    assert_eq!(
+        std::fs::read_to_string(adir.join("REPL-TERM")).unwrap(),
+        "1 fenced\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(bdir.join("REPL-TERM")).unwrap(),
+        "2 leader\n"
+    );
+}
+
+/// R5c — kill the leader mid-write (a request in flight, SIGKILL): every
+/// write it acked is on the promoted standby.
+#[test]
+fn split_brain_a_leader_killed_mid_write_loses_no_acked_write() {
+    let lease = tmp("sb-kill-lease").join("lease.json");
+    let (adir, bdir) = (tmp("sb-kill-a"), tmp("sb-kill-b"));
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let sync = ["--replicate-sync-ms".to_string(), "3000".to_string()];
+    let mut a = Mcp::start(
+        &adir,
+        &strs(&[ha_args(&lease, "a", &ra), sync.to_vec()].concat()),
+    );
+    let mut b = Mcp::spawn_raw(
+        &bdir,
+        &strs(&[ha_args(&lease, "b", &rb), sync.to_vec()].concat()),
+        true,
+    );
+    let blog = b.log.take().unwrap();
+    wait_line(&blog, "standby caught up");
+    let acked: Vec<String> = (0..30).map(|i| a.remember(i)).collect();
+    // one more write in flight, then the crash
+    writeln!(
+        a.stdin,
+        "{}",
+        json!({"jsonrpc": "2.0", "id": 9999, "method": "tools/call", "params": {"name": "remember",
+            "arguments": {"subject": "admin", "type_name": "note", "properties": {"n": 9999}}}})
+    )
+    .unwrap();
+    a.stdin.flush().unwrap();
+    let _ = a.child.kill();
+    let _ = a.child.wait();
+    b.init();
+    for (i, koid) in acked.iter().enumerate() {
+        let got = b.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "acked write {koid} lost");
+    }
+    assert_eq!(
+        std::fs::read_to_string(bdir.join("REPL-TERM")).unwrap(),
+        "2 leader\n"
+    );
+}
+
+/// R5c — a skewed clock: AWS rejects a request whose SigV4 date is too
+/// far off (403 RequestTimeTooSkewed). The agent never compares wall
+/// clocks, so skew can only surface as a store that refuses the leader —
+/// and a refused leader fences itself, fail-safe.
+#[test]
+fn split_brain_a_leader_whose_store_rejects_it_fences_itself() {
+    let s3 = fake_s3();
+    let gate = Gate::start(&s3);
+    let dir = tmp("sb-skew");
+    let repl = format!("127.0.0.1:{}", free_port());
+    // no standby here, so no synchronous acks
+    let args = ha_args(Path::new("s3://ha-bucket/lease.json"), "a", &repl);
+    let mut a = Mcp::spawn_env(&dir, &strs(&args), false, &s3_env(&gate.endpoint));
+    a.init();
+    a.remember(1);
+    gate.set(GATE_REJECT);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(st) = a.child.try_wait().unwrap() {
+            break st;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a rejected leader kept writing"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(75));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("REPL-TERM")).unwrap(),
+        "1 fenced\n"
     );
 }
