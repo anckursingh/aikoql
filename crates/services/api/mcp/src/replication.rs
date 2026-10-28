@@ -348,6 +348,23 @@ pub(crate) fn metrics(acked: &Acked, head: u64) -> String {
 }
 
 impl Acked {
+    /// R6 — hold log release at `seq` for a non-connection consumer (the
+    /// archiver), shown as `label` in the lag series.
+    pub(crate) fn hold(&self, id: u64, label: &str, seq: u64) {
+        // justified: Mutex poison is unrecoverable
+        self.standbys
+            .lock()
+            .unwrap()
+            .insert(id, (label.to_string(), seq));
+    }
+
+    /// The slowest consumer's seq — what the log may be released to.
+    pub(crate) fn slowest(&self) -> u64 {
+        // justified: Mutex poison is unrecoverable
+        let standbys = self.standbys.lock().unwrap();
+        standbys.values().map(|(_, seq)| *seq).min().unwrap_or(0)
+    }
+
     fn record(&self, seq: u64) {
         // justified: Mutex poison is unrecoverable
         let mut acked = self.seq.lock().unwrap();
@@ -548,14 +565,7 @@ fn serve_standby(
     let mut last_ckpt_look = Instant::now() - CHECKPOINT_POLL;
     while !stop.load(Ordering::Relaxed) {
         // justified: Mutex poison is unrecoverable
-        let slowest = acked
-            .standbys
-            .lock()
-            .unwrap()
-            .values()
-            .map(|(_, seq)| *seq)
-            .min()
-            .unwrap_or(0);
+        let slowest = acked.slowest();
         if slowest > released {
             if let Err(e) = source.release_log(slowest) {
                 warn!("release replication log to {slowest}: {e}");
@@ -730,7 +740,11 @@ fn send_dir(w: &mut Link, tag: u8, water: u64, dir: &Path) -> std::io::Result<()
 }
 
 /// Every file under `dir`, as ('/'-joined path relative to `root`, path).
-fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) -> std::io::Result<()> {
+pub(crate) fn collect_files(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, PathBuf)>,
+) -> std::io::Result<()> {
     for e in std::fs::read_dir(dir)? {
         let path = e?.path();
         if path.is_dir() {

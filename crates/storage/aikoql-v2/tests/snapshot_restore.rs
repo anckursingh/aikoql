@@ -755,6 +755,7 @@ fn p3m3_snapshot_copy_time_cell() {
         generation: info.generation,
         file_count: info.file_count,
         bytes_copied: info.bytes_copied,
+        last_seq: info.last_seq,
     };
     let body = format!(
         "# Snapshot Copy Time — P3-M3 (100K cell)\n\n\

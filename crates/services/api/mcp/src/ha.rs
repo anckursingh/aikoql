@@ -16,9 +16,11 @@
 //! margin that covers clock-rate drift and in-flight writes.
 
 use crate::replication::{self, Role};
+#[cfg(test)]
+use crate::s3::{amz_date, authorization, Creds};
+use crate::s3::{describe, S3};
 use aikoql_storage_v2::db::{Config, Db};
 use aikoql_storage_v2::engine::StorageAdminApi;
-use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{ErrorKind, Write};
@@ -129,26 +131,17 @@ impl LeaseStore for FileLease {
 
 /// R5a-2 — the lease as one S3 object; the version is its ETag and every
 /// write is conditional (`If-None-Match: *` to create, `If-Match: <etag>`
-/// to renew or take over). Requests are SigV4-signed.
+/// to renew or take over). Requests are SigV4-signed (`crate::s3`).
 pub(crate) struct S3Lease {
-    url: String,
-    host: String,
-    path: String,
-    region: String,
-    creds: Creds,
-    agent: ureq::Agent,
-}
-
-pub(crate) struct Creds {
-    pub(crate) akid: String,
-    pub(crate) secret: String,
-    pub(crate) token: Option<String>,
+    s3: S3,
+    key: String,
 }
 
 impl S3Lease {
     /// `endpoint`: an S3-compatible store (path-style); `None` is AWS
     /// (virtual-hosted). `timeout` bounds every request — a renewal must
     /// not hang past its period.
+    #[cfg(test)]
     pub(crate) fn new(
         endpoint: Option<String>,
         bucket: String,
@@ -157,25 +150,9 @@ impl S3Lease {
         creds: Creds,
         timeout: Duration,
     ) -> Self {
-        let key = uri_encode(&key);
-        let (base, path) = match endpoint {
-            Some(e) => (
-                e.trim_end_matches('/').to_string(),
-                format!("/{bucket}/{key}"),
-            ),
-            None => (
-                format!("https://{bucket}.s3.{region}.amazonaws.com"),
-                format!("/{key}"),
-            ),
-        };
-        let host = base.split("://").nth(1).unwrap_or(&base).to_string();
         Self {
-            url: format!("{base}{path}"),
-            host,
-            path,
-            region,
-            creds,
-            agent: ureq::AgentBuilder::new().timeout(timeout).build(),
+            s3: S3::new(endpoint, bucket, region, creds, timeout),
+            key,
         }
     }
 
@@ -184,24 +161,10 @@ impl S3Lease {
     pub(crate) fn from_env(url: &str, timeout: Duration) -> Result<Self, String> {
         let (bucket, key) =
             parse_s3_url(url).ok_or_else(|| format!("{url:?} is not s3://BUCKET/KEY"))?;
-        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-        let need = |k: &str| env(k).ok_or_else(|| format!("an s3:// lease needs {k}"));
-        let creds = Creds {
-            akid: need("AWS_ACCESS_KEY_ID")?,
-            secret: need("AWS_SECRET_ACCESS_KEY")?,
-            token: env("AWS_SESSION_TOKEN"),
-        };
-        let region = env("AWS_REGION")
-            .or_else(|| env("AWS_DEFAULT_REGION"))
-            .unwrap_or_else(|| "us-east-1".into());
-        Ok(Self::new(
-            env("AIKOQL_S3_ENDPOINT"),
-            bucket,
+        Ok(Self {
+            s3: S3::from_env(bucket, timeout)?,
             key,
-            region,
-            creds,
-            timeout,
-        ))
+        })
     }
 
     fn send(
@@ -210,57 +173,7 @@ impl S3Lease {
         body: &[u8],
         condition: Option<(&str, &str)>,
     ) -> Result<ureq::Response, (Option<u16>, String)> {
-        let payload = format!("{:x}", Sha256::digest(body));
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let date = amz_date(secs);
-        let mut headers = vec![
-            ("host", self.host.as_str()),
-            ("x-amz-content-sha256", payload.as_str()),
-            ("x-amz-date", date.as_str()),
-        ];
-        if let Some(t) = &self.creds.token {
-            headers.push(("x-amz-security-token", t.as_str()));
-        }
-        headers.sort();
-        let auth = authorization(
-            &self.creds,
-            &self.region,
-            method,
-            &self.path,
-            &headers,
-            &payload,
-        );
-        let mut req = self
-            .agent
-            .request(method, &self.url)
-            .set("authorization", &auth);
-        for (k, v) in headers.iter().filter(|(k, _)| *k != "host") {
-            req = req.set(k, v);
-        }
-        if let Some((k, v)) = condition {
-            req = req.set(k, v);
-        }
-        let sent = if method == "GET" {
-            req.call()
-        } else {
-            req.send_bytes(body)
-        };
-        sent.map_err(describe)
-    }
-}
-
-/// (HTTP status, if any; a description) — ureq's error is too large to
-/// carry around.
-fn describe(e: ureq::Error) -> (Option<u16>, String) {
-    match e {
-        ureq::Error::Status(code, resp) => {
-            let body = resp.into_string().unwrap_or_default();
-            let body: String = body.chars().take(200).collect();
-            (Some(code), format!("S3 {code}: {body}"))
-        }
-        ureq::Error::Transport(t) => (None, format!("S3 transport: {t}")),
+        self.s3.send(method, &self.key, &[], body, condition)
     }
 }
 
@@ -458,89 +371,6 @@ pub(crate) fn parse_k8s_url(url: &str) -> Option<(String, String)> {
 pub(crate) fn parse_s3_url(url: &str) -> Option<(String, String)> {
     let (bucket, key) = url.strip_prefix("s3://")?.split_once('/')?;
     (!bucket.is_empty() && !key.is_empty()).then(|| (bucket.to_string(), key.to_string()))
-}
-
-/// SigV4 URI encoding of an object key: unreserved bytes and `/` stay.
-fn uri_encode(key: &str) -> String {
-    key.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
-}
-
-fn hmac(key: &[u8], msg: &[u8]) -> Vec<u8> {
-    // justified: HMAC accepts keys of any length
-    let mut m = Hmac::<Sha256>::new_from_slice(key).expect("HMAC key");
-    m.update(msg);
-    m.finalize().into_bytes().to_vec()
-}
-
-/// The SigV4 `Authorization` header (no query string; `headers` sorted,
-/// lowercase, `x-amz-date` among them).
-pub(crate) fn authorization(
-    creds: &Creds,
-    region: &str,
-    method: &str,
-    path: &str,
-    headers: &[(&str, &str)],
-    payload: &str,
-) -> String {
-    let date = headers
-        .iter()
-        .find(|(k, _)| *k == "x-amz-date")
-        .map_or("", |(_, v)| *v);
-    let day = date.get(..8).unwrap_or_default();
-    let canonical: String = headers
-        .iter()
-        .map(|(k, v)| format!("{k}:{}\n", v.trim()))
-        .collect();
-    let signed = headers
-        .iter()
-        .map(|(k, _)| *k)
-        .collect::<Vec<_>>()
-        .join(";");
-    let request = format!("{method}\n{path}\n\n{canonical}\n{signed}\n{payload}");
-    let scope = format!("{day}/{region}/s3/aws4_request");
-    let to_sign = format!(
-        "AWS4-HMAC-SHA256\n{date}\n{scope}\n{:x}",
-        Sha256::digest(request.as_bytes())
-    );
-    let mut key = hmac(format!("AWS4{}", creds.secret).as_bytes(), day.as_bytes());
-    for part in [region, "s3", "aws4_request"] {
-        key = hmac(&key, part.as_bytes());
-    }
-    let sig: String = hmac(&key, to_sign.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    format!(
-        "AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed}, Signature={sig}",
-        creds.akid
-    )
-}
-
-/// `YYYYMMDD'T'HHMMSS'Z'` for Unix seconds (civil-from-days, H. Hinnant).
-pub(crate) fn amz_date(secs: u64) -> String {
-    let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    format!(
-        "{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
 }
 
 pub(crate) struct HaConfig {
@@ -880,6 +710,7 @@ mod tests {
             "us-east-1",
             "GET",
             "/test.txt",
+            "",
             &headers,
             EMPTY_SHA256,
         );

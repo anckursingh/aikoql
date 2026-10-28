@@ -249,7 +249,8 @@ pub(crate) struct State {
     l0_count: usize,
     l0_bytes: u64,
     l1_bytes: u64,
-    next_seq: u64,
+    /// pub(crate): a snapshot reads it inside its capture hold (R6).
+    pub(crate) next_seq: u64,
     next_segment_id: u64,
     generation: u64,
     /// SE2-M30 — identity/replica directories (spec §8.1/§8.2): the

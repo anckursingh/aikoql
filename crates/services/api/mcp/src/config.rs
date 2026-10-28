@@ -26,6 +26,13 @@ pub(crate) struct RuntimeConfig {
     /// (`--ha-lease`), this node's id in it (`--ha-node`) and its TTL
     /// (`--ha-ttl-ms`, default 10 s). CLI-only.
     pub ha_lease: Option<String>,
+    /// MRFC-0080 R6: the continuous archive (`--archive DIR|s3://BUCKET[/PREFIX]`),
+    /// its log-batch period (`--archive-log-ms`, default 5000 — the
+    /// archive's RPO) and snapshot period (`--archive-snapshot-secs`,
+    /// default 3600 — bounds restore replay). CLI-only.
+    pub archive: Option<String>,
+    pub archive_log_ms: u64,
+    pub archive_snapshot_secs: u64,
     /// MRFC-0080 R3c: TLS on the replication stream — the leader's
     /// certificate chain and key (`--replicate-tls-cert/-key`, both or
     /// neither; with them the listener may bind any interface), the CA a
@@ -283,6 +290,9 @@ pub(crate) fn load(
         replicate_listen: None,
         advertise: None,
         ha_lease: None,
+        archive: None,
+        archive_log_ms: 5_000,
+        archive_snapshot_secs: 3_600,
         replicate_tls_cert: None,
         replicate_tls_key: None,
         replicate_tls_ca: None,
@@ -526,6 +536,26 @@ pub(crate) fn load(
                 }
                 None => return Err("--replicate-advertise requires an address".into()),
             },
+            "--archive" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.archive = Some(v.clone());
+                    i += 2;
+                }
+                None => return Err("--archive requires a directory or s3:// URL".into()),
+            },
+            flag @ ("--archive-log-ms" | "--archive-snapshot-secs") => {
+                let n = args
+                    .get(i + 1)
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| format!("{flag} requires a positive number"))?;
+                if flag == "--archive-log-ms" {
+                    cfg.archive_log_ms = n;
+                } else {
+                    cfg.archive_snapshot_secs = n;
+                }
+                i += 2;
+            }
             "--ha-lease" => match args.get(i + 1) {
                 Some(v) => {
                     cfg.ha_lease = Some(v.clone());

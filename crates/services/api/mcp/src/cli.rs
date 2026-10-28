@@ -31,6 +31,7 @@ pub(crate) fn print_usage() {
         "  report [PATH]          Print knowledge report for directory\n",
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
+        "  pitr --archive URL --to DIR [--until-seq N | --until-ms MS]  Restore from the archive\n",
         "  follow DIR --leader ADDR [--token T] [--tls-ca CA.pem]  Stream a leader's log into a standby DIR\n",
         "                         (token: an admin --tcp-token of the leader, or AIKOQL_REPLICATION_TOKEN)\n",
         "\n",
@@ -47,6 +48,7 @@ pub(crate) fn print_usage() {
         "  --replicate-advertise HOST:PORT  The replication address recorded in the HA lease\n",
         "  --replicate-sync-ms MS   Ack a write only once a standby holds it; fail after MS\n",
         "  --advertise HOST:PORT    This node's client address, the NOT_LEADER hint standbys pass on\n",
+        "  --archive DIR|s3://BUCKET[/PREFIX] [--archive-log-ms MS] [--archive-snapshot-secs S]  Continuous archive (PITR)\n",
         "  --ha-lease PATH|s3://BUCKET/KEY|k8s://NS/NAME --ha-node ID [--ha-ttl-ms MS]  Automatic failover on a shared lease\n",
         "  --embedding-provider P  Embedding provider: \"candle\" (default), \"http\", or \"ollama\"\n",
         "  --embedding-base-url U  OpenAI-compatible base URL (default: http://localhost:11434)\n",
@@ -171,6 +173,56 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             {
                 eprintln!("follow stopped: {e}");
                 std::process::exit(1);
+            }
+            true
+        }
+        Some("pitr") => {
+            // MRFC-0080 R6: aikoql-mcp pitr --archive URL --to DIR
+            // [--until-seq N | --until-ms UNIX_MS]
+            let tail: Vec<&str> = subcmd_idx
+                .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
+                .unwrap_or_default();
+            let (mut url, mut to, mut until) = (None, None, crate::archive::Until::Latest);
+            let mut it = tail.iter();
+            fn usage() -> ! {
+                eprintln!("Usage: aikoql-mcp pitr --archive DIR|s3://BUCKET[/PREFIX] --to DIR [--until-seq N | --until-ms UNIX_MS]");
+                std::process::exit(2);
+            }
+            while let Some(a) = it.next() {
+                let mut num = || {
+                    it.next()
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or_else(|| usage())
+                };
+                match *a {
+                    "--archive" => url = it.next().map(|s| s.to_string()),
+                    "--to" => to = it.next().map(|s| s.to_string()),
+                    "--until-seq" => until = crate::archive::Until::Seq(num()),
+                    "--until-ms" => until = crate::archive::Until::Ms(num()),
+                    _ => usage(),
+                }
+            }
+            let (Some(url), Some(to)) = (url, to) else {
+                usage()
+            };
+            let restored = crate::archive::open_store(&url, std::time::Duration::from_secs(60))
+                .and_then(|store| {
+                    let scratch = std::path::PathBuf::from(format!("{to}.pitr-tmp"));
+                    let r = crate::archive::restore(
+                        &*store,
+                        std::path::Path::new(&to),
+                        until,
+                        &scratch,
+                    );
+                    let _ = std::fs::remove_dir_all(&scratch);
+                    r
+                });
+            match restored {
+                Ok((seq, term)) => eprintln!("restored {to} to seq {seq} (term {term})"),
+                Err(e) => {
+                    eprintln!("pitr: {e}");
+                    std::process::exit(1);
+                }
             }
             true
         }

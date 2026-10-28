@@ -32,6 +32,7 @@ mod native;
 mod protocol;
 mod rate_limiter;
 mod replication;
+mod s3;
 mod session;
 mod shell;
 mod studio;
@@ -379,7 +380,12 @@ fn main() {
         }
     };
     let (kernel, admin) =
-        match engine::open_kernel(&db_path, &cfg.encryption, replicate_listen.is_some()) {
+        // the log is retained for standbys and for the archive (R6)
+        match engine::open_kernel(
+            &db_path,
+            &cfg.encryption,
+            replicate_listen.is_some() || cfg.archive.is_some(),
+        ) {
             Ok((k, admin)) => (k, admin),
             Err(e) => {
                 eprintln!("open kernel: {}", e);
@@ -611,6 +617,45 @@ fn main() {
         eprintln!("--replicate-sync-ms needs --replicate-listen");
         std::process::exit(2);
     }
+    // MRFC-0080 R3c-2/R6: one ack table for the standbys and the archive
+    // (the slowest bounds log release); the lag series reads it.
+    let acked = Arc::new(replication::Acked::default());
+    let _ = replication::LEADER.set(acked.clone());
+    if let Some(url) = cfg.archive.as_deref() {
+        // R6: only a writing node archives; a fenced one serves reads
+        if role == replication::Role::Fenced {
+            warn!("--archive: this node is fenced — not archiving");
+        } else {
+            let Some(source) = admin.clone() else {
+                eprintln!("--archive needs the storage admin surface");
+                std::process::exit(2);
+            };
+            let started =
+                archive::open_store(url, std::time::Duration::from_secs(60)).and_then(|store| {
+                    archive::Archiver::start(
+                        store,
+                        source,
+                        acked.clone(),
+                        term,
+                        std::path::PathBuf::from(format!("{db_path}.archive-tmp")),
+                    )
+                });
+            match started {
+                Ok(a) => {
+                    info!(%url, term, "continuous archive started");
+                    let (log_every, snap_every) = (
+                        std::time::Duration::from_millis(cfg.archive_log_ms),
+                        std::time::Duration::from_secs(cfg.archive_snapshot_secs),
+                    );
+                    thread::spawn(move || a.run(log_every, snap_every));
+                }
+                Err(e) => {
+                    eprintln!("--archive: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
     if let Some(addr) = replicate_listen {
         // MRFC-0080 R3a: the replication stream rides beside any serve mode
         // (stdio included) under the TCP gates — tokens required, loopback
@@ -650,8 +695,6 @@ fn main() {
             lock: ckpt_lock.clone(),
         };
         let repl_dir = std::path::PathBuf::from(db_path.as_str());
-        let acked = Arc::new(replication::Acked::default());
-        let _ = replication::LEADER.set(acked.clone()); // the lag series
         if let Some(ms) = cfg.replicate_sync_ms {
             source.set_commit_gate(replication::sync_gate(
                 acked.clone(),
