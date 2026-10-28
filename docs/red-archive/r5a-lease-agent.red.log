@@ -1,0 +1,50 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0425]: cannot find type `Lease` in this scope
+  --> crates/services/api/mcp/src/ha.rs:15:53
+   |
+15 |     fn lease(holder: &str, term: u64, beat: u64) -> Lease {
+   |                                                     ^^^^^ not found in this scope
+
+error[E0422]: cannot find struct, variant or union type `Lease` in this scope
+  --> crates/services/api/mcp/src/ha.rs:16:9
+   |
+16 |         Lease {
+   |         ^^^^^ not found in this scope
+
+warning: unused import: `super::*`
+ --> crates/services/api/mcp/src/ha.rs:5:9
+  |
+5 |     use super::*;
+  |         ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0433]: cannot find type `FileLease` in this scope
+  --> crates/services/api/mcp/src/ha.rs:30:21
+   |
+30 |         let store = FileLease::new(tmp("cas").join("lease.json"));
+   |                     ^^^^^^^^^ use of undeclared type `FileLease`
+
+error[E0433]: cannot find type `FileLease` in this scope
+  --> crates/services/api/mcp/src/ha.rs:56:30
+   |
+56 |         let store = Arc::new(FileLease::new(tmp("race").join("lease.json")));
+   |                              ^^^^^^^^^ use of undeclared type `FileLease`
+
+error[E0433]: cannot find type `LeaseError` in this scope
+  --> crates/services/api/mcp/src/ha.rs:48:21
+   |
+48 |                 Err(LeaseError::Conflict)
+   |                     ^^^^^^^^^^ use of undeclared type `LeaseError`
+
+error[E0433]: cannot find type `LeaseError` in this scope
+  --> crates/services/api/mcp/src/ha.rs:36:21
+   |
+36 |                 Err(LeaseError::Conflict)
+   |                     ^^^^^^^^^^ use of undeclared type `LeaseError`
+
+Some errors have detailed explanations: E0422, E0425, E0433.
+For more information about an error, try `rustc --explain E0422`.
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 6 previous errors; 1 warning emitted
+EXIT=101

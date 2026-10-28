@@ -20,6 +20,7 @@ mod dispatcher;
 mod engine;
 mod error_codes;
 mod graph_ui;
+mod ha;
 mod helpers;
 mod http;
 mod imports;

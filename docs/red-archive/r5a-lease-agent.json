@@ -1,0 +1,8 @@
+{
+  "id": "r5a-lease-agent",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp ha::",
+  "captured_at": "2026-10-28T08:28:57Z",
+  "captured_head": "2b10c8cf35e1cc2928554aca24214fe3bc9a48ed",
+  "exit_code": 101
+}

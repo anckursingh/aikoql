@@ -50,6 +50,14 @@ impl Mcp {
     }
 
     fn spawn(db: &Path, extra: &[&str], logged: bool) -> Self {
+        let mut m = Self::spawn_raw(db, extra, logged);
+        m.init();
+        m
+    }
+
+    /// Started, not yet initialized — an HA standby answers nothing until
+    /// it is promoted.
+    fn spawn_raw(db: &Path, extra: &[&str], logged: bool) -> Self {
         let mut child = Command::new(bin())
             .args(extra)
             .arg(db)
@@ -65,18 +73,20 @@ impl Mcp {
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let log = child.stderr.take().map(lines);
-        let mut m = Mcp {
+        Mcp {
             child,
             stdin,
             stdout,
             next_id: 0,
             log,
-        };
-        m.request(
+        }
+    }
+
+    fn init(&mut self) {
+        self.request(
             "initialize",
             json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "repl", "version": "0"}}),
         );
-        m
     }
 
     fn request(&mut self, method: &str, params: J) -> J {
@@ -451,5 +461,96 @@ fn a_diverged_old_leader_rejoins_the_promoted_standby_by_itself() {
         res["isError"],
         json!(true),
         "the diverged write survived: {res}"
+    );
+}
+
+fn ha_args(lease: &Path, node: &str, repl: &str) -> Vec<String> {
+    [
+        "--ha-lease",
+        lease.to_str().unwrap(),
+        "--ha-node",
+        node,
+        "--ha-ttl-ms",
+        "1500",
+        "--replicate-listen",
+        repl,
+        "--tcp-token",
+        "repl-secret::admin",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+fn strs(v: &[String]) -> Vec<&str> {
+    v.iter().map(String::as_str).collect()
+}
+
+/// R5a — automatic failover: A wins the lease and leads, B follows it
+/// in-process; A crashes, B sees the lease go stale for a TTL, wins it
+/// with the next term and promotes itself — no operator.
+#[test]
+fn ha_standby_takes_over_when_the_leader_dies() {
+    let (adir, bdir) = (tmp("ha-a"), tmp("ha-b"));
+    let lease = tmp("ha-lease").join("lease.json");
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let mut a = Mcp::start(&adir, &strs(&ha_args(&lease, "a", &ra)));
+    let koids: Vec<String> = (0..10).map(|i| a.remember(i)).collect();
+    let mut b = Mcp::spawn_raw(&bdir, &strs(&ha_args(&lease, "b", &rb)), true);
+    let log = b.log.take().unwrap();
+    wait_line(&log, "standby caught up");
+
+    let t = std::time::Instant::now();
+    drop(a); // a crash
+    b.init(); // answers once B holds the lease and has promoted itself
+    eprintln!("R5a metric: failover took {:?} (ttl 1500 ms)", t.elapsed());
+    for (i, koid) in koids.iter().enumerate() {
+        let got = b.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
+    b.remember(99);
+    assert_eq!(
+        std::fs::read_to_string(bdir.join("REPL-TERM")).unwrap(),
+        "2 leader\n"
+    );
+}
+
+/// R5a — self-fencing: a leader that finds its lease taken stops
+/// writing on its own (fenced, with the new holder's address as the
+/// hint) and exits for its supervisor to restart it as a standby.
+#[test]
+fn ha_leader_fences_itself_when_its_lease_is_taken() {
+    let dir = tmp("ha-fence");
+    let lease = tmp("ha-fence-lease").join("lease.json");
+    let repl = format!("127.0.0.1:{}", free_port());
+    let mut a = Mcp::start(&dir, &strs(&ha_args(&lease, "a", &repl)));
+    a.remember(1);
+    std::fs::write(
+        &lease,
+        r#"{"holder":"intruder","term":7,"repl":"127.0.0.1:1","client":"10.0.0.7:7070","seq":0,"beat":0}"#,
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(st) = a.child.try_wait().unwrap() {
+            break st;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the leader kept its lost lease"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(75), "self-fence exit code");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("REPL-TERM")).unwrap(),
+        "1 fenced\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("REPL-LEADER")).unwrap(),
+        "10.0.0.7:7070\n"
     );
 }
