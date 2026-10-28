@@ -465,7 +465,7 @@ removed the index rebuild) → ~10–15 s, tunable through the TTL.
   kill it mid-write, skew its clock; prove no acked write is lost and
   never more than one writer per term. ✅ (see R5c below)
 
-### Risks to settle before R5a (status after R5a: clock drift designed out — see R5a; S3-compatible stores still unverified)
+### Risks to settle before R5a (status: clock drift designed out — see R5a; MinIO verified, AWS S3 / R2 still unverified — see "Real-S3 certs")
 
 - **Clock drift** is the safety-critical parameter: the self-fencing
   margin must cover the worst drift between the leader and the lease
@@ -518,9 +518,9 @@ object; a leader whose lease is taken self-fences (exit 75, `fenced`,
 hint recorded). RED: `r5a-lease-agent{,-e2e}`, `r5a-s3-lease`.
 
 R5a limits:
-- **S3 conditional writes are verified against a fake only.** AWS S3
-  documents both conditions on PUT; MinIO, R2 and other S3-compatible
-  stores must each be checked before claiming support (open risk).
+- **S3 conditional writes: verified on MinIO** (real-S3 certs below);
+  AWS S3 documents both conditions on PUT but has not been run here, and
+  R2 and other S3-compatible stores must each still be checked.
 - ~~Replication is loopback-only~~ — R3c added TLS: HA nodes on
   different hosts use `--replicate-tls-cert/-key/-ca` and
   `--replicate-advertise`. (Not yet exercised across real hosts.)
@@ -677,8 +677,8 @@ restore picks the right one; the archive holds log release.
 `--until-ms` between the bursts holds only the first. RED: `r6-*`.
 
 R6 limits:
-- **Not run against real S3** — the S3 store is verified against a fake
-  (the SigV4 signer against AWS's documented example).
+- **Verified on MinIO, not on AWS S3** (real-S3 certs below; the SigV4
+  signer is checked against AWS's documented example).
 - Time granularity is one log batch: `--until-ms` restores what had
   been *uploaded* by then, not each write's commit time (frames carry no
   wall-clock stamp).
@@ -779,6 +779,26 @@ R2's hint is the leader's. RED: `cascade-e2e`.
 Limits: each hop adds its own apply + catch-up delay; R1's acks release
 R1's log only (the leader's release still follows its direct standbys);
 `--replicate-sync-ms` counts direct standbys only.
+
+## Real-S3 certs (MinIO) ✅
+
+The S3 paths were verified against fakes only; the same contracts now
+run on a real S3-compatible server — `scripts/s3-it.sh` (a throwaway
+MinIO; `brew install minio minio-mc`), or any store via
+`AIKOQL_TEST_S3_ENDPOINT` + `AIKOQL_TEST_S3_BUCKET` + `AWS_*`. Without
+them the certs skip, so the default suite is unchanged.
+
+| cert | proves on the real store |
+|---|---|
+| `ha.rs` `real_s3_lease_is_a_compare_and_swap` | `If-None-Match: *` creates once, a stale `If-Match` is refused, a renewal changes the ETag; 8 concurrent creators → exactly one winner |
+| `archive.rs` `real_s3_store_keeps_keys` | put/get/overwrite, a missing key is an error, `ListObjectsV2` lists by prefix |
+| `archive.rs` `real_s3_archive_round_trips` | base snapshot + log batch up, listed back, restored byte-equal |
+| `replication_failover.rs` `real_s3_ha_failover_then_pitr_from_the_bucket` | lease + archive in the bucket: the leader dies, the standby takes the lease (term 2) and archives its own timeline, `pitr` restores term 2 with every object |
+
+Green on MinIO RELEASE.2025-10-15T17-29-55Z. CI: the `s3-compat` job
+(MinIO + mc containers) — `continue-on-error` until its first pushed run
+is green, then a gate. Still open: AWS S3 itself (needs credentials) and
+R2; the Kubernetes lease (fake API only).
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
