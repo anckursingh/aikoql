@@ -44,7 +44,8 @@ an exact copy, which the verifiable-knowledge claim requires.
 | diverged-tail rejoin (and automatic re-bootstrap) | R4c ✅ |
 | `NOT_LEADER` + leader hint | R4d ✅ |
 | automatic failover: lease agent (file + S3), self-fencing, in-process promotion | R5a ✅ |
-| k8s `Lease` backend, SDKs follow leader hints, standby serving reads | R5b |
+| k8s `Lease` backend, SDKs follow leader hints | R5b ✅ (Java SDK pending) |
+| standby serving reads (a read-only kernel over a replicating db) | later |
 | split-brain certs on the fault proxy | R5c |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
@@ -402,7 +403,7 @@ removed the index rebuild) → ~10–15 s, tunable through the TTL.
   rejoin, `NOT_LEADER`.
 - **R5a** — lease agent with the S3 backend, self-fencing, in-process
   promotion.
-- **R5b** — k8s `Lease` backend; SDKs follow leader hints.
+- **R5b** — k8s `Lease` backend; SDKs follow leader hints. ✅
 - **R5c** — split-brain certs on the fault proxy: partition the leader,
   kill it mid-write, skew its clock; prove no acked write is lost and
   never more than one writer per term.
@@ -474,6 +475,49 @@ R5a limits:
   closes it.
 - The node must run under a supervisor (systemd, k8s) — a self-fenced
   leader exits rather than demote in place.
+
+## R5b — Kubernetes lease, SDKs follow the leader ✅
+
+**R5b-1 — `--ha-lease k8s://NAMESPACE/NAME`.** The lease as a
+`coordination.k8s.io/v1` Lease: the version is `metadata.resourceVersion`;
+create is POST (409 AlreadyExists = a lost CAS), renew / take over is PUT
+carrying that resourceVersion (409 when it moved). The record rides the
+`aikoql.io/lease` annotation; `spec.holderIdentity` names the holder for
+`kubectl get lease`; a Lease without the annotation is refused, never
+adopted. In a pod: the service-account token (Bearer) and CA (rustls root
+store — rustls 0.23 + ring already in the tree, default features off so
+aws-lc-rs stays out), the API server from `KUBERNETES_SERVICE_HOST/PORT`,
+a TTL/3 request timeout. RBAC: the pod's service account needs `get`,
+`create`, `update` on `leases` in that namespace.
+
+**R5b-2 — SDKs follow `NOT_LEADER`.** Go, Rust, Python, TypeScript: a TCP
+client whose tool call is refused with `NOT_LEADER` and a `leader` hint
+reconnects to that address with the same token and client identity,
+re-runs `initialize` and retries the call **once**; it then stays on the
+leader. No hint → the retryable `NOT_LEADER` is returned. The refused
+call was never applied (the fence rejects before the WAL), so the retry
+cannot double-write.
+
+Tests: `ha.rs` — the CAS contract against a fake Kubernetes API (bearer
+auth, holderIdentity), `k8s://` parsing; per SDK, two scripted fakes (a
+fenced one answering NOT_LEADER + hint, the leader) — the leader sees
+`initialize, tools/call, tools/call`; no hint → NOT_LEADER returned.
+RED: `r5b-k8s-lease`, `r5b-sdk-hint-{go,rust,python,ts}`.
+
+R5b limits:
+- **Java SDK not done**: no JDK on the build machine; the same change is
+  pending there.
+- The Kubernetes store is verified against a fake API only; the
+  in-cluster TLS/token path has not run in a real cluster.
+- `session_init` identity (run_id) is not replayed on the new
+  connection; stdio and native-protocol clients do not follow hints.
+- The client trusts the hint its server sends (the token goes to the
+  named leader). The hint comes from the lease / replication handshake
+  and is validated as a bounded host:port token, but a client that must
+  pin its endpoints should not use a fenced-node address as a seed.
+- Standby reads are not in R5b: a standby still answers no client
+  traffic until it leads. It needs a kernel that opens without writing
+  over a db being replicated into — a separate milestone.
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
