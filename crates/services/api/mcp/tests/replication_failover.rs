@@ -573,7 +573,9 @@ fn strs(v: &[String]) -> Vec<&str> {
 
 /// R5a — automatic failover: A wins the lease and leads, B follows it
 /// in-process; A crashes, B sees the lease go stale for a TTL, wins it
-/// with the next term and promotes itself — no operator.
+/// with the next term and promotes itself — no operator. Standby reads:
+/// before the failover B already answers reads and refuses writes with
+/// A's address; it promotes by re-executing itself (a fresh MCP session).
 #[test]
 fn ha_standby_takes_over_when_the_leader_dies() {
     let (adir, bdir) = (tmp("ha-a"), tmp("ha-b"));
@@ -582,15 +584,49 @@ fn ha_standby_takes_over_when_the_leader_dies() {
         format!("127.0.0.1:{}", free_port()),
         format!("127.0.0.1:{}", free_port()),
     );
-    let mut a = Mcp::start(&adir, &strs(&ha_args(&lease, "a", &ra)));
+    let a_args = [
+        ha_args(&lease, "a", &ra),
+        vec!["--advertise".into(), "a.internal:7070".into()],
+    ]
+    .concat();
+    let mut a = Mcp::start(&adir, &strs(&a_args));
     let koids: Vec<String> = (0..10).map(|i| a.remember(i)).collect();
     let mut b = Mcp::spawn_raw(&bdir, &strs(&ha_args(&lease, "b", &rb)), true);
     let log = b.log.take().unwrap();
     wait_line(&log, "standby caught up");
 
+    // standby reads: B serves before any failover...
+    b.init();
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let res = b.request(
+            "tools/call",
+            json!({"name": "get", "arguments": {"subject": "admin", "koid": koids[9]}}),
+        );
+        if res["isError"] == json!(false) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the HA standby never served a read: {res}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // ...and refuses writes, naming the leader
+    let res = b.request(
+        "tools/call",
+        json!({"name": "remember", "arguments": {"subject": "admin", "type_name": "note", "properties": {"n": 0}}}),
+    );
+    let err: J = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(err["error"]["code"], json!("NOT_LEADER"), "{err}");
+    assert_eq!(err["error"]["leader"], json!("a.internal:7070"), "{err}");
+
     let t = std::time::Instant::now();
     drop(a); // a crash
-    b.init(); // answers once B holds the lease and has promoted itself
+             // B wins and re-executes itself as the leader: a fresh MCP session
+    wait_line(&log, "won the lease");
+    wait_line(&log, "aikoql-mcp ready");
+    b.init();
     eprintln!("R5a metric: failover took {:?} (ttl 3000 ms)", t.elapsed());
     for (i, koid) in koids.iter().enumerate() {
         let got = b.tool("get", json!({"subject": "admin", "koid": koid}));
@@ -870,6 +906,7 @@ fn split_brain_a_leader_cut_off_from_its_lease_fences_before_the_standby_takes_o
     );
     let fenced = stamped(&alog, "fenced; exiting");
     let taking_over = stamped(&blog, "taking over");
+    wait_line(&blog, "aikoql-mcp ready"); // the promoted, re-executed B
     assert!(
         fenced < taking_over,
         "two writers: the standby began taking over at {taking_over}, the old leader fenced at {fenced}"
@@ -927,6 +964,8 @@ fn split_brain_a_leader_killed_mid_write_loses_no_acked_write() {
     a.stdin.flush().unwrap();
     let _ = a.child.kill();
     let _ = a.child.wait();
+    wait_line(&blog, "won the lease");
+    wait_line(&blog, "aikoql-mcp ready"); // the promoted, re-executed B
     b.init();
     for (i, koid) in acked.iter().enumerate() {
         let got = b.tool("get", json!({"subject": "admin", "koid": koid}));

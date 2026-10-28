@@ -923,4 +923,71 @@ mod tests {
         assert_eq!(parse_k8s_url("k8s://primary"), None);
         assert_eq!(parse_k8s_url("s3://b/k"), None);
     }
+
+    fn ha_cfg(store: Arc<dyn LeaseStore>, dir: PathBuf) -> HaConfig {
+        HaConfig {
+            store,
+            node: "a".into(),
+            ttl: Duration::from_secs(60), // no background renewal during the test
+            repl: "127.0.0.1:1".into(),
+            client: None,
+            token: "t".into(),
+            tls: None,
+            dir,
+        }
+    }
+
+    /// Resuming its own lease after a restart, a leader renews it at once
+    /// (a CAS): the fence timer must start from a renewal that landed, not
+    /// from the restart — a lease last renewed long ago could lapse while
+    /// the restarted node already writes.
+    #[test]
+    fn resuming_a_lease_renews_it_at_once() {
+        let dir = tmp("resume-db");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::replication::store_term(&dir, 1, Role::Leader).unwrap();
+        let store: Arc<dyn LeaseStore> = Arc::new(FileLease::new(tmp("resume").join("lease.json")));
+        store.write(&lease("a", 1, 0), None).unwrap();
+        assert!(matches!(
+            begin(ha_cfg(store.clone(), dir)).unwrap(),
+            Begun::Lead(_)
+        ));
+        let (rec, _) = store.read().unwrap().unwrap();
+        assert_eq!(
+            (rec.holder.as_str(), rec.term, rec.beat),
+            ("a", 1, 1),
+            "not renewed at resume"
+        );
+    }
+
+    /// R5 standby reads — a standby that won the lease re-executes itself;
+    /// the fresh process finds the lease its own at a newer term than its
+    /// directory, claims the directory at that term and leads.
+    #[test]
+    fn a_lease_won_before_a_restart_is_claimed_and_led() {
+        let dir = tmp("won-db");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::replication::store_term(&dir, 1, Role::Standby).unwrap();
+        let store: Arc<dyn LeaseStore> = Arc::new(FileLease::new(tmp("won").join("lease.json")));
+        store.write(&lease("a", 2, 0), None).unwrap();
+        assert!(matches!(
+            begin(ha_cfg(store.clone(), dir.clone())).unwrap(),
+            Begun::Lead(_)
+        ));
+        assert_eq!(
+            crate::replication::load_term(&dir).unwrap(),
+            (2, Role::Leader)
+        );
+        assert_eq!(store.read().unwrap().unwrap().0.beat, 1);
+    }
+
+    /// A live lease held by another node: this node serves as a standby.
+    #[test]
+    fn another_holder_makes_this_node_a_standby() {
+        let dir = tmp("other-db");
+        std::fs::create_dir_all(&dir).unwrap();
+        let store: Arc<dyn LeaseStore> = Arc::new(FileLease::new(tmp("other").join("lease.json")));
+        store.write(&lease("b", 1, 0), None).unwrap();
+        assert!(matches!(begin(ha_cfg(store, dir)).unwrap(), Begun::Standby));
+    }
 }
