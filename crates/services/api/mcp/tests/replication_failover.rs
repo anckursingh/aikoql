@@ -1646,3 +1646,98 @@ fn archive_retention_keeps_the_newest_snapshots() {
         assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
     }
 }
+
+/// A real kube-apiserver (envtest, `scripts/k8s-it.sh`): the server env
+/// for its in-cluster path — a service-account directory (token + CA) and
+/// KUBERNETES_SERVICE_HOST/PORT — plus (api, token, ca) for checks.
+fn real_k8s_env(sa_dir: &Path) -> Option<(Vec<(String, String)>, String, String, String)> {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let (api, token, ca) = (
+        env("AIKOQL_TEST_K8S_API")?,
+        env("AIKOQL_TEST_K8S_TOKEN")?,
+        env("AIKOQL_TEST_K8S_CA")?,
+    );
+    let (host, port) = api.trim_start_matches("https://").rsplit_once(':')?;
+    std::fs::create_dir_all(sa_dir).ok()?;
+    std::fs::write(sa_dir.join("token"), &token).ok()?;
+    std::fs::copy(&ca, sa_dir.join("ca.crt")).ok()?;
+    let vars = vec![
+        ("KUBERNETES_SERVICE_HOST".to_string(), host.to_string()),
+        ("KUBERNETES_SERVICE_PORT".to_string(), port.to_string()),
+        (
+            "AIKOQL_K8S_SA_DIR".to_string(),
+            sa_dir.to_str()?.to_string(),
+        ),
+    ];
+    Some((vars, api, token, ca))
+}
+
+/// HA failover on a real Kubernetes Lease, through the binary's in-cluster
+/// path (service-account token + CA, KUBERNETES_SERVICE_*): the leader
+/// dies, the standby takes the Lease over (term 2), and the Lease object
+/// itself names the new holder.
+#[test]
+fn real_k8s_ha_failover_on_a_lease() {
+    let sa = tmp("k8s-sa");
+    let Some((env, api, token, ca)) = real_k8s_env(&sa) else {
+        eprintln!("skipped: AIKOQL_TEST_K8S_API unset");
+        return;
+    };
+    let name = format!(
+        "it-ha-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+    let lease = format!("k8s://default/{name}");
+    let (adir, bdir) = (tmp("k8s-a"), tmp("k8s-b"));
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let mut a = Mcp::start_env(
+        &adir,
+        &strs(&ha_args(Path::new(&lease), "a", &ra)),
+        false,
+        &env,
+    );
+    let mut koids: Vec<String> = (0..5).map(|i| a.remember(i)).collect();
+    let mut b = Mcp::spawn_env(
+        &bdir,
+        &strs(&ha_args(Path::new(&lease), "b", &rb)),
+        true,
+        &env,
+    );
+    let blog = b.log.take().unwrap();
+    wait_line(&blog, "standby caught up");
+    drop(a); // a crash
+    wait_line(&blog, "won the lease");
+    wait_line(&blog, "aikoql-mcp ready");
+    b.init();
+    koids.push(b.remember(5));
+    for (i, koid) in koids.iter().enumerate() {
+        let got = b.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(bdir.join("REPL-TERM")).unwrap(),
+        "2 leader\n"
+    );
+    let obj = Command::new("curl")
+        .args([
+            "-sf",
+            "--cacert",
+            &ca,
+            "-H",
+            &format!("Authorization: Bearer {token}"),
+        ])
+        .arg(format!(
+            "{api}/apis/coordination.k8s.io/v1/namespaces/default/leases/{name}"
+        ))
+        .output()
+        .unwrap();
+    let obj: J = serde_json::from_slice(&obj.stdout).expect("the Lease object");
+    assert_eq!(obj["spec"]["holderIdentity"], json!("b"), "{obj}");
+}

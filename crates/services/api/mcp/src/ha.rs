@@ -1159,4 +1159,56 @@ mod tests {
             .sum();
         assert_eq!(wins, 1, "conditional create let {wins} writers win");
     }
+
+    /// A real kube-apiserver (envtest, `scripts/k8s-it.sh`):
+    /// AIKOQL_TEST_K8S_API + _TOKEN + _CA (a CA file). None — skipped — when
+    /// unset.
+    fn real_k8s() -> Option<(String, String, Arc<rustls::ClientConfig>)> {
+        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let ca = std::fs::read(env("AIKOQL_TEST_K8S_CA")?).ok()?;
+        Some((
+            env("AIKOQL_TEST_K8S_API")?,
+            env("AIKOQL_TEST_K8S_TOKEN")?,
+            crate::tls::client_config(&ca).ok()?,
+        ))
+    }
+
+    fn k8s_store(api: &str, token: &str, tls: &Arc<rustls::ClientConfig>, name: &str) -> K8sLease {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(10))
+            .tls_config(tls.clone())
+            .build();
+        K8sLease::new(
+            api.into(),
+            token.into(),
+            "default".into(),
+            name.into(),
+            agent,
+        )
+    }
+
+    /// The Lease CAS on a real apiserver: POST creates once (409
+    /// AlreadyExists), PUT with a stale resourceVersion is refused (409
+    /// Conflict) — and 8 concurrent creators have exactly one winner.
+    #[test]
+    fn real_k8s_lease_is_a_compare_and_swap() {
+        let Some((api, token, tls)) = real_k8s() else {
+            eprintln!("skipped: AIKOQL_TEST_K8S_API unset");
+            return;
+        };
+        cas_contract(&k8s_store(&api, &token, &tls, &unique("cas")));
+        let name = unique("race");
+        let wins: usize = (0..8)
+            .map(|i| {
+                let store = k8s_store(&api, &token, &tls, &name);
+                std::thread::spawn(move || {
+                    store.write(&lease(&format!("n{i}"), 1, 0), None).is_ok() as usize
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .sum();
+        assert_eq!(wins, 1, "Lease creation let {wins} writers win");
+    }
 }

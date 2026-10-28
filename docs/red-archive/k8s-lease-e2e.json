@@ -1,0 +1,8 @@
+{
+  "id": "k8s-lease-e2e",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/k8s-it.sh",
+  "captured_at": "2026-10-28T14:51:49Z",
+  "captured_head": "a918592f43d15fa668d35e973a5d957f944d4e18",
+  "exit_code": 101
+}
