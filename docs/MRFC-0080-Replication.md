@@ -45,7 +45,7 @@ an exact copy, which the verifiable-knowledge claim requires.
 | `NOT_LEADER` + leader hint | R4d ✅ |
 | automatic failover: lease agent (file + S3), self-fencing, in-process promotion | R5a ✅ |
 | k8s `Lease` backend, SDKs follow leader hints | R5b ✅ (Java SDK pending) |
-| standby serving reads: read replicas (`serve --follow`) | ✅ (HA standbys: later) |
+| standby serving reads: read replicas (`serve --follow`) and HA standbys | ✅ |
 | split-brain certs: partition, kill mid-write, rejected store | R5c ✅ |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 ✅ |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
@@ -731,9 +731,32 @@ catch_up advances head, clock and broadcasts once); `replication_failover.rs`
 the leader's writes, and refuses a write with `NOT_LEADER` + hint. RED:
 `standby-kernel`, `standby-reads-e2e`, `standby-snapshot-clock`.
 
+### HA standbys serve reads ✅
+
+An HA node that does not hold the lease now serves exactly like a
+`--follow` replica — reads, `NOT_LEADER` with the holder's address, no
+stream, no archive — while `ha::stand_by` follows the holder into its
+open engine (shipped index checkpoints kept, so promotion stays fast).
+
+- **Promotion by re-exec.** A standby kernel and its listeners cannot be
+  swapped for a leader's in place, so the winner re-executes itself
+  (unix `exec`: same pid and stdio; elsewhere it exits 75 for its
+  supervisor). The fresh process meets its own lease in `ha::begin` — at
+  a newer term than its directory — claims the directory and leads. A
+  stdio client keeps its pipe but must re-`initialize`; a request in
+  flight at the exec is lost (TCP clients reconnect).
+- **`ha::begin`** decides at start-up: no lease → win it; own lease →
+  claim if needed and **resume with an immediate CAS renewal**; another
+  holder → standby.
+- **Found and fixed (R5a):** resuming a lease after a restart started the
+  fence timer at the restart instead of at a renewal that landed. A
+  leader restarting late in its lease could write while a standby took
+  the lapsed lease over — a split-brain window up to TTL/3. The resume
+  renewal closes it (`ha.rs`: `resuming_a_lease_renews_it_at_once`).
+
+Measured: failover 2.6 s at TTL 3 s, including the re-exec.
+
 Limits:
-- HA standbys (`--ha-lease`) still serve nothing before promotion; the
-  in-process switch from a standby kernel to a leader kernel is open.
 - An index declared on the leader reaches a replica at its restart
   (`catch_up` does not reload declarations — it would drop the indexes
   the maintainer fills).
