@@ -295,10 +295,22 @@ fn main() {
             eprintln!("--ha-lease needs an admin --tcp-token (or AIKOQL_REPLICATION_TOKEN) to follow with");
             std::process::exit(2);
         };
+        let ttl = std::time::Duration::from_millis(cfg.ha_ttl_ms);
+        let store: Arc<dyn ha::LeaseStore> = if lease.starts_with("s3://") {
+            match ha::S3Lease::from_env(lease, ttl / 3) {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    eprintln!("--ha-lease: {e}");
+                    std::process::exit(2);
+                }
+            }
+        } else {
+            Arc::new(ha::FileLease::new(lease.into()))
+        };
         let ha = ha::HaConfig {
-            store: Arc::new(ha::FileLease::new(lease.into())),
+            store,
             node,
-            ttl: std::time::Duration::from_millis(cfg.ha_ttl_ms),
+            ttl,
             repl,
             client: cfg.advertise.clone(),
             token,
