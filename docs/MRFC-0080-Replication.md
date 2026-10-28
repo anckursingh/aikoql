@@ -43,7 +43,9 @@ an exact copy, which the verifiable-knowledge claim requires.
 | semi-sync ack (RPO = 0 for acked writes) | R4b ✅ |
 | diverged-tail rejoin (and automatic re-bootstrap) | R4c ✅ |
 | `NOT_LEADER` + leader hint | R4d ✅ |
-| automatic failover: lease agent (S3 first, then k8s), self-fencing, in-process promotion, client leader discovery | R5 (designed below) |
+| automatic failover: lease agent (file + S3), self-fencing, in-process promotion | R5a ✅ |
+| k8s `Lease` backend, SDKs follow leader hints, standby serving reads | R5b |
+| split-brain certs on the fault proxy | R5c |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
 
@@ -405,7 +407,7 @@ removed the index rebuild) → ~10–15 s, tunable through the TTL.
   kill it mid-write, skew its clock; prove no acked write is lost and
   never more than one writer per term.
 
-### Risks to settle before R5a
+### Risks to settle before R5a (status after R5a: clock drift designed out — see R5a; S3-compatible stores still unverified)
 
 - **Clock drift** is the safety-critical parameter: the self-fencing
   margin must cover the worst drift between the leader and the lease
@@ -415,6 +417,63 @@ removed the index rebuild) → ~10–15 s, tunable through the TTL.
 - S3 conditional-write support differs across providers and
   S3-compatible stores (MinIO, R2, …) — verify per backend before
   claiming it.
+
+## R5a — automatic failover ✅
+
+`serve --ha-lease <PATH | s3://BUCKET/KEY> --ha-node ID [--ha-ttl-ms MS]
+--replicate-listen ADDR --tcp-token TOKEN::admin [--advertise HOST:PORT]`
+on every node; each node runs the `ha` agent (`crates/services/api/mcp/src/ha.rs`).
+
+- **Lease record** `{holder, term, repl, client, seq, beat}` in a
+  `LeaseStore` whose only write is a CAS on a version. `FileLease` (one
+  host, tests): content hash under an OS lock. `S3Lease` (R5a-2): the
+  ETag; create = `PUT If-None-Match: *`, renew / take over = `PUT
+  If-Match: <etag>`; 412 and 409 are a lost CAS; SigV4 with the standard
+  `AWS_*` variables, `AIKOQL_S3_ENDPOINT` for S3-compatible stores.
+- **Standby phase** (before the kernel opens): follow the holder's
+  `repl` in-process (`follow_loop`, shared with `follow`, R4c rejoin
+  included). Take over only when the record has stayed **unchanged for a
+  full TTL on this node's monotonic clock** and this node holds at least
+  the holder's last renewed `seq`: CAS to `term + 1`, `claim_term`, fall
+  through into the normal serve path — the in-process promotion.
+- **Leader**: the renewer starts at the win (before the kernel opens, so
+  a slow open cannot let the lease lapse) and renews every TTL/3. A lost
+  CAS, or 2/3 TTL since the last renewal *started* without success →
+  fence the Db, record the new holder's client address (the NOT_LEADER
+  hint) and `fenced`, **exit 75**; the supervisor restarts the node into
+  the standby phase. A leader that restarts while its lease is live
+  resumes it.
+- **No cross-node clock comparison**: a renewal lands after it starts
+  and is seen after it lands, so the old leader stops writing at least
+  TTL/3 before a standby may take over; the margin covers clock-*rate*
+  drift and in-flight writes. (The risk noted below for wall-clock
+  expiry does not arise.)
+
+Measured (`replication_failover.rs`): **failover 1.77 s at TTL 1.5 s**
+(leader crash → the standby answers its first request as leader).
+
+Tests: `ha.rs` — the CAS contract for both stores (one winner among
+concurrent creators), SigV4 against AWS's documented GET Object
+signature, UTC date formatting, `s3://` parsing; `replication_failover.rs`
+— the leader dies and the standby takes over with term 2 holding every
+object; a leader whose lease is taken self-fences (exit 75, `fenced`,
+hint recorded). RED: `r5a-lease-agent{,-e2e}`, `r5a-s3-lease`.
+
+R5a limits:
+- **S3 conditional writes are verified against a fake only.** AWS S3
+  documents both conditions on PUT; MinIO, R2 and other S3-compatible
+  stores must each be checked before claiming support (open risk).
+- Replication is still loopback-only (TLS is R3c), so a real multi-host
+  HA deployment waits for it; today's HA runs on one host.
+- A standby takes no client traffic before promotion (stdio and TCP
+  answer nothing until it leads); standby reads and NOT_LEADER from
+  standbys are R5b.
+- Eligibility uses the holder's seq **at its last renewal**: with
+  semi-sync and several standbys, a standby that missed acked writes
+  after that renewal could still win. One standby, or a quorum count,
+  closes it.
+- The node must run under a supervisor (systemd, k8s) — a self-fenced
+  leader exits rather than demote in place.
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
