@@ -564,8 +564,9 @@ RED: `r5b-k8s-lease`, `r5b-sdk-hint-{go,rust,python,ts}`.
 
 R5b limits:
 - ~~Java SDK not done~~ — done (`LeaderHintTest`; RED `r5b-sdk-hint-java`).
-- The Kubernetes store is verified against a fake API only; the
-  in-cluster TLS/token path has not run in a real cluster.
+- ~~The Kubernetes store is verified against a fake API only~~ — certified
+  on a real kube-apiserver (envtest), including the in-cluster path; not
+  yet run inside a real cluster's pod (see "Kubernetes lease certs").
 - `session_init` identity (run_id) is not replayed on the new
   connection; stdio and native-protocol clients do not follow hints.
 - The client trusts the hint its server sends (the token goes to the
@@ -802,7 +803,7 @@ them would fail the lease cert. CI: `s3-compat-moto` (pinned, no Docker)
 gates; `s3-compat` (MinIO containers) is `continue-on-error` until its
 images are pinned. Still open: AWS S3 itself (needs credentials — the
 tests always set an endpoint, so AWS's virtual-hosted URL path is not yet
-exercised), R2, the Kubernetes lease (fake API only).
+exercised), R2.
 
 ## Archive retention ✅
 
@@ -831,6 +832,26 @@ same-seq tie; an in-flight upload survives; on MinIO via
 `scripts/s3-it.sh`), `replication_failover.rs` (`--archive-keep 2` with
 1 s snapshots keeps ≤ 2; `archive-prune --keep 1`; pitr restores every
 object). RED: `archive-retention{,-e2e}`.
+
+## Kubernetes lease certs (real kube-apiserver) ✅
+
+`scripts/k8s-it.sh` runs envtest's **kube-apiserver + etcd** natively on
+loopback — no cluster, no Docker, no VM (~11 s a run, a few hundred MB) —
+with a throwaway CA, serving certificate, `system:masters` static token
+and service-account signing key, then the `real_k8s` certs (skipped
+unless `AIKOQL_TEST_K8S_API` / `_TOKEN` / `_CA` are set):
+
+| cert | proves on the real apiserver |
+|---|---|
+| `ha.rs` `real_k8s_lease_is_a_compare_and_swap` | POST creates once (409 AlreadyExists), a stale `resourceVersion` is refused (409 Conflict), a renewal changes it; 8 concurrent creators → exactly one winner |
+| `replication_failover.rs` `real_k8s_ha_failover_on_a_lease` | the binary's in-cluster path (service-account token + CA, `KUBERNETES_SERVICE_*`) on `k8s://default/<name>`: the leader dies, the standby takes the Lease at term 2, every object serves, and the Lease's `spec.holderIdentity` names the new holder |
+
+`AIKOQL_K8S_SA_DIR` points the in-cluster path at a token + `ca.crt`
+outside a pod (default: the pod mount). Green on kube-apiserver v1.37.0
+(`ENVTEST_K8S_VERSION` pins it). CI: `k8s-lease`, `continue-on-error`
+until its first pushed run is green. Not covered: a real cluster's pod
+(service-account projection, RBAC scoped to `leases` — the certs run as
+`system:masters`). RED: `k8s-lease-e2e`.
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
