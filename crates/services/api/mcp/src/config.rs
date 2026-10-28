@@ -36,6 +36,9 @@ pub(crate) struct RuntimeConfig {
     pub follow: Option<String>,
     pub archive_log_ms: u64,
     pub archive_snapshot_secs: u64,
+    /// MRFC-0080 R6 retention: keep the newest N snapshots
+    /// (`--archive-keep`, pruned after each snapshot); unset keeps all.
+    pub archive_keep: Option<usize>,
     /// MRFC-0080 R3c: TLS on the replication stream — the leader's
     /// certificate chain and key (`--replicate-tls-cert/-key`, both or
     /// neither; with them the listener may bind any interface), the CA a
@@ -297,6 +300,7 @@ pub(crate) fn load(
         follow: None,
         archive_log_ms: 5_000,
         archive_snapshot_secs: 3_600,
+        archive_keep: None,
         replicate_tls_cert: None,
         replicate_tls_key: None,
         replicate_tls_ca: None,
@@ -554,6 +558,15 @@ pub(crate) fn load(
                 }
                 None => return Err("--archive requires a directory or s3:// URL".into()),
             },
+            "--archive-keep" => {
+                let n = args
+                    .get(i + 1)
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|n| *n > 0)
+                    .ok_or("--archive-keep requires a positive number of snapshots")?;
+                cfg.archive_keep = Some(n);
+                i += 2;
+            }
             flag @ ("--archive-log-ms" | "--archive-snapshot-secs") => {
                 let n = args
                     .get(i + 1)

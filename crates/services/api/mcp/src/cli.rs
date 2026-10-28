@@ -32,6 +32,7 @@ pub(crate) fn print_usage() {
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
         "  pitr --archive URL --to DIR [--until-seq N | --until-ms MS]  Restore from the archive\n",
+        "  archive-prune --archive URL --keep N  Keep the newest N archived snapshots\n",
         "  follow DIR --leader ADDR [--token T] [--tls-ca CA.pem]  Stream a leader's log into a standby DIR\n",
         "                         (token: an admin --tcp-token of the leader, or AIKOQL_REPLICATION_TOKEN)\n",
         "\n",
@@ -49,7 +50,7 @@ pub(crate) fn print_usage() {
         "  --replicate-sync-ms MS   Ack a write only once a standby holds it; fail after MS\n",
         "  --advertise HOST:PORT    This node's client address, the NOT_LEADER hint standbys pass on\n",
         "  --follow HOST:PORT       Serve as a read replica of that leader (writes answer NOT_LEADER)\n",
-        "  --archive DIR|s3://BUCKET[/PREFIX] [--archive-log-ms MS] [--archive-snapshot-secs S]  Continuous archive (PITR)\n",
+        "  --archive DIR|s3://BUCKET[/PREFIX] [--archive-log-ms MS] [--archive-snapshot-secs S] [--archive-keep N]  Continuous archive (PITR)\n",
         "  --ha-lease PATH|s3://BUCKET/KEY|k8s://NS/NAME --ha-node ID [--ha-ttl-ms MS]  Automatic failover on a shared lease\n",
         "  --embedding-provider P  Embedding provider: \"candle\" (default), \"http\", or \"ollama\"\n",
         "  --embedding-base-url U  OpenAI-compatible base URL (default: http://localhost:11434)\n",
@@ -174,6 +175,37 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             {
                 eprintln!("follow stopped: {e}");
                 std::process::exit(1);
+            }
+            true
+        }
+        Some("archive-prune") => {
+            // MRFC-0080 R6 retention: aikoql-mcp archive-prune --archive URL --keep N
+            let tail: Vec<&str> = subcmd_idx
+                .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
+                .unwrap_or_default();
+            let (mut url, mut keep) = (None, None);
+            let mut it = tail.iter();
+            while let Some(a) = it.next() {
+                match *a {
+                    "--archive" => url = it.next().map(|s| s.to_string()),
+                    "--keep" => keep = it.next().and_then(|v| v.parse::<usize>().ok()),
+                    _ => keep = None,
+                }
+            }
+            let (Some(url), Some(keep)) = (url, keep.filter(|k| *k > 0)) else {
+                eprintln!(
+                    "Usage: aikoql-mcp archive-prune --archive DIR|s3://BUCKET[/PREFIX] --keep N"
+                );
+                std::process::exit(2);
+            };
+            let pruned = crate::archive::open_store(&url, std::time::Duration::from_secs(60))
+                .and_then(|store| crate::archive::prune(&*store, keep));
+            match pruned {
+                Ok(n) => eprintln!("pruned {n} objects (keeping the newest {keep} snapshots)"),
+                Err(e) => {
+                    eprintln!("archive-prune: {e}");
+                    std::process::exit(1);
+                }
             }
             true
         }

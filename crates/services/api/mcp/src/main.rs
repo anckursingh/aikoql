@@ -712,6 +712,7 @@ fn main() {
                         std::time::Duration::from_millis(cfg.archive_log_ms),
                         std::time::Duration::from_secs(cfg.archive_snapshot_secs),
                     );
+                    let a = a.keeping(cfg.archive_keep);
                     thread::spawn(move || a.run(log_every, snap_every));
                 }
                 Err(e) => {

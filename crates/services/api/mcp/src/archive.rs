@@ -32,6 +32,8 @@ pub(crate) trait ObjectStore: Send + Sync {
     fn get(&self, key: &str) -> Result<Vec<u8>, String>;
     /// Every key starting with `prefix`, sorted.
     fn list(&self, prefix: &str) -> Result<Vec<String>, String>;
+    /// Remove a key; a missing one is not an error.
+    fn delete(&self, key: &str) -> Result<(), String>;
 }
 
 /// Keys as files under a root — local disks, NFS, tests.
@@ -56,6 +58,13 @@ impl DirStore {
 }
 
 impl ObjectStore for DirStore {
+    fn delete(&self, key: &str) -> Result<(), String> {
+        match std::fs::remove_file(self.path(key)?) {
+            Err(e) if e.kind() != ErrorKind::NotFound => Err(format!("archive delete {key}: {e}")),
+            _ => Ok(()),
+        }
+    }
+
     fn put(&self, key: &str, body: &[u8]) -> Result<(), String> {
         let path = self.path(key)?;
         let io = |e: std::io::Error| format!("archive put {key}: {e}");
@@ -110,6 +119,13 @@ impl S3Store {
 }
 
 impl ObjectStore for S3Store {
+    fn delete(&self, key: &str) -> Result<(), String> {
+        match self.s3.send("DELETE", &self.full(key), &[], b"", None) {
+            Ok(_) | Err((Some(404), _)) => Ok(()),
+            Err((_, e)) => Err(format!("archive delete {key}: {e}")),
+        }
+    }
+
     fn put(&self, key: &str, body: &[u8]) -> Result<(), String> {
         self.s3
             .send("PUT", &self.full(key), &[], body, None)
@@ -231,6 +247,8 @@ pub(crate) struct Archiver {
     scratch: PathBuf,
     /// the newest seq the archive holds for this term
     archived: u64,
+    /// retention: prune to this many snapshots after each one (`prune`)
+    keep: Option<usize>,
 }
 
 impl Archiver {
@@ -258,6 +276,7 @@ impl Archiver {
             term,
             scratch,
             archived: 0,
+            keep: None,
         };
         a.archived = match resume {
             Some(seq) => seq,
@@ -336,8 +355,16 @@ impl Archiver {
 
     /// The archiver thread: a log pass every `log_every`, a snapshot every
     /// `snap_every` (bounding restore replay).
+    /// Retention: after each periodic snapshot keep only the newest `keep`.
+    pub(crate) fn keeping(mut self, keep: Option<usize>) -> Self {
+        self.keep = keep;
+        self
+    }
+
     pub(crate) fn run(mut self, log_every: Duration, snap_every: Duration) {
         let (mut last_snap, mut reported) = (Instant::now(), 0);
+        // a snapshot of an unchanged db adds nothing: skip it
+        let mut snapped = None;
         loop {
             std::thread::sleep(log_every);
             match self.pass() {
@@ -348,10 +375,22 @@ impl Archiver {
                 Ok(_) => {}
                 Err(e) => warn!("{e}"),
             }
-            if last_snap.elapsed() >= snap_every {
+            if last_snap.elapsed() >= snap_every && snapped != Some(self.source.last_seq()) {
                 match self.snapshot() {
-                    Ok(seq) => eprintln!("archive: snapshot at seq {seq}"),
+                    Ok(seq) => {
+                        eprintln!("archive: snapshot at seq {seq}");
+                        snapped = Some(seq);
+                    }
                     Err(e) => warn!("{e}"),
+                }
+                if let Some(keep) = self.keep {
+                    match prune(&*self.store, keep) {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            eprintln!("archive: pruned {n} objects (keeping {keep} snapshots)")
+                        }
+                        Err(e) => warn!("archive: prune: {e}"),
+                    }
                 }
                 last_snap = Instant::now();
             }
@@ -440,6 +479,79 @@ impl Timeline {
         }
         Ok(out)
     }
+}
+
+/// Retention: keep the newest `keep` complete snapshots (across terms)
+/// and every log object after the oldest kept one in its term; delete
+/// older snapshots, log objects they cover, and older terms with no kept
+/// snapshot. An upload in flight — a snapshot without COMPLETE at or after
+/// its term's oldest kept one, or in a newer term — is left alone. Returns
+/// the number of objects deleted. A target older than the oldest kept
+/// snapshot can no longer be restored: that is the point.
+pub(crate) fn prune(store: &dyn ObjectStore, keep: usize) -> Result<usize, String> {
+    if keep == 0 {
+        return Err("retention must keep at least one snapshot".into());
+    }
+    let timelines = Timeline::read_all(store, "")?;
+    let mut snaps: Vec<(u64, &Snap)> = timelines
+        .iter()
+        .flat_map(|(term, tl)| tl.snaps.iter().map(move |s| (*term, s)))
+        .collect();
+    snaps.sort_by_key(|(term, s)| std::cmp::Reverse((*term, s.seq, s.ms)));
+    snaps.truncate(keep);
+    let Some(&(oldest_term, _)) = snaps.last() else {
+        return Ok(0); // nothing complete yet: nothing is safe to drop
+    };
+    let kept: std::collections::HashSet<&str> = snaps.iter().map(|(_, s)| s.key.as_str()).collect();
+    // term → the oldest kept snapshot's (seq, ms): an idle db snapshots
+    // the same seq again, so the time breaks the tie
+    let mut floor: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
+    for (term, s) in &snaps {
+        let at = (s.seq, s.ms);
+        floor
+            .entry(*term)
+            .and_modify(|f| *f = (*f).min(at))
+            .or_insert(at);
+    }
+    let mut doomed = Vec::new();
+    for key in store.list("")? {
+        let mut parts = key.splitn(3, '/');
+        let (Some(t), Some(kind), Some(rest)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let Some(term) = t.strip_prefix("term-").and_then(|n| n.parse::<u64>().ok()) else {
+            continue;
+        };
+        let gone = if term < oldest_term {
+            true
+        } else if let Some(&f) = floor.get(&term) {
+            match kind {
+                "snap" => {
+                    let name = rest.split('/').next().unwrap_or_default();
+                    let at = name.split_once('-').and_then(|(q, ms)| {
+                        Some((q.parse::<u64>().ok()?, ms.parse::<u64>().ok()?))
+                    });
+                    !kept.contains(format!("{t}/snap/{name}").as_str())
+                        && at.is_some_and(|at| at < f)
+                }
+                "log" => rest
+                    .strip_suffix(".frames")
+                    .and_then(|n| n.split('-').nth(1))
+                    .and_then(|n| n.parse::<u64>().ok())
+                    .is_some_and(|last| last <= f.0),
+                _ => false,
+            }
+        } else {
+            false // a newer term with no complete snapshot yet: in flight
+        };
+        if gone {
+            doomed.push(key);
+        }
+    }
+    for key in &doomed {
+        store.delete(key)?;
+    }
+    Ok(doomed.len())
 }
 
 /// How far a restore replays.
@@ -907,6 +1019,22 @@ mod tests {
         let (seq, _) = restore(&*store, &out, Until::Latest, &tmp("real-s3-r")).unwrap();
         assert_eq!(seq, e.db().last_seq());
         assert_eq!(rows(&out), e.db().scan(b"").unwrap());
+        // retention on the real store: S3 DELETE, then the newest restores
+        a.snapshot().unwrap();
+        assert!(
+            prune(&*store, 1).unwrap() > 0,
+            "nothing pruned on the real store"
+        );
+        let complete = store
+            .list("")
+            .unwrap()
+            .into_iter()
+            .filter(|k| k.ends_with("/COMPLETE"))
+            .count();
+        assert_eq!(complete, 1);
+        let out = tmp("real-s3-out2");
+        let (seq, _) = restore(&*store, &out, Until::Latest, &tmp("real-s3-r2")).unwrap();
+        assert_eq!(seq, e.db().last_seq());
     }
 
     /// Retention: keep the newest N complete snapshots (across terms) and
@@ -926,9 +1054,12 @@ mod tests {
             tmp("prune-s1"),
         )
         .unwrap();
-        put(&e, 0, 20);
+        put(&e, 0, 10);
         t1.pass().unwrap();
+        // strictly before term 2's first snapshot (taken at the end of term 1)
         let early = e.db().last_seq();
+        put(&e, 10, 20);
+        t1.pass().unwrap();
         let mut t2 = Archiver::start(
             store.clone(),
             source,
@@ -973,6 +1104,44 @@ mod tests {
         let (seq, _) = restore(&*store, &out, Until::Latest, &tmp("prune-r3")).unwrap();
         assert_eq!(seq, e.db().last_seq());
         assert_eq!(prune(&*store, 1).unwrap(), 0, "a second prune found more");
+    }
+
+    /// An idle db snapshots the same seq again: the older one of a pair at
+    /// one seq is pruned too (the time breaks the tie).
+    #[test]
+    fn pruning_breaks_a_same_seq_tie_by_time() {
+        let e = engine("prune-tie");
+        let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("prune-tie-store")));
+        let source: Arc<dyn StorageAdminApi> = e.clone();
+        let mut a = Archiver::start(
+            store.clone(),
+            source,
+            Arc::new(Acked::default()),
+            1,
+            tmp("prune-tie-s"),
+        )
+        .unwrap();
+        put(&e, 0, 10);
+        a.pass().unwrap();
+        a.snapshot().unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        a.snapshot().unwrap(); // the same seq, a later ms
+        prune(&*store, 1).unwrap();
+        let complete = store
+            .list("")
+            .unwrap()
+            .into_iter()
+            .filter(|k| k.ends_with("/COMPLETE"))
+            .count();
+        assert_eq!(complete, 1);
+        let (seq, _) = restore(
+            &*store,
+            &tmp("prune-tie-out"),
+            Until::Latest,
+            &tmp("prune-tie-r"),
+        )
+        .unwrap();
+        assert_eq!(seq, e.db().last_seq());
     }
 
     /// An upload in flight (a newer snapshot without COMPLETE yet — a new
