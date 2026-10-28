@@ -42,7 +42,7 @@ an exact copy, which the verifiable-knowledge claim requires.
 | terms + fencing in the data path | R4a ✅ |
 | semi-sync ack (RPO = 0 for acked writes) | R4b ✅ |
 | diverged-tail rejoin (and automatic re-bootstrap) | R4c ✅ |
-| `NOT_LEADER` | R4d |
+| `NOT_LEADER` + leader hint | R4d ✅ |
 | automatic failover: lease agent (S3 first, then k8s), self-fencing, in-process promotion, client leader discovery | R5 (designed below) |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
@@ -299,6 +299,37 @@ R4c limits:
 - Under heavy writes the leader may release log past the snapshot's seq
   before the standby reconnects (release follows connected standbys);
   it then re-bootstraps once more.
+
+## R4d — `NOT_LEADER` ✅
+
+- A write to a fenced node fails with envelope code **`NOT_LEADER`**
+  (`retryable: true`) and, when known, `leader`: the newer leader's
+  client address (`docs/error-codes.md`).
+- The hint is `<dir>/REPL-LEADER` — the newest leader's client address
+  this node knows. A leader records its own from `serve --advertise
+  HOST:PORT`; the `ok` reply hands it to standbys (kept across a
+  re-bootstrap); a standby's hello hands it to a leader it deposes,
+  whose fence reason then reads `… (leader=ADDR)`. Promotion deletes a
+  stale hint — a new leader never serves its old leader's address.
+- Trust boundary: an address off the wire must be a bounded host:port
+  token (`valid_addr`), since it is echoed to clients.
+
+Tests: `error_codes.rs` (classification + `leader` field),
+`replication.rs` (the hint travels leader → standby → deposed leader;
+promotion clears it), `replication_failover.rs` (a fenced restart
+answers NOT_LEADER + leader; `--advertise` is recorded). RED:
+`r4d-not-leader{,-e2e}`.
+
+R4d limits:
+- Only fenced nodes answer NOT_LEADER: a standby runs `follow`, not
+  `serve`, so it takes no client traffic until R5a's in-process standby.
+- Clients must follow the hint themselves until R5b teaches the SDKs.
+- The hint is as fresh as the last handshake that carried it; R5's
+  lease becomes the authoritative source.
+
+R4 is complete: terms + fencing (R4a), RPO = 0 for acked writes (R4b),
+self-healing rejoin (R4c), client redirection (R4d). R5a builds on all
+four.
 
 ## R5 — automatic failover (design, accepted; builds on R4)
 
