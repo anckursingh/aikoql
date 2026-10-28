@@ -144,32 +144,48 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 );
                 std::process::exit(2);
             };
-            let standby = match aikoql_storage_v2::db::Db::open(aikoql_storage_v2::db::Config::new(
-                dir.clone().into(),
-            )) {
-                Ok(db) => db,
-                Err(e) => {
-                    eprintln!("open standby {dir}: {e}");
-                    std::process::exit(1);
-                }
-            };
-            eprintln!(
-                "following {leader} into {dir} from seq {}",
-                standby.last_seq()
-            );
             let stop = std::sync::atomic::AtomicBool::new(false);
             // R3b: shipped index checkpoints land where `serve` resumes them
             let ckpt = std::path::PathBuf::from(format!("{dir}.ckpt"));
-            if let Err(e) = crate::replication::follow(
-                &leader,
-                &token,
-                &standby,
-                std::path::Path::new(&dir),
-                Some(&ckpt),
-                &stop,
-            ) {
-                eprintln!("follow stopped: {e}");
-                std::process::exit(1);
+            loop {
+                let standby = match aikoql_storage_v2::db::Db::open(
+                    aikoql_storage_v2::db::Config::new(dir.clone().into()),
+                ) {
+                    Ok(db) => db,
+                    Err(e) => {
+                        eprintln!("open standby {dir}: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                eprintln!(
+                    "following {leader} into {dir} from seq {}",
+                    standby.last_seq()
+                );
+                let path = std::path::Path::new(&dir);
+                match crate::replication::follow(
+                    &leader,
+                    &token,
+                    &standby,
+                    path,
+                    Some(&ckpt),
+                    &stop,
+                ) {
+                    Ok(crate::replication::Followed::Stopped) => break,
+                    // R4c: a diverged tail or a released position — swap in
+                    // the leader's snapshot and follow on from it
+                    Ok(crate::replication::Followed::Rebootstrap { term, history }) => {
+                        drop(standby);
+                        if let Err(e) = crate::replication::rebootstrap(path, term, &history) {
+                            eprintln!("follow stopped: {e}");
+                            std::process::exit(1);
+                        }
+                        eprintln!("standby re-bootstrapped from the leader's snapshot");
+                    }
+                    Err(e) => {
+                        eprintln!("follow stopped: {e}");
+                        std::process::exit(1);
+                    }
+                }
             }
             true
         }

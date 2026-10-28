@@ -19,9 +19,15 @@
 //!
 //! R4b — `sync_gate`: a client write returns only once a standby has
 //! acked (applied + fsynced) its seq, or fails after the timeout.
+//!
+//! R4c — term history (`{dir}/REPL-HISTORY`, Postgres-timeline style:
+//! one "<term> <first seq>" line per promotion). Hello and `ok` carry it;
+//! a standby whose last frame the leader's history does not hold
+//! (`diverged`), or whose position the log no longer holds, gets `5` + a
+//! storage snapshot (checkpoint format) and re-bootstraps from it.
 
 use crate::session::TcpAuthTable;
-use aikoql_storage_v2::db::{CommitGate, Db};
+use aikoql_storage_v2::db::{CommitGate, Config, Db};
 use aikoql_storage_v2::engine::StorageAdminApi;
 use aikoql_storage_v2::wal::{decode_frame, encode_frame, FRAME_HEADER_LEN};
 use std::collections::HashMap;
@@ -33,11 +39,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
-const PROTO: &str = "aikoql-repl/1";
+const PROTO: &str = "aikoql-repl/2";
 const TAG_FRAME: u8 = 1;
 const TAG_HEARTBEAT: u8 = 2;
-const TAG_GAP: u8 = 3;
 const TAG_CHECKPOINT: u8 = 4;
+const TAG_SNAPSHOT: u8 = 5;
 /// How often a caught-up sender looks for a newer index checkpoint.
 const CHECKPOINT_POLL: Duration = Duration::from_secs(1);
 const MAX_CHECKPOINT_FILES: usize = 1 << 20;
@@ -48,7 +54,6 @@ const LEADER_SILENCE: Duration = Duration::from_secs(5);
 /// Trust-boundary bounds on lengths read off the wire.
 const MAX_FRAME_PAYLOAD: usize = 256 << 20;
 const MAX_LINE: usize = 4096;
-const MAX_REASON: usize = 64 << 10;
 /// Frames per log read.
 const BATCH: usize = 256;
 
@@ -95,22 +100,83 @@ pub(crate) fn store_term(dir: &Path, term: u64, role: Role) -> std::io::Result<(
         Role::Standby => "standby",
         Role::Fenced => "fenced",
     };
-    let tmp = dir.join(format!("{TERM_FILE}.tmp"));
+    write_durable(dir, TERM_FILE, &format!("{term} {role}\n"))
+}
+
+fn write_durable(dir: &Path, name: &str, contents: &str) -> std::io::Result<()> {
+    let tmp = dir.join(format!("{name}.tmp"));
     let mut f = std::fs::File::create(&tmp)?;
-    f.write_all(format!("{term} {role}\n").as_bytes())?;
+    f.write_all(contents.as_bytes())?;
     f.sync_all()?;
-    std::fs::rename(&tmp, dir.join(TERM_FILE))?;
+    std::fs::rename(&tmp, dir.join(name))?;
     #[cfg(unix)]
     std::fs::File::open(dir)?.sync_all()?;
     Ok(())
 }
 
-/// `serve` on a standby is its promotion: it takes the next term.
+/// R4c — the term history file inside the database directory.
+pub(crate) const HISTORY_FILE: &str = "REPL-HISTORY";
+
+/// (term, first seq written under it), oldest first. No file is one
+/// timeline: term 0 from seq 1.
+pub(crate) type History = Vec<(u64, u64)>;
+
+pub(crate) fn load_history(dir: &Path) -> std::io::Result<History> {
+    let s = match std::fs::read_to_string(dir.join(HISTORY_FILE)) {
+        Ok(s) => s,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(vec![(0, 1)]),
+        Err(e) => return Err(e),
+    };
+    s.lines()
+        .map(|l| {
+            l.split_once(' ')
+                .and_then(|(t, q)| Some((t.parse().ok()?, q.parse().ok()?)))
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("unreadable {HISTORY_FILE}: {l:?}"),
+                    )
+                })
+        })
+        .collect()
+}
+
+fn store_history(dir: &Path, history: &[(u64, u64)]) -> std::io::Result<()> {
+    let body: String = history.iter().map(|(t, q)| format!("{t} {q}\n")).collect();
+    write_durable(dir, HISTORY_FILE, &body)
+}
+
+/// R4c — is a standby whose history is `theirs` and whose last frame is
+/// `after` off our timeline? Its last frame's term must be one we had,
+/// and we must not have moved past that term before `after`.
+pub(crate) fn diverged(ours: &[(u64, u64)], theirs: &[(u64, u64)], after: u64) -> bool {
+    let term = theirs
+        .iter()
+        .rev()
+        .find(|(_, first)| *first <= after)
+        .map_or(0, |(t, _)| *t);
+    match ours.iter().position(|(t, _)| *t == term) {
+        None => true,
+        Some(i) => ours.get(i + 1).is_some_and(|(_, next)| after >= *next),
+    }
+}
+
+/// `serve` on a standby is its promotion: it takes the next term, which
+/// starts right after the last frame it holds (recorded before the kernel
+/// opens and writes under the new term).
 pub(crate) fn claim_leadership(dir: &Path) -> std::io::Result<(u64, Role)> {
     match load_term(dir)? {
         (term, Role::Standby) => {
-            store_term(dir, term + 1, Role::Leader)?;
-            Ok((term + 1, Role::Leader))
+            let next = term + 1;
+            let last = Db::open(Config::new(dir.to_path_buf()))
+                .map_err(|e| std::io::Error::other(e.to_string()))?
+                .last_seq();
+            let mut history = load_history(dir)?;
+            history.retain(|(t, _)| *t < next); // a crash-retried claim
+            history.push((next, last + 1));
+            store_history(dir, &history)?;
+            store_term(dir, next, Role::Leader)?;
+            Ok((next, Role::Leader))
         }
         other => Ok(other),
     }
@@ -245,6 +311,7 @@ fn serve_standby(
         .is_some_and(|i| i.roles.iter().any(|r| r == "admin"));
     let after = hello["after"].as_u64();
     let their_term = hello["term"].as_u64().unwrap_or(0);
+    let theirs: History = serde_json::from_value(hello["history"].clone()).unwrap_or_default();
     let (term, role) = load_term(dir)?;
     let refusal = if hello["proto"] != PROTO {
         Some(format!(
@@ -278,7 +345,19 @@ fn serve_standby(
         return Ok(());
     }
     let mut sent = after.unwrap_or(0);
-    w.write_all(format!("{}\n", serde_json::json!({ "ok": true, "term": term })).as_bytes())?;
+    let ours = load_history(dir)?;
+    // a standby ahead of our head holds frames we never wrote
+    let rebootstrap = diverged(&ours, &theirs, sent) || sent > source.last_seq();
+    let ok = serde_json::json!({ "ok": true, "term": term, "history": ours, "rebootstrap": rebootstrap });
+    w.write_all(format!("{ok}\n").as_bytes())?;
+    if rebootstrap {
+        warn!(
+            standby = id,
+            after = sent,
+            "the standby's tail diverged from this history: shipping a snapshot"
+        );
+        return send_snapshot(&mut w, source, dir, id);
+    }
     // justified: Mutex poison is unrecoverable
     acks.lock().unwrap().insert(id, sent);
 
@@ -314,11 +393,11 @@ fn serve_standby(
             let frames = match source.log_since(sent, BATCH) {
                 Ok(f) => f,
                 Err(e) => {
-                    let reason = e.to_string();
-                    let mut msg = vec![TAG_GAP];
-                    msg.extend_from_slice(&(reason.len() as u32).to_le_bytes());
-                    msg.extend_from_slice(reason.as_bytes());
-                    return w.write_all(&msg);
+                    warn!(
+                        standby = id,
+                        "replication log gap ({e}): shipping a snapshot"
+                    );
+                    return send_snapshot(&mut w, source, dir, id);
                 }
             };
             let mut buf = Vec::new();
@@ -377,9 +456,34 @@ fn send_checkpoint(
         Some(w) if Some(w) != shipped => w,
         _ => return Ok(None),
     };
+    send_dir(w, TAG_CHECKPOINT, water, &c.dir)?;
+    Ok(Some(water))
+}
+
+/// R4c — snapshot the storage into `{dir}.ship-{id}` and send it as a
+/// tagged directory; the standby re-bootstraps from it.
+fn send_snapshot(
+    w: &mut &TcpStream,
+    source: &dyn StorageAdminApi,
+    dir: &Path,
+    id: u64,
+) -> std::io::Result<()> {
+    let tmp = PathBuf::from(format!("{}.ship-{id}", dir.display()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let sent = source
+        .snapshot_to(&tmp)
+        .map_err(|e| std::io::Error::other(e.to_string()))
+        .and_then(|_| send_dir(w, TAG_SNAPSHOT, 0, &tmp));
+    let _ = std::fs::remove_dir_all(&tmp);
+    sent
+}
+
+/// `tag` + u64 `water` + u32 file count + per file (u32 path len, path,
+/// u64 size, bytes).
+fn send_dir(w: &mut &TcpStream, tag: u8, water: u64, dir: &Path) -> std::io::Result<()> {
     let mut files = Vec::new();
-    collect_files(&c.dir, &c.dir, &mut files)?;
-    let mut head = vec![TAG_CHECKPOINT];
+    collect_files(dir, dir, &mut files)?;
+    let mut head = vec![tag];
     head.extend_from_slice(&water.to_le_bytes());
     head.extend_from_slice(&(files.len() as u32).to_le_bytes());
     w.write_all(&head)?;
@@ -396,11 +500,11 @@ fn send_checkpoint(
         if copied != size {
             return Err(std::io::Error::new(
                 ErrorKind::UnexpectedEof,
-                "checkpoint file shrank while shipping",
+                "file shrank while shipping",
             ));
         }
     }
-    Ok(Some(water))
+    Ok(())
 }
 
 /// Every file under `dir`, as ('/'-joined path relative to `root`, path).
@@ -421,10 +525,10 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) -> s
     Ok(())
 }
 
-/// Receive a checkpoint into `{dir}.recv`, then swap it in as `dir` — a
-/// crash mid-swap leaves no checkpoint (promotion then replays in full),
-/// never a torn one. `None`: read and discard.
-fn receive_checkpoint(r: &mut Reader, dir: Option<&Path>) -> Result<u64, End> {
+/// Receive a shipped directory into `{dir}.recv`, then swap it in as
+/// `dir` — a crash mid-swap leaves none, never a torn one. `None`: read
+/// and discard. `marker`: a file the directory must hold to be complete.
+fn receive_dir(r: &mut Reader, dir: Option<&Path>, marker: Option<&str>) -> Result<u64, End> {
     let mut b8 = [0u8; 8];
     let mut b4 = [0u8; 4];
     r.fill(&mut b8)?;
@@ -490,10 +594,11 @@ fn receive_checkpoint(r: &mut Reader, dir: Option<&Path>) -> Result<u64, End> {
         }
     }
     if let (Some(dir), Some(tmp)) = (dir, tmp) {
-        if !tmp.join("COMPLETE").exists() {
-            return Err(End::Fatal(
-                "checkpoint arrived without its COMPLETE marker".into(),
-            ));
+        if let Some(m) = marker.filter(|m| !tmp.join(m).exists()) {
+            return Err(End::Fatal(format!(
+                "{} arrived without its {m} marker",
+                dir.display()
+            )));
         }
         if dir.exists() {
             std::fs::remove_dir_all(dir).map_err(fatal)?;
@@ -512,6 +617,53 @@ enum End {
     /// The leader refused us, cannot serve our position, or sent a frame
     /// we cannot apply — reconnecting would only repeat it.
     Fatal(String),
+    /// R4c — a snapshot landed in `{dir}.rejoin`.
+    Rebootstrap { term: u64, history: History },
+}
+
+/// How `follow` ended without an error.
+#[derive(Debug)]
+pub(crate) enum Followed {
+    /// `stop` was raised.
+    Stopped,
+    /// R4c — the leader shipped a snapshot (our tail diverged, or the log
+    /// no longer holds our position): close the db, `rebootstrap`, follow
+    /// again.
+    Rebootstrap { term: u64, history: History },
+}
+
+fn sibling(dir: &Path, ext: &str) -> PathBuf {
+    PathBuf::from(format!("{}.{ext}", dir.display()))
+}
+
+/// R4c — replace the standby at `dir` (closed) with the snapshot in
+/// `{dir}.rejoin`, carrying the leader's term and history. A crash
+/// between the two renames leaves no `dir`: the next `follow` starts
+/// empty and is re-bootstrapped again — never a mixed history.
+pub(crate) fn rebootstrap(dir: &Path, term: u64, history: &[(u64, u64)]) -> Result<(), String> {
+    let (snap, new, old) = (
+        sibling(dir, "rejoin"),
+        sibling(dir, "new"),
+        sibling(dir, "old"),
+    );
+    let _ = std::fs::remove_dir_all(&new);
+    drop(
+        aikoql_storage_v2::snapshot::restore_from(&snap, new.clone())
+            .map_err(|e| format!("restore the leader's snapshot: {e}"))?,
+    );
+    let io = |e: std::io::Error| format!("re-bootstrap {}: {e}", dir.display());
+    store_history(&new, history).map_err(io)?;
+    store_term(&new, term, Role::Standby).map_err(io)?;
+    let _ = std::fs::remove_dir_all(&old);
+    if dir.exists() {
+        std::fs::rename(dir, &old).map_err(io)?;
+    }
+    std::fs::rename(&new, dir).map_err(io)?;
+    let _ = std::fs::remove_dir_all(&old);
+    let _ = std::fs::remove_dir_all(&snap);
+    // the index checkpoint described the replaced history
+    let _ = std::fs::remove_dir_all(sibling(dir, "ckpt"));
+    Ok(())
 }
 
 /// Follow the leader at `addr` into `standby` until `stop` (Ok) or a fatal
@@ -526,11 +678,14 @@ pub(crate) fn follow(
     dir: &Path,
     checkpoint: Option<&Path>,
     stop: &AtomicBool,
-) -> Result<(), String> {
+) -> Result<Followed, String> {
     let mut backoff = Duration::from_millis(100);
     while !stop.load(Ordering::Relaxed) {
         match follow_once(addr, token, standby, dir, checkpoint, stop) {
-            End::Stopped => return Ok(()),
+            End::Stopped => return Ok(Followed::Stopped),
+            End::Rebootstrap { term, history } => {
+                return Ok(Followed::Rebootstrap { term, history })
+            }
             End::Fatal(e) => return Err(e),
             End::Retry(e) => {
                 warn!("replication link to {addr}: {e} — reconnecting");
@@ -539,7 +694,7 @@ pub(crate) fn follow(
             }
         }
     }
-    Ok(())
+    Ok(Followed::Stopped)
 }
 
 fn follow_once(
@@ -567,6 +722,10 @@ fn follow_once(
         "token": token,
         "after": standby.last_seq(),
         "term": own_term,
+        "history": match load_history(dir) {
+            Ok(h) => h,
+            Err(e) => return End::Fatal(format!("read {HISTORY_FILE}: {e}")),
+        },
     });
     if let Err(e) = s.write_all(format!("{hello}\n").as_bytes()) {
         return End::Retry(format!("handshake: {e}"));
@@ -604,9 +763,17 @@ fn follow_once(
             "refused a stale leader: its term {term} is older than this node's {own_term}"
         ));
     }
-    if (term, role) != (own_term, Role::Standby) {
-        if let Err(e) = store_term(dir, term, Role::Standby) {
-            return End::Fatal(format!("store {TERM_FILE}: {e}"));
+    let history: History = serde_json::from_value(reply["history"].clone()).unwrap_or_default();
+    // a re-bootstrap writes term + history only with the new data: until
+    // then this node keeps the history its (diverged) frames belong to
+    if reply["rebootstrap"] != true {
+        if let Err(e) = store_history(dir, &history) {
+            return End::Fatal(format!("store {HISTORY_FILE}: {e}"));
+        }
+        if (term, role) != (own_term, Role::Standby) {
+            if let Err(e) = store_term(dir, term, Role::Standby) {
+                return End::Fatal(format!("store {TERM_FILE}: {e}"));
+            }
         }
     }
     loop {
@@ -652,22 +819,13 @@ fn follow_once(
                     reported = head;
                 }
             }
-            TAG_GAP => {
-                let mut b = [0u8; 4];
-                if let Err(end) = r.fill(&mut b) {
-                    return end;
+            TAG_SNAPSHOT => {
+                return match receive_dir(&mut r, Some(&sibling(dir, "rejoin")), None) {
+                    Ok(_) => End::Rebootstrap { term, history },
+                    Err(end) => end,
                 }
-                let len = (u32::from_le_bytes(b) as usize).min(MAX_REASON);
-                let mut reason = vec![0u8; len];
-                if let Err(end) = r.fill(&mut reason) {
-                    return end;
-                }
-                return End::Fatal(format!(
-                    "the leader no longer holds this standby's position ({}) — re-bootstrap it from a snapshot",
-                    String::from_utf8_lossy(&reason)
-                ));
             }
-            TAG_CHECKPOINT => match receive_checkpoint(&mut r, checkpoint) {
+            TAG_CHECKPOINT => match receive_dir(&mut r, checkpoint, Some("COMPLETE")) {
                 Ok(water) => {
                     if checkpoint.is_some() {
                         eprintln!("standby index checkpoint at water {water}");
@@ -920,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn a_standby_behind_the_retained_log_is_told_to_rebootstrap() {
+    fn a_standby_behind_the_retained_log_is_rebootstrapped_automatically() {
         let gap_dir = tmp("gap");
         let mut cfg = Config::new(gap_dir.clone());
         cfg.memtable_bytes = 1024; // no retain_log: flushed history is gone

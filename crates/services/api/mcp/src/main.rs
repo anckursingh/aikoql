@@ -265,6 +265,16 @@ fn main() {
         None => None,
     };
 
+    // MRFC-0080 R4: serving a standby promotes it to the next term (R4c:
+    // before the kernel opens, so its open-time writes are the new term's);
+    // a node deposed by a newer term keeps serving reads, never writes.
+    let (term, role) = match replication::claim_leadership(std::path::Path::new(&db_path)) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("replication term: {e}");
+            std::process::exit(1);
+        }
+    };
     let (kernel, admin) =
         match engine::open_kernel(&db_path, &cfg.encryption, replicate_listen.is_some()) {
             Ok((k, admin)) => (k, admin),
@@ -273,15 +283,6 @@ fn main() {
                 std::process::exit(1);
             }
         };
-    // MRFC-0080 R4: serving a standby promotes it to the next term; a
-    // node deposed by a newer term keeps serving reads, never writes.
-    let (term, role) = match replication::claim_leadership(std::path::Path::new(&db_path)) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("replication term: {e}");
-            std::process::exit(1);
-        }
-    };
     if role == replication::Role::Fenced {
         let Some(a) = admin.as_ref() else {
             eprintln!("a fenced node needs the storage admin surface to refuse writes");
