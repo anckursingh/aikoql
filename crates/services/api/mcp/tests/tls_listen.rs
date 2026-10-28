@@ -325,3 +325,104 @@ fn tls007_shutdown_drains_an_open_tls_connection() {
     drop(idle);
     let _ = std::fs::remove_dir_all(&db);
 }
+
+/// One HTTP/1.1 request over TLS; the whole response.
+fn https(port: u16, req: &str) -> String {
+    let mut s = tls(port);
+    s.write_all(req.as_bytes()).unwrap();
+    s.flush().unwrap();
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match s.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => out.extend_from_slice(&chunk[..n]),
+            // the response is complete once the server closes, cleanly or not
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The HTTP surface (login, query API, /health) over HTTPS with the same
+/// certificate, on a non-loopback bind armed with allow_remote_http + a login.
+#[test]
+fn tls008_https_surface_on_any_interface() {
+    let (db, port) = (tmp("008"), free_port());
+    let metrics = format!("0.0.0.0:{port}");
+    let env = [
+        ("AIKOQL_ALLOW_REMOTE_HTTP", "1".to_string()),
+        ("AIKOQL_ADMIN_PASSWORD", "tls-pw".to_string()),
+    ];
+    let _srv = serve(
+        &db,
+        &[&["--metrics-addr", &metrics][..], &strs(&cert_args())].concat(),
+        &env,
+    );
+    let _ = connect(port); // listening
+    let health = https(
+        port,
+        "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    assert!(
+        health.starts_with("HTTP/1.1 200"),
+        "GET /health over HTTPS: {health:?}"
+    );
+    let body = r#"{"username":"admin","password":"tls-pw"}"#;
+    let login = https(
+        port,
+        &format!(
+            "POST /api/login HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert!(
+        login.starts_with("HTTP/1.1 200") && login.contains("\"token\""),
+        "login over HTTPS: {login:?}"
+    );
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+/// Remote HTTP without TLS is refused even when armed: the login and the
+/// session tokens must not cross the network in plaintext.
+#[test]
+fn tls009_remote_plaintext_http_refused() {
+    let db = tmp("009");
+    let mut child = Command::new(bin())
+        .args(["serve", "--metrics-addr", "0.0.0.0:0"])
+        .arg(&db)
+        .env("AIKOQL_ALLOW_REMOTE_HTTP", "1")
+        .env("AIKOQL_ADMIN_PASSWORD", "tls-pw")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // a server that starts would serve forever: bound the wait
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            break st;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("remote plaintext HTTP was served (no refusal within 15 s)");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut err = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut err)
+        .unwrap();
+    assert_eq!(status.code(), Some(2), "{err}");
+    assert!(
+        err.contains("--tls-cert"),
+        "the refusal names the fix: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&db);
+}
