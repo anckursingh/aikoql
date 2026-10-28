@@ -380,26 +380,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Start MinIO and create the bucket
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      # MinIO no longer ships images or binaries (Docker Hub minio/minio is
+      # gone, dl.min.io answers 410): build the locally verified releases from
+      # source — minio RELEASE.2025-10-15T17-29-55Z, mc RELEASE.2025-08-13T08-35-41Z
+      - name: MinIO from source
         run: |
-          set -euo pipefail
-          docker run -d --name minio -p 127.0.0.1:9000:9000 \
-            -e MINIO_ROOT_USER=aikoqltest -e MINIO_ROOT_PASSWORD=aikoqltest-secret \
-            minio/minio:latest server /data
-          for _ in $(seq 1 60); do
-            curl -sf http://127.0.0.1:9000/minio/health/ready && break
-            sleep 1
-          done
-          docker run --rm --network host --entrypoint sh minio/mc:latest -c \
-            "mc alias set it http://127.0.0.1:9000 aikoqltest aikoqltest-secret && mc mb --ignore-existing it/aikoql-it"
-      - name: Real-S3 tests
-        env:
-          AIKOQL_TEST_S3_ENDPOINT: http://127.0.0.1:9000
-        run: bash scripts/s3-it.sh
+          go install github.com/minio/minio@v0.0.0-20251015172955-9e49d5e7a648
+          go install github.com/minio/mc@v0.0.0-20250813083541-7394ce0dd2a8
+      - name: Real-S3 tests (throwaway MinIO)
+        run: PATH="$PATH:$(go env GOPATH)/bin" bash scripts/s3-it.sh
 
   # MRFC-0080: the same real-S3 certs against Moto — an independent S3
   # implementation, pinned and Docker-free, so this one gates (MinIO above
-  # stays advisory until its images are pinned to a verified tag).
+  # stays advisory until its from-source job has run green).
   s3-compat-moto:
     name: Real S3 legs (Moto)
     runs-on: ubuntu-latest
