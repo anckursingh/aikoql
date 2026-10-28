@@ -1,0 +1,8 @@
+{
+  "id": "docker-memory-dir",
+  "pre_fix_commit": "HEAD",
+  "command": "node scripts/e2e-volume-restart.js ghcr.io/anckursingh/aikoql:0.2.3",
+  "captured_at": "2026-10-28T18:34:48Z",
+  "captured_head": "3fec9d4b0af821ca2cb66cc7a30b6785598ed4b7",
+  "exit_code": 1
+}

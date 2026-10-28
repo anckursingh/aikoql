@@ -72,6 +72,12 @@ function assert(cond, msg) {
   });
   const koid = note.koid;
   assert(!!koid, `remember must return a koid, got ${JSON.stringify(note)}`);
+  // agent memory (MRFC-0070) is mutable state too: it must land in /data
+  const mem = await a.call('memory_store', {
+    name: 'dep003-memory', description: 'volume restart memory', content: 'memory survives the restart',
+  });
+  assert(mem.stored === true && String(mem.path).startsWith('/data/'),
+    `memory must be stored under /data, got ${JSON.stringify(mem)}`);
   a.end();
   sh('docker stop -t 1 aikoql-vol-a');
 
@@ -82,10 +88,13 @@ function assert(cond, msg) {
   assert(fetched.type_name === 'note', `restored KO must be a note, got ${JSON.stringify(fetched)}`);
   assert(fetched.properties.body === 'volume restart proof',
     `restored KO content must match, got ${fetched.properties.body}`);
+  const found = await b.call('memory_search', { query: 'memory survives the restart' });
+  assert(found.count >= 1 && found.results.some((r) => r.name === 'dep003-memory'),
+    `the memory must survive the restart, got ${JSON.stringify(found)}`);
   b.end();
   sh('docker stop -t 1 aikoql-vol-b');
   sh(`docker volume rm -f ${VOLUME}`);
 
-  console.log('e2e-volume-restart: PASS — knowledge survives a volume-backed container restart');
+  console.log('e2e-volume-restart: PASS — knowledge and agent memory survive a volume-backed container restart');
   process.exit(0);
 })().catch((e) => { console.error('e2e-volume-restart: FAIL', e.message); process.exit(1); });
