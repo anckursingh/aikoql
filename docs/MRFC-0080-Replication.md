@@ -38,7 +38,7 @@ an exact copy, which the verifiable-knowledge claim requires.
 | follower reads (read replicas): a live kernel whose in-memory state follows applied frames | later (needs a write-free kernel open) |
 | transport + manual failover | R3a ✅ |
 | failover time: promotion rebuilt every index from the whole journal | R3b ✅ |
-| TLS for cross-host links; lag metrics endpoint | R3c |
+| TLS for cross-host links; lag metrics endpoint | R3c ✅ |
 | terms + fencing in the data path | R4a ✅ |
 | semi-sync ack (RPO = 0 for acked writes) | R4b ✅ |
 | diverged-tail rejoin (and automatic re-bootstrap) | R4c ✅ |
@@ -143,7 +143,7 @@ length read off the wire is bounded.
 
 Security: standbys need an `admin` token (the stream is every tenant's
 data); the listener is loopback-only and refuses to start without
-tokens — the `--listen` rules. Cross-host links need a tunnel until R3c.
+tokens — the `--listen` rules. Cross-host links: TLS since R3c (below).
 
 ## R3b — fast failover ✅
 
@@ -193,6 +193,63 @@ R3 limits, carried forward:
 - Release follows connected standbys only: a standby away longer than
   the retained log re-bootstraps (automatically since R4c — a full
   snapshot copy).
+
+## R3c — TLS between hosts, lag metrics ✅
+
+**R3c-1 — TLS.** Every replication connection is a `Link`: plaintext or
+rustls (ring provider, the crate's only TLS stack — shared with the k8s
+lease via the `tls` module).
+- Leader: `--replicate-tls-cert PEM --replicate-tls-key PEM` (both or
+  neither). With them the listener may bind any interface; without,
+  `--replicate-listen` stays loopback-only (plaintext tokens).
+- Standby: `follow --tls-ca PEM` / `serve --replicate-tls-ca PEM` (HA)
+  trust exactly that CA; the leader's certificate must carry the host
+  the standby dials (IP or DNS SAN). `--replicate-advertise HOST:PORT`
+  is the address recorded in the HA lease when the listen address
+  (e.g. `0.0.0.0:7071`) is not dialable.
+- A TLS failure (untrusted certificate, protocol error — rustls's
+  InvalidData) is fatal for `follow`, never retried.
+- Server auth only: standbys are authenticated by their admin token
+  inside the encrypted stream; mTLS is a later option.
+- One owner per connection: a rustls stream cannot be split across a
+  reader and a writer thread, so the leader now reads acks on its
+  sending thread (`poll_acks`: 1 ms between batches; 10 ms when idle,
+  which doubles as the head poll — the R4b ack latency is unchanged).
+
+**R3c-2 — lag metrics.** A serving leader's `/metrics` scrape
+(`--metrics-addr`) carries:
+
+```
+aikoql_replication_head_seq            the leader's newest committed seq
+aikoql_replication_standbys            connected standbys
+aikoql_replication_standby_lag_frames{standby="ID",peer="ADDR"}  head − acked
+```
+
+`Acked` holds each connected standby's (peer, acked seq); the slowest
+still bounds log release.
+
+Tests: `replication.rs` — a TLS standby streams across flushes; one
+trusting an unrelated CA is refused with a certificate error and applies
+nothing; the lag series drains to 0 and the standby count follows
+connects/disconnects. `replication_failover.rs` — a TLS leader on
+`0.0.0.0` is followed via `follow --tls-ca` and promoted with every
+object; the leader's real `/metrics` scrape carries the series. Fixtures:
+`tests/fixtures/tls/` (test-only P-256 certs, CA keys deleted). RED:
+`r3c-tls{,-e2e}`, `r3c-lag-metrics{,-e2e}`.
+
+Harness fix found on the way: `free_port` handed out OS-ephemeral ports,
+which a client connection's local end could take before the server bound
+them (`Address already in use`, ~1 run in 10 as the suite grew). Ports
+now come from below the ephemeral ranges; an unlogged server's stderr is
+kept and printed when it exits.
+
+R3c limits:
+- Exercised on one machine (loopback + `0.0.0.0` bind); no cross-host
+  run yet.
+- No certificate reload: rotating the leader's cert needs a restart.
+- Standby-side lag (as seen by the standby) is not exported — a
+  standby runs `follow`, which serves no metrics; the leader's per-standby
+  series covers it while the standby is connected.
 
 ## R4a — terms and write fencing ✅
 
@@ -464,8 +521,9 @@ R5a limits:
 - **S3 conditional writes are verified against a fake only.** AWS S3
   documents both conditions on PUT; MinIO, R2 and other S3-compatible
   stores must each be checked before claiming support (open risk).
-- Replication is still loopback-only (TLS is R3c), so a real multi-host
-  HA deployment waits for it; today's HA runs on one host.
+- ~~Replication is loopback-only~~ — R3c added TLS: HA nodes on
+  different hosts use `--replicate-tls-cert/-key/-ca` and
+  `--replicate-advertise`. (Not yet exercised across real hosts.)
 - A standby takes no client traffic before promotion (stdio and TCP
   answer nothing until it leads); standby reads and NOT_LEADER from
   standbys are R5b.
@@ -558,8 +616,9 @@ covers: the leader may run up to a third slow before the bound breaks.
 RED: `r5c-split-brain` (no "taking over" line to order against).
 
 R5c limits:
-- Single host: replication is loopback-only until TLS (R3c), so the
-  certs partition the lease path, not a real network between hosts.
+- Single host: the certs partition the lease path, not a real network
+  between hosts (R3c's TLS makes multi-host possible; the certs still
+  run on one machine).
 - A partition of the replication link alone is not certified: takeover
   depends only on the lease, so a standby cut off from the leader's
   frames but not from the store never promotes — by construction, not
