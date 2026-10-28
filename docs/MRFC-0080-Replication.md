@@ -47,7 +47,7 @@ an exact copy, which the verifiable-knowledge claim requires.
 | k8s `Lease` backend, SDKs follow leader hints | R5b ✅ (Java SDK pending) |
 | standby serving reads (a read-only kernel over a replicating db) | later |
 | split-brain certs: partition, kill mid-write, rejected store | R5c ✅ |
-| log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
+| log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 ✅ |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
 
 ## R1 — storage replication log (`aikoql-v2`) ✅
@@ -624,6 +624,74 @@ R5c limits:
   frames but not from the store never promotes — by construction, not
   by a cert.
 - Clock-rate drift is argued, not injected.
+
+## R6 — continuous archive, point-in-time restore ✅
+
+`serve --archive DIR|s3://BUCKET[/PREFIX] [--archive-log-ms 5000]
+[--archive-snapshot-secs 3600]` on the leader; restore anywhere with
+`aikoql-mcp pitr --archive URL --to DIR [--until-seq N | --until-ms
+UNIX_MS]`, then `serve DIR`.
+
+**Layout** (`archive.rs`), one directory per replication term:
+
+```
+term-{T:010}/snap/{seq:020}-{ms:013}/<snapshot files>   COMPLETE written last
+term-{T:010}/log/{first:020}-{last:020}-{ms:013}.frames  encoded WAL frames
+```
+
+- **Timelines never mix.** A new leader (a new term) starts its own
+  directory with a fresh snapshot, so a diverged old leader's archived
+  tail can never be replayed into the new history — the R4c argument,
+  applied to the archive.
+- **Archiver** (on the serving leader; a fenced node does not archive):
+  resumes its term's newest object or starts with a snapshot; every
+  `--archive-log-ms` uploads the retained log past what it holds, in
+  objects of ≤ 4096 frames; every `--archive-snapshot-secs` uploads a
+  snapshot (bounding replay). It **holds log release** as an entry in
+  `Acked` — frames are never dropped before they are uploaded, with or
+  without standbys — and appears in the lag series as `peer="archive"`.
+  A log that no longer holds its position (e.g. a restart after a
+  release) restarts the timeline from a snapshot.
+- **Restore** picks the newest timeline with a complete snapshot at or
+  before the target, restores it (`restore_from`, verified) and replays
+  frames with `apply_replicated` up to the target seq — or, for
+  `--until-ms`, every log object uploaded by that instant. A missing
+  object fails the restore rather than stopping short.
+- Storage: `SnapshotInfo.last_seq` — the exact seq a snapshot holds, read
+  inside its capture hold.
+- Stores: a directory (local disk, NFS; keys validated as plain relative
+  paths) or S3 (`ListObjectsV2` paginated, SigV4 via the shared `s3`
+  client the lease now uses too; `AWS_*` env, `AIKOQL_S3_ENDPOINT`).
+
+**RPO / RTO.** Archive RPO = one log period (5 s default) for an
+async leader. Restore time = snapshot download + replay since that
+snapshot (bounded by the snapshot period).
+
+Tests: `archive.rs` — the store contract on a directory and on an S3
+fake (prefix-scoped, ListObjectsV2), list-XML parsing; restore to the
+latest and to a mid seq byte-equal; restore until an instant gets exactly
+what was archived by then; each term archives its own timeline and
+restore picks the right one; the archive holds log release.
+`replication_bootstrap.rs` — `last_seq` is exact. `replication_failover.rs`
+— a leader archives two bursts and dies; `pitr` restores all of it, and
+`--until-ms` between the bursts holds only the first. RED: `r6-*`.
+
+R6 limits:
+- **Not run against real S3** — the S3 store is verified against a fake
+  (the SigV4 signer against AWS's documented example).
+- Time granularity is one log batch: `--until-ms` restores what had
+  been *uploaded* by then, not each write's commit time (frames carry no
+  wall-clock stamp).
+- No archive retention: old snapshots and log objects are kept until a
+  bucket lifecycle rule (or an operator) removes them; a retention
+  command is a later item.
+- Snapshot files are uploaded whole, one in memory at a time (shortcut
+  comment) — multipart streaming once single segments outgrow memory.
+- A restored directory is a standalone node (term 0, no history); with
+  field encryption the KMS key file must be restored beside it (R2 note).
+- Restoring to a seq in an older timeline after a newer one began
+  returns that older history, including any tail the old leader wrote
+  after it was deposed (never acked under `--replicate-sync-ms`).
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
