@@ -45,6 +45,7 @@ MRFC-0040 structured errors: the `error.code` string inside a tool result
 | INTERNAL | no | fallthrough | txn_commit of a never-opened txn (cl01f) |
 | NOT_A_PROGRAM | no | "not a program" | program tool on a non-program KOID |
 | COMPILE_ERROR | no | "compile", "parse", "syntax", "aikoql1" | aikoql parse errors, `AIKOQL1xxx` prefix (cl01f) |
+| NOT_LEADER | yes | "not leader" (checked first) | a write to a node fenced by a newer replication term (MRFC-0080 R4d); carries `leader` — the newer leader's client address — when known (replication_failover.rs) |
 
 RATE_LIMITED, TIMEOUT, VERSION_CONFLICT, RETRYABLE and NOT_A_PROGRAM have
 no dedicated producer pin in cli_contract.rs: their producers need config- or

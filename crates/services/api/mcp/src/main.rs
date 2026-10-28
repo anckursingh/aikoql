@@ -283,12 +283,24 @@ fn main() {
                 std::process::exit(1);
             }
         };
+    // R4d: after the kernel created the directory (a fresh one must be
+    // empty when it opens)
+    if let (replication::Role::Leader, Some(addr)) = (role, cfg.advertise.as_deref()) {
+        let dir = std::path::Path::new(&db_path);
+        if let Err(e) = replication::store_leader(dir, addr) {
+            eprintln!("record --advertise: {e}");
+            std::process::exit(1);
+        }
+    }
     if role == replication::Role::Fenced {
         let Some(a) = admin.as_ref() else {
             eprintln!("a fenced node needs the storage admin surface to refuse writes");
             std::process::exit(2);
         };
-        a.fence(format!("fenced at replication term {term}"));
+        a.fence(format!(
+            "fenced at replication term {term}{}",
+            replication::leader_hint(std::path::Path::new(&db_path))
+        ));
         warn!(
             term,
             "deposed by a newer replication term: reads only — rejoin with `follow`"

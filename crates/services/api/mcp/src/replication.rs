@@ -161,6 +161,36 @@ pub(crate) fn diverged(ours: &[(u64, u64)], theirs: &[(u64, u64)], after: u64) -
     }
 }
 
+/// R4d — the client address of the newest leader this node knows: its
+/// own `--advertise` on a leader, its leader's on a standby, the deposing
+/// leader's on a fenced node (the NOT_LEADER hint).
+pub(crate) const LEADER_FILE: &str = "REPL-LEADER";
+
+pub(crate) fn load_leader(dir: &Path) -> Option<String> {
+    let addr = std::fs::read_to_string(dir.join(LEADER_FILE)).ok()?;
+    Some(addr.trim().to_string()).filter(|a| valid_addr(a))
+}
+
+pub(crate) fn store_leader(dir: &Path, addr: &str) -> std::io::Result<()> {
+    write_durable(dir, LEADER_FILE, &format!("{addr}\n"))
+}
+
+/// Trust boundary: the hint arrives off the wire and is echoed to
+/// clients — a bounded host:port-ish token, nothing else.
+pub(crate) fn valid_addr(a: &str) -> bool {
+    !a.is_empty()
+        && a.len() <= 255
+        && a.chars()
+            .all(|c| c.is_ascii_alphanumeric() || ".-_:[]".contains(c))
+}
+
+/// " (leader=ADDR)" for a fence reason, when the address is known.
+pub(crate) fn leader_hint(dir: &Path) -> String {
+    load_leader(dir)
+        .map(|a| format!(" (leader={a})"))
+        .unwrap_or_default()
+}
+
 /// `serve` on a standby is its promotion: it takes the next term, which
 /// starts right after the last frame it holds (recorded before the kernel
 /// opens and writes under the new term).
@@ -175,6 +205,11 @@ pub(crate) fn claim_leadership(dir: &Path) -> std::io::Result<(u64, Role)> {
             history.retain(|(t, _)| *t < next); // a crash-retried claim
             history.push((next, last + 1));
             store_history(dir, &history)?;
+            // the old leader's address must never be served as ours
+            match std::fs::remove_file(dir.join(LEADER_FILE)) {
+                Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
+                _ => {}
+            }
             store_term(dir, next, Role::Leader)?;
             Ok((next, Role::Leader))
         }
@@ -328,8 +363,14 @@ fn serve_standby(
         ))
     } else if their_term > term {
         // the standby has followed a newer leader: this one was deposed
+        if let Some(addr) = hello["leader"].as_str().filter(|a| valid_addr(a)) {
+            store_leader(dir, addr)?;
+        }
         store_term(dir, their_term, Role::Fenced)?;
-        source.fence(format!("deposed by replication term {their_term}"));
+        source.fence(format!(
+            "deposed by replication term {their_term}{}",
+            leader_hint(dir)
+        ));
         warn!(
             term,
             their_term, "a standby carries a newer term: this node is fenced"
@@ -348,7 +389,13 @@ fn serve_standby(
     let ours = load_history(dir)?;
     // a standby ahead of our head holds frames we never wrote
     let rebootstrap = diverged(&ours, &theirs, sent) || sent > source.last_seq();
-    let ok = serde_json::json!({ "ok": true, "term": term, "history": ours, "rebootstrap": rebootstrap });
+    let ok = serde_json::json!({
+        "ok": true,
+        "term": term,
+        "history": ours,
+        "rebootstrap": rebootstrap,
+        "leader": load_leader(dir),
+    });
     w.write_all(format!("{ok}\n").as_bytes())?;
     if rebootstrap {
         warn!(
@@ -654,6 +701,9 @@ pub(crate) fn rebootstrap(dir: &Path, term: u64, history: &[(u64, u64)]) -> Resu
     let io = |e: std::io::Error| format!("re-bootstrap {}: {e}", dir.display());
     store_history(&new, history).map_err(io)?;
     store_term(&new, term, Role::Standby).map_err(io)?;
+    if let Some(addr) = load_leader(dir) {
+        store_leader(&new, &addr).map_err(io)?;
+    }
     let _ = std::fs::remove_dir_all(&old);
     if dir.exists() {
         std::fs::rename(dir, &old).map_err(io)?;
@@ -722,6 +772,7 @@ fn follow_once(
         "token": token,
         "after": standby.last_seq(),
         "term": own_term,
+        "leader": load_leader(dir),
         "history": match load_history(dir) {
             Ok(h) => h,
             Err(e) => return End::Fatal(format!("read {HISTORY_FILE}: {e}")),
@@ -764,6 +815,14 @@ fn follow_once(
         ));
     }
     let history: History = serde_json::from_value(reply["history"].clone()).unwrap_or_default();
+    // a hint, not data: kept across a re-bootstrap (`rebootstrap` copies it)
+    if let Some(addr) = reply["leader"].as_str().filter(|a| valid_addr(a)) {
+        if load_leader(dir).as_deref() != Some(addr) {
+            if let Err(e) = store_leader(dir, addr) {
+                return End::Fatal(format!("store {LEADER_FILE}: {e}"));
+            }
+        }
+    }
     // a re-bootstrap writes term + history only with the new data: until
     // then this node keeps the history its (diverged) frames belong to
     if reply["rebootstrap"] != true {

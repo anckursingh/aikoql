@@ -18,6 +18,10 @@ pub(crate) struct RuntimeConfig {
     /// Same loopback-only + token rules as `--listen`; standbys need an
     /// `admin` token. Turns on log retention. CLI-only.
     pub replicate_listen: Option<String>,
+    /// MRFC-0080 R4d: this node's client-facing address (`--advertise`),
+    /// handed to standbys — and by them to a deposed leader — as the
+    /// NOT_LEADER hint. CLI-only.
+    pub advertise: Option<String>,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -261,6 +265,7 @@ pub(crate) fn load(
         listen_addr: None,
         native_port: None,
         replicate_listen: None,
+        advertise: None,
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -474,6 +479,14 @@ pub(crate) fn load(
                 );
                 i += 2;
             }
+            "--advertise" => match args.get(i + 1) {
+                Some(v) if crate::replication::valid_addr(v) => {
+                    cfg.advertise = Some(v.clone());
+                    i += 2;
+                }
+                Some(v) => return Err(format!("--advertise requires HOST:PORT, got {v:?}")),
+                None => return Err("--advertise requires an address".into()),
+            },
             "--replicate-listen" => match args.get(i + 1) {
                 Some(v) => {
                     cfg.replicate_listen = Some(v.clone());

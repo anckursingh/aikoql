@@ -18,6 +18,8 @@ pub enum ErrorCode {
     Internal,
     NotAProgram,
     CompileError,
+    /// MRFC-0080 R4d — a deposed (fenced) node refused a write.
+    NotLeader,
 }
 
 impl ErrorCode {
@@ -33,6 +35,7 @@ impl ErrorCode {
             ErrorCode::Internal => "INTERNAL",
             ErrorCode::NotAProgram => "NOT_A_PROGRAM",
             ErrorCode::CompileError => "COMPILE_ERROR",
+            ErrorCode::NotLeader => "NOT_LEADER",
         }
     }
 
@@ -43,6 +46,7 @@ impl ErrorCode {
                 | ErrorCode::RateLimited
                 | ErrorCode::VersionConflict
                 | ErrorCode::Retryable
+                | ErrorCode::NotLeader
         )
     }
 
@@ -58,13 +62,16 @@ impl ErrorCode {
             ErrorCode::Internal => "An unexpected error occurred. Report this if it persists",
             ErrorCode::NotAProgram => "The KOID references an object that is not a program. Use list_programs to find valid programs",
             ErrorCode::CompileError => "The aikoql query has a syntax error. Check the query and retry",
+            ErrorCode::NotLeader => "This node no longer accepts writes. Retry the write against the leader (`leader`, when known)",
         }
     }
 
     /// Classify an error message string into an error code.
     pub fn classify(msg: &str) -> Self {
         let lower = msg.to_lowercase();
-        if lower.contains("access denied")
+        if lower.contains("not leader") {
+            ErrorCode::NotLeader
+        } else if lower.contains("access denied")
             || lower.contains("access_denied")
             || lower.contains("unauthorized")
             || lower.contains("login required")
@@ -109,7 +116,7 @@ pub fn wrap_result(result: Result<J, String>) -> J {
         Ok(payload) => json!({"ok": true, "data": payload}),
         Err(msg) => {
             let code = ErrorCode::classify(&msg);
-            json!({
+            let mut out = json!({
                 "ok": false,
                 "error": {
                     "code": code.as_str(),
@@ -117,7 +124,13 @@ pub fn wrap_result(result: Result<J, String>) -> J {
                     "retryable": code.retryable(),
                     "suggestion": code.suggestion(),
                 }
-            })
+            });
+            // R4d: the fence reason carries "(leader=ADDR)" when known
+            let hint = msg.split("leader=").nth(1).map(|t| t.trim_end_matches(')'));
+            if let (ErrorCode::NotLeader, Some(addr)) = (code, hint) {
+                out["error"]["leader"] = json!(addr);
+            }
+            out
         }
     }
 }
