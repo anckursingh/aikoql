@@ -1095,22 +1095,6 @@ mod tests {
         ));
     }
 
-    /// A real S3-compatible store (MinIO in dev/CI, `scripts/s3-it.sh`):
-    /// AIKOQL_TEST_S3_ENDPOINT + AIKOQL_TEST_S3_BUCKET + the AWS_* creds.
-    /// None — the test is skipped — when unset.
-    fn real_s3() -> Option<(String, String, Creds)> {
-        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-        Some((
-            env("AIKOQL_TEST_S3_ENDPOINT")?,
-            env("AIKOQL_TEST_S3_BUCKET")?,
-            Creds {
-                akid: env("AWS_ACCESS_KEY_ID")?,
-                secret: env("AWS_SECRET_ACCESS_KEY")?,
-                token: env("AWS_SESSION_TOKEN"),
-            },
-        ))
-    }
-
     fn unique(tag: &str) -> String {
         let ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1123,16 +1107,16 @@ mod tests {
     /// ("S3-compatible stores must each be checked").
     #[test]
     fn real_s3_lease_is_a_compare_and_swap() {
-        let Some((endpoint, bucket, creds)) = real_s3() else {
-            eprintln!("skipped: AIKOQL_TEST_S3_ENDPOINT unset");
+        let Some(t) = crate::s3::real_s3() else {
+            eprintln!("skipped: no AIKOQL_TEST_S3_ENDPOINT / AIKOQL_TEST_S3_AWS");
             return;
         };
         let store = S3Lease::new(
-            Some(endpoint.clone()),
-            bucket.clone(),
+            t.endpoint.clone(),
+            t.bucket.clone(),
             format!("{}/lease.json", unique("cas")),
-            "us-east-1".into(),
-            creds,
+            t.region.clone(),
+            t.creds,
             Duration::from_secs(10),
         );
         cas_contract(&store);
@@ -1140,19 +1124,15 @@ mod tests {
         let key = format!("{}/lease.json", unique("race"));
         let wins: usize = (0..8)
             .map(|i| {
-                let (endpoint, bucket, key, creds) = (
-                    endpoint.clone(),
-                    bucket.clone(),
-                    key.clone(),
-                    real_s3().unwrap().2,
-                );
+                let key = key.clone();
                 std::thread::spawn(move || {
+                    let t = crate::s3::real_s3().unwrap();
                     let s = S3Lease::new(
-                        Some(endpoint),
-                        bucket,
+                        t.endpoint,
+                        t.bucket,
                         key,
-                        "us-east-1".into(),
-                        creds,
+                        t.region,
+                        t.creds,
                         Duration::from_secs(10),
                     );
                     s.write(&lease(&format!("n{i}"), 1, 0), None).is_ok() as usize

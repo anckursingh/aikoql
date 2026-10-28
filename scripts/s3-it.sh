@@ -9,6 +9,14 @@
 #   S3_IT_BACKEND=moto scripts/s3-it.sh a throwaway Moto server (`moto_server`
 #                                       on PATH: pip install "moto[server]")
 #   S3_IT_BACKEND="minio moto" …        both, one after the other
+#   S3_IT_BACKEND=aws AIKOQL_TEST_S3_BUCKET=<throwaway bucket> \
+#     AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… [AWS_SESSION_TOKEN=…] \
+#     AWS_REGION=<the bucket's region> scripts/s3-it.sh
+#                                       AWS itself, no endpoint: the
+#                                       virtual-hosted URL path. Use a
+#                                       throwaway bucket and short-lived,
+#                                       bucket-scoped credentials — the certs
+#                                       leave small objects under it-*
 #   AIKOQL_TEST_S3_ENDPOINT=http://host:9000 scripts/s3-it.sh
 #                                       a running store (CI: a MinIO
 #                                       container); its bucket must exist or
@@ -19,6 +27,9 @@
 # them). Neither is AWS. Credentials default to throwaway test values.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
+# AWS must never see the throwaway defaults below: remember what was given
+given_creds="${AWS_ACCESS_KEY_ID:+yes}"
+given_bucket="${AIKOQL_TEST_S3_BUCKET:+yes}"
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-aikoqltest}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-aikoqltest-secret}"
 export AIKOQL_TEST_S3_BUCKET="${AIKOQL_TEST_S3_BUCKET:-aikoql-it}"
@@ -77,7 +88,17 @@ for backend in ${S3_IT_BACKEND:-minio}; do
       # Moto accepts an unsigned CreateBucket
       curl -sf -X PUT "$AIKOQL_TEST_S3_ENDPOINT/$AIKOQL_TEST_S3_BUCKET" >/dev/null
       ;;
-    *) echo "s3-it: unknown backend $backend (minio | moto)" >&2; exit 2 ;;
+    aws)
+      [ -n "$given_creds" ] && [ -n "$given_bucket" ] && [ -n "${AWS_REGION:-${AWS_DEFAULT_REGION:-}}" ] ||
+        { echo "s3-it: aws needs AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, AIKOQL_TEST_S3_BUCKET and AWS_REGION set explicitly" >&2; exit 2; }
+      unset AIKOQL_TEST_S3_ENDPOINT
+      export AIKOQL_TEST_S3_AWS=1
+      echo "s3-it: AWS (virtual-hosted) — bucket $AIKOQL_TEST_S3_BUCKET in ${AWS_REGION:-$AWS_DEFAULT_REGION}; objects stay under it-* (use a throwaway bucket)"
+      run_tests aws
+      unset AIKOQL_TEST_S3_AWS
+      continue
+      ;;
+    *) echo "s3-it: unknown backend $backend (minio | moto | aws)" >&2; exit 2 ;;
   esac
   run_tests "$backend"
   stop

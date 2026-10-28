@@ -962,16 +962,12 @@ mod tests {
 
     /// A real S3-compatible store (see ha.rs `real_s3`), under a fresh prefix.
     fn real_s3_store(tag: &str) -> Option<S3Store> {
-        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let t = crate::s3::real_s3()?;
         let s3 = crate::s3::S3::new(
-            Some(env("AIKOQL_TEST_S3_ENDPOINT")?),
-            env("AIKOQL_TEST_S3_BUCKET")?,
-            "us-east-1".into(),
-            crate::s3::Creds {
-                akid: env("AWS_ACCESS_KEY_ID")?,
-                secret: env("AWS_SECRET_ACCESS_KEY")?,
-                token: env("AWS_SESSION_TOKEN"),
-            },
+            t.endpoint,
+            t.bucket,
+            t.region,
+            t.creds,
             Duration::from_secs(30),
         );
         let ns = std::time::SystemTime::now()
@@ -987,7 +983,7 @@ mod tests {
     #[test]
     fn real_s3_store_keeps_keys() {
         let Some(s) = real_s3_store("keys") else {
-            eprintln!("skipped: AIKOQL_TEST_S3_ENDPOINT unset");
+            eprintln!("skipped: no AIKOQL_TEST_S3_ENDPOINT / AIKOQL_TEST_S3_AWS");
             return;
         };
         store_contract(&s);
@@ -998,7 +994,7 @@ mod tests {
     #[test]
     fn real_s3_archive_round_trips() {
         let Some(s) = real_s3_store("archive") else {
-            eprintln!("skipped: AIKOQL_TEST_S3_ENDPOINT unset");
+            eprintln!("skipped: no AIKOQL_TEST_S3_ENDPOINT / AIKOQL_TEST_S3_AWS");
             return;
         };
         let store: Arc<dyn ObjectStore> = Arc::new(s);

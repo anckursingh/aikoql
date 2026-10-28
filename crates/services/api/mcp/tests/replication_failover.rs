@@ -1466,18 +1466,27 @@ fn a_replica_can_feed_another_replica() {
 /// A real S3-compatible store (MinIO in dev/CI, `scripts/s3-it.sh`):
 /// the server env for it and the bucket; None (skip) when unset.
 fn real_s3_env() -> Option<(Vec<(String, String)>, String)> {
+    // an S3-compatible endpoint, or AWS itself (AIKOQL_TEST_S3_AWS=1: no
+    // endpoint — the servers use virtual-hosted URLs)
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-    let endpoint = env("AIKOQL_TEST_S3_ENDPOINT")?;
+    let endpoint = match (env("AIKOQL_TEST_S3_AWS"), env("AIKOQL_TEST_S3_ENDPOINT")) {
+        (Some(_), _) => None,
+        (None, Some(e)) => Some(e),
+        (None, None) => return None,
+    };
     let bucket = env("AIKOQL_TEST_S3_BUCKET")?;
+    let region = env("AWS_REGION")
+        .or_else(|| env("AWS_DEFAULT_REGION"))
+        .unwrap_or_else(|| "us-east-1".into());
     let mut vars = vec![
         ("AWS_ACCESS_KEY_ID".to_string(), env("AWS_ACCESS_KEY_ID")?),
         (
             "AWS_SECRET_ACCESS_KEY".to_string(),
             env("AWS_SECRET_ACCESS_KEY")?,
         ),
-        ("AWS_REGION".to_string(), "us-east-1".to_string()),
-        ("AIKOQL_S3_ENDPOINT".to_string(), endpoint),
+        ("AWS_REGION".to_string(), region),
     ];
+    vars.extend(endpoint.map(|e| ("AIKOQL_S3_ENDPOINT".to_string(), e)));
     vars.extend(env("AWS_SESSION_TOKEN").map(|t| ("AWS_SESSION_TOKEN".to_string(), t)));
     Some((vars, bucket))
 }
@@ -1489,7 +1498,7 @@ fn real_s3_env() -> Option<(Vec<(String, String)>, String)> {
 #[test]
 fn real_s3_ha_failover_then_pitr_from_the_bucket() {
     let Some((env, bucket)) = real_s3_env() else {
-        eprintln!("skipped: AIKOQL_TEST_S3_ENDPOINT unset");
+        eprintln!("skipped: no AIKOQL_TEST_S3_ENDPOINT / AIKOQL_TEST_S3_AWS");
         return;
     };
     let prefix = format!(

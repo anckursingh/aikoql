@@ -82,17 +82,7 @@ impl S3 {
         body: &[u8],
         header: Option<(&str, &str)>,
     ) -> Result<ureq::Response, (Option<u16>, String)> {
-        let path = format!("{}/{}", self.bucket_path, uri_encode(key, true));
-        let mut pairs: Vec<(String, String)> = query
-            .iter()
-            .map(|(k, v)| (uri_encode(k, false), uri_encode(v, false)))
-            .collect();
-        pairs.sort();
-        let query = pairs
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join("&");
+        let (url, path, query) = self.target(key, query);
         let payload = format!("{:x}", Sha256::digest(body));
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -116,11 +106,6 @@ impl S3 {
             &headers,
             &payload,
         );
-        let url = if query.is_empty() {
-            format!("{}{path}", self.base)
-        } else {
-            format!("{}{path}?{query}", self.base)
-        };
         let mut req = self.agent.request(method, &url).set("authorization", &auth);
         for (k, v) in headers.iter().filter(|(k, _)| *k != "host") {
             req = req.set(k, v);
@@ -134,6 +119,31 @@ impl S3 {
             req.send_bytes(body)
         };
         sent.map_err(describe)
+    }
+}
+
+impl S3 {
+    /// (URL, canonical path, canonical query) for `key` ("" is the bucket
+    /// root) and unencoded `query` pairs. Virtual-hosted on AWS (the bucket
+    /// is in the host), path-style on an endpoint (it leads the path).
+    fn target(&self, key: &str, query: &[(&str, &str)]) -> (String, String, String) {
+        let path = format!("{}/{}", self.bucket_path, uri_encode(key, true));
+        let mut pairs: Vec<(String, String)> = query
+            .iter()
+            .map(|(k, v)| (uri_encode(k, false), uri_encode(v, false)))
+            .collect();
+        pairs.sort();
+        let query = pairs
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        let url = if query.is_empty() {
+            format!("{}{path}", self.base)
+        } else {
+            format!("{}{path}?{query}", self.base)
+        };
+        (url, path, query)
     }
 }
 
@@ -234,6 +244,41 @@ pub(crate) fn amz_date(secs: u64) -> String {
         rem % 3600 / 60,
         rem % 60
     )
+}
+
+/// The real-S3 certs' target: an S3-compatible endpoint
+/// (AIKOQL_TEST_S3_ENDPOINT) or AWS itself (AIKOQL_TEST_S3_AWS=1 — no
+/// endpoint, virtual-hosted URLs), with AIKOQL_TEST_S3_BUCKET, the AWS_*
+/// credentials and AWS_REGION (default us-east-1). None — the certs skip —
+/// when neither target is set.
+#[cfg(test)]
+pub(crate) struct RealS3 {
+    pub(crate) endpoint: Option<String>,
+    pub(crate) bucket: String,
+    pub(crate) region: String,
+    pub(crate) creds: Creds,
+}
+
+#[cfg(test)]
+pub(crate) fn real_s3() -> Option<RealS3> {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let endpoint = match (env("AIKOQL_TEST_S3_AWS"), env("AIKOQL_TEST_S3_ENDPOINT")) {
+        (Some(_), _) => None,
+        (None, Some(e)) => Some(e),
+        (None, None) => return None,
+    };
+    Some(RealS3 {
+        endpoint,
+        bucket: env("AIKOQL_TEST_S3_BUCKET")?,
+        region: env("AWS_REGION")
+            .or_else(|| env("AWS_DEFAULT_REGION"))
+            .unwrap_or_else(|| "us-east-1".into()),
+        creds: Creds {
+            akid: env("AWS_ACCESS_KEY_ID")?,
+            secret: env("AWS_SECRET_ACCESS_KEY")?,
+            token: env("AWS_SESSION_TOKEN"),
+        },
+    })
 }
 
 #[cfg(test)]
