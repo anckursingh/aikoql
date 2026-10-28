@@ -847,4 +847,65 @@ mod tests {
         });
         (endpoint, keys)
     }
+
+    /// A real S3-compatible store (see ha.rs `real_s3`), under a fresh prefix.
+    fn real_s3_store(tag: &str) -> Option<S3Store> {
+        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let s3 = crate::s3::S3::new(
+            Some(env("AIKOQL_TEST_S3_ENDPOINT")?),
+            env("AIKOQL_TEST_S3_BUCKET")?,
+            "us-east-1".into(),
+            crate::s3::Creds {
+                akid: env("AWS_ACCESS_KEY_ID")?,
+                secret: env("AWS_SECRET_ACCESS_KEY")?,
+                token: env("AWS_SESSION_TOKEN"),
+            },
+            Duration::from_secs(30),
+        );
+        let ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        Some(S3Store::new(
+            s3,
+            format!("it-{tag}-{}-{ns}", std::process::id()),
+        ))
+    }
+
+    #[test]
+    fn real_s3_store_keeps_keys() {
+        let Some(s) = real_s3_store("keys") else {
+            eprintln!("skipped: AIKOQL_TEST_S3_ENDPOINT unset");
+            return;
+        };
+        store_contract(&s);
+    }
+
+    /// The archive on a real store: base snapshot + log batches up,
+    /// listed back (ListObjectsV2) and restored byte-equal.
+    #[test]
+    fn real_s3_archive_round_trips() {
+        let Some(s) = real_s3_store("archive") else {
+            eprintln!("skipped: AIKOQL_TEST_S3_ENDPOINT unset");
+            return;
+        };
+        let store: Arc<dyn ObjectStore> = Arc::new(s);
+        let e = engine("real-s3");
+        put(&e, 0, 50);
+        let source: Arc<dyn StorageAdminApi> = e.clone();
+        let mut a = Archiver::start(
+            store.clone(),
+            source,
+            Arc::new(Acked::default()),
+            1,
+            tmp("real-s3-scratch"),
+        )
+        .unwrap();
+        put(&e, 50, 120);
+        assert_eq!(a.pass().unwrap(), e.db().last_seq());
+        let out = tmp("real-s3-out");
+        let (seq, _) = restore(&*store, &out, Until::Latest, &tmp("real-s3-r")).unwrap();
+        assert_eq!(seq, e.db().last_seq());
+        assert_eq!(rows(&out), e.db().scan(b"").unwrap());
+    }
 }

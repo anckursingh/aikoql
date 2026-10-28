@@ -368,6 +368,35 @@ jobs:
           "$VIRTUAL_ENV/bin/maturin" develop --release
           "$VIRTUAL_ENV/bin/python" -m pytest tests/ -q
 
+  # MRFC-0080: the real-S3 legs (HA lease conditional writes, continuous
+  # archive, PITR) against MinIO — locally `scripts/s3-it.sh` (brew install
+  # minio minio-mc). continue-on-error until its first pushed run is green
+  # (the images are not pinned to a verified tag yet); then flip it to a gate.
+  s3-compat:
+    name: Real S3 legs (MinIO)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Start MinIO and create the bucket
+        run: |
+          set -euo pipefail
+          docker run -d --name minio -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER=aikoqltest -e MINIO_ROOT_PASSWORD=aikoqltest-secret \
+            minio/minio:latest server /data
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9000/minio/health/ready && break
+            sleep 1
+          done
+          docker run --rm --network host --entrypoint sh minio/mc:latest -c \
+            "mc alias set it http://127.0.0.1:9000 aikoqltest aikoqltest-secret && mc mb --ignore-existing it/aikoql-it"
+      - name: Real-S3 tests
+        env:
+          AIKOQL_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+        run: bash scripts/s3-it.sh
+
   # GO-SDK-01: the Go SDK (crates/sdk/go) is the P3-M9 re-adoption — the
   # first-class-db-roadmap Phase-4 trigger fired (a Go product needs the
   # DB). Same shape as python-sdk: build the real server binary, then run

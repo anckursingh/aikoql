@@ -1398,3 +1398,106 @@ fn a_replica_can_feed_another_replica() {
     assert_eq!(err["error"]["leader"], json!("db1.internal:7070"), "{err}");
     drop(r1);
 }
+
+/// A real S3-compatible store (MinIO in dev/CI, `scripts/s3-it.sh`):
+/// the server env for it and the bucket; None (skip) when unset.
+fn real_s3_env() -> Option<(Vec<(String, String)>, String)> {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let endpoint = env("AIKOQL_TEST_S3_ENDPOINT")?;
+    let bucket = env("AIKOQL_TEST_S3_BUCKET")?;
+    let mut vars = vec![
+        ("AWS_ACCESS_KEY_ID".to_string(), env("AWS_ACCESS_KEY_ID")?),
+        (
+            "AWS_SECRET_ACCESS_KEY".to_string(),
+            env("AWS_SECRET_ACCESS_KEY")?,
+        ),
+        ("AWS_REGION".to_string(), "us-east-1".to_string()),
+        ("AIKOQL_S3_ENDPOINT".to_string(), endpoint),
+    ];
+    vars.extend(env("AWS_SESSION_TOKEN").map(|t| ("AWS_SESSION_TOKEN".to_string(), t)));
+    Some((vars, bucket))
+}
+
+/// The enterprise S3 leg end to end on a real store: the HA lease and the
+/// continuous archive both live in the bucket; the leader dies, the
+/// standby takes the lease over and archives its own timeline, and `pitr`
+/// restores the newest state from the bucket.
+#[test]
+fn real_s3_ha_failover_then_pitr_from_the_bucket() {
+    let Some((env, bucket)) = real_s3_env() else {
+        eprintln!("skipped: AIKOQL_TEST_S3_ENDPOINT unset");
+        return;
+    };
+    let prefix = format!(
+        "it-e2e-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let (lease, archive) = (
+        format!("s3://{bucket}/{prefix}/lease.json"),
+        format!("s3://{bucket}/{prefix}/archive"),
+    );
+    let (adir, bdir) = (tmp("s3e2e-a"), tmp("s3e2e-b"));
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let node = |n: &str, repl: &str| {
+        let mut args = ha_args(Path::new(&lease), n, repl);
+        args.extend(["--archive", &archive, "--archive-log-ms", "200"].map(String::from));
+        args
+    };
+    let mut a = Mcp::spawn_env(&adir, &strs(&node("a", &ra)), false, &env);
+    a.init();
+    let mut koids: Vec<String> = (0..10).map(|i| a.remember(i)).collect();
+    let mut b = Mcp::spawn_env(&bdir, &strs(&node("b", &rb)), true, &env);
+    let blog = b.log.take().unwrap();
+    wait_line(&blog, "standby caught up");
+    drop(a); // a crash
+    wait_line(&blog, "won the lease");
+    wait_line(&blog, "aikoql-mcp ready");
+    b.init();
+    koids.push(b.remember(10));
+    for (i, koid) in koids.iter().enumerate() {
+        let got = b.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
+    // B archives its own timeline (term 2); wait until its last write is up
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut quiet_since = std::time::Instant::now();
+    let mut uploaded = false;
+    while !(uploaded && quiet_since.elapsed() >= Duration::from_secs(1)) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "B's archive never settled"
+        );
+        if let Ok(line) = blog.recv_timeout(Duration::from_millis(100)) {
+            if line.contains("archive: log up to seq") {
+                (uploaded, quiet_since) = (true, std::time::Instant::now());
+            }
+        }
+    }
+    drop(b);
+
+    let out = tmp("s3e2e-restored");
+    let restored = Command::new(bin())
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .arg("pitr")
+        .args(["--archive", &archive, "--to", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&restored.stderr);
+    assert!(restored.status.success(), "pitr failed: {said}");
+    assert!(
+        said.contains("(term 2)"),
+        "restored from the wrong timeline: {said}"
+    );
+    let mut m = Mcp::start(&out, &[]);
+    for (i, koid) in koids.iter().enumerate() {
+        let got = m.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
+}
