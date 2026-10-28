@@ -1,0 +1,67 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0433]: cannot find type `K8sLease` in this scope
+   --> crates/services/api/mcp/src/ha.rs:901:21
+    |
+901 |         let store = K8sLease::new(
+    |                     ^^^^^^^^ use of undeclared type `K8sLease`
+
+error[E0425]: cannot find function `parse_k8s_url` in this scope
+   --> crates/services/api/mcp/src/ha.rs:921:13
+    |
+305 | pub(crate) fn parse_s3_url(url: &str) -> Option<(String, String)> {
+    | ----------------------------------------------------------------- similarly named function `parse_s3_url` defined here
+...
+921 |             parse_k8s_url("k8s://aikoql/primary"),
+    |             ^^^^^^^^^^^^^
+    |
+help: a function with a similar name exists
+    |
+921 -             parse_k8s_url("k8s://aikoql/primary"),
+921 +             parse_s3_url("k8s://aikoql/primary"),
+    |
+
+error[E0425]: cannot find function `parse_k8s_url` in this scope
+   --> crates/services/api/mcp/src/ha.rs:924:20
+    |
+305 | pub(crate) fn parse_s3_url(url: &str) -> Option<(String, String)> {
+    | ----------------------------------------------------------------- similarly named function `parse_s3_url` defined here
+...
+924 |         assert_eq!(parse_k8s_url("k8s://primary"), None);
+    |                    ^^^^^^^^^^^^^
+    |
+help: a function with a similar name exists
+    |
+924 -         assert_eq!(parse_k8s_url("k8s://primary"), None);
+924 +         assert_eq!(parse_s3_url("k8s://primary"), None);
+    |
+
+error[E0425]: cannot find function `parse_k8s_url` in this scope
+   --> crates/services/api/mcp/src/ha.rs:925:20
+    |
+305 | pub(crate) fn parse_s3_url(url: &str) -> Option<(String, String)> {
+    | ----------------------------------------------------------------- similarly named function `parse_s3_url` defined here
+...
+925 |         assert_eq!(parse_k8s_url("s3://b/k"), None);
+    |                    ^^^^^^^^^^^^^
+    |
+help: a function with a similar name exists
+    |
+925 -         assert_eq!(parse_k8s_url("s3://b/k"), None);
+925 +         assert_eq!(parse_s3_url("s3://b/k"), None);
+    |
+
+warning: variable does not need to be mutable
+   --> crates/services/api/mcp/src/ha.rs:865:17
+    |
+865 |             let mut store = |s: &mut FakeState, body: Vec<u8>| {
+    |                 ----^^^^^
+    |                 |
+    |                 help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 4 previous errors; 1 warning emitted
+EXIT=101

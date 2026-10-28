@@ -747,94 +747,181 @@ mod tests {
         paths: Vec<String>,
     }
 
+    type Shared = Arc<std::sync::Mutex<FakeState>>;
+    type Headers = std::collections::HashMap<String, String>;
+
+    /// A one-request-per-connection HTTP/1.1 server: `handle` gets
+    /// (state, method, path, headers, body) and answers (status line,
+    /// extra headers, body). Every request's path and authorization land
+    /// in the state.
+    fn fake_http(
+        handle: impl Fn(&mut FakeState, &str, &str, &Headers, Vec<u8>) -> (&'static str, String, Vec<u8>)
+            + Send
+            + 'static,
+    ) -> (String, Shared) {
+        use std::io::{BufRead, BufReader, Read};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let state: Shared = Arc::default();
+        let st = state.clone();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let mut conn = conn.unwrap();
+                let mut r = BufReader::new(conn.try_clone().unwrap());
+                let mut line = String::new();
+                r.read_line(&mut line).unwrap();
+                let mut parts = line.split_whitespace();
+                let (method, path) = (
+                    parts.next().unwrap().to_string(),
+                    parts.next().unwrap().to_string(),
+                );
+                let mut headers = Headers::new();
+                loop {
+                    let mut h = String::new();
+                    r.read_line(&mut h).unwrap();
+                    let h = h.trim_end();
+                    if h.is_empty() {
+                        break;
+                    }
+                    let (k, v) = h.split_once(':').unwrap();
+                    headers.insert(k.to_ascii_lowercase(), v.trim().to_string());
+                }
+                let len: usize = headers
+                    .get("content-length")
+                    .map_or(0, |v| v.parse().unwrap());
+                let mut body = vec![0u8; len];
+                r.read_exact(&mut body).unwrap();
+                let mut s = st.lock().unwrap();
+                s.auth
+                    .push(headers.get("authorization").cloned().unwrap_or_default());
+                if !s.paths.contains(&path) {
+                    s.paths.push(path.clone());
+                }
+                let (status, extra, out) = handle(&mut s, &method, &path, &headers, body);
+                drop(s);
+                let head = format!(
+                    "HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    out.len()
+                );
+                let _ = conn.write_all(head.as_bytes());
+                let _ = conn.write_all(&out);
+            }
+        });
+        (endpoint, state)
+    }
+
     /// Just enough S3: GET / PUT on one object, `If-None-Match: *` and
     /// `If-Match` → 412 when they fail, quoted ETags.
     struct FakeS3 {
         endpoint: String,
-        state: Arc<std::sync::Mutex<FakeState>>,
+        state: Shared,
     }
 
     impl FakeS3 {
         fn start() -> Self {
-            use std::io::{BufRead, BufReader, Read};
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let endpoint = format!("http://{}", listener.local_addr().unwrap());
-            let state = Arc::new(std::sync::Mutex::new(FakeState::default()));
-            let st = state.clone();
-            std::thread::spawn(move || {
-                for conn in listener.incoming() {
-                    let mut conn = conn.unwrap();
-                    let mut r = BufReader::new(conn.try_clone().unwrap());
-                    let mut line = String::new();
-                    r.read_line(&mut line).unwrap();
-                    let mut parts = line.split_whitespace();
-                    let (method, path) = (
-                        parts.next().unwrap().to_string(),
-                        parts.next().unwrap().to_string(),
-                    );
-                    let mut headers = std::collections::HashMap::new();
-                    loop {
-                        let mut h = String::new();
-                        r.read_line(&mut h).unwrap();
-                        let h = h.trim_end();
-                        if h.is_empty() {
-                            break;
-                        }
-                        let (k, v) = h.split_once(':').unwrap();
-                        headers.insert(k.to_ascii_lowercase(), v.trim().to_string());
-                    }
-                    let len: usize = headers
-                        .get("content-length")
-                        .map_or(0, |v| v.parse().unwrap());
-                    let mut body = vec![0u8; len];
-                    r.read_exact(&mut body).unwrap();
-                    let mut s = st.lock().unwrap();
-                    s.auth
-                        .push(headers.get("authorization").cloned().unwrap_or_default());
-                    if !s.paths.contains(&path) {
-                        s.paths.push(path);
-                    }
-                    let (status, etag, out) = match method.as_str() {
-                        "GET" => match &s.object {
-                            Some((b, e)) => ("200 OK", Some(e.clone()), b.clone()),
-                            None => (
-                                "404 Not Found",
-                                None,
-                                b"<Error><Code>NoSuchKey</Code></Error>".to_vec(),
-                            ),
-                        },
-                        _ => {
-                            let current = s.object.as_ref().map(|(_, e)| e.clone());
-                            let ok = match (headers.get("if-none-match"), headers.get("if-match")) {
-                                (Some(_), _) => current.is_none(),
-                                (_, Some(m)) => current.as_deref() == Some(m.as_str()),
-                                _ => true,
-                            };
-                            if ok {
-                                s.next += 1;
-                                let e = format!("\"v{}\"", s.next);
-                                s.object = Some((body, e.clone()));
-                                ("200 OK", Some(e), Vec::new())
-                            } else {
-                                (
-                                    "412 Precondition Failed",
-                                    None,
-                                    b"<Error><Code>PreconditionFailed</Code></Error>".to_vec(),
-                                )
-                            }
-                        }
+            let (endpoint, state) = fake_http(|s, method, _, headers, body| match method {
+                "GET" => match &s.object {
+                    Some((b, e)) => ("200 OK", format!("ETag: {e}\r\n"), b.clone()),
+                    None => (
+                        "404 Not Found",
+                        String::new(),
+                        b"<Error><Code>NoSuchKey</Code></Error>".to_vec(),
+                    ),
+                },
+                _ => {
+                    let current = s.object.as_ref().map(|(_, e)| e.clone());
+                    let ok = match (headers.get("if-none-match"), headers.get("if-match")) {
+                        (Some(_), _) => current.is_none(),
+                        (_, Some(m)) => current.as_deref() == Some(m.as_str()),
+                        _ => true,
                     };
-                    drop(s);
-                    let etag = etag.map(|e| format!("ETag: {e}\r\n")).unwrap_or_default();
-                    let head = format!(
-                        "HTTP/1.1 {status}\r\n{etag}Content-Length: {}\r\nConnection: close\r\n\r\n",
-                        out.len()
-                    );
-                    let _ = conn.write_all(head.as_bytes());
-                    let _ = conn.write_all(&out);
+                    if ok {
+                        s.next += 1;
+                        let e = format!("\"v{}\"", s.next);
+                        s.object = Some((body, e.clone()));
+                        ("200 OK", format!("ETag: {e}\r\n"), Vec::new())
+                    } else {
+                        (
+                            "412 Precondition Failed",
+                            String::new(),
+                            b"<Error><Code>PreconditionFailed</Code></Error>".to_vec(),
+                        )
+                    }
                 }
             });
             FakeS3 { endpoint, state }
         }
+    }
+
+    const LEASES: &str = "/apis/coordination.k8s.io/v1/namespaces/aikoql/leases";
+
+    /// Just enough of the Kubernetes API for one Lease: POST creates (409
+    /// if it exists), PUT replaces iff `metadata.resourceVersion` matches
+    /// (409 otherwise), GET reads (404 if absent).
+    fn fake_k8s() -> (String, Shared) {
+        fake_http(|s, method, path, _, body| {
+            let named = format!("{LEASES}/primary");
+            let current = s.object.as_ref().map(|(_, rv)| rv.clone());
+            let mut store = |s: &mut FakeState, body: Vec<u8>| {
+                s.next += 1;
+                let rv = s.next.to_string();
+                let mut obj: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                obj["metadata"]["resourceVersion"] = serde_json::json!(rv);
+                let out = serde_json::to_vec(&obj).unwrap();
+                s.object = Some((out.clone(), rv));
+                out
+            };
+            match (method, path) {
+                ("GET", p) if p == named => match &s.object {
+                    Some((b, _)) => ("200 OK", String::new(), b.clone()),
+                    None => ("404 Not Found", String::new(), b"{}".to_vec()),
+                },
+                ("POST", LEASES) if current.is_none() => {
+                    ("201 Created", String::new(), store(s, body))
+                }
+                ("POST", LEASES) => ("409 Conflict", String::new(), b"{}".to_vec()),
+                ("PUT", p) if p == named => {
+                    let sent: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    if sent["metadata"]["resourceVersion"].as_str() == current.as_deref() {
+                        ("200 OK", String::new(), store(s, body))
+                    } else {
+                        ("409 Conflict", String::new(), b"{}".to_vec())
+                    }
+                }
+                _ => ("400 Bad Request", String::new(), b"{}".to_vec()),
+            }
+        })
+    }
+
+    /// R5b-1 — the Kubernetes Lease store: the same CAS contract on
+    /// resourceVersion, bearer-authenticated, holder visible to kubectl.
+    #[test]
+    fn a_k8s_lease_is_a_compare_and_swap() {
+        let (endpoint, state) = fake_k8s();
+        let store = K8sLease::new(
+            endpoint,
+            "tok".into(),
+            "aikoql".into(),
+            "primary".into(),
+            ureq::AgentBuilder::new()
+                .timeout(Duration::from_secs(5))
+                .build(),
+        );
+        cas_contract(&store);
+        let s = state.lock().unwrap();
+        assert!(s.auth.iter().all(|a| a == "Bearer tok"), "{:?}", s.auth);
+        let obj: serde_json::Value = serde_json::from_slice(&s.object.as_ref().unwrap().0).unwrap();
+        assert_eq!(obj["kind"], "Lease");
+        assert_eq!(obj["spec"]["holderIdentity"], "a");
+    }
+
+    #[test]
+    fn k8s_lease_urls_parse() {
+        assert_eq!(
+            parse_k8s_url("k8s://aikoql/primary"),
+            Some(("aikoql".to_string(), "primary".to_string()))
+        );
+        assert_eq!(parse_k8s_url("k8s://primary"), None);
+        assert_eq!(parse_k8s_url("s3://b/k"), None);
     }
 }
