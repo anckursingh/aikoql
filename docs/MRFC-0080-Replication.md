@@ -45,7 +45,7 @@ an exact copy, which the verifiable-knowledge claim requires.
 | `NOT_LEADER` + leader hint | R4d ✅ |
 | automatic failover: lease agent (file + S3), self-fencing, in-process promotion | R5a ✅ |
 | k8s `Lease` backend, SDKs follow leader hints | R5b ✅ (Java SDK pending) |
-| standby serving reads (a read-only kernel over a replicating db) | later |
+| standby serving reads: read replicas (`serve --follow`) | ✅ (HA standbys: later) |
 | split-brain certs: partition, kill mid-write, rejected store | R5c ✅ |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 ✅ |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
@@ -692,6 +692,54 @@ R6 limits:
 - Restoring to a seq in an older timeline after a newer one began
   returns that older history, including any tail the old leader wrote
   after it was deposed (never acked under `--replicate-sync-ms`).
+
+## Standby reads — read replicas ✅
+
+`serve --follow LEADER_REPL_ADDR [--replicate-tls-ca CA.pem] DIR` (token:
+`AIKOQL_REPLICATION_TOKEN` or an admin `--tcp-token`) serves MCP reads
+from a directory it keeps replicating into; writes answer `NOT_LEADER`
+with the leader's client address.
+
+- **Kernel** (`Kernel::open_standby`): opens without writing a row — no
+  type-index backfill, job recovery reads without marking, the catalog
+  is checked (never bootstrapped), index declarations load without
+  recording state, subscriptions are in-memory only.
+- **`Kernel::catch_up`** (every 100 ms): reload what open caches (journal
+  head, auth, schemas), **advance the HLC** to the caught-up commit, and
+  broadcast the new journal events once, so the index maintainer follows
+  as if they were local commits.
+- **Storage**: the replica's store is fenced before the kernel opens, so
+  any client write — or a stray open-time one — fails `NOT_LEADER`,
+  while `apply_replicated` (now on `StorageAdminApi`) keeps applying.
+  The fence reason is replaceable, so the hint follows the leader.
+- **Re-bootstrap**: a snapshot cannot be swapped under a live kernel. The
+  replica records it in `<dir>.rejoin.json` and exits 75; the restart
+  finishes the swap (`finish_rebootstrap`) before opening.
+
+Found on the way: reads snapshot at the kernel's clock (`hlc.current`),
+which nothing advanced on a replica — `get` and type scans (which read
+heads) converged, text search saw nothing newer than the replica's open.
+`catch_up` now observes the head's commit timestamp
+(RED `standby-snapshot-clock`).
+
+Consistency: eventual, bounded by apply lag + the 100 ms catch-up period
+(no read-your-writes across leader → replica).
+
+Tests: `kernel/tests/standby.rs` (open/subscribe/catch_up write nothing;
+catch_up advances head, clock and broadcasts once); `replication_failover.rs`
+— a replica serves `get`, `aikoql` and `find_similar` that converge on
+the leader's writes, and refuses a write with `NOT_LEADER` + hint. RED:
+`standby-kernel`, `standby-reads-e2e`, `standby-snapshot-clock`.
+
+Limits:
+- HA standbys (`--ha-lease`) still serve nothing before promotion; the
+  in-process switch from a standby kernel to a leader kernel is open.
+- An index declared on the leader reaches a replica at its restart
+  (`catch_up` does not reload declarations — it would drop the indexes
+  the maintainer fills).
+- An encrypted replica needs an initialized directory (field encryption
+  writes its crypto-metadata row on first open, which the fence refuses).
+- A replica cannot itself serve a replication stream (no cascading).
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
