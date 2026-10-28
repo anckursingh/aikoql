@@ -1462,12 +1462,9 @@ mod tests {
         wait_for(|| standby.last_seq() == l.engine.db().last_seq());
         assert_eq!(standby.scan(b"").unwrap(), l.engine.db().scan(b"").unwrap());
 
-        // the leader released what the standby acked
-        let rlog = std::fs::read_dir(l.dir.join("rlog")).unwrap().count();
-        assert!(
-            rlog <= 1,
-            "acked archive files were not released ({rlog} left)"
-        );
+        // the leader released what the standby acked — on its next loop pass
+        // after the ack lands, which can trail the standby's apply
+        wait_for(|| std::fs::read_dir(l.dir.join("rlog")).unwrap().count() <= 1);
 
         stop.store(true, Ordering::SeqCst);
         h.join().unwrap().unwrap();
