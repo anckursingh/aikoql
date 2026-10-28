@@ -39,7 +39,8 @@ an exact copy, which the verifiable-knowledge claim requires.
 | transport + manual failover | R3a ✅ |
 | failover time: promotion rebuilt every index from the whole journal | R3b ✅ |
 | TLS for cross-host links; lag metrics endpoint | R3c |
-| terms + fencing in the data path, semi-sync ack (RPO = 0), diverged-tail rejoin, `NOT_LEADER` | R4 |
+| terms + fencing in the data path | R4a ✅ |
+| semi-sync ack (RPO = 0), diverged-tail rejoin, `NOT_LEADER` | R4b–d |
 | automatic failover: lease agent (S3 first, then k8s), self-fencing, in-process promotion, client leader discovery | R5 (designed below) |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
@@ -176,13 +177,45 @@ names its cause.
    standby (R1b) before it rejoins — never restart it as a leader.
 
 R3 limits, carried forward:
-- No fencing: a partitioned old leader can still take writes (R4).
+- No fencing: a partitioned old leader can still take writes (R4a
+  narrows this — see below).
 - Async only: writes acked in the last moments before a crash may not
   have shipped (RPO > 0 until R4's semi-sync).
 - Checkpoints ship whole each time their water moves; incremental by
   file once indexes are large (shortcut comment in `send_checkpoint`).
 - Release follows connected standbys only: a standby away longer than
   the retained log re-bootstraps.
+
+## R4a — terms and write fencing ✅
+
+- Each node keeps `<dir>/REPL-TERM` = `"<term> <role>"`, role ∈
+  `leader | standby | fenced`; no file = term 0, leader. Written tmp →
+  fsync → rename → dir fsync: a lost write never unfences a node.
+- Handshake: the hello carries the standby's term, `{"ok":true,"term"}`
+  the leader's. The standby refuses a leader whose term is older than
+  its own and adopts (persists) a newer one as `standby`.
+- A leader that meets a newer term from a standby persists `fenced`,
+  calls `StorageAdminApi::fence` (`Db::fence` → every client write fails
+  with `stale: not leader: …`; replicated frames still apply) and
+  refuses the connection. A fenced node serves no stream.
+- `serve` on a `standby` directory is its promotion: term + 1, `leader`.
+  `serve` on a `fenced` directory starts fenced — reads only — until the
+  node rejoins with `follow` (which makes it a `standby` again).
+
+Tests: `replication.rs` unit matrix (refuse + fence, adopt) and
+`replication_failover.rs` (promotion writes `1 leader`; a fenced node
+refuses writes after a restart). RED: `r4a-term-fencing{,-e2e}`.
+
+R4a limits:
+- A deposed leader is fenced only when a newer-term node **reaches** it.
+  A partitioned old leader nobody connects to keeps taking writes until
+  the lease (R5a) self-fences it — manual promotion still needs the
+  runbook's step 1.
+- `Kernel::open` on a fenced directory still writes its open-time
+  records before the fence goes up; they are part of the diverged tail
+  R4c truncates.
+- `follow` on a directory that once led does not yet detect a diverged
+  tail — re-bootstrap it (R1b) until R4c.
 
 ## R5 — automatic failover (design, accepted; builds on R4)
 
