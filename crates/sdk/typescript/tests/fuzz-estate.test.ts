@@ -176,7 +176,8 @@ test("the envelope property", async () => {
         async (addr) => {
           const c = await Client.dial(addr);
           try {
-            assert.deepEqual(await c.callTool("probe"), env);
+            // what JSON can carry: jsonValue() may yield -0, which encodes as 0
+            assert.deepEqual(await c.callTool("probe"), JSON.parse(JSON.stringify(env)));
           } finally {
             await c.close().catch(() => {});
           }
