@@ -326,6 +326,13 @@ fn tls007_shutdown_drains_an_open_tls_connection() {
     let _ = std::fs::remove_dir_all(&db);
 }
 
+/// A 200 status line (the server answers HTTP/1.0).
+fn ok(resp: &str) -> bool {
+    resp.lines()
+        .next()
+        .is_some_and(|l| l.starts_with("HTTP/1.") && l.contains(" 200 "))
+}
+
 /// One HTTP/1.1 request over TLS; the whole response.
 fn https(port: u16, req: &str) -> String {
     let mut s = tls(port);
@@ -364,10 +371,7 @@ fn tls008_https_surface_on_any_interface() {
         port,
         "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
     );
-    assert!(
-        health.starts_with("HTTP/1.1 200"),
-        "GET /health over HTTPS: {health:?}"
-    );
+    assert!(ok(&health), "GET /health over HTTPS: {health:?}");
     let body = r#"{"username":"admin","password":"tls-pw"}"#;
     let login = https(
         port,
@@ -378,7 +382,7 @@ fn tls008_https_surface_on_any_interface() {
         ),
     );
     assert!(
-        login.starts_with("HTTP/1.1 200") && login.contains("\"token\""),
+        ok(&login) && login.contains("\"token\""),
         "login over HTTPS: {login:?}"
     );
     let _ = std::fs::remove_dir_all(&db);

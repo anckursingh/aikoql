@@ -258,8 +258,27 @@ fn main() {
         eprintln!("{msg}");
         std::process::exit(2);
     }
+    // TLS on the client listeners and the HTTP surface (--tls-cert/--tls-key)
+    let client_tls = match (&cfg.tls_cert, &cfg.tls_key) {
+        (Some(c), Some(k)) => {
+            match tls::read(c).and_then(|c| tls::read(k).and_then(|k| tls::server_config(&c, &k))) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    eprintln!("--tls-cert/--tls-key: {e}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        (None, None) => None,
+        _ => {
+            eprintln!(
+                "--tls-cert and --tls-key go together (or AIKOQL_TLS_CERT and AIKOQL_TLS_KEY)"
+            );
+            std::process::exit(2);
+        }
+    };
     let metrics_addr = match metrics_addr {
-        Some(a) => match validate_http_listen(&a, cfg.allow_remote_http) {
+        Some(a) => match validate_http_listen(&a, cfg.allow_remote_http, client_tls.is_some()) {
             Ok(v) => Some(v),
             Err(e) => {
                 eprintln!("{e}");
@@ -290,25 +309,6 @@ fn main() {
         (None, None) => None,
         _ => {
             eprintln!("--replicate-tls-cert and --replicate-tls-key go together");
-            std::process::exit(2);
-        }
-    };
-    // TLS on the client listeners and the HTTP surface (--tls-cert/--tls-key)
-    let client_tls = match (&cfg.tls_cert, &cfg.tls_key) {
-        (Some(c), Some(k)) => {
-            match tls::read(c).and_then(|c| tls::read(k).and_then(|k| tls::server_config(&c, &k))) {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    eprintln!("--tls-cert/--tls-key: {e}");
-                    std::process::exit(2);
-                }
-            }
-        }
-        (None, None) => None,
-        _ => {
-            eprintln!(
-                "--tls-cert and --tls-key go together (or AIKOQL_TLS_CERT and AIKOQL_TLS_KEY)"
-            );
             std::process::exit(2);
         }
     };
@@ -703,6 +703,7 @@ fn main() {
             rest_rate_limit.clone(),
             http_auth.clone(),
             admin.clone(),
+            client_tls.clone(),
         );
     }
 
@@ -1086,7 +1087,7 @@ fn validate_listen(addr: &str) -> Result<String, String> {
 /// API — loopback-only unless allow_remote_http is armed (same fail-closed
 /// reasoning as validate_listen; arming itself is gated on credentials by
 /// remote_http_requires_auth).
-fn validate_http_listen(addr: &str, allow_remote: bool) -> Result<String, String> {
+fn validate_http_listen(addr: &str, allow_remote: bool, tls: bool) -> Result<String, String> {
     let expanded = match addr.rsplit_once(':') {
         Some(("", port)) => format!("127.0.0.1:{port}"),
         _ => addr.to_string(),
@@ -1100,11 +1101,22 @@ fn validate_http_listen(addr: &str, allow_remote: bool) -> Result<String, String
             "--metrics-addr {expanded} did not resolve to any address"
         ));
     }
-    if !allow_remote && !resolved.iter().all(|a| a.ip().is_loopback()) {
+    if resolved.iter().all(|a| a.ip().is_loopback()) {
+        return Ok(expanded);
+    }
+    if !allow_remote {
         return Err(format!(
             "--metrics-addr {expanded} would serve the HTTP surface (login + knowledge API) \
              on a non-loopback interface; bind 127.0.0.1 (or ::1), or set \
-             allow_remote_http = true together with [auth] credentials"
+             allow_remote_http = true together with [auth] credentials and --tls-cert/--tls-key"
+        ));
+    }
+    // logins and session tokens must not cross the network in plaintext
+    if !tls {
+        return Err(format!(
+            "--metrics-addr {expanded} would serve logins and session tokens over plaintext \
+             HTTP on a non-loopback interface; add --tls-cert/--tls-key (or AIKOQL_TLS_CERT/_KEY) \
+             to serve HTTPS, or bind 127.0.0.1"
         ));
     }
     Ok(expanded)

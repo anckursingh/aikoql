@@ -540,11 +540,14 @@ fn auth004_remote_http_refused_without_auth() {
     assert!(crate::remote_http_requires_auth(true, false).is_err());
     assert!(crate::remote_http_requires_auth(true, true).is_ok());
     assert!(crate::remote_http_requires_auth(false, false).is_ok());
-    assert!(crate::validate_http_listen("0.0.0.0:9091", false).is_err());
-    assert!(crate::validate_http_listen("0.0.0.0:9091", true).is_ok());
-    assert!(crate::validate_http_listen("127.0.0.1:9091", false).is_ok());
-    assert!(crate::validate_http_listen(":9091", false).is_ok());
-    assert!(crate::validate_http_listen("nonsense", false).is_err());
+    assert!(crate::validate_http_listen("0.0.0.0:9091", false, false).is_err());
+    assert!(crate::validate_http_listen("0.0.0.0:9091", false, true).is_err());
+    // armed remote HTTP also needs TLS: logins must not cross in plaintext
+    assert!(crate::validate_http_listen("0.0.0.0:9091", true, false).is_err());
+    assert!(crate::validate_http_listen("0.0.0.0:9091", true, true).is_ok());
+    assert!(crate::validate_http_listen("127.0.0.1:9091", false, false).is_ok());
+    assert!(crate::validate_http_listen(":9091", false, false).is_ok());
+    assert!(crate::validate_http_listen("nonsense", false, false).is_err());
 }
 
 /// auth006 RED: graph_api executes as the CALLER's subject — a

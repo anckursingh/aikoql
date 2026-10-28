@@ -104,6 +104,7 @@ pub(crate) fn serve_metrics(
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
     auth: Arc<AuthResolver>,
     admin: Option<Arc<dyn aikoql_storage_v2::engine::StorageAdminApi>>,
+    tls: Option<Arc<rustls::ServerConfig>>,
 ) {
     let listener = match TcpListener::bind(addr) {
         Ok(l) => l,
@@ -123,8 +124,17 @@ pub(crate) fn serve_metrics(
                 let rl = rate_limit.clone();
                 let auth = auth.clone();
                 let admin = admin.clone();
-                std::thread::spawn(move || {
-                    handle_http(&mut s, &k, &sess, &db, &ont, &rl, &auth, admin.as_deref())
+                let tls = tls.clone();
+                std::thread::spawn(move || match tls {
+                    None => handle_http(&mut s, &k, &sess, &db, &ont, &rl, &auth, admin.as_deref()),
+                    Some(cfg) => {
+                        let Some(mut t) = https_accept(s, cfg) else {
+                            return;
+                        };
+                        handle_http(&mut t, &k, &sess, &db, &ont, &rl, &auth, admin.as_deref());
+                        t.conn.send_close_notify();
+                        let _ = t.flush();
+                    }
                 });
             }
             Err(e) => {
@@ -135,6 +145,27 @@ pub(crate) fn serve_metrics(
             }
         }
     }
+}
+
+/// The TLS handshake for one HTTPS connection, bounded so a silent peer
+/// cannot hold the thread; `None` (logged in debug) when it fails.
+fn https_accept(
+    s: TcpStream,
+    cfg: Arc<rustls::ServerConfig>,
+) -> Option<rustls::StreamOwned<rustls::ServerConnection, TcpStream>> {
+    let mut conn = rustls::ServerConnection::new(cfg).ok()?;
+    let mut s = s;
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    while conn.is_handshaking() {
+        if let Err(e) = conn.complete_io(&mut s) {
+            if cfg!(debug_assertions) {
+                eprintln!("https handshake: {e}");
+            }
+            return None;
+        }
+    }
+    let _ = s.set_read_timeout(None);
+    Some(rustls::StreamOwned::new(conn, s))
 }
 
 /// Build graph JSON: { nodes: [...], edges: [...] }.
@@ -861,7 +892,7 @@ pub(crate) fn explain_endpoint(query: &str, k: &Kernel) -> Result<String, String
 }
 
 pub(crate) fn handle_http(
-    stream: &mut TcpStream,
+    stream: &mut (impl Read + Write),
     k: &Kernel,
     sessions: &Mutex<HashMap<String, HttpSession>>,
     db_path: &Arc<String>,
@@ -1199,9 +1230,12 @@ pub(crate) fn spawn_metrics(
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
     auth: Arc<AuthResolver>,
     admin: Option<Arc<dyn aikoql_storage_v2::engine::StorageAdminApi>>,
+    tls: Option<Arc<rustls::ServerConfig>>,
 ) {
-    info!(addr = %addr, "metrics HTTP server started");
+    info!(addr = %addr, https = tls.is_some(), "metrics HTTP server started");
     thread::spawn(move || {
-        serve_metrics(kernel, ontology, &addr, &db_path, rate_limit, auth, admin)
+        serve_metrics(
+            kernel, ontology, &addr, &db_path, rate_limit, auth, admin, tls,
+        )
     });
 }
