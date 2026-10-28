@@ -488,6 +488,10 @@ fn main() {
         );
     }
 
+    if cfg.replicate_sync_ms.is_some() && replicate_listen.is_none() {
+        eprintln!("--replicate-sync-ms needs --replicate-listen");
+        std::process::exit(2);
+    }
     if let Some(addr) = replicate_listen {
         // MRFC-0080 R3a: the replication stream rides beside any serve mode
         // (stdio included) under the TCP gates — tokens required, loopback
@@ -527,6 +531,13 @@ fn main() {
             lock: ckpt_lock.clone(),
         };
         let repl_dir = std::path::PathBuf::from(db_path.as_str());
+        let acked = Arc::new(replication::Acked::default());
+        if let Some(ms) = cfg.replicate_sync_ms {
+            source.set_commit_gate(replication::sync_gate(
+                acked.clone(),
+                std::time::Duration::from_millis(ms),
+            ));
+        }
         thread::spawn(move || {
             replication::serve_replication(
                 listener,
@@ -535,6 +546,7 @@ fn main() {
                 Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 Some(shipped),
                 repl_dir,
+                acked,
             )
         });
         // R3b: a leader that crashes leaves no shutdown checkpoint — take

@@ -42,6 +42,7 @@ pub(crate) fn print_usage() {
         "                         AIKOQL_TCP_TOKEN_FILE in production instead; env replaces flags)\n",
         "  --metrics-addr ADDR    HTTP metrics + health endpoint (e.g., 127.0.0.1:9091)\n",
         "  --replicate-listen ADDR  Replication stream for standbys (loopback-only; admin --tcp-token)\n",
+        "  --replicate-sync-ms MS   Ack a write only once a standby holds it; fail after MS\n",
         "  --embedding-provider P  Embedding provider: \"candle\" (default), \"http\", or \"ollama\"\n",
         "  --embedding-base-url U  OpenAI-compatible base URL (default: http://localhost:11434)\n",
         "  --embedding-model M     Model name (default: nomic-embed-text)\n",

@@ -16,9 +16,12 @@
 //! hello carries the standby's term, the `ok` the leader's. A standby
 //! never takes frames from an older term; a leader that meets a newer one
 //! was deposed — it persists `fenced` and refuses every client write.
+//!
+//! R4b — `sync_gate`: a client write returns only once a standby has
+//! acked (applied + fsynced) its seq, or fails after the timeout.
 
 use crate::session::TcpAuthTable;
-use aikoql_storage_v2::db::Db;
+use aikoql_storage_v2::db::{CommitGate, Db};
 use aikoql_storage_v2::engine::StorageAdminApi;
 use aikoql_storage_v2::wal::{decode_frame, encode_frame, FRAME_HEADER_LEN};
 use std::collections::HashMap;
@@ -26,7 +29,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
@@ -113,6 +116,45 @@ pub(crate) fn claim_leadership(dir: &Path) -> std::io::Result<(u64, Role)> {
     }
 }
 
+/// R4b — the highest seq any standby has acked.
+#[derive(Default)]
+pub(crate) struct Acked {
+    seq: Mutex<u64>,
+    cv: Condvar,
+}
+
+impl Acked {
+    fn record(&self, seq: u64) {
+        // justified: Mutex poison is unrecoverable
+        let mut acked = self.seq.lock().unwrap();
+        if seq > *acked {
+            *acked = seq;
+            self.cv.notify_all();
+        }
+    }
+}
+
+/// R4b — the commit gate: wait until a standby acked `seq`, at most
+/// `timeout`.
+pub(crate) fn sync_gate(acked: Arc<Acked>, timeout: Duration) -> CommitGate {
+    Box::new(move |seq| {
+        // justified: Mutex poison is unrecoverable
+        let guard = acked.seq.lock().unwrap();
+        let (guard, _) = acked
+            .cv
+            .wait_timeout_while(guard, timeout, |a| *a < seq)
+            .unwrap();
+        if *guard >= seq {
+            Ok(())
+        } else {
+            Err(format!(
+                "no standby acked seq {seq} within {} ms",
+                timeout.as_millis()
+            ))
+        }
+    })
+}
+
 /// MRFC-0080 R3b — the leader's index checkpoint directory, shipped to
 /// standbys whenever its water moves. `lock` is held by every checkpoint
 /// writer: the sender never reads a directory mid-swap.
@@ -132,6 +174,7 @@ pub(crate) fn serve_replication(
     stop: Arc<AtomicBool>,
     checkpoint: Option<ShippedCheckpoint>,
     dir: PathBuf,
+    acked: Arc<Acked>,
 ) {
     if let Err(e) = listener.set_nonblocking(true) {
         warn!("replication listener: {e}");
@@ -143,13 +186,14 @@ pub(crate) fn serve_replication(
         match listener.accept() {
             Ok((stream, _)) => {
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
-                let (source, auth, acks, stop, ckpt, dir) = (
+                let (source, auth, acks, stop, ckpt, dir, acked) = (
                     source.clone(),
                     auth.clone(),
                     acks.clone(),
                     stop.clone(),
                     checkpoint.clone(),
                     dir.clone(),
+                    acked.clone(),
                 );
                 std::thread::spawn(move || {
                     let served = serve_standby(
@@ -161,6 +205,7 @@ pub(crate) fn serve_replication(
                         &stop,
                         ckpt.as_ref(),
                         &dir,
+                        acked,
                     );
                     if let Err(e) = served {
                         warn!("replication standby {id}: {e}");
@@ -187,6 +232,7 @@ fn serve_standby(
     stop: &AtomicBool,
     checkpoint: Option<&ShippedCheckpoint>,
     dir: &Path,
+    acked: Arc<Acked>,
 ) -> std::io::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(LEADER_SILENCE))?;
@@ -243,8 +289,10 @@ fn serve_standby(
     std::thread::spawn(move || {
         let mut b = [0u8; 8];
         while ack_reader.read_exact(&mut b).is_ok() {
+            let seq = u64::from_le_bytes(b);
             // justified: Mutex poison is unrecoverable
-            ack_map.lock().unwrap().insert(id, u64::from_le_bytes(b));
+            ack_map.lock().unwrap().insert(id, seq);
+            acked.record(seq);
         }
     });
 

@@ -376,6 +376,10 @@ impl CompactorSignal {
     }
 }
 
+/// MRFC-0080 R4b — runs after each client write commits, outside every
+/// lock; an error fails the write (it is committed locally, not acked).
+pub type CommitGate = Box<dyn Fn(u64) -> Result<(), String> + Send + Sync>;
+
 pub struct Db {
     pub(crate) config: Config,
     /// Held forever — the OS lock (dropping the file releases it).
@@ -437,6 +441,8 @@ pub struct Db {
     /// MRFC-0080 R4 — set once a newer replication term deposed this
     /// node: client writes are refused, replicated frames still apply.
     fenced: std::sync::OnceLock<String>,
+    /// MRFC-0080 R4b — the synchronous-replication wait, when armed.
+    commit_gate: std::sync::OnceLock<CommitGate>,
 }
 
 /// P4-M5 — bounded, sampled per-request read trace. `record` assigns the
@@ -941,6 +947,7 @@ impl Db {
             control: ControlStats::default(),
             wal_fail_next: AtomicBool::new(wal_fail_next_armed),
             fenced: std::sync::OnceLock::new(),
+            commit_gate: std::sync::OnceLock::new(),
         })
     }
 
@@ -1044,7 +1051,16 @@ impl Db {
     /// order (replay enforces strictly increasing seqs) and apply-before-
     /// ack visibility. Lock order is state → wal, never the reverse.
     pub fn write(&self, ops: &[Op]) -> Result<u64, FormatError> {
-        self.write_at(ops, None)
+        let seq = self.write_at(ops, None)?;
+        if let Some(gate) = self.commit_gate.get() {
+            gate(seq).map_err(|e| FormatError::Io(format!("not replicated: {e}")))?;
+        }
+        Ok(seq)
+    }
+
+    /// MRFC-0080 R4b — arm the synchronous-replication wait (once).
+    pub fn set_commit_gate(&self, gate: CommitGate) {
+        let _ = self.commit_gate.set(gate);
     }
 
     /// MRFC-0080 R1 — apply one leader frame under the leader's seq.

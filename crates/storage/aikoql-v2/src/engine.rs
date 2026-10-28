@@ -48,6 +48,8 @@ pub trait StorageAdminApi: Send + Sync {
     fn last_seq(&self) -> u64;
     /// MRFC-0080 R4 — refuse client writes from now on.
     fn fence(&self, why: String);
+    /// MRFC-0080 R4b — arm the synchronous-replication wait.
+    fn set_commit_gate(&self, gate: crate::db::CommitGate);
 }
 
 /// AIKOQL v2 engine: WAL → memtable → immutable segments, served
@@ -124,6 +126,10 @@ impl StorageAdminApi for AikoqlStorageEngineV2 {
 
     fn fence(&self, why: String) {
         self.db.fence(why)
+    }
+
+    fn set_commit_gate(&self, gate: crate::db::CommitGate) {
+        self.db.set_commit_gate(gate)
     }
 
     fn restore_from(&self, dir: &Path) -> KResult<RestoreInfo> {

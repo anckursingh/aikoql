@@ -59,6 +59,9 @@ pub(crate) struct RuntimeConfig {
     /// indexes this often and ships each checkpoint to its standbys, so a
     /// promotion replays only the journal tail since the last one.
     pub index_checkpoint_secs: u64,
+    /// MRFC-0080 R4b: with `--replicate-listen`, a client write is acked
+    /// only once a standby holds it, or fails after this many ms.
+    pub replicate_sync_ms: Option<u64>,
     /// The TOML path that took effect (for diagnostics).
     pub config_path: Option<String>,
 }
@@ -285,6 +288,7 @@ pub(crate) fn load(
         request_timeout_secs: 30,
         max_connections: 64,
         index_checkpoint_secs: 30,
+        replicate_sync_ms: None,
         config_path: None,
     };
 
@@ -556,6 +560,16 @@ pub(crate) fn load(
                     i += 2;
                 }
                 None => return Err("--index-checkpoint-secs requires a value".into()),
+            },
+            "--replicate-sync-ms" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.replicate_sync_ms =
+                        Some(v.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+                            format!("--replicate-sync-ms requires a positive number, got {v:?}")
+                        })?);
+                    i += 2;
+                }
+                None => return Err("--replicate-sync-ms requires a value".into()),
             },
             "--max-connections" => match args.get(i + 1) {
                 Some(v) => {
