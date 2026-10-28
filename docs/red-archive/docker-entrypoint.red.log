@@ -1,0 +1,2 @@
+docker-entrypoint: /Users/pukku/coding/aikoql/docker-entrypoint.sh missing
+EXIT=1
