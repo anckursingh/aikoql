@@ -269,6 +269,49 @@ fn main() {
     // MRFC-0080 R4: serving a standby promotes it to the next term (R4c:
     // before the kernel opens, so its open-time writes are the new term's);
     // a node deposed by a newer term keeps serving reads, never writes.
+    // MRFC-0080 R5a: with a lease, block as a standby of its holder until
+    // this node wins it (or resumes its own), then serve as the leader.
+    let ha_slot = cfg.ha_lease.as_ref().map(|lease| {
+        let (Some(repl), Some(node)) = (replicate_listen.as_deref(), cfg.ha_node.clone()) else {
+            eprintln!("--ha-lease needs --ha-node and --replicate-listen");
+            std::process::exit(2);
+        };
+        let repl = match validate_listen(repl) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        };
+        // the token this node presents when following: the operator's
+        // replication token, else its own first admin --tcp-token
+        let token = std::env::var("AIKOQL_REPLICATION_TOKEN").ok().or_else(|| {
+            tcp_tokens
+                .iter()
+                .find(|t| t.split(':').nth(2).is_some_and(|r| r.split(',').any(|r| r == "admin")))
+                .and_then(|t| t.split(':').next().map(str::to_string))
+        });
+        let Some(token) = token else {
+            eprintln!("--ha-lease needs an admin --tcp-token (or AIKOQL_REPLICATION_TOKEN) to follow with");
+            std::process::exit(2);
+        };
+        let ha = ha::HaConfig {
+            store: Arc::new(ha::FileLease::new(lease.into())),
+            node,
+            ttl: std::time::Duration::from_millis(cfg.ha_ttl_ms),
+            repl,
+            client: cfg.advertise.clone(),
+            token,
+            dir: std::path::PathBuf::from(&db_path),
+        };
+        match ha::lead(ha) {
+            Ok(slot) => slot,
+            Err(e) => {
+                eprintln!("ha: {e}");
+                std::process::exit(1);
+            }
+        }
+    });
     let (term, role) = match replication::claim_leadership(std::path::Path::new(&db_path)) {
         Ok(t) => t,
         Err(e) => {
@@ -284,6 +327,9 @@ fn main() {
                 std::process::exit(1);
             }
         };
+    if let (Some(slot), Some(a)) = (&ha_slot, &admin) {
+        let _ = slot.set(a.clone()); // the renewer can now fence writes
+    }
     // R4d: after the kernel created the directory (a fresh one must be
     // empty when it opens)
     if let (replication::Role::Leader, Some(addr)) = (role, cfg.advertise.as_deref()) {

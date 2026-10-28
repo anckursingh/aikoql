@@ -1,4 +1,332 @@
 //! MRFC-0080 R5a — automatic failover: one lease, one term.
+//!
+//! The lease record `{holder, term, repl, client, seq, beat}` lives in a
+//! `LeaseStore` whose only write is a compare-and-swap on a version. A
+//! node writes only while it holds the lease, and the lease term is the
+//! replication term (R4a): every node fences on it.
+//!
+//! Timing never compares clocks across nodes:
+//! - a standby takes over only after it has seen the record unchanged
+//!   for a full TTL on its own monotonic clock;
+//! - a leader fences itself once 2/3 TTL have passed since its last
+//!   successful renewal *started*.
+//!
+//! A renewal lands after it starts and is seen after it lands, so the old
+//! leader stops writing at least TTL/3 before anyone may take over — the
+//! margin that covers clock-rate drift and in-flight writes.
+
+use crate::replication::{self, Role};
+use aikoql_storage_v2::db::{Config, Db};
+use aikoql_storage_v2::engine::StorageAdminApi;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::io::{ErrorKind, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
+use tracing::{error, info, warn};
+
+/// Exit code of a self-fenced leader: its supervisor restarts it, and it
+/// comes back as a standby of whoever holds the lease.
+pub(crate) const FENCED_EXIT: i32 = 75;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Lease {
+    pub(crate) holder: String,
+    pub(crate) term: u64,
+    /// The holder's replication address — what standbys follow.
+    pub(crate) repl: String,
+    /// The holder's client address (`--advertise`) — the NOT_LEADER hint.
+    pub(crate) client: Option<String>,
+    /// The holder's head seq at its last renewal: a standby behind it may
+    /// not take over.
+    pub(crate) seq: u64,
+    /// Bumped by every renewal, so every renewal changes the version.
+    pub(crate) beat: u64,
+}
+
+#[derive(Debug)]
+pub(crate) enum LeaseError {
+    /// The version moved: someone else wrote first.
+    Conflict,
+    Other(String),
+}
+
+pub(crate) trait LeaseStore: Send + Sync {
+    /// The record and its version; `None` when there is none.
+    fn read(&self) -> Result<Option<(Lease, String)>, String>;
+    /// Write iff the current version is `expected` (`None`: iff there is
+    /// no record); returns the new version.
+    fn write(&self, lease: &Lease, expected: Option<&str>) -> Result<String, LeaseError>;
+}
+
+/// A lease in a local file — one host, or tests. The version is the
+/// content hash; the CAS runs under an OS lock on `{path}.lock`.
+pub(crate) struct FileLease {
+    path: PathBuf,
+}
+
+impl FileLease {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn lock(&self) -> std::io::Result<std::fs::File> {
+        if let Some(p) = self.path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(format!("{}.lock", self.path.display()))?;
+        f.lock()?;
+        Ok(f)
+    }
+
+    fn bytes(&self) -> std::io::Result<Option<Vec<u8>>> {
+        match std::fs::read(&self.path) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+fn version(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+impl LeaseStore for FileLease {
+    fn read(&self) -> Result<Option<(Lease, String)>, String> {
+        let _g = self.lock().map_err(|e| format!("lock the lease: {e}"))?;
+        let Some(b) = self.bytes().map_err(|e| format!("read the lease: {e}"))? else {
+            return Ok(None);
+        };
+        let lease = serde_json::from_slice(&b).map_err(|e| format!("unreadable lease: {e}"))?;
+        Ok(Some((lease, version(&b))))
+    }
+
+    fn write(&self, lease: &Lease, expected: Option<&str>) -> Result<String, LeaseError> {
+        let other = |e: std::io::Error| LeaseError::Other(format!("lease file: {e}"));
+        let _g = self.lock().map_err(other)?;
+        let current = self.bytes().map_err(other)?.map(|b| version(&b));
+        if current.as_deref() != expected {
+            return Err(LeaseError::Conflict);
+        }
+        let body = serde_json::to_vec(lease).map_err(|e| LeaseError::Other(e.to_string()))?;
+        let tmp = PathBuf::from(format!("{}.tmp", self.path.display()));
+        let mut f = std::fs::File::create(&tmp).map_err(other)?;
+        f.write_all(&body)
+            .and_then(|_| f.sync_all())
+            .map_err(other)?;
+        std::fs::rename(&tmp, &self.path).map_err(other)?;
+        Ok(version(&body))
+    }
+}
+
+pub(crate) struct HaConfig {
+    pub(crate) store: Arc<dyn LeaseStore>,
+    pub(crate) node: String,
+    pub(crate) ttl: Duration,
+    /// This node's replication address, recorded in the lease it holds.
+    pub(crate) repl: String,
+    pub(crate) client: Option<String>,
+    /// Presented to the leader when following.
+    pub(crate) token: String,
+    pub(crate) dir: PathBuf,
+}
+
+/// The renewer's late-bound fence target: the storage admin surface,
+/// set once the kernel has opened.
+pub(crate) type AdminSlot = Arc<OnceLock<Arc<dyn StorageAdminApi>>>;
+
+/// The standby phase: follow whoever holds the lease, until this node
+/// holds it. Then the directory is claimed at the lease's term, the
+/// renewer starts (before the kernel opens — a slow open must not let
+/// the lease lapse), and the caller serves as the leader.
+pub(crate) fn lead(cfg: HaConfig) -> Result<AdminSlot, String> {
+    let cfg = Arc::new(cfg);
+    let mut seen: Option<(String, Instant)> = None;
+    let mut following: Option<Follower> = None;
+    let mut behind_warned = false;
+    loop {
+        let (term, role) = replication::load_term(&cfg.dir).map_err(|e| e.to_string())?;
+        match cfg.store.read() {
+            Err(e) => warn!("ha: read the lease: {e}"),
+            Ok(None) => {
+                stop(&mut following);
+                if let Some(won) = try_win(&cfg, None, term + 1)? {
+                    return Ok(won);
+                }
+            }
+            Ok(Some((rec, ver))) => {
+                if rec.holder == cfg.node && rec.term == term && role == Role::Leader {
+                    // our own live lease from before a restart: keep it
+                    stop(&mut following);
+                    info!(term, "ha: resuming the lease this node holds");
+                    return Ok(start_renewer(cfg.clone(), rec, ver, Instant::now()));
+                }
+                if seen.as_ref().map(|(v, _)| v) != Some(&ver) {
+                    seen = Some((ver.clone(), Instant::now()));
+                }
+                let lead_addr = (rec.holder != cfg.node).then_some(&rec.repl);
+                if following.as_ref().map(|f| &f.leader) != lead_addr {
+                    stop(&mut following);
+                    following = lead_addr.map(|a| Follower::start(&cfg, a.clone()));
+                }
+                let stale = seen.as_ref().is_some_and(|(_, at)| at.elapsed() >= cfg.ttl);
+                if stale {
+                    stop(&mut following);
+                    let last = last_seq(&cfg)?;
+                    if last >= rec.seq {
+                        if let Some(won) = try_win(&cfg, Some(&ver), term.max(rec.term) + 1)? {
+                            return Ok(won);
+                        }
+                    } else if !behind_warned {
+                        behind_warned = true;
+                        warn!(
+                            last,
+                            lease_seq = rec.seq,
+                            "ha: the lease lapsed but this standby is behind its holder — not taking over"
+                        );
+                    }
+                }
+            }
+        }
+        std::thread::sleep(cfg.ttl / 5);
+    }
+}
+
+/// One CAS attempt for `term`; on a win the directory is claimed and the
+/// renewer runs.
+fn try_win(
+    cfg: &Arc<HaConfig>,
+    expected: Option<&str>,
+    term: u64,
+) -> Result<Option<AdminSlot>, String> {
+    let lease = Lease {
+        holder: cfg.node.clone(),
+        term,
+        repl: cfg.repl.clone(),
+        client: cfg.client.clone(),
+        seq: last_seq(cfg)?,
+        beat: 0,
+    };
+    let started = Instant::now();
+    match cfg.store.write(&lease, expected) {
+        Ok(ver) => {
+            replication::claim_term(&cfg.dir, term)
+                .map_err(|e| format!("claim term {term}: {e}"))?;
+            info!(term, "ha: won the lease — promoting this node");
+            Ok(Some(start_renewer(cfg.clone(), lease, ver, started)))
+        }
+        Err(LeaseError::Conflict) => Ok(None),
+        Err(LeaseError::Other(e)) => {
+            warn!("ha: write the lease: {e}");
+            Ok(None)
+        }
+    }
+}
+
+fn last_seq(cfg: &HaConfig) -> Result<u64, String> {
+    Db::open(Config::new(cfg.dir.clone()))
+        .map(|db| db.last_seq())
+        .map_err(|e| format!("open {}: {e}", cfg.dir.display()))
+}
+
+fn start_renewer(cfg: Arc<HaConfig>, lease: Lease, ver: String, last_ok: Instant) -> AdminSlot {
+    let slot: AdminSlot = Arc::new(OnceLock::new());
+    let s = slot.clone();
+    std::thread::spawn(move || renew(&cfg, lease, ver, last_ok, &s));
+    slot
+}
+
+fn renew(
+    cfg: &HaConfig,
+    mut lease: Lease,
+    mut ver: String,
+    mut last_ok: Instant,
+    slot: &AdminSlot,
+) {
+    loop {
+        std::thread::sleep(cfg.ttl / 3);
+        let started = Instant::now();
+        let next = Lease {
+            beat: lease.beat + 1,
+            seq: slot.get().map_or(lease.seq, |a| a.last_seq()),
+            ..lease.clone()
+        };
+        match cfg.store.write(&next, Some(&ver)) {
+            Ok(v) => {
+                (lease, ver, last_ok) = (next, v, started);
+            }
+            Err(LeaseError::Conflict) => fence(cfg, slot, lease.term, "the lease was taken"),
+            Err(LeaseError::Other(e)) => {
+                warn!("ha: renew the lease: {e}");
+                if last_ok.elapsed() >= cfg.ttl * 2 / 3 {
+                    fence(
+                        cfg,
+                        slot,
+                        lease.term,
+                        "the lease could not be renewed in time",
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Stop writing first, then record why, then exit for the supervisor.
+fn fence(cfg: &HaConfig, slot: &AdminSlot, term: u64, why: &str) -> ! {
+    if let Some(admin) = slot.get() {
+        admin.fence(format!("{why} (self-fenced)"));
+    }
+    if let Ok(Some((rec, _))) = cfg.store.read() {
+        if let Some(c) = rec.client.filter(|c| replication::valid_addr(c)) {
+            let _ = replication::store_leader(&cfg.dir, &c);
+        }
+    }
+    let _ = replication::store_term(&cfg.dir, term, Role::Fenced);
+    error!(
+        term,
+        "ha: {why} — fenced; exiting for the supervisor to restart this node as a standby"
+    );
+    std::process::exit(FENCED_EXIT);
+}
+
+/// `follow_loop` on a thread, stoppable.
+struct Follower {
+    leader: String,
+    stop: Arc<AtomicBool>,
+    handle: std::thread::JoinHandle<()>,
+}
+
+impl Follower {
+    fn start(cfg: &Arc<HaConfig>, leader: String) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (c, l, st) = (cfg.clone(), leader.clone(), stop.clone());
+        let handle = std::thread::spawn(move || {
+            let ckpt = PathBuf::from(format!("{}.ckpt", c.dir.display()));
+            if let Err(e) = replication::follow_loop(&c.dir, &l, &c.token, &ckpt, &st) {
+                warn!("ha: following {l}: {e}");
+            }
+        });
+        Follower {
+            leader,
+            stop,
+            handle,
+        }
+    }
+}
+
+fn stop(following: &mut Option<Follower>) {
+    if let Some(f) = following.take() {
+        f.stop.store(true, Ordering::SeqCst);
+        let _ = f.handle.join();
+    }
+}
 
 #[cfg(test)]
 mod tests {

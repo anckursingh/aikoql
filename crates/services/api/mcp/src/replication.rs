@@ -197,23 +197,60 @@ pub(crate) fn leader_hint(dir: &Path) -> String {
 pub(crate) fn claim_leadership(dir: &Path) -> std::io::Result<(u64, Role)> {
     match load_term(dir)? {
         (term, Role::Standby) => {
-            let next = term + 1;
-            let last = Db::open(Config::new(dir.to_path_buf()))
-                .map_err(|e| std::io::Error::other(e.to_string()))?
-                .last_seq();
-            let mut history = load_history(dir)?;
-            history.retain(|(t, _)| *t < next); // a crash-retried claim
-            history.push((next, last + 1));
-            store_history(dir, &history)?;
-            // the old leader's address must never be served as ours
-            match std::fs::remove_file(dir.join(LEADER_FILE)) {
-                Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
-                _ => {}
-            }
-            store_term(dir, next, Role::Leader)?;
-            Ok((next, Role::Leader))
+            claim_term(dir, term + 1)?;
+            Ok((term + 1, Role::Leader))
         }
         other => Ok(other),
+    }
+}
+
+/// Make `dir` the leader at `term` (R5a: the lease's term), starting the
+/// term right after the last frame it holds. The directory must be closed.
+pub(crate) fn claim_term(dir: &Path, term: u64) -> std::io::Result<()> {
+    let last = Db::open(Config::new(dir.to_path_buf()))
+        .map_err(|e| std::io::Error::other(e.to_string()))?
+        .last_seq();
+    let mut history = load_history(dir)?;
+    history.retain(|(t, _)| *t < term); // a crash-retried claim
+    history.push((term, last + 1));
+    store_history(dir, &history)?;
+    // the old leader's address must never be served as ours
+    match std::fs::remove_file(dir.join(LEADER_FILE)) {
+        Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    store_term(dir, term, Role::Leader)
+}
+
+/// The standby loop shared by the `follow` subcommand and the HA agent:
+/// open the db, follow `leader`, re-bootstrap when told (R4c), until
+/// `stop` (Ok) or a fatal end (Err). Shipped index checkpoints land in
+/// `ckpt`.
+pub(crate) fn follow_loop(
+    dir: &Path,
+    leader: &str,
+    token: &str,
+    ckpt: &Path,
+    stop: &AtomicBool,
+) -> Result<(), String> {
+    loop {
+        let standby = Db::open(Config::new(dir.to_path_buf()))
+            .map_err(|e| format!("open standby {}: {e}", dir.display()))?;
+        eprintln!(
+            "following {leader} into {} from seq {}",
+            dir.display(),
+            standby.last_seq()
+        );
+        match follow(leader, token, &standby, dir, Some(ckpt), stop)? {
+            Followed::Stopped => return Ok(()),
+            // a diverged tail or a released position — swap in the
+            // leader's snapshot and follow on from it
+            Followed::Rebootstrap { term, history } => {
+                drop(standby);
+                rebootstrap(dir, term, &history)?;
+                eprintln!("standby re-bootstrapped from the leader's snapshot");
+            }
+        }
     }
 }
 
@@ -739,7 +776,10 @@ pub(crate) fn follow(
             End::Fatal(e) => return Err(e),
             End::Retry(e) => {
                 warn!("replication link to {addr}: {e} — reconnecting");
-                std::thread::sleep(backoff);
+                let until = Instant::now() + backoff;
+                while Instant::now() < until && !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
                 backoff = (backoff * 2).min(LEADER_SILENCE);
             }
         }

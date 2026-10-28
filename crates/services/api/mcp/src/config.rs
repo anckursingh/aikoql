@@ -22,6 +22,12 @@ pub(crate) struct RuntimeConfig {
     /// handed to standbys — and by them to a deposed leader — as the
     /// NOT_LEADER hint. CLI-only.
     pub advertise: Option<String>,
+    /// MRFC-0080 R5a: automatic failover — the lease location
+    /// (`--ha-lease`), this node's id in it (`--ha-node`) and its TTL
+    /// (`--ha-ttl-ms`, default 10 s). CLI-only.
+    pub ha_lease: Option<String>,
+    pub ha_node: Option<String>,
+    pub ha_ttl_ms: u64,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -266,6 +272,9 @@ pub(crate) fn load(
         native_port: None,
         replicate_listen: None,
         advertise: None,
+        ha_lease: None,
+        ha_node: None,
+        ha_ttl_ms: 10_000,
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -479,6 +488,32 @@ pub(crate) fn load(
                 );
                 i += 2;
             }
+            "--ha-lease" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.ha_lease = Some(v.clone());
+                    i += 2;
+                }
+                None => return Err("--ha-lease requires a path".into()),
+            },
+            "--ha-node" => match args.get(i + 1) {
+                Some(v) if crate::replication::valid_addr(v) => {
+                    cfg.ha_node = Some(v.clone());
+                    i += 2;
+                }
+                Some(v) => return Err(format!("--ha-node requires a plain id, got {v:?}")),
+                None => return Err("--ha-node requires an id".into()),
+            },
+            "--ha-ttl-ms" => match args.get(i + 1) {
+                Some(v) => {
+                    // below ~300 ms the renew period (TTL/3) is lost in
+                    // scheduling noise and every node flaps
+                    cfg.ha_ttl_ms = v.parse().ok().filter(|n| *n >= 300).ok_or_else(|| {
+                        format!("--ha-ttl-ms requires a number >= 300, got {v:?}")
+                    })?;
+                    i += 2;
+                }
+                None => return Err("--ha-ttl-ms requires a value".into()),
+            },
             "--advertise" => match args.get(i + 1) {
                 Some(v) if crate::replication::valid_addr(v) => {
                     cfg.advertise = Some(v.clone());

@@ -44,6 +44,7 @@ pub(crate) fn print_usage() {
         "  --replicate-listen ADDR  Replication stream for standbys (loopback-only; admin --tcp-token)\n",
         "  --replicate-sync-ms MS   Ack a write only once a standby holds it; fail after MS\n",
         "  --advertise HOST:PORT    This node's client address, the NOT_LEADER hint standbys pass on\n",
+        "  --ha-lease PATH --ha-node ID [--ha-ttl-ms MS]  Automatic failover on a shared lease\n",
         "  --embedding-provider P  Embedding provider: \"candle\" (default), \"http\", or \"ollama\"\n",
         "  --embedding-base-url U  OpenAI-compatible base URL (default: http://localhost:11434)\n",
         "  --embedding-model M     Model name (default: nomic-embed-text)\n",
@@ -148,45 +149,10 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             let stop = std::sync::atomic::AtomicBool::new(false);
             // R3b: shipped index checkpoints land where `serve` resumes them
             let ckpt = std::path::PathBuf::from(format!("{dir}.ckpt"));
-            loop {
-                let standby = match aikoql_storage_v2::db::Db::open(
-                    aikoql_storage_v2::db::Config::new(dir.clone().into()),
-                ) {
-                    Ok(db) => db,
-                    Err(e) => {
-                        eprintln!("open standby {dir}: {e}");
-                        std::process::exit(1);
-                    }
-                };
-                eprintln!(
-                    "following {leader} into {dir} from seq {}",
-                    standby.last_seq()
-                );
-                let path = std::path::Path::new(&dir);
-                match crate::replication::follow(
-                    &leader,
-                    &token,
-                    &standby,
-                    path,
-                    Some(&ckpt),
-                    &stop,
-                ) {
-                    Ok(crate::replication::Followed::Stopped) => break,
-                    // R4c: a diverged tail or a released position — swap in
-                    // the leader's snapshot and follow on from it
-                    Ok(crate::replication::Followed::Rebootstrap { term, history }) => {
-                        drop(standby);
-                        if let Err(e) = crate::replication::rebootstrap(path, term, &history) {
-                            eprintln!("follow stopped: {e}");
-                            std::process::exit(1);
-                        }
-                        eprintln!("standby re-bootstrapped from the leader's snapshot");
-                    }
-                    Err(e) => {
-                        eprintln!("follow stopped: {e}");
-                        std::process::exit(1);
-                    }
-                }
+            let path = std::path::Path::new(&dir);
+            if let Err(e) = crate::replication::follow_loop(path, &leader, &token, &ckpt, &stop) {
+                eprintln!("follow stopped: {e}");
+                std::process::exit(1);
             }
             true
         }
