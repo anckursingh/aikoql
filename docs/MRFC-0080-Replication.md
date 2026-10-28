@@ -40,7 +40,8 @@ an exact copy, which the verifiable-knowledge claim requires.
 | failover time: promotion rebuilt every index from the whole journal | R3b ✅ |
 | TLS for cross-host links; lag metrics endpoint | R3c |
 | terms + fencing in the data path | R4a ✅ |
-| semi-sync ack (RPO = 0), diverged-tail rejoin, `NOT_LEADER` | R4b–d |
+| semi-sync ack (RPO = 0 for acked writes) | R4b ✅ |
+| diverged-tail rejoin, `NOT_LEADER` | R4c–d |
 | automatic failover: lease agent (S3 first, then k8s), self-fencing, in-process promotion, client leader discovery | R5 (designed below) |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
@@ -179,8 +180,8 @@ names its cause.
 R3 limits, carried forward:
 - No fencing: a partitioned old leader can still take writes (R4a
   narrows this — see below).
-- Async only: writes acked in the last moments before a crash may not
-  have shipped (RPO > 0 until R4's semi-sync).
+- Async by default: writes acked in the last moments before a crash may
+  not have shipped. `--replicate-sync-ms` (R4b) closes this.
 - Checkpoints ship whole each time their water moves; incremental by
   file once indexes are large (shortcut comment in `send_checkpoint`).
 - Release follows connected standbys only: a standby away longer than
@@ -216,6 +217,37 @@ R4a limits:
   R4c truncates.
 - `follow` on a directory that once led does not yet detect a diverged
   tail — re-bootstrap it (R1b) until R4c.
+
+## R4b — synchronous replication acks ✅
+
+- `serve --replicate-listen … --replicate-sync-ms MS`: a client write
+  returns only once a standby has acked its seq (the standby acks after
+  `apply_replicated` + fsync), or fails `not replicated` after MS.
+- Mechanism: `Db::set_commit_gate` (via `StorageAdminApi`) runs a
+  callback after each client write commits, outside the state/WAL locks;
+  replicated frames never wait. The leader's gate waits on `Acked` — the
+  highest seq any standby acked (Mutex + Condvar, fed by each standby's
+  ack thread).
+- Guarantee: **no acked write is lost to a failover onto a caught-up
+  standby (RPO = 0 for acked writes).** A write that times out is
+  committed on the leader but never acked — the client must treat it as
+  unknown; if the leader then dies it belongs to the diverged tail R4c
+  truncates.
+
+Tests: `replication.rs` (every acked write is already on the standby;
+no standby → `not replicated` after the timeout) and
+`replication_failover.rs` (`--replicate-sync-ms 300` refuses to ack with
+no standby, acks once one follows). RED: `r4b-semi-sync{,-e2e}`.
+
+R4b limits:
+- Strict, not degrading: with no standby connected every write waits the
+  full timeout and fails. Run two standbys for write availability; a
+  quorum count (`ack from N of M`) is a later option.
+- Reads are not gated: other clients may read a write before a standby
+  holds it (the same window as MySQL semi-sync / Postgres `remote_write`).
+- Throughput under sync is bounded by commit-to-ack latency per writer;
+  the 10 ms log poll in the sender is now on the write path (shortcut
+  comment in `serve_standby` — a commit notify replaces it).
 
 ## R5 — automatic failover (design, accepted; builds on R4)
 
