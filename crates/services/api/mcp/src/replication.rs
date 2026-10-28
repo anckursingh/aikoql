@@ -610,7 +610,8 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let source: Arc<dyn StorageAdminApi> = engine.clone();
         let s = stop.clone();
-        std::thread::spawn(move || serve_replication(listener, source, auth, s, None));
+        let d = dir.clone();
+        std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d));
         Leader {
             engine,
             addr,
@@ -640,11 +641,12 @@ mod tests {
     fn standby_streams_catches_up_and_resumes_after_disconnect() {
         let l = leader("stream");
         write(&l, 0, 100);
-        let standby = Arc::new(Db::open(Config::new(tmp("stream-standby"))).unwrap());
+        let sdir = tmp("stream-standby");
+        let standby = Arc::new(Db::open(Config::new(sdir.clone())).unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         let run = |stop: Arc<AtomicBool>| {
-            let (addr, sb) = (l.addr.clone(), standby.clone());
-            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, None, &stop))
+            let (addr, sb, d) = (l.addr.clone(), standby.clone(), sdir.clone());
+            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &stop))
         };
         let h = run(stop.clone());
         write(&l, 100, 200); // live writes while streaming
@@ -674,10 +676,11 @@ mod tests {
     fn non_admin_and_unknown_tokens_are_refused() {
         let l = leader("auth");
         write(&l, 0, 10);
-        let standby = Db::open(Config::new(tmp("auth-standby"))).unwrap();
+        let sdir = tmp("auth-standby");
+        let standby = Db::open(Config::new(sdir.clone())).unwrap();
         let stop = AtomicBool::new(false);
         for tok in ["user-tok", "nope"] {
-            let err = follow(&l.addr, tok, &standby, None, &stop).unwrap_err();
+            let err = follow(&l.addr, tok, &standby, &sdir, None, &stop).unwrap_err();
             assert!(err.contains("refused"), "{tok}: {err}");
         }
         assert_eq!(
@@ -690,7 +693,8 @@ mod tests {
 
     #[test]
     fn a_standby_behind_the_retained_log_is_told_to_rebootstrap() {
-        let mut cfg = Config::new(tmp("gap"));
+        let gap_dir = tmp("gap");
+        let mut cfg = Config::new(gap_dir.clone());
         cfg.memtable_bytes = 1024; // no retain_log: flushed history is gone
         let engine = Arc::new(AikoqlStorageEngineV2::open_with_config(cfg).unwrap());
         for i in 0..100u32 {
@@ -705,11 +709,76 @@ mod tests {
         let source: Arc<dyn StorageAdminApi> = engine.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let s = stop.clone();
-        std::thread::spawn(move || serve_replication(listener, source, auth, s, None));
+        std::thread::spawn(move || serve_replication(listener, source, auth, s, None, gap_dir));
 
-        let standby = Db::open(Config::new(tmp("gap-standby"))).unwrap();
-        let err = follow(&addr, "t", &standby, None, &AtomicBool::new(false)).unwrap_err();
+        let sdir = tmp("gap-standby");
+        let standby = Db::open(Config::new(sdir.clone())).unwrap();
+        let err = follow(&addr, "t", &standby, &sdir, None, &AtomicBool::new(false)).unwrap_err();
         assert!(err.contains("re-bootstrap"), "{err}");
         stop.store(true, Ordering::SeqCst);
+    }
+
+    /// R4 — a standby that has followed a term-2 leader refuses a term-0
+    /// one; the stale leader learns the newer term and fences itself.
+    #[test]
+    fn a_standby_refuses_an_older_term_leader_which_then_fences_itself() {
+        let l = leader("fence");
+        write(&l, 0, 10);
+        let sdir = tmp("fence-standby");
+        let standby = Db::open(Config::new(sdir.clone())).unwrap();
+        store_term(&sdir, 2, Role::Standby).unwrap();
+        let err = follow(
+            &l.addr,
+            "leader-tok",
+            &standby,
+            &sdir,
+            None,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(err.contains("term"), "{err}");
+        assert_eq!(
+            standby.last_seq(),
+            0,
+            "a frame from a stale leader was applied"
+        );
+        assert_eq!(load_term(&l.dir).unwrap(), (2, Role::Fenced));
+        let e = l.engine.db().put(b"late", b"x").unwrap_err();
+        assert!(e.to_string().contains("not leader"), "{e}");
+        // a fenced node serves no stream either
+        let fresh = tmp("fence-fresh");
+        let db = Db::open(Config::new(fresh.clone())).unwrap();
+        let err = follow(
+            &l.addr,
+            "leader-tok",
+            &db,
+            &fresh,
+            None,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(err.contains("fenced"), "{err}");
+        l.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// R4 — a standby adopts (and persists) a newer leader's term.
+    #[test]
+    fn a_standby_adopts_a_newer_leader_term() {
+        let l = leader("adopt");
+        store_term(&l.dir, 3, Role::Leader).unwrap();
+        write(&l, 0, 10);
+        let sdir = tmp("adopt-standby");
+        let standby = Arc::new(Db::open(Config::new(sdir.clone())).unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+        let h = {
+            let (addr, sb, d, st) = (l.addr.clone(), standby.clone(), sdir.clone(), stop.clone());
+            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st))
+        };
+        wait_for(|| standby.last_seq() == l.engine.db().last_seq());
+        stop.store(true, Ordering::SeqCst);
+        h.join().unwrap().unwrap();
+        assert_eq!(load_term(&sdir).unwrap(), (3, Role::Standby));
+        assert_eq!(load_term(&tmp("no-term")).unwrap(), (0, Role::Leader));
+        l.stop.store(true, Ordering::SeqCst);
     }
 }

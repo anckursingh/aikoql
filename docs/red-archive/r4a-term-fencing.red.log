@@ -1,0 +1,209 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0061]: this function takes 5 arguments but 6 arguments were supplied
+   --> crates/services/api/mcp/src/replication.rs:614:36
+    |
+614 |         std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d));
+    |                                    ^^^^^^^^^^^^^^^^^                                  - unexpected argument #6 of type `PathBuf`
+    |
+note: function defined here
+   --> crates/services/api/mcp/src/replication.rs:59:15
+    |
+ 59 | pub(crate) fn serve_replication(
+    |               ^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+614 -         std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d));
+614 +         std::thread::spawn(move || serve_replication(listener, source, auth, s, None));
+    |
+
+error[E0061]: this function takes 5 arguments but 6 arguments were supplied
+   --> crates/services/api/mcp/src/replication.rs:649:40
+    |
+649 |             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &stop))
+    |                                        ^^^^^^                           -- unexpected argument #4 of type `&PathBuf`
+    |
+note: function defined here
+   --> crates/services/api/mcp/src/replication.rs:377:15
+    |
+377 | pub(crate) fn follow(
+    |               ^^^^^^
+help: remove the extra argument
+    |
+649 -             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &stop))
+649 +             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, None, &stop))
+    |
+
+error[E0061]: this function takes 5 arguments but 6 arguments were supplied
+   --> crates/services/api/mcp/src/replication.rs:683:23
+    |
+683 |             let err = follow(&l.addr, tok, &standby, &sdir, None, &stop).unwrap_err();
+    |                       ^^^^^^                         ----- unexpected argument #4 of type `&PathBuf`
+    |
+note: function defined here
+   --> crates/services/api/mcp/src/replication.rs:377:15
+    |
+377 | pub(crate) fn follow(
+    |               ^^^^^^
+help: remove the extra argument
+    |
+683 -             let err = follow(&l.addr, tok, &standby, &sdir, None, &stop).unwrap_err();
+683 +             let err = follow(&l.addr, tok, &standby, None, &stop).unwrap_err();
+    |
+
+error[E0061]: this function takes 5 arguments but 6 arguments were supplied
+   --> crates/services/api/mcp/src/replication.rs:712:36
+    |
+712 |         std::thread::spawn(move || serve_replication(listener, source, auth, s, None, gap_dir));
+    |                                    ^^^^^^^^^^^^^^^^^                                  ------- unexpected argument #6 of type `PathBuf`
+    |
+note: function defined here
+   --> crates/services/api/mcp/src/replication.rs:59:15
+    |
+ 59 | pub(crate) fn serve_replication(
+    |               ^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+712 -         std::thread::spawn(move || serve_replication(listener, source, auth, s, None, gap_dir));
+712 +         std::thread::spawn(move || serve_replication(listener, source, auth, s, None));
+    |
+
+error[E0061]: this function takes 5 arguments but 6 arguments were supplied
+   --> crates/services/api/mcp/src/replication.rs:716:19
+    |
+716 |         let err = follow(&addr, "t", &standby, &sdir, None, &AtomicBool::new(false)).unwrap_err();
+    |                   ^^^^^^                       ----- unexpected argument #4 of type `&PathBuf`
+    |
+note: function defined here
+   --> crates/services/api/mcp/src/replication.rs:377:15
+    |
+377 | pub(crate) fn follow(
+    |               ^^^^^^
+help: remove the extra argument
+    |
+716 -         let err = follow(&addr, "t", &standby, &sdir, None, &AtomicBool::new(false)).unwrap_err();
+716 +         let err = follow(&addr, "t", &standby, None, &AtomicBool::new(false)).unwrap_err();
+    |
+
+error[E0433]: cannot find type `Role` in this scope
+   --> crates/services/api/mcp/src/replication.rs:729:30
+    |
+729 |         store_term(&sdir, 2, Role::Standby).unwrap();
+    |                              ^^^^ use of undeclared type `Role`
+
+error[E0425]: cannot find function `store_term` in this scope
+   --> crates/services/api/mcp/src/replication.rs:729:9
+    |
+729 |         store_term(&sdir, 2, Role::Standby).unwrap();
+    |         ^^^^^^^^^^ not found in this scope
+
+error[E0061]: this function takes 5 arguments but 6 arguments were supplied
+   --> crates/services/api/mcp/src/replication.rs:730:19
+    |
+730 |         let err = follow(
+    |                   ^^^^^^
+...
+734 |             &sdir,
+    |             ----- unexpected argument #4 of type `&PathBuf`
+    |
+note: function defined here
+   --> crates/services/api/mcp/src/replication.rs:377:15
+    |
+377 | pub(crate) fn follow(
+    |               ^^^^^^
+help: remove the extra argument
+    |
+733 -             &standby,
+734 -             &sdir,
+733 +             &standby,
+    |
+
+error[E0425]: cannot find function `load_term` in this scope
+   --> crates/services/api/mcp/src/replication.rs:745:20
+    |
+745 |         assert_eq!(load_term(&l.dir).unwrap(), (2, Role::Fenced));
+    |                    ^^^^^^^^^ not found in this scope
+
+error[E0433]: cannot find type `Role` in this scope
+   --> crates/services/api/mcp/src/replication.rs:745:52
+    |
+745 |         assert_eq!(load_term(&l.dir).unwrap(), (2, Role::Fenced));
+    |                                                    ^^^^ use of undeclared type `Role`
+
+error[E0061]: this function takes 5 arguments but 6 arguments were supplied
+   --> crates/services/api/mcp/src/replication.rs:751:19
+    |
+751 |         let err = follow(
+    |                   ^^^^^^
+...
+755 |             &fresh,
+    |             ------ unexpected argument #4 of type `&PathBuf`
+    |
+note: function defined here
+   --> crates/services/api/mcp/src/replication.rs:377:15
+    |
+377 | pub(crate) fn follow(
+    |               ^^^^^^
+help: remove the extra argument
+    |
+754 -             &db,
+755 -             &fresh,
+754 +             &db,
+    |
+
+error[E0433]: cannot find type `Role` in this scope
+   --> crates/services/api/mcp/src/replication.rs:768:31
+    |
+768 |         store_term(&l.dir, 3, Role::Leader).unwrap();
+    |                               ^^^^ use of undeclared type `Role`
+
+error[E0425]: cannot find function `store_term` in this scope
+   --> crates/services/api/mcp/src/replication.rs:768:9
+    |
+768 |         store_term(&l.dir, 3, Role::Leader).unwrap();
+    |         ^^^^^^^^^^ not found in this scope
+
+error[E0061]: this function takes 5 arguments but 6 arguments were supplied
+   --> crates/services/api/mcp/src/replication.rs:775:40
+    |
+775 |             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st))
+    |                                        ^^^^^^                           -- unexpected argument #4 of type `&PathBuf`
+    |
+note: function defined here
+   --> crates/services/api/mcp/src/replication.rs:377:15
+    |
+377 | pub(crate) fn follow(
+    |               ^^^^^^
+help: remove the extra argument
+    |
+775 -             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st))
+775 +             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, None, &st))
+    |
+
+error[E0425]: cannot find function `load_term` in this scope
+   --> crates/services/api/mcp/src/replication.rs:780:20
+    |
+780 |         assert_eq!(load_term(&sdir).unwrap(), (3, Role::Standby));
+    |                    ^^^^^^^^^ not found in this scope
+
+error[E0433]: cannot find type `Role` in this scope
+   --> crates/services/api/mcp/src/replication.rs:780:51
+    |
+780 |         assert_eq!(load_term(&sdir).unwrap(), (3, Role::Standby));
+    |                                                   ^^^^ use of undeclared type `Role`
+
+error[E0425]: cannot find function `load_term` in this scope
+   --> crates/services/api/mcp/src/replication.rs:781:20
+    |
+781 |         assert_eq!(load_term(&tmp("no-term")).unwrap(), (0, Role::Leader));
+    |                    ^^^^^^^^^ not found in this scope
+
+error[E0433]: cannot find type `Role` in this scope
+   --> crates/services/api/mcp/src/replication.rs:781:61
+    |
+781 |         assert_eq!(load_term(&tmp("no-term")).unwrap(), (0, Role::Leader));
+    |                                                             ^^^^ use of undeclared type `Role`
+
+Some errors have detailed explanations: E0061, E0425, E0433.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 18 previous errors
+EXIT=101

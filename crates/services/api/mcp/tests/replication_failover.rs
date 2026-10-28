@@ -222,6 +222,11 @@ fn leader_dies_standby_is_promoted_with_every_object() {
     let _ = f.wait();
 
     let mut promoted = Mcp::start(&sdir, &[]);
+    // R4: promotion takes the next term
+    assert_eq!(
+        std::fs::read_to_string(sdir.join("REPL-TERM")).unwrap(),
+        "1 leader\n"
+    );
     for (i, koid) in koids.iter().enumerate() {
         let got = promoted.tool("get", json!({"subject": "admin", "koid": koid}));
         assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
@@ -314,4 +319,30 @@ fn promotion_resumes_indexes_from_the_shipped_checkpoint() {
         let got = promoted.tool("get", json!({"subject": "admin", "koid": koid}));
         assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
     }
+}
+
+/// R4 — a node fenced by a newer term stays fenced across a restart: it
+/// serves reads but refuses every write until it rejoins as a follower.
+#[test]
+fn a_fenced_node_refuses_writes_after_a_restart() {
+    let dir = tmp("fenced");
+    let mut m = Mcp::start(&dir, &[]);
+    let koid = m.remember(1);
+    drop(m);
+    std::fs::write(dir.join("REPL-TERM"), "4 fenced\n").unwrap();
+    let mut m = Mcp::start(&dir, &[]);
+    assert_eq!(
+        m.tool("get", json!({"subject": "admin", "koid": koid}))["properties"]["n"],
+        json!(1)
+    );
+    let res = m.request(
+        "tools/call",
+        json!({"name": "remember", "arguments": {"subject": "admin", "type_name": "note", "properties": {"n": 2}}}),
+    );
+    assert_eq!(
+        res["isError"],
+        json!(true),
+        "a fenced node took a write: {res}"
+    );
+    assert!(res.to_string().contains("not leader"), "{res}");
 }
