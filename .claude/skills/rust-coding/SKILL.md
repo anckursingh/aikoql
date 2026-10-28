@@ -101,7 +101,7 @@ atomic or absent.
 
 ## Before declaring done
 
-1. `cargo fmt --check` and `cargo clippy --workspace -- -D warnings`.
+1. `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`.
 2. The targeted test suite (`cargo test -p <crate>`), then the full
    workspace only if the change is cross-crate — a workspace run is
    ~50 min; it rides CI when possible.

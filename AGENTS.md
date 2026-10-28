@@ -51,7 +51,7 @@ the architect review.
 - **Gates** (run before declaring anything done): the `scripts/check-*.sh`
   chain (architecture hygiene, red archives, skip drift, test-env hygiene,
   shuffle wiring, disposition head) + `cargo fmt --check` +
-  `cargo clippy --workspace -- -D warnings`.
+  `cargo clippy --workspace --all-targets -- -D warnings`.
 - **Test hygiene**: no unseeded RNG or bare `set_var` in test code
   (`scripts/check-test-env-hygiene.sh`); env-gated cells register in
   `tests/gated.toml` with a reason and an `ungated_by` home.
