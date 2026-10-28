@@ -355,7 +355,10 @@ mod tests {
     /// the version it read is still current.
     #[test]
     fn a_file_lease_is_a_compare_and_swap() {
-        let store = FileLease::new(tmp("cas").join("lease.json"));
+        cas_contract(&FileLease::new(tmp("cas").join("lease.json")));
+    }
+
+    fn cas_contract(store: &dyn LeaseStore) {
         assert!(store.read().unwrap().is_none());
         let v1 = store.write(&lease("a", 1, 0), None).unwrap();
         assert!(
@@ -392,5 +395,180 @@ mod tests {
             .map(|h| h.join().unwrap() as usize)
             .sum();
         assert_eq!(wins, 1);
+    }
+
+    /// R5a-2 — the S3 store against a conditional-write fake: the same
+    /// CAS contract, every request signed.
+    #[test]
+    fn an_s3_lease_is_a_compare_and_swap() {
+        let fake = FakeS3::start();
+        let store = S3Lease::new(
+            Some(fake.endpoint.clone()),
+            "lease-bucket".into(),
+            "ha/lease.json".into(),
+            "eu-west-1".into(),
+            Creds {
+                akid: "AKIDTEST".into(),
+                secret: "secret".into(),
+                token: None,
+            },
+            Duration::from_secs(5),
+        );
+        cas_contract(&store);
+        let auth = fake.state.lock().unwrap().auth.clone();
+        assert!(
+            auth.iter()
+                .all(|a| a.starts_with("AWS4-HMAC-SHA256 Credential=AKIDTEST/")
+                    && a.contains("/eu-west-1/s3/aws4_request")),
+            "unsigned request: {auth:?}"
+        );
+        assert_eq!(
+            fake.state.lock().unwrap().paths,
+            ["/lease-bucket/ha/lease.json"]
+        );
+    }
+
+    /// AWS SigV4 documentation, "Example: GET Object".
+    #[test]
+    fn sigv4_matches_the_aws_get_object_example() {
+        let headers = [
+            ("host", "examplebucket.s3.amazonaws.com"),
+            ("range", "bytes=0-9"),
+            ("x-amz-content-sha256", EMPTY_SHA256),
+            ("x-amz-date", "20130524T000000Z"),
+        ];
+        let auth = authorization(
+            &Creds {
+                akid: "AKIAIOSFODNN7EXAMPLE".into(),
+                secret: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into(),
+                token: None,
+            },
+            "us-east-1",
+            "GET",
+            "/test.txt",
+            &headers,
+            EMPTY_SHA256,
+        );
+        assert_eq!(
+            auth,
+            "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, \
+             SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, \
+             Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"
+        );
+    }
+
+    #[test]
+    fn amz_date_is_utc_basic_format() {
+        assert_eq!(amz_date(1_369_353_600), "20130524T000000Z");
+        assert_eq!(amz_date(951_782_400 + 3_661), "20000229T010101Z"); // leap day
+    }
+
+    #[test]
+    fn s3_lease_urls_parse() {
+        assert_eq!(
+            parse_s3_url("s3://bucket/path/to/lease.json"),
+            Some(("bucket".to_string(), "path/to/lease.json".to_string()))
+        );
+        assert_eq!(parse_s3_url("s3://bucket"), None);
+        assert_eq!(parse_s3_url("/var/lease.json"), None);
+    }
+
+    #[derive(Default)]
+    struct FakeState {
+        object: Option<(Vec<u8>, String)>,
+        next: u64,
+        auth: Vec<String>,
+        paths: Vec<String>,
+    }
+
+    /// Just enough S3: GET / PUT on one object, `If-None-Match: *` and
+    /// `If-Match` → 412 when they fail, quoted ETags.
+    struct FakeS3 {
+        endpoint: String,
+        state: Arc<std::sync::Mutex<FakeState>>,
+    }
+
+    impl FakeS3 {
+        fn start() -> Self {
+            use std::io::{BufRead, BufReader, Read};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let state = Arc::new(std::sync::Mutex::new(FakeState::default()));
+            let st = state.clone();
+            std::thread::spawn(move || {
+                for conn in listener.incoming() {
+                    let mut conn = conn.unwrap();
+                    let mut r = BufReader::new(conn.try_clone().unwrap());
+                    let mut line = String::new();
+                    r.read_line(&mut line).unwrap();
+                    let mut parts = line.split_whitespace();
+                    let (method, path) = (
+                        parts.next().unwrap().to_string(),
+                        parts.next().unwrap().to_string(),
+                    );
+                    let mut headers = std::collections::HashMap::new();
+                    loop {
+                        let mut h = String::new();
+                        r.read_line(&mut h).unwrap();
+                        let h = h.trim_end();
+                        if h.is_empty() {
+                            break;
+                        }
+                        let (k, v) = h.split_once(':').unwrap();
+                        headers.insert(k.to_ascii_lowercase(), v.trim().to_string());
+                    }
+                    let len: usize = headers
+                        .get("content-length")
+                        .map_or(0, |v| v.parse().unwrap());
+                    let mut body = vec![0u8; len];
+                    r.read_exact(&mut body).unwrap();
+                    let mut s = st.lock().unwrap();
+                    s.auth
+                        .push(headers.get("authorization").cloned().unwrap_or_default());
+                    if !s.paths.contains(&path) {
+                        s.paths.push(path);
+                    }
+                    let (status, etag, out) = match method.as_str() {
+                        "GET" => match &s.object {
+                            Some((b, e)) => ("200 OK", Some(e.clone()), b.clone()),
+                            None => (
+                                "404 Not Found",
+                                None,
+                                b"<Error><Code>NoSuchKey</Code></Error>".to_vec(),
+                            ),
+                        },
+                        _ => {
+                            let current = s.object.as_ref().map(|(_, e)| e.clone());
+                            let ok = match (headers.get("if-none-match"), headers.get("if-match")) {
+                                (Some(_), _) => current.is_none(),
+                                (_, Some(m)) => current.as_deref() == Some(m.as_str()),
+                                _ => true,
+                            };
+                            if ok {
+                                s.next += 1;
+                                let e = format!("\"v{}\"", s.next);
+                                s.object = Some((body, e.clone()));
+                                ("200 OK", Some(e), Vec::new())
+                            } else {
+                                (
+                                    "412 Precondition Failed",
+                                    None,
+                                    b"<Error><Code>PreconditionFailed</Code></Error>".to_vec(),
+                                )
+                            }
+                        }
+                    };
+                    drop(s);
+                    let etag = etag.map(|e| format!("ETag: {e}\r\n")).unwrap_or_default();
+                    let head = format!(
+                        "HTTP/1.1 {status}\r\n{etag}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        out.len()
+                    );
+                    let _ = conn.write_all(head.as_bytes());
+                    let _ = conn.write_all(&out);
+                }
+            });
+            FakeS3 { endpoint, state }
+        }
     }
 }

@@ -1,0 +1,8 @@
+{
+  "id": "r5a-s3-lease",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp ha::",
+  "captured_at": "2026-10-28T08:34:50Z",
+  "captured_head": "162fb53b426f8df143dfae7a196c35553c6f07e3",
+  "exit_code": 101
+}
