@@ -762,7 +762,23 @@ Limits:
   the maintainer fills).
 - An encrypted replica needs an initialized directory (field encryption
   writes its crypto-metadata row on first open, which the fence refuses).
-- A replica cannot itself serve a replication stream (no cascading).
+- ~~No cascading~~ — a `--follow` replica may also `--replicate-listen`
+  (below).
+
+### Cascading replicas ✅
+
+`serve --follow UPSTREAM --replicate-listen ADDR …` serves the stream on
+to further replicas: leader → R1 → R2. R1 retains its log and serves
+frames, snapshots, its term history and the leader's client address from
+its own directory — R2 re-bootstraps from R1, judges divergence against
+the same timeline, and its NOT_LEADER names the real leader. HA standbys
+do not serve the stream (the lease names only the leader). Test:
+`replication_failover.rs` — a write on the leader reaches R2 through R1;
+R2's hint is the leader's. RED: `cascade-e2e`.
+
+Limits: each hop adds its own apply + catch-up delay; R1's acks release
+R1's log only (the leader's release still follows its direct standbys);
+`--replicate-sync-ms` counts direct standbys only.
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
