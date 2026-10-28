@@ -41,7 +41,8 @@ an exact copy, which the verifiable-knowledge claim requires.
 | TLS for cross-host links; lag metrics endpoint | R3c |
 | terms + fencing in the data path | R4a ✅ |
 | semi-sync ack (RPO = 0 for acked writes) | R4b ✅ |
-| diverged-tail rejoin, `NOT_LEADER` | R4c–d |
+| diverged-tail rejoin (and automatic re-bootstrap) | R4c ✅ |
+| `NOT_LEADER` | R4d |
 | automatic failover: lease agent (S3 first, then k8s), self-fencing, in-process promotion, client leader discovery | R5 (designed below) |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
@@ -65,9 +66,9 @@ an exact copy, which the verifiable-knowledge claim requires.
   promoted follower never reuses one (the same floors open() recovers).
 - `Db::last_seq()`: the follower's resume point after a restart.
 
-Divergence detection (R4) needs no format change: a reconnecting follower
-sends `(last_seq, frame checksum)`; a mismatch means its tail diverged and
-is truncated to the new leader's history.
+Divergence detection landed in R4c by term history, not by frame
+checksum: a standby without `retain_log` cannot checksum frames it has
+already flushed, and the LSM cannot truncate a committed tail in place.
 
 ## Tests (RED first, per AGENTS.md)
 
@@ -134,7 +135,7 @@ JSON handshake line (proto, token, resume seq) answered `{"ok":true}` or
 1 s heartbeats, a gap notice, index checkpoints — down, u64 acks up. The
 leader releases its archive to the slowest **connected** standby's ack.
 Standbys reconnect with backoff and resume from `last_seq`; refusals,
-gaps and undecodable frames are fatal (re-bootstrap with R1b). Every
+undecodable frames are fatal; gaps re-bootstrap automatically (R4c). Every
 length read off the wire is bounded.
 
 Security: standbys need an `admin` token (the stream is every tenant's
@@ -174,8 +175,10 @@ names its cause.
 3. `aikoql-mcp serve --replicate-listen ADDR --tcp-token … <standby>` —
    the kernel opens over the standby's storage, the indexes resume from
    `<standby>.ckpt`, and new standbys can follow it.
-4. Point clients at the new leader. Re-bootstrap the old leader as a
-   standby (R1b) before it rejoins — never restart it as a leader.
+4. Point clients at the new leader. Bring the old leader back with
+   `aikoql-mcp follow <old-dir> --leader <new-leader>` (R4c: a diverged
+   tail is detected and replaced automatically) — never restart it as a
+   leader.
 
 R3 limits, carried forward:
 - No fencing: a partitioned old leader can still take writes (R4a
@@ -185,7 +188,8 @@ R3 limits, carried forward:
 - Checkpoints ship whole each time their water moves; incremental by
   file once indexes are large (shortcut comment in `send_checkpoint`).
 - Release follows connected standbys only: a standby away longer than
-  the retained log re-bootstraps.
+  the retained log re-bootstraps (automatically since R4c — a full
+  snapshot copy).
 
 ## R4a — terms and write fencing ✅
 
@@ -214,9 +218,7 @@ R4a limits:
   runbook's step 1.
 - `Kernel::open` on a fenced directory still writes its open-time
   records before the fence goes up; they are part of the diverged tail
-  R4c truncates.
-- `follow` on a directory that once led does not yet detect a diverged
-  tail — re-bootstrap it (R1b) until R4c.
+  R4c replaces.
 
 ## R4b — synchronous replication acks ✅
 
@@ -232,7 +234,7 @@ R4a limits:
   standby (RPO = 0 for acked writes).** A write that times out is
   committed on the leader but never acked — the client must treat it as
   unknown; if the leader then dies it belongs to the diverged tail R4c
-  truncates.
+  replaces.
 
 Tests: `replication.rs` (every acked write is already on the standby;
 no standby → `not replicated` after the timeout) and
@@ -248,6 +250,55 @@ R4b limits:
 - Throughput under sync is bounded by commit-to-ack latency per writer;
   the 10 ms log poll in the sender is now on the write path (shortcut
   comment in `serve_standby` — a commit notify replaces it).
+
+## R4c — diverged-tail rejoin ✅
+
+- **Term history** (Postgres timelines): `<dir>/REPL-HISTORY` holds one
+  `"<term> <first seq>"` line per promotion; no file = `0 1`. `serve` on
+  a standby appends `(term + 1, last_seq + 1)` **before the kernel
+  opens**, so the kernel's open-time writes belong to the new term.
+  Standbys copy the leader's history at each handshake.
+- **Detection** (leader, at handshake; protocol `aikoql-repl/2`): the
+  hello carries the standby's history and `after`. `diverged(ours,
+  theirs, after)` — the standby's last frame was written under term T
+  (from its history); it is consistent iff we had T and had not moved
+  past T before `after`. A standby ahead of our head is diverged too.
+- **Repair**: no in-place truncation (the LSM cannot rewind a committed
+  tail). The leader snapshots its storage (`snapshot_to` into
+  `<dir>.ship-<id>`) and ships it as tag `5`, the checkpoint directory
+  format; the standby lands it in `<dir>.rejoin`. `follow` returns
+  `Followed::Rebootstrap`; the CLI closes the db and `rebootstrap`
+  restores into `<dir>.new` with the leader's term + history, swaps it in
+  (old data and the stale `.ckpt` removed) and follows on from the
+  snapshot's seq.
+- The same path replaces R3a's fatal gap: a standby whose position the
+  retained log no longer holds — including a fresh one — re-bootstraps
+  without an operator.
+- Term and history are written only with the data they describe: a
+  diverged node keeps its old history until the swap, so a crash
+  mid-rejoin is detected again on the next connect.
+
+Tests: `replication.rs` — `diverged` table, the drill (A leads, B
+follows, A takes a tail and dies, B is promoted and writes, A follows B:
+re-bootstrapped, no tail survives, scans equal), a caught-up old leader
+rejoins **without** a snapshot, a gap re-bootstraps automatically;
+`replication_failover.rs` — the drill through `serve` + `follow`. RED:
+`r4c-diverged-rejoin{,-e2e}`.
+
+R4c limits:
+- Repair is a full snapshot copy, sized by the database, not by the
+  tail. Fine for the rare rejoin; an incremental rewind needs seq-aware
+  truncation in storage.
+- Two operators promoting two standbys to the same term (manual split
+  brain) share a term number with different histories; detection
+  compares terms, not their first seqs. The R5 lease makes one winner
+  per term by construction.
+- A crash between `rebootstrap`'s two renames leaves no `<dir>`; the
+  next `follow` starts empty and re-bootstraps again (the old data is in
+  `<dir>.old` until then).
+- Under heavy writes the leader may release log past the snapshot's seq
+  before the standby reconnects (release follows connected standbys);
+  it then re-bootstraps once more.
 
 ## R5 — automatic failover (design, accepted; builds on R4)
 
