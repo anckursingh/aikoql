@@ -23,12 +23,23 @@ fn tmp(tag: &str) -> PathBuf {
     p
 }
 
+/// A port for a server to bind, below every OS ephemeral range (Linux
+/// 32768+, macOS/Windows 49152+). An ephemeral one (bind :0, release)
+/// can be taken as the local end of any client connection before the
+/// server binds it — "Address already in use" under the parallel suite.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    // a per-run slot of 100 ports: back-to-back runs (whose last sockets
+    // may still be closing) start apart
+    let base = 20_000 + (std::process::id() % 120) as u16 * 100;
+    loop {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let port = 20_000 + (base - 20_000 + n) % 12_000;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
 }
 
 struct Mcp {
@@ -38,6 +49,12 @@ struct Mcp {
     next_id: u64,
     /// the server's log (stderr) lines, when started with `start_logged`
     log: Option<mpsc::Receiver<String>>,
+    /// where an unlogged server's stderr goes
+    stderr: PathBuf,
+}
+
+fn stderr_path(db: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.stderr", db.display()))
 }
 
 impl Mcp {
@@ -71,7 +88,8 @@ impl Mcp {
             .stderr(if logged {
                 Stdio::piped()
             } else {
-                Stdio::null()
+                // kept for the "server exited" panic
+                Stdio::from(std::fs::File::create(stderr_path(db)).unwrap())
             })
             .spawn()
             .expect("spawn aikoql-mcp");
@@ -84,6 +102,7 @@ impl Mcp {
             stdout,
             next_id: 0,
             log,
+            stderr: stderr_path(db),
         }
     }
 
@@ -106,10 +125,18 @@ impl Mcp {
         self.stdin.flush().unwrap();
         loop {
             let mut line = String::new();
-            assert!(
-                self.stdout.read_line(&mut line).unwrap() > 0,
-                "server exited"
-            );
+            if self.stdout.read_line(&mut line).unwrap() == 0 {
+                let err = std::fs::read_to_string(&self.stderr).unwrap_or_default();
+                let tail: Vec<&str> = err.lines().rev().take(8).collect();
+                panic!(
+                    "server exited; stderr tail:\n{}",
+                    tail.into_iter()
+                        .rev()
+                        .map(strip_ansi)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
             let frame: J = serde_json::from_str(line.trim()).expect("json-rpc frame");
             if frame["id"].as_u64() == Some(id) {
                 assert!(frame.get("error").is_none(), "json-rpc error: {frame}");
@@ -527,7 +554,9 @@ fn ha_args(lease: &Path, node: &str, repl: &str) -> Vec<String> {
         "--ha-node",
         node,
         "--ha-ttl-ms",
-        "1500",
+        // headroom: under the parallel suite a starved renewal must not
+        // look like a dead leader (1.5 s flaked once in six runs)
+        "3000",
         "--replicate-listen",
         repl,
         "--tcp-token",
@@ -562,7 +591,7 @@ fn ha_standby_takes_over_when_the_leader_dies() {
     let t = std::time::Instant::now();
     drop(a); // a crash
     b.init(); // answers once B holds the lease and has promoted itself
-    eprintln!("R5a metric: failover took {:?} (ttl 1500 ms)", t.elapsed());
+    eprintln!("R5a metric: failover took {:?} (ttl 3000 ms)", t.elapsed());
     for (i, koid) in koids.iter().enumerate() {
         let got = b.tool("get", json!({"subject": "admin", "koid": koid}));
         assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
