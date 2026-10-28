@@ -1093,3 +1093,86 @@ fn the_leader_scrape_carries_replication_lag() {
     let _ = f.kill();
     let _ = f.wait();
 }
+
+/// R6 — the continuous archive and point-in-time restore through the
+/// binary: a leader archives (base snapshot + log batches) while it
+/// writes; it dies; `pitr` restores the latest state, and a restore until
+/// an instant between two write bursts holds the first and not the second.
+#[test]
+fn pitr_restores_the_archive_to_the_latest_and_to_a_point_in_time() {
+    let (ldir, store) = (tmp("pitr-leader"), tmp("pitr-archive"));
+    let mut leader = Mcp::start_logged(
+        &ldir,
+        &[
+            "--archive",
+            store.to_str().unwrap(),
+            "--archive-log-ms",
+            "200",
+        ],
+    );
+    let log = leader.log.take().unwrap();
+    let first: Vec<String> = (0..10).map(|i| leader.remember(i)).collect();
+    // wait for the archive to cover the first burst
+    let covered = |log: &mpsc::Receiver<String>, n: usize| loop {
+        let line = wait_line(log, "archive: log up to seq");
+        let seq: usize = line.rsplit(' ').next().unwrap().parse().unwrap();
+        if seq >= n {
+            break;
+        }
+    };
+    covered(&log, 10);
+    std::thread::sleep(Duration::from_millis(300));
+    let boundary = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .to_string();
+    std::thread::sleep(Duration::from_millis(300));
+    let second: Vec<String> = (10..20).map(|i| leader.remember(i)).collect();
+    covered(&log, 20);
+    drop(leader);
+
+    let pitr = |to: &Path, until: &[&str]| {
+        let out = Command::new(bin())
+            .arg("pitr")
+            .args([
+                "--archive",
+                store.to_str().unwrap(),
+                "--to",
+                to.to_str().unwrap(),
+            ])
+            .args(until)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "pitr failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let latest = tmp("pitr-latest");
+    pitr(&latest, &[]);
+    let mut m = Mcp::start(&latest, &[]);
+    for (i, koid) in first.iter().chain(&second).enumerate() {
+        let got = m.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
+    drop(m);
+
+    let earlier = tmp("pitr-earlier");
+    pitr(&earlier, &["--until-ms", &boundary]);
+    let mut m = Mcp::start(&earlier, &[]);
+    for (i, koid) in first.iter().enumerate() {
+        let got = m.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
+    let res = m.request(
+        "tools/call",
+        json!({"name": "get", "arguments": {"subject": "admin", "koid": second[0]}}),
+    );
+    assert_eq!(
+        res["isError"],
+        json!(true),
+        "a write after the instant survived: {res}"
+    );
+}

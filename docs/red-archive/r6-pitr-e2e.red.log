@@ -1,0 +1,24 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.46s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-a0f0414a7eb71cd6)
+
+running 1 test
+test pitr_restores_the_archive_to_the_latest_and_to_a_point_in_time ... FAILED
+
+failures:
+
+---- pitr_restores_the_archive_to_the_latest_and_to_a_point_in_time stdout ----
+
+thread 'pitr_restores_the_archive_to_the_latest_and_to_a_point_in_time' (860932) panicked at crates/services/api/mcp/tests/replication_failover.rs:131:17:
+server exited; stderr tail:
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    pitr_restores_the_archive_to_the_latest_and_to_a_point_in_time
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 1.26s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+EXIT=101

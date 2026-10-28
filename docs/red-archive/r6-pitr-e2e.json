@@ -1,0 +1,8 @@
+{
+  "id": "r6-pitr-e2e",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test replication_failover pitr",
+  "captured_at": "2026-10-28T10:17:12Z",
+  "captured_head": "bde036ea07e4376e342e3e935aacb3b51aa7293d",
+  "exit_code": 101
+}

@@ -12,6 +12,7 @@
 
 mod admin;
 mod api_rest;
+mod archive;
 mod audit;
 mod authz;
 mod cli;

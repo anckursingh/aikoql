@@ -47,12 +47,15 @@ fn snapshot_bootstrap_then_log_catch_up() {
 
     let snap = dir("boot-snap");
     std::fs::remove_dir_all(&snap).ok();
-    leader.snapshot_to(&snap).unwrap();
+    let info = leader.snapshot_to(&snap).unwrap();
+    // R6: the snapshot names the exact seq it captured (PITR replays from it)
+    assert_eq!(info.last_seq, leader.last_seq());
     write_round(&leader, 1, &mut oids); // written after the snapshot
 
     let fdir = dir("boot-follow");
     std::fs::remove_dir_all(&fdir).ok();
     let follower = restore_from(&snap, fdir).unwrap();
+    assert_eq!(follower.last_seq(), info.last_seq);
     assert!(follower.last_seq() > 0 && follower.last_seq() < leader.last_seq());
 
     for f in leader.log_since(follower.last_seq(), usize::MAX).unwrap() {
