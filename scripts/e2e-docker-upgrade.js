@@ -75,7 +75,7 @@ const ls = () => out(`docker run --rm -v ${VOLUME}:/data --entrypoint ls ${image
   let logs = '';
   for (let i = 0; i < 60 && !/server ready/.test(logs); i++) {
     execSync('sleep 1');
-    logs = out('docker logs aikoql-up-b 2>&1');
+    logs = out('docker logs aikoql-up-b 2>&1').replace(/\x1b\[[0-9;]*m/g, ''); // tracing colours
   }
   assert(/moved the database \/data\/aikoql\.redb to \/data\/aikoql/.test(logs), `no rename log line:\n${logs}`);
   assert(/db=\/data\/aikoql\b(?!\.redb)/.test(logs), `B must serve /data/aikoql:\n${logs}`);
