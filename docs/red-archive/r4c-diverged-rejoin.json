@@ -1,0 +1,8 @@
+{
+  "id": "r4c-diverged-rejoin",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp replication",
+  "captured_at": "2026-10-28T08:13:37Z",
+  "captured_head": "3f4e77236464de42e6aee975f1db4e8c18be9daf",
+  "exit_code": 101
+}

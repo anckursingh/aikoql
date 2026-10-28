@@ -375,3 +375,54 @@ fn a_sync_leader_acks_writes_only_once_a_standby_holds_them() {
     wait_caught_up(&rx);
     leader.remember(1);
 }
+
+/// R4c — the old leader comes back and simply follows the promoted
+/// standby: its unreplicated tail is detected and replaced by the new
+/// leader's history (snapshot over the stream), no operator step.
+#[test]
+fn a_diverged_old_leader_rejoins_the_promoted_standby_by_itself() {
+    let (adir, bdir) = (tmp("rejoin-a"), tmp("rejoin-b"));
+    let (addr_a, addr_b) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let tok = ["--tcp-token", "repl-secret::admin"];
+    let mut a = Mcp::start(
+        &adir,
+        &[&["--replicate-listen", &addr_a][..], &tok].concat(),
+    );
+    let mut kept: Vec<String> = (0..10).map(|i| a.remember(i)).collect();
+    let (mut f, rx) = follow(&bdir, &addr_a);
+    wait_caught_up(&rx);
+    let _ = f.kill();
+    let _ = f.wait();
+    let lost = a.remember(100); // B never sees it
+    drop(a);
+
+    let mut b = Mcp::start(
+        &bdir,
+        &[&["--replicate-listen", &addr_b][..], &tok].concat(),
+    );
+    kept.push(b.remember(10));
+    let (mut f, rx) = follow(&adir, &addr_b);
+    wait_line(&rx, "re-bootstrapped");
+    wait_caught_up(&rx);
+    let _ = f.kill();
+    let _ = f.wait();
+    drop(b);
+
+    let mut a = Mcp::start(&adir, &[]);
+    for (i, koid) in kept.iter().enumerate() {
+        let got = a.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
+    let res = a.request(
+        "tools/call",
+        json!({"name": "get", "arguments": {"subject": "admin", "koid": lost}}),
+    );
+    assert_eq!(
+        res["isError"],
+        json!(true),
+        "the diverged write survived: {res}"
+    );
+}

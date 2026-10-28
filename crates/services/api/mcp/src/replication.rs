@@ -741,10 +741,64 @@ mod tests {
     use aikoql_storage_v2::engine::StorageAdminApi;
     use aikoql_storage_v2::AikoqlStorageEngineV2;
     use std::net::TcpListener;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+
+    /// A db at `dir`, once whoever held it (a stopped leader's threads)
+    /// has let go.
+    fn open_when_free(dir: &Path) -> Db {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match Db::open(Config::new(dir.to_path_buf())) {
+                Ok(db) => return db,
+                Err(e) if Instant::now() < deadline => {
+                    let _ = e;
+                    std::thread::sleep(Duration::from_millis(20))
+                }
+                Err(e) => panic!("open {}: {e}", dir.display()),
+            }
+        }
+    }
+
+    /// The `follow` subcommand's loop: re-bootstrap when the leader says
+    /// so, then follow until the standby holds `head`. True when a
+    /// re-bootstrap happened.
+    fn follow_to(addr: &str, token: &str, sdir: &Path, head: u64) -> bool {
+        let mut rebootstrapped = false;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let db = Arc::new(open_when_free(sdir));
+            let stop = Arc::new(AtomicBool::new(false));
+            let h = {
+                let (addr, token, db, d, st) = (
+                    addr.to_string(),
+                    token.to_string(),
+                    db.clone(),
+                    sdir.to_path_buf(),
+                    stop.clone(),
+                );
+                std::thread::spawn(move || follow(&addr, &token, &db, &d, None, &st))
+            };
+            while !h.is_finished() && db.last_seq() != head {
+                assert!(
+                    Instant::now() < deadline,
+                    "the standby never reached {head}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            stop.store(true, Ordering::SeqCst);
+            match h.join().unwrap().unwrap() {
+                Followed::Stopped => return rebootstrapped,
+                Followed::Rebootstrap { term, history } => {
+                    drop(db);
+                    rebootstrap(sdir, term, &history).unwrap();
+                    rebootstrapped = true;
+                }
+            }
+        }
+    }
 
     fn tmp(tag: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!(
@@ -765,7 +819,10 @@ mod tests {
     }
 
     fn leader(tag: &str) -> Leader {
-        let dir = tmp(tag);
+        leader_at(tmp(tag))
+    }
+
+    fn leader_at(dir: PathBuf) -> Leader {
         let mut cfg = Config::new(dir.clone());
         cfg.retain_log = true;
         cfg.memtable_bytes = 1024; // the stream crosses flush truncations
@@ -892,10 +949,12 @@ mod tests {
             )
         });
 
+        // R4c: the leader ships a snapshot; the standby swaps it in and
+        // follows on from it — no operator step
         let sdir = tmp("gap-standby");
-        let standby = Db::open(Config::new(sdir.clone())).unwrap();
-        let err = follow(&addr, "t", &standby, &sdir, None, &AtomicBool::new(false)).unwrap_err();
-        assert!(err.contains("re-bootstrap"), "{err}");
+        assert!(follow_to(&addr, "t", &sdir, engine.db().last_seq()));
+        let standby = Db::open(Config::new(sdir)).unwrap();
+        assert_eq!(standby.scan(b"").unwrap(), engine.db().scan(b"").unwrap());
         stop.store(true, Ordering::SeqCst);
     }
 
@@ -1001,5 +1060,72 @@ mod tests {
         let e = l.engine.db().put(b"k", b"v").unwrap_err();
         assert!(e.to_string().contains("not replicated"), "{e}");
         l.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// R4c — a frame is consistent with our history iff the term it was
+    /// written under is one we had and we had not yet moved past it.
+    #[test]
+    fn divergence_is_judged_by_term_history() {
+        let ours = [(0, 1), (1, 51)];
+        assert!(!diverged(&ours, &[(0, 1)], 50), "a prefix of term 0");
+        assert!(diverged(&ours, &[(0, 1)], 60), "term-0 frames past 50");
+        assert!(!diverged(&ours, &[(0, 1), (1, 51)], 60), "our own timeline");
+        assert!(
+            diverged(&ours, &[(0, 1), (2, 40)], 45),
+            "a term we never had"
+        );
+        assert!(!diverged(&[(0, 1)], &[], 0), "an empty standby");
+    }
+
+    /// The R4c drill: A leads, B follows, A takes writes B never sees and
+    /// dies; B is promoted and writes; A follows B — its diverged tail is
+    /// detected and replaced by B's history, no operator step.
+    fn old_leader_rejoins(tag: &str, tail: u32) -> (bool, Db, Leader) {
+        let a = leader(&format!("{tag}-a"));
+        write(&a, 0, 50);
+        let bdir = tmp(&format!("{tag}-b"));
+        assert!(!follow_to(
+            &a.addr,
+            "leader-tok",
+            &bdir,
+            a.engine.db().last_seq()
+        ));
+        for i in 0..tail {
+            a.engine
+                .db()
+                .put(format!("lost{i}").as_bytes(), b"x")
+                .unwrap();
+        }
+        a.stop.store(true, Ordering::SeqCst);
+        let adir = a.dir.clone();
+        drop(a);
+        assert_eq!(claim_leadership(&bdir).unwrap(), (1, Role::Leader));
+        let b = leader_at(bdir);
+        for i in 0..5u32 {
+            b.engine
+                .db()
+                .put(format!("new{i}").as_bytes(), b"y")
+                .unwrap();
+        }
+        let rebootstrapped = follow_to(&b.addr, "leader-tok", &adir, b.engine.db().last_seq());
+        assert_eq!(load_term(&adir).unwrap(), (1, Role::Standby));
+        (rebootstrapped, open_when_free(&adir), b)
+    }
+
+    #[test]
+    fn a_diverged_old_leader_is_rebootstrapped_and_rejoins() {
+        let (rebootstrapped, a, b) = old_leader_rejoins("div", 10);
+        assert!(rebootstrapped, "the diverged tail was not detected");
+        assert_eq!(a.scan(b"").unwrap(), b.engine.db().scan(b"").unwrap());
+        assert_eq!(a.get(b"lost0").unwrap(), None, "the diverged tail survived");
+        b.stop.store(true, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn a_caught_up_old_leader_rejoins_without_a_snapshot() {
+        let (rebootstrapped, a, b) = old_leader_rejoins("nodiv", 0);
+        assert!(!rebootstrapped, "a consistent standby was re-bootstrapped");
+        assert_eq!(a.scan(b"").unwrap(), b.engine.db().scan(b"").unwrap());
+        b.stop.store(true, Ordering::SeqCst);
     }
 }
