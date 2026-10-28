@@ -86,3 +86,5 @@ npm-publish/memory/
 
 # local commit-message scratch file
 .commit-msg.txt
+# maturin develop builds the native module in place
+/crates/sdk/python/python/aikoql/_aikoql*.so

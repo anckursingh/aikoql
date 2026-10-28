@@ -809,6 +809,75 @@ mod tests {
         Client::dial(addr).await.unwrap()
     }
 
+    /// The envelope a fenced server answers a write with (MRFC-0080 R4d).
+    fn not_leader(id: &Value, leader: Option<&str>) -> String {
+        let mut e =
+            serde_json::json!({"code": "NOT_LEADER", "message": "not leader", "retryable": true});
+        if let Some(l) = leader {
+            e["leader"] = serde_json::json!(l);
+        }
+        let text = serde_json::json!({"ok": false, "error": e}).to_string();
+        serde_json::json!({"id": id, "result": {"content": [{"text": text}], "isError": true}})
+            .to_string()
+    }
+
+    /// MRFC-0080 R5b — a call refused with NOT_LEADER + leader is retried
+    /// once against the leader over a fresh, initialized connection, and
+    /// the client stays there.
+    #[tokio::test]
+    async fn not_leader_follows_the_leader_hint() {
+        let saw = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let s = saw.clone();
+        let leader = scripted(move |req| {
+            s.lock()
+                .unwrap()
+                .push(req["method"].as_str().unwrap().to_string());
+            let f = if req["method"] == "initialize" {
+                respond(&req["id"], MIN_SERVER_VERSION)
+            } else {
+                tool_result(&req["id"], serde_json::json!({"koid": "ko-1"}))
+            };
+            vec![(f, Duration::ZERO)]
+        })
+        .await;
+        let hint = leader.clone();
+        let fenced = scripted(move |req| {
+            let f = if req["method"] == "initialize" {
+                respond(&req["id"], MIN_SERVER_VERSION)
+            } else {
+                not_leader(&req["id"], Some(&hint))
+            };
+            vec![(f, Duration::ZERO)]
+        })
+        .await;
+        let c = dial(&fenced).await.with_token("t");
+        c.initialize().await.unwrap();
+        let got = c
+            .call_tool("remember", Some(serde_json::json!({"type_name": "note"})))
+            .await
+            .unwrap();
+        assert_eq!(got["koid"], "ko-1");
+        c.call_tool("remember", None).await.unwrap();
+        assert_eq!(
+            *saw.lock().unwrap(),
+            ["initialize", "tools/call", "tools/call"]
+        );
+    }
+
+    #[tokio::test]
+    async fn not_leader_without_a_hint_is_returned() {
+        let addr = scripted(|req| vec![(not_leader(&req["id"], None), Duration::ZERO)]).await;
+        let c = dial(&addr).await;
+        match c.call_tool("remember", None).await {
+            Err(Error::Mcp(e)) => {
+                assert_eq!(e.code, "NOT_LEADER");
+                assert!(e.retryable);
+                assert_eq!(e.leader, None);
+            }
+            other => panic!("expected NOT_LEADER, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn initialize_ok() {
         let reqs = Arc::new(std::sync::Mutex::new(Vec::new()));

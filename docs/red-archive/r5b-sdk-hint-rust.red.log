@@ -1,0 +1,12 @@
+   Compiling aikoql-sdk v0.2.4 (/Users/pukku/coding/aikoql/crates/sdk/rust)
+error[E0609]: no field `leader` on type `McpError`
+   --> crates/sdk/rust/src/client.rs:875:30
+    |
+875 |                 assert_eq!(e.leader, None);
+    |                              ^^^^^^ unknown field
+    |
+    = note: available fields are: `code`, `message`, `retryable`, `suggestion`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `aikoql-sdk` (lib test) due to 1 previous error
+EXIT=101

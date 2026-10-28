@@ -1,0 +1,8 @@
+--- FAIL: TestNotLeaderFollowsTheLeaderHint (0.00s)
+    client_test.go:455: the call was not retried on the leader: null aikoql: remember: [NOT_LEADER] not leader
+FAIL
+FAIL	github.com/anckursingh/aikoql/crates/sdk/go	0.084s
+?   	github.com/anckursingh/aikoql/crates/sdk/go/cmd/sdk-conformance	[no test files]
+?   	github.com/anckursingh/aikoql/crates/sdk/go/examples/web-service	[no test files]
+FAIL
+EXIT=1

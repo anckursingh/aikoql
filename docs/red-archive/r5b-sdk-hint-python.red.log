@@ -1,0 +1,90 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+___________________ test_not_leader_follows_the_leader_hint ____________________
+
+    def test_not_leader_follows_the_leader_hint():
+        saw = []
+    
+        def lead(req):
+            saw.append(req["method"])
+            if req["method"] == "initialize":
+                return [_init(req)]
+            return [_tool(req, {"ok": True, "data": {"koid": "ko-1"}})]
+    
+        with ScriptedServer(respond=lead) as leader:
+            hint = f"127.0.0.1:{leader.port}"
+    
+            def fenced(req):
+                if req["method"] == "initialize":
+                    return [_init(req)]
+                return [_not_leader(req, hint)]
+    
+            with ScriptedServer(respond=fenced) as f:
+                c = McpClient("127.0.0.1", f.port, "t").connect(timeout=5)
+                try:
+                    c.initialize()
+>                   assert c.call_tool("remember", {"type_name": "note"}) == {"koid": "ko-1"}
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_leader_hint.py:61: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <aikoql.mcp_client.McpClient object at 0x10b0c89e0>, name = 'remember'
+arguments = {'type_name': 'note'}
+
+    def call_tool(self, name: str, arguments: Optional[dict] = None) -> dict:
+        """Call an MCP tool. Returns the parsed data payload."""
+        params: Dict[str, Any] = {"name": name}
+        if arguments:
+            params["arguments"] = arguments
+        result = self._rpc("tools/call", params)
+        # Unwrap MCP content envelope.
+        text = result.get("content", [{}])[0].get("text", "{}")
+        data = json.loads(text)
+        if not data.get("ok", True):
+>           raise McpError.from_response(data.get("error", {}))
+E           aikoql.mcp_client.McpError: [NOT_LEADER] not leader
+
+python/aikoql/mcp_client.py:343: McpError
+___________________ test_not_leader_without_a_hint_is_raised ___________________
+
+    def test_not_leader_without_a_hint_is_raised():
+        with ScriptedServer(respond=lambda req: [_not_leader(req)]) as s:
+            c = McpClient("127.0.0.1", s.port).connect(timeout=5)
+            try:
+                with pytest.raises(McpError) as e:
+                    c.call_tool("remember", {"type_name": "note"})
+                assert e.value.code == "NOT_LEADER"
+                assert e.value.retryable
+>               assert e.value.leader is None
+                       ^^^^^^^^^^^^^^
+E               AttributeError: 'McpError' object has no attribute 'leader'
+
+tests/test_leader_hint.py:77: AttributeError
+=============================== warnings summary ===============================
+tests/test_leader_hint.py::test_not_leader_follows_the_leader_hint
+  $VENV/lib/python3.12/site-packages/_pytest/threadexception.py:54: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-1 (_run)
+  
+  Traceback (most recent call last):
+    File "/Users/pukku/.local/share/uv/python/cpython-3.12.16-macos-aarch64-none/lib/python3.12/threading.py", line 1075, in _bootstrap_inner
+      self.run()
+    File "/Users/pukku/.local/share/uv/python/cpython-3.12.16-macos-aarch64-none/lib/python3.12/threading.py", line 1012, in run
+      self._target(*self._args, **self._kwargs)
+    File "/Users/pukku/coding/aikoql/crates/sdk/python/tests/scripted.py", line 41, in _run
+      conn, _ = self.sock.accept()
+                ^^^^^^^^^^^^^^^^^^
+    File "/Users/pukku/.local/share/uv/python/cpython-3.12.16-macos-aarch64-none/lib/python3.12/socket.py", line 295, in accept
+      fd, addr = self._accept()
+                 ^^^^^^^^^^^^^^
+  ConnectionAbortedError: [Errno 53] Software caused connection abort
+  
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_leader_hint.py::test_not_leader_follows_the_leader_hint - a...
+FAILED tests/test_leader_hint.py::test_not_leader_without_a_hint_is_raised - ...
+2 failed, 1 warning in 0.06s
+EXIT=1
