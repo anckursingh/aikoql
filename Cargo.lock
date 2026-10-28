@@ -190,6 +190,7 @@ dependencies = [
  "hmac 0.12.1",
  "mongodb",
  "postgres",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",

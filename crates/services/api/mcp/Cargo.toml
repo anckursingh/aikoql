@@ -29,6 +29,9 @@ sha2 = "0.10"
 hmac = "0.12"
 # R5a-2: the S3 lease's HTTP client (already in the default build's tree)
 ureq = { version = "2", features = ["json"] }
+# R5b-1: trust the cluster CA for the k8s lease (0.23 + ring are already in
+# the tree; no default features, so aws-lc-rs stays out)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

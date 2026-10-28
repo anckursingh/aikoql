@@ -304,6 +304,14 @@ fn main() {
                     std::process::exit(2);
                 }
             }
+        } else if lease.starts_with("k8s://") {
+            match ha::K8sLease::in_cluster(lease, ttl / 3) {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    eprintln!("--ha-lease: {e}");
+                    std::process::exit(2);
+                }
+            }
         } else {
             Arc::new(ha::FileLease::new(lease.into()))
         };

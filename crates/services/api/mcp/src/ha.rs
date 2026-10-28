@@ -302,6 +302,171 @@ impl LeaseStore for S3Lease {
     }
 }
 
+/// R5b-1 — the lease as a Kubernetes `Lease` (coordination.k8s.io/v1).
+/// The version is `metadata.resourceVersion`: create is POST (409 when it
+/// exists), renew / take over is PUT carrying that resourceVersion (409
+/// when it moved). The record rides the `aikoql.io/lease` annotation;
+/// `spec.holderIdentity` names the holder for kubectl.
+pub(crate) struct K8sLease {
+    base: String,
+    token: String,
+    namespace: String,
+    name: String,
+    agent: ureq::Agent,
+}
+
+const ANNOTATION: &str = "aikoql.io/lease";
+
+impl K8sLease {
+    pub(crate) fn new(
+        base: String,
+        token: String,
+        namespace: String,
+        name: String,
+        agent: ureq::Agent,
+    ) -> Self {
+        Self {
+            base,
+            token,
+            namespace,
+            name,
+            agent,
+        }
+    }
+
+    /// `k8s://NAMESPACE/NAME` from inside a pod: the service account's
+    /// token and CA, the API server from `KUBERNETES_SERVICE_HOST/PORT`.
+    pub(crate) fn in_cluster(url: &str, timeout: Duration) -> Result<Self, String> {
+        const SA: &str = "/var/run/secrets/kubernetes.io/serviceaccount";
+        let (namespace, name) =
+            parse_k8s_url(url).ok_or_else(|| format!("{url:?} is not k8s://NAMESPACE/NAME"))?;
+        let host = std::env::var("KUBERNETES_SERVICE_HOST").map_err(|_| {
+            "a k8s:// lease runs in a pod (KUBERNETES_SERVICE_HOST unset)".to_string()
+        })?;
+        let port = std::env::var("KUBERNETES_SERVICE_PORT").unwrap_or_else(|_| "443".into());
+        let read =
+            |f: &str| std::fs::read(format!("{SA}/{f}")).map_err(|e| format!("{SA}/{f}: {e}"));
+        let token = String::from_utf8_lossy(&read("token")?).trim().to_string();
+        let mut roots = rustls::RootCertStore::empty();
+        use rustls::pki_types::{pem::PemObject, CertificateDer};
+        for cert in CertificateDer::pem_slice_iter(&read("ca.crt")?) {
+            let cert = cert.map_err(|e| format!("cluster CA: {e}"))?;
+            roots.add(cert).map_err(|e| format!("cluster CA: {e}"))?;
+        }
+        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        let agent = ureq::AgentBuilder::new()
+            .timeout(timeout)
+            .tls_config(Arc::new(tls))
+            .build();
+        let host = if host.contains(':') {
+            format!("[{host}]")
+        } else {
+            host
+        };
+        Ok(Self::new(
+            format!("https://{host}:{port}"),
+            token,
+            namespace,
+            name,
+            agent,
+        ))
+    }
+
+    fn url(&self, named: bool) -> String {
+        let name = if named {
+            format!("/{}", self.name)
+        } else {
+            String::new()
+        };
+        format!(
+            "{}/apis/coordination.k8s.io/v1/namespaces/{}/leases{name}",
+            self.base, self.namespace
+        )
+    }
+
+    fn bearer(&self) -> String {
+        format!("Bearer {}", self.token)
+    }
+}
+
+/// (record, resourceVersion) out of a Lease object.
+fn lease_object(v: &serde_json::Value) -> Result<(Lease, String), String> {
+    let rv = v["metadata"]["resourceVersion"]
+        .as_str()
+        .ok_or("a Lease without metadata.resourceVersion")?;
+    let rec = v["metadata"]["annotations"][ANNOTATION]
+        .as_str()
+        .ok_or_else(|| {
+            format!("the Lease carries no {ANNOTATION} annotation — not an aikoql lease")
+        })?;
+    let lease = serde_json::from_str(rec).map_err(|e| format!("unreadable lease: {e}"))?;
+    Ok((lease, rv.to_string()))
+}
+
+impl LeaseStore for K8sLease {
+    fn read(&self) -> Result<Option<(Lease, String)>, String> {
+        match self
+            .agent
+            .get(&self.url(true))
+            .set("authorization", &self.bearer())
+            .call()
+        {
+            Ok(resp) => {
+                let v: serde_json::Value = resp
+                    .into_json()
+                    .map_err(|e| format!("read the Lease: {e}"))?;
+                lease_object(&v).map(Some)
+            }
+            Err(ureq::Error::Status(404, _)) => Ok(None),
+            Err(e) => Err(describe(e).1),
+        }
+    }
+
+    fn write(&self, lease: &Lease, expected: Option<&str>) -> Result<String, LeaseError> {
+        let record = serde_json::to_string(lease).map_err(|e| LeaseError::Other(e.to_string()))?;
+        let mut metadata =
+            serde_json::json!({ "name": self.name, "annotations": { ANNOTATION: record } });
+        if let Some(rv) = expected {
+            metadata["resourceVersion"] = serde_json::json!(rv);
+        }
+        let object = serde_json::json!({
+            "apiVersion": "coordination.k8s.io/v1",
+            "kind": "Lease",
+            "metadata": metadata,
+            "spec": { "holderIdentity": lease.holder },
+        });
+        let req = match expected {
+            None => self.agent.post(&self.url(false)),
+            Some(_) => self.agent.put(&self.url(true)),
+        };
+        match req.set("authorization", &self.bearer()).send_json(object) {
+            Ok(resp) => {
+                let v: serde_json::Value = resp
+                    .into_json()
+                    .map_err(|e| LeaseError::Other(format!("read the Lease: {e}")))?;
+                lease_object(&v)
+                    .map(|(_, rv)| rv)
+                    .map_err(LeaseError::Other)
+            }
+            // AlreadyExists on create, a moved resourceVersion on replace
+            Err(ureq::Error::Status(409, _)) => Err(LeaseError::Conflict),
+            Err(e) => Err(LeaseError::Other(describe(e).1)),
+        }
+    }
+}
+
+pub(crate) fn parse_k8s_url(url: &str) -> Option<(String, String)> {
+    let (ns, name) = url.strip_prefix("k8s://")?.split_once('/')?;
+    (!ns.is_empty() && !name.is_empty() && !name.contains('/'))
+        .then(|| (ns.to_string(), name.to_string()))
+}
+
 pub(crate) fn parse_s3_url(url: &str) -> Option<(String, String)> {
     let (bucket, key) = url.strip_prefix("s3://")?.split_once('/')?;
     (!bucket.is_empty() && !key.is_empty()).then(|| (bucket.to_string(), key.to_string()))
@@ -862,7 +1027,7 @@ mod tests {
         fake_http(|s, method, path, _, body| {
             let named = format!("{LEASES}/primary");
             let current = s.object.as_ref().map(|(_, rv)| rv.clone());
-            let mut store = |s: &mut FakeState, body: Vec<u8>| {
+            let store = |s: &mut FakeState, body: Vec<u8>| {
                 s.next += 1;
                 let rv = s.next.to_string();
                 let mut obj: serde_json::Value = serde_json::from_slice(&body).unwrap();
