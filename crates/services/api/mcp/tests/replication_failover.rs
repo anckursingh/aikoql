@@ -330,6 +330,7 @@ fn a_fenced_node_refuses_writes_after_a_restart() {
     let koid = m.remember(1);
     drop(m);
     std::fs::write(dir.join("REPL-TERM"), "4 fenced\n").unwrap();
+    std::fs::write(dir.join("REPL-LEADER"), "10.0.0.9:7070\n").unwrap();
     let mut m = Mcp::start(&dir, &[]);
     assert_eq!(
         m.tool("get", json!({"subject": "admin", "koid": koid}))["properties"]["n"],
@@ -344,7 +345,33 @@ fn a_fenced_node_refuses_writes_after_a_restart() {
         json!(true),
         "a fenced node took a write: {res}"
     );
-    assert!(res.to_string().contains("not leader"), "{res}");
+    // R4d: machine-readable, with the newer leader's client address
+    let err: J = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(err["error"]["code"], json!("NOT_LEADER"), "{err}");
+    assert_eq!(err["error"]["leader"], json!("10.0.0.9:7070"), "{err}");
+}
+
+/// R4d — `--advertise` is the client address a leader hands its standbys
+/// (and they hand a deposed leader, for its NOT_LEADER hint).
+#[test]
+fn a_leader_records_its_advertised_address() {
+    let dir = tmp("advertise");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _m = Mcp::start(
+        &dir,
+        &[
+            "--replicate-listen",
+            &addr,
+            "--tcp-token",
+            "repl-secret::admin",
+            "--advertise",
+            "db1.internal:7070",
+        ],
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("REPL-LEADER")).unwrap(),
+        "db1.internal:7070\n"
+    );
 }
 
 /// R4b — `--replicate-sync-ms`: a client write is acked only once a

@@ -121,3 +121,23 @@ pub fn wrap_result(result: Result<J, String>) -> J {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MRFC-0080 R4d — a fenced node's write refusal is NOT_LEADER,
+    /// retryable against the leader whose client address it carries.
+    #[test]
+    fn a_fenced_write_is_not_leader_with_the_leader_hint() {
+        let msg = "store: aikoql-v2: stale: not leader: deposed by replication term 2 (leader=10.0.0.9:7070)";
+        assert_eq!(ErrorCode::classify(msg), ErrorCode::NotLeader);
+        let w = wrap_result(Err(msg.to_string()));
+        assert_eq!(w["error"]["code"], "NOT_LEADER");
+        assert_eq!(w["error"]["retryable"], true);
+        assert_eq!(w["error"]["leader"], "10.0.0.9:7070");
+        let w = wrap_result(Err("stale: not leader: fenced at replication term 4".into()));
+        assert_eq!(w["error"]["code"], "NOT_LEADER");
+        assert!(w["error"].get("leader").is_none(), "no hint, no field: {w}");
+    }
+}

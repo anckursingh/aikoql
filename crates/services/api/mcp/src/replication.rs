@@ -1125,6 +1125,7 @@ mod tests {
         let sdir = tmp("fence-standby");
         let standby = Db::open(Config::new(sdir.clone())).unwrap();
         store_term(&sdir, 2, Role::Standby).unwrap();
+        store_leader(&sdir, "10.0.0.9:7070").unwrap(); // its term-2 leader
         let err = follow(
             &l.addr,
             "leader-tok",
@@ -1141,8 +1142,10 @@ mod tests {
             "a frame from a stale leader was applied"
         );
         assert_eq!(load_term(&l.dir).unwrap(), (2, Role::Fenced));
+        assert_eq!(load_leader(&l.dir).as_deref(), Some("10.0.0.9:7070"));
         let e = l.engine.db().put(b"late", b"x").unwrap_err();
         assert!(e.to_string().contains("not leader"), "{e}");
+        assert!(e.to_string().contains("leader=10.0.0.9:7070"), "{e}");
         // a fenced node serves no stream either
         let fresh = tmp("fence-fresh");
         let db = Db::open(Config::new(fresh.clone())).unwrap();
@@ -1164,6 +1167,7 @@ mod tests {
     fn a_standby_adopts_a_newer_leader_term() {
         let l = leader("adopt");
         store_term(&l.dir, 3, Role::Leader).unwrap();
+        store_leader(&l.dir, "10.0.0.1:7070").unwrap(); // its --advertise
         write(&l, 0, 10);
         let sdir = tmp("adopt-standby");
         let standby = Arc::new(Db::open(Config::new(sdir.clone())).unwrap());
@@ -1176,6 +1180,7 @@ mod tests {
         stop.store(true, Ordering::SeqCst);
         h.join().unwrap().unwrap();
         assert_eq!(load_term(&sdir).unwrap(), (3, Role::Standby));
+        assert_eq!(load_leader(&sdir).as_deref(), Some("10.0.0.1:7070"));
         assert_eq!(load_term(&tmp("no-term")).unwrap(), (0, Role::Leader));
         l.stop.store(true, Ordering::SeqCst);
     }
@@ -1241,6 +1246,7 @@ mod tests {
     fn old_leader_rejoins(tag: &str, tail: u32) -> (bool, Db, Leader) {
         let a = leader(&format!("{tag}-a"));
         write(&a, 0, 50);
+        store_leader(&a.dir, "10.0.0.1:7070").unwrap();
         let bdir = tmp(&format!("{tag}-b"));
         assert!(!follow_to(
             &a.addr,
@@ -1257,7 +1263,13 @@ mod tests {
         a.stop.store(true, Ordering::SeqCst);
         let adir = a.dir.clone();
         drop(a);
+        assert_eq!(load_leader(&bdir).as_deref(), Some("10.0.0.1:7070"));
         assert_eq!(claim_leadership(&bdir).unwrap(), (1, Role::Leader));
+        assert_eq!(
+            load_leader(&bdir),
+            None,
+            "a promoted node kept its old leader's address"
+        );
         let b = leader_at(bdir);
         for i in 0..5u32 {
             b.engine
