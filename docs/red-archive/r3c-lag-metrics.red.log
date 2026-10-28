@@ -1,0 +1,34 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0425]: cannot find function `metrics` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1606:20
+     |
+1606 |         let idle = metrics(&l.acked, l.engine.db().last_seq());
+     |                    ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `metrics` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1616:21
+     |
+1616 |         wait_for(|| metrics(&l.acked, head).contains("_lag_frames{standby=\"0\""));
+     |                     ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `metrics` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1617:21
+     |
+1617 |         wait_for(|| metrics(&l.acked, head).contains("\"} 0\n"));
+     |                     ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `metrics` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1618:17
+     |
+1618 |         let m = metrics(&l.acked, head);
+     |                 ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `metrics` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1627:21
+     |
+1627 |         wait_for(|| metrics(&l.acked, head).contains("aikoql_replication_standbys 0"));
+     |                     ^^^^^^^ not found in this scope
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 5 previous errors
+EXIT=101

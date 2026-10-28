@@ -207,8 +207,31 @@ fn wait_line(rx: &mpsc::Receiver<String>, needle: &str) -> String {
     }
 }
 
+/// A child killed when dropped — a failing test must not leak it.
+struct Proc(Child);
+
+impl std::ops::Deref for Proc {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Proc {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for Proc {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// `follow` as a child; its stderr lines arrive on the channel.
-fn follow(standby: &Path, addr: &str) -> (Child, mpsc::Receiver<String>) {
+fn follow(standby: &Path, addr: &str) -> (Proc, mpsc::Receiver<String>) {
     let mut child = Command::new(bin())
         .arg("follow")
         .arg(standby)
@@ -220,7 +243,7 @@ fn follow(standby: &Path, addr: &str) -> (Child, mpsc::Receiver<String>) {
         .spawn()
         .expect("spawn follow");
     let rx = lines(child.stderr.take().unwrap());
-    (child, rx)
+    (Proc(child), rx)
 }
 
 fn wait_caught_up(rx: &mpsc::Receiver<String>) {
@@ -439,9 +462,11 @@ fn a_sync_leader_acks_writes_only_once_a_standby_holds_them() {
     assert_eq!(res["isError"], json!(true), "acked with no standby: {res}");
     assert!(res.to_string().contains("not replicated"), "{res}");
 
-    let (_f, rx) = follow(&sdir, &addr);
+    let (mut f, rx) = follow(&sdir, &addr);
     wait_caught_up(&rx);
     leader.remember(1);
+    let _ = f.kill(); // a bound `_f` would leak the child past the test
+    let _ = f.wait();
 }
 
 /// R4c — the old leader comes back and simply follows the promoted
@@ -961,4 +986,81 @@ fn replicate_listen_over_tls_accepts_a_non_loopback_bind() {
         let got = promoted.tool("get", json!({"subject": "admin", "koid": koid}));
         assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
     }
+}
+
+/// R3c-2 — the leader's /metrics scrape carries the replication series:
+/// a following standby shows up with its lag, which drains to 0.
+#[test]
+fn the_leader_scrape_carries_replication_lag() {
+    let (ldir, sdir) = (tmp("lag-leader"), tmp("lag-standby"));
+    let (repl, metrics) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    // metrics-only serve reads no stdin (S-12): no client writes — the
+    // kernel's open-time records are the history the standby follows
+    let _leader = Mcp::spawn_raw(
+        &ldir,
+        &[
+            "--replicate-listen",
+            &repl,
+            "--metrics-addr",
+            &metrics,
+            "--tcp-token",
+            "repl-secret::admin",
+        ],
+        false,
+    );
+    let (mut f, rx) = follow(&sdir, &repl);
+    wait_caught_up(&rx);
+    let scrape = || {
+        let mut s = std::net::TcpStream::connect(&metrics).unwrap();
+        write!(
+            s,
+            "GET /metrics HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        // the server may keep the connection open: read until it pauses
+        s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut out = Vec::new();
+        let mut chunk = [0u8; 8192];
+        while let Ok(n) = std::io::Read::read(&mut s, &mut chunk) {
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&chunk[..n]);
+            let text = String::from_utf8_lossy(&out);
+            if let Some(at) = text.find("\r\n\r\n") {
+                let len = text[..at]
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().to_string())
+                    })
+                    .and_then(|v| v.parse::<usize>().ok());
+                if len.is_some_and(|len| out.len() >= at + 4 + len) {
+                    break;
+                }
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let m = scrape();
+        if m.contains("aikoql_replication_standbys 1")
+            && m.contains("_lag_frames{")
+            && m.contains("\"} 0\n")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no replication lag series:\n{m}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = f.kill();
+    let _ = f.wait();
 }

@@ -1596,4 +1596,35 @@ mod tests {
         assert_eq!(standby.last_seq(), 0);
         l.stop.store(true, Ordering::SeqCst);
     }
+
+    /// R3c-2 — the leader's lag series: head, connected standbys, and
+    /// per standby the frames it has not acked (0 once caught up).
+    #[test]
+    fn the_leader_exports_per_standby_lag() {
+        let l = leader("lag");
+        write(&l, 0, 50);
+        let idle = metrics(&l.acked, l.engine.db().last_seq());
+        assert!(idle.contains("aikoql_replication_standbys 0"), "{idle}");
+        let sdir = tmp("lag-standby");
+        let standby = Arc::new(Db::open(Config::new(sdir.clone())).unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+        let h = {
+            let (addr, sb, d, st) = (l.addr.clone(), standby.clone(), sdir.clone(), stop.clone());
+            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st, None))
+        };
+        let head = l.engine.db().last_seq();
+        wait_for(|| metrics(&l.acked, head).contains("_lag_frames{standby=\"0\""));
+        wait_for(|| metrics(&l.acked, head).contains("\"} 0\n"));
+        let m = metrics(&l.acked, head);
+        assert!(
+            m.contains(&format!("aikoql_replication_head_seq {head}")),
+            "{m}"
+        );
+        assert!(m.contains("aikoql_replication_standbys 1"), "{m}");
+        assert!(m.contains("peer=\"127.0.0.1:"), "{m}");
+        stop.store(true, Ordering::SeqCst);
+        h.join().unwrap().unwrap();
+        wait_for(|| metrics(&l.acked, head).contains("aikoql_replication_standbys 0"));
+        l.stop.store(true, Ordering::SeqCst);
+    }
 }
