@@ -67,9 +67,78 @@ impl Mcp {
     }
 
     fn spawn(db: &Path, extra: &[&str], logged: bool) -> Self {
-        let mut m = Self::spawn_raw(db, extra, logged);
-        m.init();
-        m
+        Self::start_env(db, extra, logged, &[])
+    }
+
+    /// Started and initialized. A server that exits before answering
+    /// because its listener bind found the port taken — a holder that
+    /// exists only for a moment, between free_port's probe and the bind,
+    /// and is gone by the time anyone looks — is restarted on the same
+    /// port after a pause (≤ 5 tries); any other early exit panics with the
+    /// server's stderr.
+    fn start_env(db: &Path, extra: &[&str], logged: bool, env: &[(String, String)]) -> Self {
+        for attempt in 1.. {
+            let mut m = Self::spawn_env(db, extra, logged, env);
+            if m.try_init() {
+                return m;
+            }
+            let said = m.stderr_text();
+            if said.contains("Address already in use") && attempt < 5 {
+                eprintln!("harness: a listener port was taken at startup — restarting (attempt {attempt})");
+                drop(m);
+                std::thread::sleep(Duration::from_millis(300));
+                continue;
+            }
+            panic!("server exited before initialize (attempt {attempt}); stderr:\n{said}");
+        }
+        unreachable!()
+    }
+
+    /// What the server wrote to stderr: its log channel, or its file.
+    fn stderr_text(&mut self) -> String {
+        match &self.log {
+            Some(rx) => {
+                let mut out = Vec::new();
+                while let Ok(line) = rx.recv_timeout(Duration::from_millis(500)) {
+                    out.push(line);
+                }
+                out.join("\n")
+            }
+            None => std::fs::read_to_string(&self.stderr)
+                .unwrap_or_default()
+                .lines()
+                .map(strip_ansi)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+
+    /// `initialize`; false when the server exited instead of answering.
+    fn try_init(&mut self) -> bool {
+        self.next_id += 1;
+        let id = self.next_id;
+        let req = json!({"jsonrpc": "2.0", "id": id, "method": "initialize", "params": {
+            "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "repl", "version": "0"}}});
+        if writeln!(self.stdin, "{req}")
+            .and_then(|_| self.stdin.flush())
+            .is_err()
+        {
+            return false;
+        }
+        loop {
+            let mut line = String::new();
+            match self.stdout.read_line(&mut line) {
+                Ok(0) | Err(_) => return false,
+                Ok(_) => {}
+            }
+            let frame: J = match serde_json::from_str(line.trim()) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            if frame["id"].as_u64() == Some(id) {
+                return true;
+            }
+        }
     }
 
     /// Started, not yet initialized — an HA standby answers nothing until
@@ -873,13 +942,12 @@ fn split_brain_a_leader_cut_off_from_its_lease_fences_before_the_standby_takes_o
         format!("127.0.0.1:{}", free_port()),
         format!("127.0.0.1:{}", free_port()),
     );
-    let mut a = Mcp::spawn_env(
+    let mut a = Mcp::start_env(
         &adir,
         &strs(&s3_node("a", &ra)),
         true,
         &s3_env(&gate.endpoint),
     );
-    a.init();
     let alog = a.log.take().unwrap();
     let mut b = Mcp::spawn_env(&bdir, &strs(&s3_node("b", &rb)), true, &s3_env(&s3));
     let blog = b.log.take().unwrap();
@@ -989,8 +1057,7 @@ fn split_brain_a_leader_whose_store_rejects_it_fences_itself() {
     let repl = format!("127.0.0.1:{}", free_port());
     // no standby here, so no synchronous acks
     let args = ha_args(Path::new("s3://ha-bucket/lease.json"), "a", &repl);
-    let mut a = Mcp::spawn_env(&dir, &strs(&args), false, &s3_env(&gate.endpoint));
-    a.init();
+    let mut a = Mcp::start_env(&dir, &strs(&args), false, &s3_env(&gate.endpoint));
     a.remember(1);
     gate.set(GATE_REJECT);
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -1253,8 +1320,7 @@ fn a_read_replica_serves_converging_reads_and_refuses_writes() {
         "AIKOQL_REPLICATION_TOKEN".to_string(),
         "repl-secret".to_string(),
     )];
-    let mut replica = Mcp::spawn_env(&sdir, &["--follow", &repl], false, &env);
-    replica.init();
+    let mut replica = Mcp::start_env(&sdir, &["--follow", &repl], false, &env);
     let mut read = |m: &mut Mcp, koid: &str| -> Option<J> {
         let res = m.request(
             "tools/call",
@@ -1353,7 +1419,7 @@ fn a_replica_can_feed_another_replica() {
         "AIKOQL_REPLICATION_TOKEN".to_string(),
         "repl-secret".to_string(),
     )];
-    let mut r1 = Mcp::spawn_env(
+    let r1 = Mcp::start_env(
         &r1dir,
         &[
             "--follow",
@@ -1366,9 +1432,7 @@ fn a_replica_can_feed_another_replica() {
         false,
         &env,
     );
-    r1.init();
-    let mut r2 = Mcp::spawn_env(&r2dir, &["--follow", &r1repl], false, &env);
-    r2.init();
+    let mut r2 = Mcp::start_env(&r2dir, &["--follow", &r1repl], false, &env);
     let serves = |m: &mut Mcp, koid: &str| {
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
@@ -1450,8 +1514,7 @@ fn real_s3_ha_failover_then_pitr_from_the_bucket() {
         args.extend(["--archive", &archive, "--archive-log-ms", "200"].map(String::from));
         args
     };
-    let mut a = Mcp::spawn_env(&adir, &strs(&node("a", &ra)), false, &env);
-    a.init();
+    let mut a = Mcp::start_env(&adir, &strs(&node("a", &ra)), false, &env);
     let mut koids: Vec<String> = (0..10).map(|i| a.remember(i)).collect();
     let mut b = Mcp::spawn_env(&bdir, &strs(&node("b", &rb)), true, &env);
     let blog = b.log.take().unwrap();

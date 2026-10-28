@@ -756,7 +756,10 @@ fn main() {
             eprintln!("--replicate-listen needs the storage admin surface");
             std::process::exit(2);
         };
-        info!(%addr, tls = repl_tls.is_some(), "replication stream listening");
+        let bound = listener
+            .local_addr()
+            .map_or(addr.clone(), |a| a.to_string());
+        info!(addr = %bound, tls = repl_tls.is_some(), "replication stream listening");
         let shipped = replication::ShippedCheckpoint {
             dir: ckpt_dir.clone(),
             lock: ckpt_lock.clone(),
