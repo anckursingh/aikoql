@@ -397,6 +397,26 @@ jobs:
           AIKOQL_TEST_S3_ENDPOINT: http://127.0.0.1:9000
         run: bash scripts/s3-it.sh
 
+  # MRFC-0080: the same real-S3 certs against Moto — an independent S3
+  # implementation, pinned and Docker-free, so this one gates (MinIO above
+  # stays advisory until its images are pinned to a verified tag).
+  s3-compat-moto:
+    name: Real S3 legs (Moto)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Moto server
+        run: pip install -q "moto[server]==5.2.5"
+      - name: Real-S3 tests (Moto)
+        env:
+          S3_IT_BACKEND: moto
+        run: bash scripts/s3-it.sh
+
   # GO-SDK-01: the Go SDK (crates/sdk/go) is the P3-M9 re-adoption — the
   # first-class-db-roadmap Phase-4 trigger fired (a Go product needs the
   # DB). Same shape as python-sdk: build the real server binary, then run
