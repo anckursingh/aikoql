@@ -159,9 +159,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             let stop = std::sync::atomic::AtomicBool::new(false);
             // R3b: shipped index checkpoints land where `serve` resumes them
             let ckpt = std::path::PathBuf::from(format!("{dir}.ckpt"));
-            if let Err(e) =
-                crate::replication::follow(&leader, &token, &standby, Some(&ckpt), &stop)
-            {
+            if let Err(e) = crate::replication::follow(
+                &leader,
+                &token,
+                &standby,
+                std::path::Path::new(&dir),
+                Some(&ckpt),
+                &stop,
+            ) {
                 eprintln!("follow stopped: {e}");
                 std::process::exit(1);
             }

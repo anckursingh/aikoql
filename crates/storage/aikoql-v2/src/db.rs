@@ -434,6 +434,9 @@ pub struct Db {
     /// armed from `Config::wal_fail_next` (consumed on the next frame;
     /// production configs never arm it).
     pub(crate) wal_fail_next: AtomicBool,
+    /// MRFC-0080 R4 — set once a newer replication term deposed this
+    /// node: client writes are refused, replicated frames still apply.
+    fenced: std::sync::OnceLock<String>,
 }
 
 /// P4-M5 — bounded, sampled per-request read trace. `record` assigns the
@@ -937,6 +940,7 @@ impl Db {
             trace: TraceState::new(),
             control: ControlStats::default(),
             wal_fail_next: AtomicBool::new(wal_fail_next_armed),
+            fenced: std::sync::OnceLock::new(),
         })
     }
 
@@ -1055,6 +1059,12 @@ impl Db {
         self.write_at(ops, Some(seq))
     }
 
+    /// MRFC-0080 R4 — refuse every client write from now on (a newer
+    /// term deposed this node); `why` rides each refusal.
+    pub fn fence(&self, why: String) {
+        let _ = self.fenced.set(why);
+    }
+
     /// MRFC-0080 R1 — the newest committed seq (0 on an empty db): a
     /// follower's resume point.
     pub fn last_seq(&self) -> u64 {
@@ -1159,6 +1169,9 @@ impl Db {
                     u16::MAX
                 )));
             }
+        }
+        if let (None, Some(why)) = (expected, self.fenced.get()) {
+            return Err(FormatError::Stale(format!("not leader: {why}")));
         }
         if expected.is_none() && self.config.durability == DurabilityMode::GroupCommit {
             let seq = self.writer()?.write(ops)?;

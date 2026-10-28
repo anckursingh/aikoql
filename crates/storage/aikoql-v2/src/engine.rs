@@ -46,6 +46,8 @@ pub trait StorageAdminApi: Send + Sync {
     fn log_since(&self, after: u64, max: usize) -> KResult<Vec<WalFrame>>;
     fn release_log(&self, upto: u64) -> KResult<()>;
     fn last_seq(&self) -> u64;
+    /// MRFC-0080 R4 — refuse client writes from now on.
+    fn fence(&self, why: String);
 }
 
 /// AIKOQL v2 engine: WAL → memtable → immutable segments, served
@@ -118,6 +120,10 @@ impl StorageAdminApi for AikoqlStorageEngineV2 {
 
     fn last_seq(&self) -> u64 {
         self.db.last_seq()
+    }
+
+    fn fence(&self, why: String) {
+        self.db.fence(why)
     }
 
     fn restore_from(&self, dir: &Path) -> KResult<RestoreInfo> {

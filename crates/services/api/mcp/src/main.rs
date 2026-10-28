@@ -273,6 +273,26 @@ fn main() {
                 std::process::exit(1);
             }
         };
+    // MRFC-0080 R4: serving a standby promotes it to the next term; a
+    // node deposed by a newer term keeps serving reads, never writes.
+    let (term, role) = match replication::claim_leadership(std::path::Path::new(&db_path)) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("replication term: {e}");
+            std::process::exit(1);
+        }
+    };
+    if role == replication::Role::Fenced {
+        let Some(a) = admin.as_ref() else {
+            eprintln!("a fenced node needs the storage admin surface to refuse writes");
+            std::process::exit(2);
+        };
+        a.fence(format!("fenced at replication term {term}"));
+        warn!(
+            term,
+            "deposed by a newer replication term: reads only — rejoin with `follow`"
+        );
+    }
 
     #[cfg(feature = "embedding-openai")]
     let url = if embedding_base_url.is_empty() {
@@ -506,6 +526,7 @@ fn main() {
             dir: ckpt_dir.clone(),
             lock: ckpt_lock.clone(),
         };
+        let repl_dir = std::path::PathBuf::from(db_path.as_str());
         thread::spawn(move || {
             replication::serve_replication(
                 listener,
@@ -513,6 +534,7 @@ fn main() {
                 auth,
                 Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 Some(shipped),
+                repl_dir,
             )
         });
         // R3b: a leader that crashes leaves no shutdown checkpoint — take

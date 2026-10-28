@@ -11,6 +11,11 @@
 //! relative path + u64 size + bytes). Standby → leader is
 //! a stream of u64 LE acked seqs; the leader releases its archive to the
 //! slowest connected standby's ack.
+//!
+//! R4 — terms: each node keeps `{dir}/REPL-TERM` ("<term> <role>"). The
+//! hello carries the standby's term, the `ok` the leader's. A standby
+//! never takes frames from an older term; a leader that meets a newer one
+//! was deposed — it persists `fenced` and refuses every client write.
 
 use crate::session::TcpAuthTable;
 use aikoql_storage_v2::db::Db;
@@ -44,6 +49,70 @@ const MAX_REASON: usize = 64 << 10;
 /// Frames per log read.
 const BATCH: usize = 256;
 
+/// R4 — the term file inside the database directory.
+pub(crate) const TERM_FILE: &str = "REPL-TERM";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Role {
+    Leader,
+    Standby,
+    /// Deposed by a newer term: reads only, until it rejoins as a standby.
+    Fenced,
+}
+
+/// The node's (term, role); no file is term 0, leader — a node that
+/// never replicated.
+pub(crate) fn load_term(dir: &Path) -> std::io::Result<(u64, Role)> {
+    let s = match std::fs::read_to_string(dir.join(TERM_FILE)) {
+        Ok(s) => s,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok((0, Role::Leader)),
+        Err(e) => return Err(e),
+    };
+    let bad = || {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("unreadable {TERM_FILE}: {s:?}"),
+        )
+    };
+    let (term, role) = s.trim().split_once(' ').ok_or_else(bad)?;
+    let role = match role {
+        "leader" => Role::Leader,
+        "standby" => Role::Standby,
+        "fenced" => Role::Fenced,
+        _ => return Err(bad()),
+    };
+    Ok((term.parse().map_err(|_| bad())?, role))
+}
+
+/// Durable on return (tmp → fsync → rename → dir fsync): a lost or torn
+/// write must never unfence a node or forget a term.
+pub(crate) fn store_term(dir: &Path, term: u64, role: Role) -> std::io::Result<()> {
+    let role = match role {
+        Role::Leader => "leader",
+        Role::Standby => "standby",
+        Role::Fenced => "fenced",
+    };
+    let tmp = dir.join(format!("{TERM_FILE}.tmp"));
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(format!("{term} {role}\n").as_bytes())?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, dir.join(TERM_FILE))?;
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
+    Ok(())
+}
+
+/// `serve` on a standby is its promotion: it takes the next term.
+pub(crate) fn claim_leadership(dir: &Path) -> std::io::Result<(u64, Role)> {
+    match load_term(dir)? {
+        (term, Role::Standby) => {
+            store_term(dir, term + 1, Role::Leader)?;
+            Ok((term + 1, Role::Leader))
+        }
+        other => Ok(other),
+    }
+}
+
 /// MRFC-0080 R3b — the leader's index checkpoint directory, shipped to
 /// standbys whenever its water moves. `lock` is held by every checkpoint
 /// writer: the sender never reads a directory mid-swap.
@@ -62,6 +131,7 @@ pub(crate) fn serve_replication(
     auth: Arc<TcpAuthTable>,
     stop: Arc<AtomicBool>,
     checkpoint: Option<ShippedCheckpoint>,
+    dir: PathBuf,
 ) {
     if let Err(e) = listener.set_nonblocking(true) {
         warn!("replication listener: {e}");
@@ -73,16 +143,25 @@ pub(crate) fn serve_replication(
         match listener.accept() {
             Ok((stream, _)) => {
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
-                let (source, auth, acks, stop, ckpt) = (
+                let (source, auth, acks, stop, ckpt, dir) = (
                     source.clone(),
                     auth.clone(),
                     acks.clone(),
                     stop.clone(),
                     checkpoint.clone(),
+                    dir.clone(),
                 );
                 std::thread::spawn(move || {
-                    let served =
-                        serve_standby(&stream, id, &*source, &auth, &acks, &stop, ckpt.as_ref());
+                    let served = serve_standby(
+                        &stream,
+                        id,
+                        &*source,
+                        &auth,
+                        &acks,
+                        &stop,
+                        ckpt.as_ref(),
+                        &dir,
+                    );
                     if let Err(e) = served {
                         warn!("replication standby {id}: {e}");
                     }
@@ -107,6 +186,7 @@ fn serve_standby(
     acks: &Arc<Mutex<HashMap<u64, u64>>>,
     stop: &AtomicBool,
     checkpoint: Option<&ShippedCheckpoint>,
+    dir: &Path,
 ) -> std::io::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(LEADER_SILENCE))?;
@@ -118,6 +198,8 @@ fn serve_standby(
         .lookup(token)
         .is_some_and(|i| i.roles.iter().any(|r| r == "admin"));
     let after = hello["after"].as_u64();
+    let their_term = hello["term"].as_u64().unwrap_or(0);
+    let (term, role) = load_term(dir)?;
     let refusal = if hello["proto"] != PROTO {
         Some(format!(
             "replication refused: protocol {} (this leader: {PROTO})",
@@ -127,6 +209,21 @@ fn serve_standby(
         Some("replication refused: the token is unknown or lacks the admin role".to_string())
     } else if after.is_none() {
         Some("replication refused: no resume seq".to_string())
+    } else if role == Role::Fenced {
+        Some(format!(
+            "replication refused: this node is fenced at term {term}"
+        ))
+    } else if their_term > term {
+        // the standby has followed a newer leader: this one was deposed
+        store_term(dir, their_term, Role::Fenced)?;
+        source.fence(format!("deposed by replication term {their_term}"));
+        warn!(
+            term,
+            their_term, "a standby carries a newer term: this node is fenced"
+        );
+        Some(format!(
+            "replication refused: this leader's term {term} is older than the standby's {their_term} — it is now fenced"
+        ))
     } else {
         None
     };
@@ -135,7 +232,7 @@ fn serve_standby(
         return Ok(());
     }
     let mut sent = after.unwrap_or(0);
-    w.write_all(b"{\"ok\":true}\n")?;
+    w.write_all(format!("{}\n", serde_json::json!({ "ok": true, "term": term })).as_bytes())?;
     // justified: Mutex poison is unrecoverable
     acks.lock().unwrap().insert(id, sent);
 
@@ -378,12 +475,13 @@ pub(crate) fn follow(
     addr: &str,
     token: &str,
     standby: &Db,
+    dir: &Path,
     checkpoint: Option<&Path>,
     stop: &AtomicBool,
 ) -> Result<(), String> {
     let mut backoff = Duration::from_millis(100);
     while !stop.load(Ordering::Relaxed) {
-        match follow_once(addr, token, standby, checkpoint, stop) {
+        match follow_once(addr, token, standby, dir, checkpoint, stop) {
             End::Stopped => return Ok(()),
             End::Fatal(e) => return Err(e),
             End::Retry(e) => {
@@ -400,9 +498,14 @@ fn follow_once(
     addr: &str,
     token: &str,
     standby: &Db,
+    dir: &Path,
     checkpoint: Option<&Path>,
     stop: &AtomicBool,
 ) -> End {
+    let (own_term, role) = match load_term(dir) {
+        Ok(t) => t,
+        Err(e) => return End::Fatal(format!("read {TERM_FILE}: {e}")),
+    };
     let mut s = match TcpStream::connect(addr) {
         Ok(s) => s,
         Err(e) => return End::Retry(format!("connect: {e}")),
@@ -411,7 +514,12 @@ fn follow_once(
     if let Err(e) = s.set_read_timeout(Some(Duration::from_millis(100))) {
         return End::Retry(e.to_string());
     }
-    let hello = serde_json::json!({ "proto": PROTO, "token": token, "after": standby.last_seq() });
+    let hello = serde_json::json!({
+        "proto": PROTO,
+        "token": token,
+        "after": standby.last_seq(),
+        "term": own_term,
+    });
     if let Err(e) = s.write_all(format!("{hello}\n").as_bytes()) {
         return End::Retry(format!("handshake: {e}"));
     }
@@ -441,6 +549,17 @@ fn follow_once(
     };
     if let Some(e) = reply["error"].as_str() {
         return End::Fatal(e.to_string());
+    }
+    let term = reply["term"].as_u64().unwrap_or(0);
+    if term < own_term {
+        return End::Fatal(format!(
+            "refused a stale leader: its term {term} is older than this node's {own_term}"
+        ));
+    }
+    if (term, role) != (own_term, Role::Standby) {
+        if let Err(e) = store_term(dir, term, Role::Standby) {
+            return End::Fatal(format!("store {TERM_FILE}: {e}"));
+        }
     }
     loop {
         let mut tag = [0u8; 1];
