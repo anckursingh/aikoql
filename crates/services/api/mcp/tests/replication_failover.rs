@@ -1176,3 +1176,73 @@ fn pitr_restores_the_archive_to_the_latest_and_to_a_point_in_time() {
         "a write after the instant survived: {res}"
     );
 }
+
+/// Standby reads — `serve --follow LEADER` is a read replica: it applies
+/// the leader's log into its own directory while serving reads (which
+/// converge on the leader's writes), and refuses writes with NOT_LEADER
+/// and the leader's client address.
+#[test]
+fn a_read_replica_serves_converging_reads_and_refuses_writes() {
+    let (ldir, sdir) = (tmp("replica-leader"), tmp("replica"));
+    let repl = format!("127.0.0.1:{}", free_port());
+    let mut leader = Mcp::start(
+        &ldir,
+        &[
+            "--replicate-listen",
+            &repl,
+            "--tcp-token",
+            "repl-secret::admin",
+            "--advertise",
+            "db1.internal:7070",
+        ],
+    );
+    let first = leader.remember(1);
+    let env = [(
+        "AIKOQL_REPLICATION_TOKEN".to_string(),
+        "repl-secret".to_string(),
+    )];
+    let mut replica = Mcp::spawn_env(&sdir, &["--follow", &repl], false, &env);
+    replica.init();
+    let mut read = |m: &mut Mcp, koid: &str| -> Option<J> {
+        let res = m.request(
+            "tools/call",
+            json!({"name": "get", "arguments": {"subject": "admin", "koid": koid}}),
+        );
+        if res["isError"] == json!(false) {
+            serde_json::from_str(res["content"][0]["text"].as_str()?).ok()
+        } else {
+            None
+        }
+    };
+    let converge = |m: &mut Mcp, koid: &str, read: &mut dyn FnMut(&mut Mcp, &str) -> Option<J>| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(ko) = read(m, koid) {
+                return ko;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the replica never served {koid}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    assert_eq!(
+        converge(&mut replica, &first, &mut read)["properties"]["n"],
+        json!(1)
+    );
+    let second = leader.remember(2); // written while the replica serves
+    assert_eq!(
+        converge(&mut replica, &second, &mut read)["properties"]["n"],
+        json!(2)
+    );
+
+    let res = replica.request(
+        "tools/call",
+        json!({"name": "remember", "arguments": {"subject": "admin", "type_name": "note", "properties": {"n": 3}}}),
+    );
+    assert_eq!(res["isError"], json!(true), "a replica took a write: {res}");
+    let err: J = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(err["error"]["code"], json!("NOT_LEADER"), "{err}");
+    assert_eq!(err["error"]["leader"], json!("db1.internal:7070"), "{err}");
+}

@@ -1,0 +1,8 @@
+{
+  "id": "standby-kernel",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test standby",
+  "captured_at": "2026-10-28T12:26:54Z",
+  "captured_head": "ebc1a8e09c9b3c67a6ca1b874085632d0c4857ad",
+  "exit_code": 101
+}
