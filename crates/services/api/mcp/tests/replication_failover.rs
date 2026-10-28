@@ -917,3 +917,48 @@ fn split_brain_a_leader_whose_store_rejects_it_fences_itself() {
         "1 fenced\n"
     );
 }
+
+/// R3c — with TLS a leader may bind a non-loopback address (the stream
+/// is encrypted and the standby verifies the leader's certificate); a
+/// standby trusting the CA follows it.
+#[test]
+fn replicate_listen_over_tls_accepts_a_non_loopback_bind() {
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tls");
+    let (ldir, sdir) = (tmp("tls-leader"), tmp("tls-standby"));
+    let port = free_port();
+    let mut leader = Mcp::start(
+        &ldir,
+        &[
+            "--replicate-listen",
+            &format!("0.0.0.0:{port}"),
+            "--replicate-tls-cert",
+            fx.join("server.pem").to_str().unwrap(),
+            "--replicate-tls-key",
+            fx.join("server.key").to_str().unwrap(),
+            "--tcp-token",
+            "repl-secret::admin",
+        ],
+    );
+    let koids: Vec<String> = (0..10).map(|i| leader.remember(i)).collect();
+    let mut child = Command::new(bin())
+        .arg("follow")
+        .arg(&sdir)
+        .args(["--leader", &format!("127.0.0.1:{port}")])
+        .args(["--tls-ca", fx.join("ca.pem").to_str().unwrap()])
+        .env("AIKOQL_REPLICATION_TOKEN", "repl-secret")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let rx = lines(child.stderr.take().unwrap());
+    wait_caught_up(&rx);
+    let _ = child.kill();
+    let _ = child.wait();
+    drop(leader);
+    let mut promoted = Mcp::start(&sdir, &[]);
+    for (i, koid) in koids.iter().enumerate() {
+        let got = promoted.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
+}

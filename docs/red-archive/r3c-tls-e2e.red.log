@@ -1,0 +1,23 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.51s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-a0f0414a7eb71cd6)
+
+running 1 test
+test replicate_listen_over_tls_accepts_a_non_loopback_bind ... FAILED
+
+failures:
+
+---- replicate_listen_over_tls_accepts_a_non_loopback_bind stdout ----
+
+thread 'replicate_listen_over_tls_accepts_a_non_loopback_bind' (733250) panicked at crates/services/api/mcp/tests/replication_failover.rs:109:13:
+server exited
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    replicate_listen_over_tls_accepts_a_non_loopback_bind
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.29s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+EXIT=101

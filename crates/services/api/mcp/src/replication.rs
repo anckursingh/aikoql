@@ -1036,7 +1036,7 @@ mod tests {
                     sdir.to_path_buf(),
                     stop.clone(),
                 );
-                std::thread::spawn(move || follow(&addr, &token, &db, &d, None, &st))
+                std::thread::spawn(move || follow(&addr, &token, &db, &d, None, &st, None))
             };
             while !h.is_finished() && db.last_seq() != head {
                 assert!(
@@ -1080,6 +1080,10 @@ mod tests {
     }
 
     fn leader_at(dir: PathBuf) -> Leader {
+        leader_with(dir, None)
+    }
+
+    fn leader_with(dir: PathBuf, tls: Option<Arc<rustls::ServerConfig>>) -> Leader {
         let mut cfg = Config::new(dir.clone());
         cfg.retain_log = true;
         cfg.memtable_bytes = 1024; // the stream crosses flush truncations
@@ -1095,7 +1099,7 @@ mod tests {
         let d = dir.clone();
         let acked = Arc::new(Acked::default());
         let a = acked.clone();
-        std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d, a));
+        std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d, a, tls));
         Leader {
             engine,
             addr,
@@ -1131,7 +1135,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let run = |stop: Arc<AtomicBool>| {
             let (addr, sb, d) = (l.addr.clone(), standby.clone(), sdir.clone());
-            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &stop))
+            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &stop, None))
         };
         let h = run(stop.clone());
         write(&l, 100, 200); // live writes while streaming
@@ -1165,7 +1169,7 @@ mod tests {
         let standby = Db::open(Config::new(sdir.clone())).unwrap();
         let stop = AtomicBool::new(false);
         for tok in ["user-tok", "nope"] {
-            let err = follow(&l.addr, tok, &standby, &sdir, None, &stop).unwrap_err();
+            let err = follow(&l.addr, tok, &standby, &sdir, None, &stop, None).unwrap_err();
             assert!(err.contains("refused"), "{tok}: {err}");
         }
         assert_eq!(
@@ -1203,6 +1207,7 @@ mod tests {
                 None,
                 gap_dir,
                 Arc::new(Acked::default()),
+                None,
             )
         });
 
@@ -1232,6 +1237,7 @@ mod tests {
             &sdir,
             None,
             &AtomicBool::new(false),
+            None,
         )
         .unwrap_err();
         assert!(err.contains("term"), "{err}");
@@ -1255,6 +1261,7 @@ mod tests {
             &fresh,
             None,
             &AtomicBool::new(false),
+            None,
         )
         .unwrap_err();
         assert!(err.contains("fenced"), "{err}");
@@ -1273,7 +1280,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let h = {
             let (addr, sb, d, st) = (l.addr.clone(), standby.clone(), sdir.clone(), stop.clone());
-            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st))
+            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st, None))
         };
         wait_for(|| standby.last_seq() == l.engine.db().last_seq());
         stop.store(true, Ordering::SeqCst);
@@ -1297,7 +1304,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let h = {
             let (addr, sb, d, st) = (l.addr.clone(), standby.clone(), sdir.clone(), stop.clone());
-            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st))
+            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st, None))
         };
         for i in 0..50u32 {
             let seq = l.engine.db().put(format!("s{i}").as_bytes(), b"v").unwrap();
@@ -1396,5 +1403,69 @@ mod tests {
         assert!(!rebootstrapped, "a consistent standby was re-bootstrapped");
         assert_eq!(a.scan(b"").unwrap(), b.engine.db().scan(b"").unwrap());
         b.stop.store(true, Ordering::SeqCst);
+    }
+
+    const CA: &[u8] = include_bytes!("../tests/fixtures/tls/ca.pem");
+    const OTHER_CA: &[u8] = include_bytes!("../tests/fixtures/tls/other-ca.pem");
+    const CERT: &[u8] = include_bytes!("../tests/fixtures/tls/server.pem");
+    const KEY: &[u8] = include_bytes!("../tests/fixtures/tls/server.key");
+
+    /// R3c — the stream over TLS: a standby that trusts the leader's CA
+    /// streams, converges and resumes, exactly as in plaintext.
+    #[test]
+    fn a_tls_standby_streams_from_a_tls_leader() {
+        let l = leader_with(
+            tmp("tls"),
+            Some(crate::tls::server_config(CERT, KEY).unwrap()),
+        );
+        write(&l, 0, 100);
+        let client = crate::tls::client_config(CA).unwrap();
+        let sdir = tmp("tls-standby");
+        let standby = Arc::new(Db::open(Config::new(sdir.clone())).unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+        let h = {
+            let (addr, sb, d, st, c) = (
+                l.addr.clone(),
+                standby.clone(),
+                sdir.clone(),
+                stop.clone(),
+                client.clone(),
+            );
+            std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st, Some(&c)))
+        };
+        write(&l, 100, 200); // live while streaming, across flushes
+        wait_for(|| standby.last_seq() == l.engine.db().last_seq());
+        assert_eq!(standby.scan(b"").unwrap(), l.engine.db().scan(b"").unwrap());
+        stop.store(true, Ordering::SeqCst);
+        h.join().unwrap().unwrap();
+        l.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// R3c — a standby that does not trust the leader's certificate is
+    /// refused at the handshake (fatal, not retried), and a plaintext
+    /// standby gets nothing from a TLS leader.
+    #[test]
+    fn a_standby_that_does_not_trust_the_leader_is_refused() {
+        let l = leader_with(
+            tmp("tls-untrusted"),
+            Some(crate::tls::server_config(CERT, KEY).unwrap()),
+        );
+        write(&l, 0, 10);
+        let sdir = tmp("tls-untrusted-standby");
+        let standby = Db::open(Config::new(sdir.clone())).unwrap();
+        let other = crate::tls::client_config(OTHER_CA).unwrap();
+        let err = follow(
+            &l.addr,
+            "leader-tok",
+            &standby,
+            &sdir,
+            None,
+            &AtomicBool::new(false),
+            Some(&other),
+        )
+        .unwrap_err();
+        assert!(err.to_lowercase().contains("certificate"), "{err}");
+        assert_eq!(standby.last_seq(), 0);
+        l.stop.store(true, Ordering::SeqCst);
     }
 }
