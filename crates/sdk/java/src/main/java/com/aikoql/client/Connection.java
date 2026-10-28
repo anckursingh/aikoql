@@ -33,7 +33,9 @@ public final class Connection implements AutoCloseable {
         return Corr.MATCH;
     }
 
-    final Transport transport;
+    /** Replaced when a NOT_LEADER hint moves the session (MRFC-0080 R5b);
+     * always under {@code lock}. */
+    Transport transport;
     final ReentrantLock lock = new ReentrantLock();
     private int nextId;
     private boolean closed;
@@ -213,8 +215,40 @@ public final class Connection implements AutoCloseable {
     }
 
     /** Calls any registered MCP tool by name and returns its data payload —
-     * the escape hatch for tools without a typed wrapper here. */
+     * the escape hatch for tools without a typed wrapper here.
+     *
+     * <p>MRFC-0080 R5b: refused with NOT_LEADER and a leader hint, the
+     * session reconnects to that leader, re-runs {@link #initialize} and
+     * retries the call once; it then stays on the leader. Session identity
+     * from {@link #sessionInit} is not replayed. */
     public Json.Value callTool(String name, Map<String, Object> args, Deadline dl)
+            throws AikoqlException {
+        try {
+            return callToolOnce(name, args, dl);
+        } catch (AikoqlException e) {
+            String leader = e.getLeader();
+            if (!"NOT_LEADER".equals(e.getCode()) || leader == null) throw e;
+            follow(leader, dl);
+            return callToolOnce(name, args, dl);
+        }
+    }
+
+    /** Replaces the transport with one to the leader at {@code addr} and
+     * re-runs the handshake. */
+    private void follow(String addr, Deadline dl) throws AikoqlException {
+        Transport next = Transport.connect(addr, AikoqlClient.DIAL_TIMEOUT_MS);
+        lock.lock();
+        try {
+            transport.close();
+            transport = next;
+            closed = false;
+        } finally {
+            lock.unlock();
+        }
+        initialize(dl);
+    }
+
+    private Json.Value callToolOnce(String name, Map<String, Object> args, Deadline dl)
             throws AikoqlException {
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("name", name);
@@ -252,7 +286,9 @@ public final class Connection implements AutoCloseable {
                 boolean retryable =
                         o.fields.get("retryable") instanceof Json.Bool rb && rb.v();
                 String suggestion = Json.jsonStr(o.fields.get("suggestion"));
-                throw new AikoqlException(code, message, retryable, suggestion);
+                String leader = Json.jsonStr(o.fields.get("leader"));
+                throw new AikoqlException(code, message, retryable, suggestion, null,
+                        leader.isEmpty() ? null : leader);
             }
             throw new AikoqlException(
                     "INTERNAL", "tool " + toolName + " failed without an error envelope");

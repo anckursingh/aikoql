@@ -12,14 +12,23 @@ public class AikoqlException extends RuntimeException {
     private final boolean retryable;
     private final String suggestion;
     private final String requestId;
+    private final String leader;
 
     public AikoqlException(String code, String message, boolean retryable,
                            String suggestion, String requestId) {
+        this(code, message, retryable, suggestion, requestId, null);
+    }
+
+    /** {@code leader}: the leader's client address on a NOT_LEADER refusal
+     * (MRFC-0080 R4d), or null when the server does not know it. */
+    public AikoqlException(String code, String message, boolean retryable,
+                           String suggestion, String requestId, String leader) {
         super("[" + code + "] " + message);
         this.code = code;
         this.retryable = retryable;
         this.suggestion = suggestion;
         this.requestId = requestId;
+        this.leader = leader;
     }
 
     public AikoqlException(String code, String message, boolean retryable, String suggestion) {
@@ -44,6 +53,11 @@ public class AikoqlException extends RuntimeException {
 
     public String getRequestId() {
         return requestId;
+    }
+
+    /** The leader's client address on a NOT_LEADER refusal, else null. */
+    public String getLeader() {
+        return leader;
     }
 
     /** The frozen TIMEOUT (retryable): a deadline elapsed before a response. */
