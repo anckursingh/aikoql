@@ -14,7 +14,7 @@
 //
 // DialStdio spawns the server instead and speaks MCP over its
 // stdin/stdout — the docker-container contract (`docker run -i --rm
-// image serve /data/aikoql.redb`), token-free because stdio trusts the
+// image serve /data/aikoql`), token-free because stdio trusts the
 // process boundary.
 //
 // A Client serializes its calls over one connection (the mutex is
@@ -133,7 +133,7 @@ func Dial(ctx context.Context, addr string, opts ...Option) (*Client, error) {
 
 // DialStdio spawns bin with args and speaks MCP over its stdin/stdout.
 // This is the docker-container contract — `docker run -i --rm image serve
-// /data/aikoql.redb` runs the same binary over the same stdio (the repo's
+// /data/aikoql` runs the same binary over the same stdio (the repo's
 // e2e-volume-restart.js proves the container side). No token: stdio trusts
 // the process boundary and the server's stdio mode needs no --tcp-token.
 // The server's stderr is inherited so its logs stay visible. ctx bounds

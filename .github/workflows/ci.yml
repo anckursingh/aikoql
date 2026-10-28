@@ -161,7 +161,7 @@ jobs:
         run: |
           set +e
           out=$(docker run --rm --entrypoint aikoql -e AIKOQL_TCP_TOKEN=ci:ci:admin \
-            aikoql:test serve /data/aikoql.redb --listen 0.0.0.0:9090 2>&1)
+            aikoql:test serve /data/aikoql --listen 0.0.0.0:9090 2>&1)
           rc=$?
           set -e
           echo "$out"

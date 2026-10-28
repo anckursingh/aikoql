@@ -1,6 +1,6 @@
 # Aikoql MVP — multi-stage Docker build
-# PRR-1: redb is the default storage backend — no rocksdb (the
-# `storage-rocksdb` feature never existed; see MVP-001).
+# Storage is aikoql-v2, the only engine since launch S-02 (no redb, no
+# rocksdb).
 # Stage 1: build (pin matches the repo MSRV — rust 1.80 cannot parse
 # edition-2024 registry crates, e.g. crypto-common 0.2.2).
 FROM rust:1.97-slim-bookworm AS builder
@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /build/target/release/aikoql-mcp /usr/local/bin/aikoql
 COPY aikoql.toml /etc/aikoql/aikoql.toml
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN mkdir -p /data
 VOLUME /data
@@ -38,7 +39,9 @@ EXPOSE 9090 9091
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -fsS http://127.0.0.1:9091/health || exit 1
 
-ENTRYPOINT ["aikoql"]
+# `aikoql "$@"` after the one-time /data/aikoql.redb → /data/aikoql move
+# (docker-entrypoint.sh); `--entrypoint aikoql` still runs the binary bare.
+ENTRYPOINT ["docker-entrypoint.sh"]
 # PRR-2 + PRR-4: TCP requires >=1 token; the config pipeline reads
 # AIKOQL_TCP_TOKEN (TOKEN[:TENANT[:ROLES]]) directly, so no shell expansion
 # is needed (an exec-form CMD with ${...} is NOT expanded by Docker, and a
@@ -50,8 +53,8 @@ ENTRYPOINT ["aikoql"]
 # proxy that shares the container's network namespace (the loopback bind is
 # reachable there), or use the stdio/npm path.
 # Container contract: everything mutable lives under the /data volume —
-# redb file, memory dir, and the local embedding model store (PRR-3 installs
+# the aikoql-v2 database directory, memory dir, and the local embedding model store (PRR-3 installs
 # there via `docker exec aikoql aikoql model install`; the image itself stays
 # stateless, no model baked in). CLI args win over aikoql.toml, so the paths
 # below are authoritative in the container.
-CMD ["serve", "/data/aikoql.redb", "--listen", "127.0.0.1:9090", "--metrics-addr", "127.0.0.1:9091", "--model-dir", "/data/models"]
+CMD ["serve", "/data/aikoql", "--listen", "127.0.0.1:9090", "--metrics-addr", "127.0.0.1:9091", "--model-dir", "/data/models"]

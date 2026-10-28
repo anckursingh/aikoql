@@ -19,7 +19,7 @@ function client(name) {
   const child = spawn('docker', [
     'run', '-i', '--rm', '--name', name,
     '-v', `${VOLUME}:/data`,
-    image, '/data/aikoql.redb',
+    image, '/data/aikoql',
   ], { stdio: ['pipe', 'pipe', 'pipe'] });
   child.stderr.on('data', (c) => process.stderr.write(`[${name}] ` + c));
   child.on('error', (e) => { console.error(`e2e-volume-restart: spawn ${name} failed:`, e.message); process.exit(1); });
