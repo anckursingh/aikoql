@@ -63,6 +63,9 @@ type McpError struct {
 	Message    string `json:"message"`
 	Retryable  bool   `json:"retryable"`
 	Suggestion string `json:"suggestion"`
+	// Leader is the leader's client address on a NOT_LEADER refusal
+	// (MRFC-0080 R4d), when the server knows it.
+	Leader string `json:"leader,omitempty"`
 }
 
 func (e *McpError) Error() string {
@@ -107,6 +110,9 @@ type Client struct {
 	nextID int64
 	closed bool
 	cfg    clientConfig
+	// addr is the TCP address dialed ("" over stdio) — moved by a
+	// NOT_LEADER leader hint.
+	addr string
 }
 
 // Dial opens a TCP connection to addr ("host:port"). The handshake is
@@ -122,7 +128,7 @@ func Dial(ctx context.Context, addr string, opts ...Option) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("aikoql: dial %s: %w", addr, err)
 	}
-	return &Client{tr: conn, r: bufio.NewReader(conn), cfg: cfg}, nil
+	return &Client{tr: conn, r: bufio.NewReader(conn), cfg: cfg, addr: addr}, nil
 }
 
 // DialStdio spawns bin with args and speaks MCP over its stdin/stdout.
@@ -576,7 +582,40 @@ func (c *Client) SessionInit(ctx context.Context, p SessionParams) error {
 
 // CallTool calls any registered MCP tool by name and returns its data
 // payload — the escape hatch for tools without a typed wrapper here.
+//
+// MRFC-0080 R5b: a TCP client refused with NOT_LEADER and a leader hint
+// reconnects to that leader, re-runs Initialize and retries the call
+// once; the Client then stays on the leader. Session identity set with
+// SessionInit is not replayed.
 func (c *Client) CallTool(ctx context.Context, name string, arguments any) (json.RawMessage, error) {
+	raw, err := c.callTool(ctx, name, arguments)
+	var me *McpError
+	if errors.As(err, &me) && me.Code == "NOT_LEADER" && me.Leader != "" && c.addr != "" {
+		if ferr := c.follow(ctx, me.Leader); ferr != nil {
+			return nil, errors.Join(err, ferr)
+		}
+		return c.callTool(ctx, name, arguments)
+	}
+	return raw, err
+}
+
+// follow replaces the connection with one to the leader at addr and
+// re-runs the handshake.
+func (c *Client) follow(ctx context.Context, addr string) error {
+	d := net.Dialer{Timeout: c.cfg.dialTimeout}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("aikoql: follow the leader hint %s: %w", addr, err)
+	}
+	c.mu.Lock()
+	old := c.tr
+	c.tr, c.r, c.addr = conn, bufio.NewReader(conn), addr
+	c.mu.Unlock()
+	_ = old.Close()
+	return c.Initialize(ctx)
+}
+
+func (c *Client) callTool(ctx context.Context, name string, arguments any) (json.RawMessage, error) {
 	params := map[string]any{"name": name}
 	if arguments != nil {
 		params["arguments"] = arguments

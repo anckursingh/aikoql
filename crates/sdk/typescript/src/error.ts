@@ -17,13 +17,16 @@ export class McpError extends Error {
   code: string;
   retryable: boolean;
   suggestion: string;
+  /** The leader's client address on a NOT_LEADER refusal (MRFC-0080 R4d). */
+  leader?: string;
 
-  constructor(code: string, message: string, retryable = false, suggestion = "") {
+  constructor(code: string, message: string, retryable = false, suggestion = "", leader?: string) {
     super(`[${code}] ${message}`);
     this.name = "McpError";
     this.code = code;
     this.retryable = retryable;
     this.suggestion = suggestion;
+    if (leader !== undefined) this.leader = leader;
   }
 
   /** The frozen TIMEOUT (retryable): a deadline elapsed before a response. */

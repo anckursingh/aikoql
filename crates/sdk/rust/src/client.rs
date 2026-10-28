@@ -52,6 +52,8 @@ struct Inner {
     /// Set once by connect_native — every call after that speaks §6 frames.
     native: AtomicBool,
     cfg: std::sync::Mutex<ClientConfig>,
+    /// The TCP address dialed — moved by a NOT_LEADER leader hint.
+    addr: std::sync::Mutex<String>,
 }
 
 /// One MCP JSON-RPC connection to an aikoql-mcp server. Clone shares the
@@ -88,6 +90,7 @@ impl Client {
                     name: "aikoql-rust-sdk".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
                 }),
+                addr: std::sync::Mutex::new(addr.to_string()),
             }),
         })
     }
@@ -326,6 +329,7 @@ impl Client {
                     message: format!("tool {method} failed without an error envelope"),
                     retryable: false,
                     suggestion: String::new(),
+                    leader: None,
                 }));
             }
             return Ok(env.get("data").cloned().unwrap_or(env));
@@ -385,7 +389,40 @@ impl Client {
 
     /// Calls any registered MCP tool by name and returns its data payload —
     /// the escape hatch for tools without a typed wrapper here.
+    ///
+    /// MRFC-0080 R5b: refused with NOT_LEADER and a leader hint, a
+    /// JSON-RPC client reconnects to that leader, re-runs initialize and
+    /// retries the call once; the client then stays on the leader. Session
+    /// identity from session_init is not replayed; a native-protocol
+    /// client returns the error.
     pub async fn call_tool(&self, name: &str, arguments: Option<Value>) -> Result<Value, Error> {
+        match self.call_tool_once(name, arguments.clone()).await {
+            Err(Error::Mcp(e))
+                if e.code == "NOT_LEADER" && !self.inner.native.load(Ordering::Relaxed) =>
+            {
+                let Some(leader) = e.leader.clone() else {
+                    return Err(Error::Mcp(e));
+                };
+                self.follow(&leader).await?;
+                self.call_tool_once(name, arguments).await
+            }
+            other => other,
+        }
+    }
+
+    /// Replaces the connection with one to the leader at `addr` and
+    /// re-runs the handshake.
+    async fn follow(&self, addr: &str) -> Result<(), Error> {
+        let stream = tokio::time::timeout(DIAL_TIMEOUT, TcpStream::connect(addr))
+            .await
+            .map_err(|_| McpError::deadline())?
+            .map_err(Error::Io)?;
+        *self.inner.io.lock().await = Some(BufReader::new(stream));
+        *self.inner.addr.lock().unwrap() = addr.to_string();
+        self.initialize().await
+    }
+
+    async fn call_tool_once(&self, name: &str, arguments: Option<Value>) -> Result<Value, Error> {
         let mut params = Map::new();
         params.insert("name".into(), Value::String(name.into()));
         if let Some(a) = arguments {
@@ -416,6 +453,7 @@ impl Client {
                 message: format!("tool {name} failed without an error envelope"),
                 retryable: false,
                 suggestion: String::new(),
+                leader: None,
             }));
         }
         if let Some(data) = payload.data {
@@ -503,6 +541,7 @@ async fn native_send(
             ),
             retryable: false,
             suggestion: String::new(),
+            leader: None,
         }));
     }
     let header = nat::header_bytes(0, request_id, msg_type, payload.len() as u32);
@@ -547,6 +586,7 @@ async fn native_recv(io: &mut BufReader<TcpStream>) -> Result<(u16, u64, Vec<u8>
                 ),
                 retryable: false,
                 suggestion: String::new(),
+                leader: None,
             }),
             other => Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

@@ -58,11 +58,14 @@ def _stream_notify(frame: dict, stream_id: str):
 class McpError(Exception):
     """Structured error from the MCP server (MRFC-0040 error codes)."""
 
-    def __init__(self, code: str, message: str, retryable: bool = False, suggestion: str = ""):
+    def __init__(self, code: str, message: str, retryable: bool = False, suggestion: str = "",
+                 leader: Optional[str] = None):
         self.code = code
         self.message = message
         self.retryable = retryable
         self.suggestion = suggestion
+        # MRFC-0080 R4d: the leader's client address on a NOT_LEADER refusal
+        self.leader = leader
         super().__init__(f"[{code}] {message}")
 
     @classmethod
@@ -72,6 +75,7 @@ class McpError(Exception):
             message=err.get("message", "unknown error"),
             retryable=err.get("retryable", False),
             suggestion=err.get("suggestion", ""),
+            leader=err.get("leader"),
         )
 
 
@@ -141,8 +145,12 @@ class McpClient:
         # socket (§7 principle 11). A fresh connect() clears it.
         self._dead = False
         self._next_id = 0
+        # replayed when a NOT_LEADER hint moves the client (MRFC-0080 R5b)
+        self._timeout = 5.0
+        self._init_args = ("aikoql-py", None)
 
     def connect(self, timeout: float = 5.0) -> "McpClient":
+        self._timeout = timeout
         self._sock = socket.create_connection((self.host, self.port), timeout=timeout)
         self._sock.settimeout(timeout)
         self._dead = False
@@ -284,6 +292,7 @@ class McpClient:
     # -- MCP protocol ---------------------------------------------------
 
     def initialize(self, client_name: str = "aikoql-py", client_version: Optional[str] = None):
+        self._init_args = (client_name, client_version)
         if client_version is None:
             client_version = _default_client_version()
         params = {
@@ -331,7 +340,29 @@ class McpClient:
         return self._rpc("session/init", params)
 
     def call_tool(self, name: str, arguments: Optional[dict] = None) -> dict:
-        """Call an MCP tool. Returns the parsed data payload."""
+        """Call an MCP tool. Returns the parsed data payload.
+
+        MRFC-0080 R5b: refused with NOT_LEADER and a leader hint, the client
+        reconnects to that leader, re-runs initialize and retries the call
+        once; it then stays on the leader. session_init identity is not
+        replayed.
+        """
+        try:
+            return self._call_tool_once(name, arguments)
+        except McpError as e:
+            if e.code != "NOT_LEADER" or not e.leader:
+                raise
+            self._follow(e.leader)
+            return self._call_tool_once(name, arguments)
+
+    def _follow(self, leader: str):
+        host, _, port = leader.rpartition(":")
+        self.close()
+        self.host, self.port = host.strip("[]"), int(port)
+        self.connect(self._timeout)
+        self.initialize(*self._init_args)
+
+    def _call_tool_once(self, name: str, arguments: Optional[dict] = None) -> dict:
         params: Dict[str, Any] = {"name": name}
         if arguments:
             params["arguments"] = arguments

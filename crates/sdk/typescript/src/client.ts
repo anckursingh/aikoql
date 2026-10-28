@@ -113,9 +113,13 @@ export class Client {
   // The open stream's release (null when none): close() cancels a
   // mid-stream close through it (§17).
   private streamGate: (() => void) | null = null;
+  // The TCP address dialed (undefined for other transports) — moved by a
+  // NOT_LEADER leader hint (MRFC-0080 R5b).
+  private addr: string | undefined;
 
-  private constructor(transport: Transport) {
+  private constructor(transport: Transport, addr?: string) {
     this.transport = transport;
+    this.addr = addr;
   }
 
   /** Opens a TCP connection ("host:port"). The handshake is separate
@@ -123,7 +127,7 @@ export class Client {
    * every aikoql-mcp TCP server requires the token. */
   static async dial(addr: string): Promise<Client> {
     const transport = await TcpTransport.connect(addr, DIAL_TIMEOUT_MS);
-    return new Client(transport);
+    return new Client(transport, addr);
   }
 
   /** Sends the --tcp-token credential in the initialize handshake
@@ -243,8 +247,39 @@ export class Client {
   }
 
   /** Calls any registered MCP tool by name and returns its data payload —
-   * the escape hatch for tools without a typed wrapper here. */
+   * the escape hatch for tools without a typed wrapper here.
+   *
+   * MRFC-0080 R5b: refused with NOT_LEADER and a leader hint, a TCP
+   * client reconnects to that leader, re-runs initialize and retries the
+   * call once; it then stays on the leader. sessionInit identity is not
+   * replayed. */
   async callTool(
+    name: string,
+    args?: unknown,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<unknown> {
+    try {
+      return await this.callToolOnce(name, args, opts);
+    } catch (e) {
+      if (!(e instanceof McpError) || e.code !== "NOT_LEADER" || !e.leader || this.addr === undefined) throw e;
+      await this.follow(e.leader, opts.signal);
+      return this.callToolOnce(name, args, opts);
+    }
+  }
+
+  /** Replaces the connection with one to the leader at `addr` and
+   * re-runs the handshake. */
+  private async follow(addr: string, signal?: AbortSignal): Promise<void> {
+    const next = await TcpTransport.connect(addr, DIAL_TIMEOUT_MS);
+    await this.withLock(async () => {
+      this.transport.close();
+      this.transport = next;
+      this.addr = addr;
+    });
+    await this.initialize({ signal });
+  }
+
+  private async callToolOnce(
     name: string,
     args?: unknown,
     opts: { signal?: AbortSignal } = {},
@@ -270,12 +305,14 @@ export class Client {
           message?: string;
           retryable?: boolean;
           suggestion?: string;
+          leader?: string;
         };
         throw new McpError(
           e.code ?? "INTERNAL",
           e.message ?? "",
           e.retryable ?? false,
           e.suggestion ?? "",
+          e.leader,
         );
       }
       throw new McpError(
