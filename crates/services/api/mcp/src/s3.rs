@@ -235,3 +235,71 @@ pub(crate) fn amz_date(secs: u64) -> String {
         rem % 60
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn creds() -> Creds {
+        Creds {
+            akid: "AKID".into(),
+            secret: "secret".into(),
+            token: None,
+        }
+    }
+
+    /// AWS (no endpoint): virtual-hosted — the bucket is in the host, the
+    /// signed path is the key alone; a bucket-root list signs "/".
+    #[test]
+    fn aws_targets_are_virtual_hosted() {
+        let s3 = S3::new(
+            None,
+            "my-bkt".into(),
+            "eu-west-1".into(),
+            creds(),
+            Duration::from_secs(1),
+        );
+        assert_eq!(s3.host, "my-bkt.s3.eu-west-1.amazonaws.com");
+        let (url, path, query) = s3.target("ha/lease json.json", &[]);
+        assert_eq!(
+            url,
+            "https://my-bkt.s3.eu-west-1.amazonaws.com/ha/lease%20json.json"
+        );
+        assert_eq!(
+            (path.as_str(), query.as_str()),
+            ("/ha/lease%20json.json", "")
+        );
+        let (url, path, query) = s3.target("", &[("prefix", "a/b"), ("list-type", "2")]);
+        assert_eq!(
+            url,
+            "https://my-bkt.s3.eu-west-1.amazonaws.com/?list-type=2&prefix=a%2Fb"
+        );
+        assert_eq!(
+            (path.as_str(), query.as_str()),
+            ("/", "list-type=2&prefix=a%2Fb")
+        );
+    }
+
+    /// An S3-compatible endpoint: path-style — the bucket leads the path.
+    #[test]
+    fn endpoint_targets_are_path_style() {
+        let s3 = S3::new(
+            Some("http://127.0.0.1:9000/".into()),
+            "bkt".into(),
+            "us-east-1".into(),
+            creds(),
+            Duration::from_secs(1),
+        );
+        assert_eq!(s3.host, "127.0.0.1:9000");
+        let (url, path, _) = s3.target("k", &[]);
+        assert_eq!(
+            (url.as_str(), path.as_str()),
+            ("http://127.0.0.1:9000/bkt/k", "/bkt/k")
+        );
+        let (url, path, _) = s3.target("", &[("list-type", "2")]);
+        assert_eq!(
+            (url.as_str(), path.as_str()),
+            ("http://127.0.0.1:9000/bkt/?list-type=2", "/bkt/")
+        );
+    }
+}
