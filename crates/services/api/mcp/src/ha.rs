@@ -610,7 +610,16 @@ pub(crate) fn lead(cfg: HaConfig) -> Result<AdminSlot, String> {
                     stop(&mut following);
                     let last = last_seq(&cfg)?;
                     if last >= rec.seq {
-                        if let Some(won) = try_win(&cfg, Some(&ver), term.max(rec.term) + 1)? {
+                        let next = term.max(rec.term) + 1;
+                        // logged BEFORE the CAS: an operator (and the R5c
+                        // cert) can order it against the old leader's
+                        // "fenced" line — one writer per term
+                        info!(
+                            holder = %rec.holder,
+                            term = next,
+                            "ha: the lease lapsed — taking over"
+                        );
+                        if let Some(won) = try_win(&cfg, Some(&ver), next)? {
                             return Ok(won);
                         }
                     } else if !behind_warned {
@@ -712,16 +721,18 @@ fn fence(cfg: &HaConfig, slot: &AdminSlot, term: u64, why: &str) -> ! {
     if let Some(admin) = slot.get() {
         admin.fence(format!("{why} (self-fenced)"));
     }
-    if let Ok(Some((rec, _))) = cfg.store.read() {
-        if let Some(c) = rec.client.filter(|c| replication::valid_addr(c)) {
-            let _ = replication::store_leader(&cfg.dir, &c);
-        }
-    }
     let _ = replication::store_term(&cfg.dir, term, Role::Fenced);
     error!(
         term,
         "ha: {why} — fenced; exiting for the supervisor to restart this node as a standby"
     );
+    // best-effort NOT_LEADER hint, last: a partitioned store makes this
+    // read wait out its timeout, and nothing above may wait for it
+    if let Ok(Some((rec, _))) = cfg.store.read() {
+        if let Some(c) = rec.client.filter(|c| replication::valid_addr(c)) {
+            let _ = replication::store_leader(&cfg.dir, &c);
+        }
+    }
     std::process::exit(FENCED_EXIT);
 }
 
