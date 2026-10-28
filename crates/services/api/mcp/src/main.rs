@@ -311,17 +311,21 @@ fn main() {
     };
     // MRFC-0080 standby reads: `--follow LEADER` serves a read replica —
     // never promoted by `serve`, finishing a re-bootstrap it recorded.
-    if cfg.follow.is_some() {
-        if cfg.ha_lease.is_some() || replicate_listen.is_some() || cfg.archive.is_some() {
-            eprintln!("--follow (a read replica) does not combine with --ha-lease, --replicate-listen or --archive");
-            std::process::exit(2);
-        }
+    if cfg.follow.is_some()
+        && (cfg.ha_lease.is_some() || replicate_listen.is_some() || cfg.archive.is_some())
+    {
+        eprintln!("--follow (a read replica) does not combine with --ha-lease, --replicate-listen or --archive");
+        std::process::exit(2);
+    }
+    // a serving standby (read replica, HA standby) that exited for a
+    // re-bootstrap finishes it before anything opens the directory
+    if cfg.follow.is_some() || cfg.ha_lease.is_some() {
         if let Err(e) = replication::finish_rebootstrap(std::path::Path::new(&db_path)) {
-            eprintln!("read replica: {e}");
+            eprintln!("standby: {e}");
             std::process::exit(1);
         }
     }
-    let ha_slot = cfg.ha_lease.as_ref().map(|lease| {
+    let begun = cfg.ha_lease.as_ref().map(|lease| {
         let (Some(repl), Some(node)) = (replicate_listen.as_deref(), cfg.ha_node.clone()) else {
             eprintln!("--ha-lease needs --ha-node and --replicate-listen");
             std::process::exit(2);
@@ -368,15 +372,22 @@ fn main() {
             tls: repl_trust.clone(),
             dir: std::path::PathBuf::from(&db_path),
         };
-        match ha::lead(ha) {
-            Ok(slot) => slot,
+        match ha::begin(ha) {
+            Ok(b) => b,
             Err(e) => {
                 eprintln!("ha: {e}");
                 std::process::exit(1);
             }
         }
     });
-    let claimed = if cfg.follow.is_some() {
+    // standby reads: an HA standby serves reads until it wins the lease
+    let (ha_slot, ha_standby) = match begun {
+        Some(ha::Begun::Lead(slot)) => (Some(slot), None),
+        Some(ha::Begun::Standby(c)) => (None, Some(c)),
+        None => (None, None),
+    };
+    let serving_standby = cfg.follow.is_some() || ha_standby.is_some();
+    let claimed = if serving_standby {
         replication::load_term(std::path::Path::new(&db_path))
     } else {
         replication::claim_leadership(std::path::Path::new(&db_path))
@@ -393,10 +404,10 @@ fn main() {
         match engine::open_kernel(
             &db_path,
             &cfg.encryption,
-            replicate_listen.is_some() || cfg.archive.is_some(),
-            cfg.follow.as_ref().map(|l| {
+            !serving_standby && (replicate_listen.is_some() || cfg.archive.is_some()),
+            serving_standby.then(|| {
                 format!(
-                    "this node is a read replica of {l}{}",
+                    "this node is a standby{}",
                     replication::leader_hint(std::path::Path::new(&db_path))
                 )
             }),
@@ -412,14 +423,16 @@ fn main() {
     }
     // R4d: after the kernel created the directory (a fresh one must be
     // empty when it opens)
-    if let (replication::Role::Leader, Some(addr)) = (role, cfg.advertise.as_deref()) {
+    if let (replication::Role::Leader, Some(addr), false) =
+        (role, cfg.advertise.as_deref(), serving_standby)
+    {
         let dir = std::path::Path::new(&db_path);
         if let Err(e) = replication::store_leader(dir, addr) {
             eprintln!("record --advertise: {e}");
             std::process::exit(1);
         }
     }
-    if role == replication::Role::Fenced {
+    if role == replication::Role::Fenced && !serving_standby {
         let Some(a) = admin.as_ref() else {
             eprintln!("a fenced node needs the storage admin surface to refuse writes");
             std::process::exit(2);
@@ -538,6 +551,20 @@ fn main() {
         kernel
     };
     let kernel = Arc::new(kernel);
+    if let Some(ha) = ha_standby {
+        let Some(a) = admin.clone() else {
+            eprintln!("--ha-lease needs the storage admin surface");
+            std::process::exit(2);
+        };
+        info!("serving as an HA standby — reads only until this node wins the lease");
+        replication::catch_up_loop(
+            kernel.clone(),
+            a.clone(),
+            std::path::PathBuf::from(db_path.as_str()),
+            "this node is an HA standby",
+        );
+        thread::spawn(move || ha::stand_by(ha, a));
+    }
     if let Some(leader) = cfg.follow.clone() {
         let Some(token) = replication_token(&tcp_tokens) else {
             eprintln!(
@@ -657,7 +684,7 @@ fn main() {
     // (the slowest bounds log release); the lag series reads it.
     let acked = Arc::new(replication::Acked::default());
     let _ = replication::LEADER.set(acked.clone());
-    if let Some(url) = cfg.archive.as_deref() {
+    if let Some(url) = cfg.archive.as_deref().filter(|_| !serving_standby) {
         // R6: only a writing node archives; a fenced one serves reads
         if role == replication::Role::Fenced {
             warn!("--archive: this node is fenced — not archiving");
@@ -692,7 +719,8 @@ fn main() {
             }
         }
     }
-    if let Some(addr) = replicate_listen {
+    // a standby serves no stream; its promoted (re-executed) process does
+    if let Some(addr) = replicate_listen.filter(|_| !serving_standby) {
         // MRFC-0080 R3a: the replication stream rides beside any serve mode
         // (stdio included) under the TCP gates — tokens required, loopback
         // bind only (the stream is the whole database, in plaintext).

@@ -1152,11 +1152,24 @@ fn pitr_restores_the_archive_to_the_latest_and_to_a_point_in_time() {
     let log = leader.log.take().unwrap();
     let first: Vec<String> = (0..10).map(|i| leader.remember(i)).collect();
     // wait for the archive to cover the first burst
-    let covered = |log: &mpsc::Receiver<String>, n: usize| loop {
-        let line = wait_line(log, "archive: log up to seq");
-        let seq: usize = line.rsplit(' ').next().unwrap().parse().unwrap();
-        if seq >= n {
-            break;
+    // a burst is archived once the archiver goes quiet: it passes every
+    // 200 ms and logs whenever it uploads, so a second with no new
+    // "log up to seq" line means everything committed is up. (A seq is a
+    // storage frame number, not an object count — never compare the two.)
+    let covered = |log: &mpsc::Receiver<String>, _burst: usize| {
+        wait_line(log, "archive: log up to seq");
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let mut quiet_since = std::time::Instant::now();
+        while quiet_since.elapsed() < Duration::from_secs(1) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the archive never settled"
+            );
+            if let Ok(line) = log.recv_timeout(Duration::from_millis(100)) {
+                if line.contains("archive: log up to seq") {
+                    quiet_since = std::time::Instant::now();
+                }
+            }
         }
     };
     covered(&log, 10);

@@ -391,44 +391,97 @@ pub(crate) struct HaConfig {
 /// set once the kernel has opened.
 pub(crate) type AdminSlot = Arc<OnceLock<Arc<dyn StorageAdminApi>>>;
 
-/// The standby phase: follow whoever holds the lease, until this node
-/// holds it. Then the directory is claimed at the lease's term, the
-/// renewer starts (before the kernel opens — a slow open must not let
-/// the lease lapse), and the caller serves as the leader.
-pub(crate) fn lead(cfg: HaConfig) -> Result<AdminSlot, String> {
+/// Where `begin` leaves this node.
+pub(crate) enum Begun {
+    /// It holds the lease: the directory is claimed at the lease's term and
+    /// the renewer runs (it started before the kernel opens — a slow open
+    /// must not let the lease lapse). Serve as the leader.
+    Lead(AdminSlot),
+    /// Another node holds it: serve reads as its standby (`stand_by`).
+    Standby(Arc<HaConfig>),
+}
+
+/// The start-up decision. No lease: try to win one. This node's own lease
+/// — from before a restart, or won just before a re-exec at a newer term
+/// than its directory — is claimed if needed and resumed by an immediate
+/// CAS renewal (the fence timer starts from a renewal that landed, never
+/// from the restart). Any other holder: a standby. An unreadable store, or
+/// a lost race, is retried.
+pub(crate) fn begin(cfg: HaConfig) -> Result<Begun, String> {
     let cfg = Arc::new(cfg);
+    loop {
+        let (term, _) = replication::load_term(&cfg.dir).map_err(|e| e.to_string())?;
+        match cfg.store.read() {
+            Err(e) => warn!("ha: read the lease: {e}"),
+            Ok(None) => {
+                if let Some(won) = try_win(&cfg, None, term + 1)? {
+                    return Ok(Begun::Lead(won));
+                }
+            }
+            Ok(Some((rec, ver))) if rec.holder == cfg.node && rec.term >= term => {
+                if rec.term > term
+                    || replication::load_term(&cfg.dir).map(|t| t.1).ok() != Some(Role::Leader)
+                {
+                    replication::claim_term(&cfg.dir, rec.term)
+                        .map_err(|e| format!("claim term {}: {e}", rec.term))?;
+                }
+                info!(term = rec.term, "ha: resuming the lease this node holds");
+                if let Some(slot) = resume(&cfg, rec, &ver) {
+                    return Ok(Begun::Lead(slot));
+                }
+            }
+            Ok(Some(_)) => return Ok(Begun::Standby(cfg)),
+        }
+        std::thread::sleep(cfg.ttl / 5);
+    }
+}
+
+/// Renew this node's lease now (CAS); the renewer takes over from there.
+fn resume(cfg: &Arc<HaConfig>, rec: Lease, ver: &str) -> Option<AdminSlot> {
+    let started = Instant::now();
+    let next = Lease {
+        beat: rec.beat + 1,
+        ..rec
+    };
+    match cfg.store.write(&next, Some(ver)) {
+        Ok(v) => Some(start_renewer(cfg.clone(), next, v, started)),
+        Err(LeaseError::Conflict) => None, // taken meanwhile: decide again
+        Err(LeaseError::Other(e)) => {
+            warn!("ha: renew the lease: {e}");
+            None
+        }
+    }
+}
+
+/// The serving standby (standby reads): follow the holder into this
+/// node's open, fenced engine. Once the record has stayed unchanged for a
+/// full TTL on this node's monotonic clock — and this node holds at least
+/// the holder's last renewed seq — win the lease at the next term and
+/// re-execute this process: the fresh process claims the directory and
+/// leads (`begin`).
+pub(crate) fn stand_by(cfg: Arc<HaConfig>, replica: Arc<dyn StorageAdminApi>) {
     let mut seen: Option<(String, Instant)> = None;
     let mut following: Option<Follower> = None;
     let mut behind_warned = false;
     loop {
-        let (term, role) = replication::load_term(&cfg.dir).map_err(|e| e.to_string())?;
+        std::thread::sleep(cfg.ttl / 5);
+        let term = replication::load_term(&cfg.dir).map_or(0, |t| t.0);
         match cfg.store.read() {
             Err(e) => warn!("ha: read the lease: {e}"),
-            Ok(None) => {
-                stop(&mut following);
-                if let Some(won) = try_win(&cfg, None, term + 1)? {
-                    return Ok(won);
-                }
-            }
+            Ok(None) => win(&cfg, None, term + 1, &replica),
             Ok(Some((rec, ver))) => {
-                if rec.holder == cfg.node && rec.term == term && role == Role::Leader {
-                    // our own live lease from before a restart: keep it
-                    stop(&mut following);
-                    info!(term, "ha: resuming the lease this node holds");
-                    return Ok(start_renewer(cfg.clone(), rec, ver, Instant::now()));
-                }
                 if seen.as_ref().map(|(v, _)| v) != Some(&ver) {
                     seen = Some((ver.clone(), Instant::now()));
                 }
                 let lead_addr = (rec.holder != cfg.node).then_some(&rec.repl);
                 if following.as_ref().map(|f| &f.leader) != lead_addr {
                     stop(&mut following);
-                    following = lead_addr.map(|a| Follower::start(&cfg, a.clone()));
+                    following =
+                        lead_addr.map(|a| Follower::start(&cfg, a.clone(), replica.clone()));
                 }
                 let stale = seen.as_ref().is_some_and(|(_, at)| at.elapsed() >= cfg.ttl);
                 if stale {
-                    stop(&mut following);
-                    let last = last_seq(&cfg)?;
+                    let last = replica.last_seq();
                     if last >= rec.seq {
                         let next = term.max(rec.term) + 1;
                         // logged BEFORE the CAS: an operator (and the R5c
@@ -439,9 +492,7 @@ pub(crate) fn lead(cfg: HaConfig) -> Result<AdminSlot, String> {
                             term = next,
                             "ha: the lease lapsed — taking over"
                         );
-                        if let Some(won) = try_win(&cfg, Some(&ver), next)? {
-                            return Ok(won);
-                        }
+                        win(&cfg, Some(&ver), next, &replica);
                     } else if !behind_warned {
                         behind_warned = true;
                         warn!(
@@ -453,8 +504,44 @@ pub(crate) fn lead(cfg: HaConfig) -> Result<AdminSlot, String> {
                 }
             }
         }
-        std::thread::sleep(cfg.ttl / 5);
     }
+}
+
+/// One CAS for `term` from the serving standby; a win re-executes.
+fn win(cfg: &HaConfig, expected: Option<&str>, term: u64, replica: &Arc<dyn StorageAdminApi>) {
+    let lease = Lease {
+        holder: cfg.node.clone(),
+        term,
+        repl: cfg.repl.clone(),
+        client: cfg.client.clone(),
+        seq: replica.last_seq(),
+        beat: 0,
+    };
+    match cfg.store.write(&lease, expected) {
+        Ok(_) => {
+            info!(term, "ha: won the lease — re-executing as the leader");
+            reexec();
+        }
+        Err(LeaseError::Conflict) => {}
+        Err(LeaseError::Other(e)) => warn!("ha: write the lease: {e}"),
+    }
+}
+
+/// Replace this process with a fresh one of the same command line (unix:
+/// same pid, same stdio; the lease it just won is claimed by `begin`).
+/// Elsewhere — or if exec fails — exit for the supervisor to restart it.
+fn reexec() -> ! {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = std::env::current_exe().map(|exe| {
+            std::process::Command::new(exe)
+                .args(std::env::args_os().skip(1))
+                .exec()
+        });
+        error!("ha: re-exec as the leader failed ({err:?}) — exiting for the supervisor");
+    }
+    std::process::exit(FENCED_EXIT);
 }
 
 /// One CAS attempt for `term`; on a win the directory is claimed and the
@@ -556,7 +643,7 @@ fn fence(cfg: &HaConfig, slot: &AdminSlot, term: u64, why: &str) -> ! {
     std::process::exit(FENCED_EXIT);
 }
 
-/// `follow_loop` on a thread, stoppable.
+/// The standby's stream into its open engine, on a thread, stoppable.
 struct Follower {
     leader: String,
     stop: Arc<AtomicBool>,
@@ -564,14 +651,23 @@ struct Follower {
 }
 
 impl Follower {
-    fn start(cfg: &Arc<HaConfig>, leader: String) -> Self {
+    fn start(cfg: &Arc<HaConfig>, leader: String, replica: Arc<dyn StorageAdminApi>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let (c, l, st) = (cfg.clone(), leader.clone(), stop.clone());
         let handle = std::thread::spawn(move || {
+            // R3b: shipped index checkpoints land where the promoted
+            // process resumes them
             let ckpt = PathBuf::from(format!("{}.ckpt", c.dir.display()));
-            if let Err(e) =
-                replication::follow_loop(&c.dir, &l, &c.token, &ckpt, &st, c.tls.as_ref())
-            {
+            let followed = replication::follow_into(
+                &l,
+                &c.token,
+                &replica,
+                &c.dir,
+                Some(&ckpt),
+                &st,
+                c.tls.as_ref(),
+            );
+            if let Err(e) = followed {
                 warn!("ha: following {l}: {e}");
             }
         });
@@ -988,6 +1084,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let store: Arc<dyn LeaseStore> = Arc::new(FileLease::new(tmp("other").join("lease.json")));
         store.write(&lease("b", 1, 0), None).unwrap();
-        assert!(matches!(begin(ha_cfg(store, dir)).unwrap(), Begun::Standby));
+        assert!(matches!(
+            begin(ha_cfg(store, dir)).unwrap(),
+            Begun::Standby(_)
+        ));
     }
 }

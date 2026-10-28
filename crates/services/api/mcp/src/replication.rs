@@ -928,38 +928,65 @@ pub(crate) fn serve_replica(
     let (a, d) = (admin.clone(), dir.clone());
     std::thread::spawn(move || {
         let stop = AtomicBool::new(false);
-        match follow(&leader, &token, &a, &d, None, &stop, tls.as_ref()) {
-            Ok(Followed::Rebootstrap { term, history }) => {
-                let pending = serde_json::json!({ "term": term, "history": history });
-                let parent = d.parent().unwrap_or(Path::new("."));
-                let name = format!(
-                    "{}.rejoin.json",
-                    d.file_name().unwrap_or_default().to_string_lossy()
-                );
-                if let Err(e) = write_durable(parent, &name, &pending.to_string()) {
-                    eprintln!("read replica: record the re-bootstrap: {e}");
-                    std::process::exit(1);
-                }
-                eprintln!("read replica: the leader shipped a snapshot — exiting to re-bootstrap on restart");
-                std::process::exit(75);
-            }
-            Ok(Followed::Stopped) => {}
-            Err(e) => {
-                eprintln!("follow stopped: {e}");
-                std::process::exit(1);
-            }
+        if let Err(e) = follow_into(&leader, &token, &a, &d, None, &stop, tls.as_ref()) {
+            eprintln!("follow stopped: {e}");
+            std::process::exit(1);
         }
     });
+    catch_up_loop(kernel, admin, dir, "this node is a read replica");
+}
+
+/// A serving standby's stream into its open engine, until `stop`. A
+/// shipped snapshot cannot be swapped under a live kernel: it is recorded
+/// in `{dir}.rejoin.json` and the process exits 75 for its supervisor —
+/// the restart finishes the re-bootstrap (`finish_rebootstrap`).
+pub(crate) fn follow_into(
+    leader: &str,
+    token: &str,
+    replica: &Arc<dyn StorageAdminApi>,
+    dir: &Path,
+    checkpoint: Option<&Path>,
+    stop: &AtomicBool,
+    tls: Option<&Arc<rustls::ClientConfig>>,
+) -> Result<(), String> {
+    match follow(leader, token, replica, dir, checkpoint, stop, tls)? {
+        Followed::Rebootstrap { term, history } => {
+            let pending = serde_json::json!({ "term": term, "history": history });
+            let parent = dir.parent().unwrap_or(Path::new("."));
+            let name = format!(
+                "{}.rejoin.json",
+                dir.file_name().unwrap_or_default().to_string_lossy()
+            );
+            write_durable(parent, &name, &pending.to_string())
+                .map_err(|e| format!("record the re-bootstrap: {e}"))?;
+            eprintln!(
+                "standby: the leader shipped a snapshot — exiting to re-bootstrap on restart"
+            );
+            std::process::exit(75);
+        }
+        Followed::Stopped => Ok(()),
+    }
+}
+
+/// A serving standby's kernel follows its store: `catch_up` every 100 ms,
+/// and the NOT_LEADER hint (`role` + the leader's address) refreshed
+/// whenever the leader changes.
+pub(crate) fn catch_up_loop(
+    kernel: Arc<aikoql_kernel::Kernel>,
+    admin: Arc<dyn StorageAdminApi>,
+    dir: PathBuf,
+    role: &'static str,
+) {
     std::thread::spawn(move || {
         let mut hint = None;
         loop {
             std::thread::sleep(Duration::from_millis(100));
             if let Err(e) = kernel.catch_up() {
-                warn!("read replica: catch up: {e}");
+                warn!("standby: catch up: {e}");
             }
             let now = load_leader(&dir);
             if now != hint {
-                admin.fence(format!("this node is a read replica{}", leader_hint(&dir)));
+                admin.fence(format!("{role}{}", leader_hint(&dir)));
                 hint = now;
             }
         }
