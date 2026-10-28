@@ -1650,7 +1650,15 @@ fn archive_retention_keeps_the_newest_snapshots() {
 /// A real kube-apiserver (envtest, `scripts/k8s-it.sh`): the server env
 /// for its in-cluster path — a service-account directory (token + CA) and
 /// KUBERNETES_SERVICE_HOST/PORT — plus (api, token, ca) for checks.
-fn real_k8s_env(sa_dir: &Path) -> Option<(Vec<(String, String)>, String, String, String)> {
+struct RealK8s {
+    /// the server env for its in-cluster path
+    env: Vec<(String, String)>,
+    api: String,
+    token: String,
+    ca: String,
+}
+
+fn real_k8s_env(sa_dir: &Path) -> Option<RealK8s> {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let (api, token, ca) = (
         env("AIKOQL_TEST_K8S_API")?,
@@ -1669,7 +1677,12 @@ fn real_k8s_env(sa_dir: &Path) -> Option<(Vec<(String, String)>, String, String,
             sa_dir.to_str()?.to_string(),
         ),
     ];
-    Some((vars, api, token, ca))
+    Some(RealK8s {
+        env: vars,
+        api,
+        token,
+        ca,
+    })
 }
 
 /// HA failover on a real Kubernetes Lease, through the binary's in-cluster
@@ -1679,7 +1692,13 @@ fn real_k8s_env(sa_dir: &Path) -> Option<(Vec<(String, String)>, String, String,
 #[test]
 fn real_k8s_ha_failover_on_a_lease() {
     let sa = tmp("k8s-sa");
-    let Some((env, api, token, ca)) = real_k8s_env(&sa) else {
+    let Some(RealK8s {
+        env,
+        api,
+        token,
+        ca,
+    }) = real_k8s_env(&sa)
+    else {
         eprintln!("skipped: AIKOQL_TEST_K8S_API unset");
         return;
     };

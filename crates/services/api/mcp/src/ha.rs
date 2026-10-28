@@ -250,14 +250,19 @@ impl K8sLease {
     /// `k8s://NAMESPACE/NAME` from inside a pod: the service account's
     /// token and CA, the API server from `KUBERNETES_SERVICE_HOST/PORT`.
     pub(crate) fn in_cluster(url: &str, timeout: Duration) -> Result<Self, String> {
-        const SA: &str = "/var/run/secrets/kubernetes.io/serviceaccount";
+        // the pod's mounted service account; AIKOQL_K8S_SA_DIR points
+        // elsewhere (a token + CA outside a pod — the k8s-it certs)
+        let sa = std::env::var("AIKOQL_K8S_SA_DIR")
+            .ok()
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(|| "/var/run/secrets/kubernetes.io/serviceaccount".into());
         let (namespace, name) =
             parse_k8s_url(url).ok_or_else(|| format!("{url:?} is not k8s://NAMESPACE/NAME"))?;
         let host = std::env::var("KUBERNETES_SERVICE_HOST").map_err(|_| {
             "a k8s:// lease runs in a pod (KUBERNETES_SERVICE_HOST unset)".to_string()
         })?;
         let port = std::env::var("KUBERNETES_SERVICE_PORT").unwrap_or_else(|_| "443".into());
-        let read = |f: &str| crate::tls::read(&format!("{SA}/{f}"));
+        let read = |f: &str| crate::tls::read(&format!("{sa}/{f}"));
         let token = String::from_utf8_lossy(&read("token")?).trim().to_string();
         let tls =
             crate::tls::client_config(&read("ca.crt")?).map_err(|e| format!("cluster CA: {e}"))?;
