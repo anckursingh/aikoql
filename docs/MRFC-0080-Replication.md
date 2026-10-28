@@ -779,7 +779,7 @@ Limits: each hop adds its own apply + catch-up delay; R1's acks release
 R1's log only (the leader's release still follows its direct standbys);
 `--replicate-sync-ms` counts direct standbys only.
 
-## Real-S3 certs (MinIO) ✅
+## Real-S3 certs (MinIO, Moto) ✅
 
 The S3 paths were verified against fakes only; the same contracts now
 run on a real S3-compatible server — `scripts/s3-it.sh` (a throwaway
@@ -794,10 +794,16 @@ them the certs skip, so the default suite is unchanged.
 | `archive.rs` `real_s3_archive_round_trips` | base snapshot + log batch up, listed back, restored byte-equal |
 | `replication_failover.rs` `real_s3_ha_failover_then_pitr_from_the_bucket` | lease + archive in the bucket: the leader dies, the standby takes the lease (term 2) and archives its own timeline, `pitr` restores term 2 with every object |
 
-Green on MinIO RELEASE.2025-10-15T17-29-55Z. CI: the `s3-compat` job
-(MinIO + mc containers) — `continue-on-error` until its first pushed run
-is green, then a gate. Still open: AWS S3 itself (needs credentials) and
-R2; the Kubernetes lease (fake API only).
+Green on two independent S3 implementations: MinIO
+RELEASE.2025-10-15T17-29-55Z and Moto 5.2.5 (`S3_IT_BACKEND=moto`, or
+`"minio moto"` for both). A signed probe confirms Moto enforces the
+conditional writes (412 on a repeated `If-None-Match: *` and on a stale
+`If-Match`), so it is a valid lease target — an emulator that ignored
+them would fail the lease cert. CI: `s3-compat-moto` (pinned, no Docker)
+gates; `s3-compat` (MinIO containers) is `continue-on-error` until its
+images are pinned. Still open: AWS S3 itself (needs credentials — the
+tests always set an endpoint, so AWS's virtual-hosted URL path is not yet
+exercised), R2, the Kubernetes lease (fake API only).
 
 ## Archive retention ✅
 
