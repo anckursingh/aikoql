@@ -470,7 +470,13 @@ fn promotion_resumes_indexes_from_the_shipped_checkpoint() {
             break;
         }
     }
-    koids.extend((history..history + 5).map(|i| leader.remember(i))); // the tail
+    // the tail, written while the standby is away: a live follower may still
+    // print a "caught up" from before it (once per catch-up, and the heartbeat
+    // can trail), but a fresh follower's first one covers it
+    let _ = f.kill();
+    let _ = f.wait();
+    koids.extend((history..history + 5).map(|i| leader.remember(i)));
+    let (mut f, rx) = follow(&sdir, &addr);
     wait_caught_up(&rx);
     drop(leader);
     let _ = f.kill();
