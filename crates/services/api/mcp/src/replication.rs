@@ -32,7 +32,7 @@ use aikoql_storage_v2::engine::StorageAdminApi;
 use aikoql_storage_v2::wal::{decode_frame, encode_frame, FRAME_HEADER_LEN};
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -56,6 +56,57 @@ const MAX_FRAME_PAYLOAD: usize = 256 << 20;
 const MAX_LINE: usize = 4096;
 /// Frames per log read.
 const BATCH: usize = 256;
+/// R3c — how long the leader waits for acks between sends while catching
+/// a standby up, and while idle (the idle wait is the head poll).
+const BUSY_ACK_WAIT: Duration = Duration::from_millis(1);
+const IDLE_ACK_WAIT: Duration = Duration::from_millis(10);
+
+/// R3c — one replication connection, plaintext or TLS (rustls). One
+/// owner: a TLS connection cannot be split between a reader thread and a
+/// writer thread, so each side reads and writes on one thread.
+pub(crate) enum Link {
+    Plain(TcpStream),
+    Leader(Box<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>),
+    Standby(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+}
+
+impl Link {
+    fn tcp(&self) -> &TcpStream {
+        match self {
+            Link::Plain(s) => s,
+            Link::Leader(t) => &t.sock,
+            Link::Standby(t) => &t.sock,
+        }
+    }
+}
+
+impl Read for Link {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Link::Plain(s) => s.read(buf),
+            Link::Leader(t) => t.read(buf),
+            Link::Standby(t) => t.read(buf),
+        }
+    }
+}
+
+impl Write for Link {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Link::Plain(s) => s.write(buf),
+            Link::Leader(t) => t.write(buf),
+            Link::Standby(t) => t.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Link::Plain(s) => s.flush(),
+            Link::Leader(t) => t.flush(),
+            Link::Standby(t) => t.flush(),
+        }
+    }
+}
 
 /// R4 — the term file inside the database directory.
 pub(crate) const TERM_FILE: &str = "REPL-TERM";
@@ -232,6 +283,7 @@ pub(crate) fn follow_loop(
     token: &str,
     ckpt: &Path,
     stop: &AtomicBool,
+    tls: Option<&Arc<rustls::ClientConfig>>,
 ) -> Result<(), String> {
     loop {
         let standby = Db::open(Config::new(dir.to_path_buf()))
@@ -241,7 +293,7 @@ pub(crate) fn follow_loop(
             dir.display(),
             standby.last_seq()
         );
-        match follow(leader, token, &standby, dir, Some(ckpt), stop)? {
+        match follow(leader, token, &standby, dir, Some(ckpt), stop, tls)? {
             Followed::Stopped => return Ok(()),
             // a diverged tail or a released position — swap in the
             // leader's snapshot and follow on from it
@@ -313,6 +365,7 @@ pub(crate) fn serve_replication(
     checkpoint: Option<ShippedCheckpoint>,
     dir: PathBuf,
     acked: Arc<Acked>,
+    tls: Option<Arc<rustls::ServerConfig>>,
 ) {
     if let Err(e) = listener.set_nonblocking(true) {
         warn!("replication listener: {e}");
@@ -324,7 +377,7 @@ pub(crate) fn serve_replication(
         match listener.accept() {
             Ok((stream, _)) => {
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
-                let (source, auth, acks, stop, ckpt, dir, acked) = (
+                let (source, auth, acks, stop, ckpt, dir, acked, tls) = (
                     source.clone(),
                     auth.clone(),
                     acks.clone(),
@@ -332,10 +385,11 @@ pub(crate) fn serve_replication(
                     checkpoint.clone(),
                     dir.clone(),
                     acked.clone(),
+                    tls.clone(),
                 );
                 std::thread::spawn(move || {
                     let served = serve_standby(
-                        &stream,
+                        stream,
                         id,
                         &*source,
                         &auth,
@@ -343,14 +397,14 @@ pub(crate) fn serve_replication(
                         &stop,
                         ckpt.as_ref(),
                         &dir,
-                        acked,
+                        &acked,
+                        tls,
                     );
                     if let Err(e) = served {
                         warn!("replication standby {id}: {e}");
                     }
                     // justified: Mutex poison is unrecoverable
                     acks.lock().unwrap().remove(&id);
-                    let _ = stream.shutdown(Shutdown::Both);
                 });
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
@@ -362,7 +416,7 @@ pub(crate) fn serve_replication(
 }
 
 fn serve_standby(
-    stream: &TcpStream,
+    stream: TcpStream,
     id: u64,
     source: &dyn StorageAdminApi,
     auth: &TcpAuthTable,
@@ -370,12 +424,20 @@ fn serve_standby(
     stop: &AtomicBool,
     checkpoint: Option<&ShippedCheckpoint>,
     dir: &Path,
-    acked: Arc<Acked>,
+    acked: &Acked,
+    tls: Option<Arc<rustls::ServerConfig>>,
 ) -> std::io::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(LEADER_SILENCE))?;
-    let mut w = stream;
-    let hello: serde_json::Value = serde_json::from_slice(&read_line(stream)?)
+    let mut w = match tls {
+        // R3c: the handshake runs on the first read (the hello line)
+        Some(cfg) => Link::Leader(Box::new(rustls::StreamOwned::new(
+            rustls::ServerConnection::new(cfg).map_err(std::io::Error::other)?,
+            stream,
+        ))),
+        None => Link::Plain(stream),
+    };
+    let hello: serde_json::Value = serde_json::from_slice(&read_line(&mut w)?)
         .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
     let token = hello["token"].as_str().unwrap_or_default();
     let admin = auth
@@ -445,20 +507,9 @@ fn serve_standby(
     // justified: Mutex poison is unrecoverable
     acks.lock().unwrap().insert(id, sent);
 
-    // Acks arrive on their own thread; it ends when the socket closes.
-    stream.set_read_timeout(None)?;
-    let mut ack_reader = stream.try_clone()?;
-    let ack_map = acks.clone();
-    std::thread::spawn(move || {
-        let mut b = [0u8; 8];
-        while ack_reader.read_exact(&mut b).is_ok() {
-            let seq = u64::from_le_bytes(b);
-            // justified: Mutex poison is unrecoverable
-            ack_map.lock().unwrap().insert(id, seq);
-            acked.record(seq);
-        }
-    });
-
+    // R3c: acks are read on this thread, between sends — a TLS connection
+    // has one owner — and the ack wait doubles as the idle poll.
+    let mut ack_buf = Vec::new();
     let mut released = 0;
     let mut last_send = Instant::now();
     let mut shipped_water = None;
@@ -495,6 +546,9 @@ fn serve_standby(
             }
             w.write_all(&buf)?;
             last_send = Instant::now();
+            if !poll_acks(&mut w, &mut ack_buf, BUSY_ACK_WAIT, id, acks, acked)? {
+                return Ok(());
+            }
         } else {
             // R3b: only when caught up — every frame up to the head precedes
             // the checkpoint on the wire, so its water is already applied.
@@ -513,18 +567,62 @@ fn serve_standby(
                 w.write_all(&msg)?;
                 last_send = Instant::now();
             }
-            // shortcut: polls the log head every 10 ms; a commit notify
-            // from the Db replaces it when replication lag must drop below.
-            std::thread::sleep(Duration::from_millis(10));
+            // shortcut: polls the log head every 10 ms (here, waiting for
+            // acks); a commit notify from the Db replaces it when replication
+            // lag must drop below.
+            if !poll_acks(&mut w, &mut ack_buf, IDLE_ACK_WAIT, id, acks, acked)? {
+                return Ok(());
+            }
         }
     }
     Ok(())
 }
 
+/// Wait up to `wait` for acks (u64 LE each, possibly split across
+/// reads) and record the newest. False once the standby closed the link.
+fn poll_acks(
+    link: &mut Link,
+    buf: &mut Vec<u8>,
+    wait: Duration,
+    id: u64,
+    acks: &Mutex<HashMap<u64, u64>>,
+    acked: &Acked,
+) -> std::io::Result<bool> {
+    link.tcp().set_read_timeout(Some(wait))?;
+    let mut chunk = [0u8; 4096];
+    match link.read(&mut chunk) {
+        Ok(0) => return Ok(false),
+        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        Err(e)
+            if matches!(
+                e.kind(),
+                ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+            ) =>
+        {
+            return Ok(true)
+        }
+        Err(e) => return Err(e),
+    }
+    let whole = buf.len() / 8 * 8;
+    let newest = buf[..whole]
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| u64::from_le_bytes(*c))
+        .max();
+    buf.drain(..whole);
+    if let Some(seq) = newest {
+        // justified: Mutex poison is unrecoverable
+        acks.lock().unwrap().insert(id, seq);
+        acked.record(seq);
+    }
+    Ok(true)
+}
+
 /// Send the checkpoint when it is complete and its water differs from
 /// `shipped`; returns the water sent.
 fn send_checkpoint(
-    w: &mut &TcpStream,
+    w: &mut Link,
     c: &ShippedCheckpoint,
     shipped: Option<u64>,
 ) -> std::io::Result<Option<u64>> {
@@ -547,7 +645,7 @@ fn send_checkpoint(
 /// R4c — snapshot the storage into `{dir}.ship-{id}` and send it as a
 /// tagged directory; the standby re-bootstraps from it.
 fn send_snapshot(
-    w: &mut &TcpStream,
+    w: &mut Link,
     source: &dyn StorageAdminApi,
     dir: &Path,
     id: u64,
@@ -564,7 +662,7 @@ fn send_snapshot(
 
 /// `tag` + u64 `water` + u32 file count + per file (u32 path len, path,
 /// u64 size, bytes).
-fn send_dir(w: &mut &TcpStream, tag: u8, water: u64, dir: &Path) -> std::io::Result<()> {
+fn send_dir(w: &mut Link, tag: u8, water: u64, dir: &Path) -> std::io::Result<()> {
     let mut files = Vec::new();
     collect_files(dir, dir, &mut files)?;
     let mut head = vec![tag];
@@ -765,10 +863,11 @@ pub(crate) fn follow(
     dir: &Path,
     checkpoint: Option<&Path>,
     stop: &AtomicBool,
+    tls: Option<&Arc<rustls::ClientConfig>>,
 ) -> Result<Followed, String> {
     let mut backoff = Duration::from_millis(100);
     while !stop.load(Ordering::Relaxed) {
-        match follow_once(addr, token, standby, dir, checkpoint, stop) {
+        match follow_once(addr, token, standby, dir, checkpoint, stop, tls) {
             End::Stopped => return Ok(Followed::Stopped),
             End::Rebootstrap { term, history } => {
                 return Ok(Followed::Rebootstrap { term, history })
@@ -794,19 +893,33 @@ fn follow_once(
     dir: &Path,
     checkpoint: Option<&Path>,
     stop: &AtomicBool,
+    tls: Option<&Arc<rustls::ClientConfig>>,
 ) -> End {
     let (own_term, role) = match load_term(dir) {
         Ok(t) => t,
         Err(e) => return End::Fatal(format!("read {TERM_FILE}: {e}")),
     };
-    let mut s = match TcpStream::connect(addr) {
+    let s = match TcpStream::connect(addr) {
         Ok(s) => s,
         Err(e) => return End::Retry(format!("connect: {e}")),
     };
-    // short reads so `stop` is seen promptly; silence is judged separately
-    if let Err(e) = s.set_read_timeout(Some(Duration::from_millis(100))) {
+    // the TLS handshake completes inside the hello write: give it the
+    // full silence budget, then drop to short reads for `stop`
+    if let Err(e) = s.set_read_timeout(Some(LEADER_SILENCE)) {
         return End::Retry(e.to_string());
     }
+    let mut s = match tls {
+        Some(cfg) => {
+            let conn = crate::tls::server_name(addr).and_then(|name| {
+                rustls::ClientConnection::new(cfg.clone(), name).map_err(|e| e.to_string())
+            });
+            match conn {
+                Ok(c) => Link::Standby(Box::new(rustls::StreamOwned::new(c, s))),
+                Err(e) => return End::Fatal(format!("TLS: {e}")),
+            }
+        }
+        None => Link::Plain(s),
+    };
     let hello = serde_json::json!({
         "proto": PROTO,
         "token": token,
@@ -819,11 +932,15 @@ fn follow_once(
         },
     });
     if let Err(e) = s.write_all(format!("{hello}\n").as_bytes()) {
-        return End::Retry(format!("handshake: {e}"));
+        return link_end(e, "handshake");
+    }
+    // short reads so `stop` is seen promptly; silence is judged separately
+    if let Err(e) = s.tcp().set_read_timeout(Some(Duration::from_millis(100))) {
+        return End::Retry(e.to_string());
     }
     let mut reported = 0;
     let mut r = Reader {
-        s: &s,
+        s,
         stop,
         heard: Instant::now(),
     };
@@ -902,7 +1019,7 @@ fn follow_once(
                 if let Err(e) = standby.apply_replicated(f.seq, &f.ops) {
                     return End::Fatal(format!("apply frame {}: {e}", f.seq));
                 }
-                if let Err(e) = (&s).write_all(&f.seq.to_le_bytes()) {
+                if let Err(e) = r.s.write_all(&f.seq.to_le_bytes()) {
                     return End::Retry(format!("ack: {e}"));
                 }
             }
@@ -937,10 +1054,21 @@ fn follow_once(
     }
 }
 
+/// How a link error ends a connection: a TLS failure (rustls reports
+/// InvalidData — an untrusted certificate, a protocol violation) repeats
+/// on every reconnect, so it is fatal; anything else retries.
+fn link_end(e: std::io::Error, what: &str) -> End {
+    if e.kind() == ErrorKind::InvalidData {
+        End::Fatal(format!("TLS {what}: {e}"))
+    } else {
+        End::Retry(format!("{what}: {e}"))
+    }
+}
+
 /// Exact-length reads over a short-timeout socket: keeps partial progress
 /// across timeouts, honors `stop`, and judges leader silence by wall time.
 struct Reader<'a> {
-    s: &'a TcpStream,
+    s: Link,
     stop: &'a AtomicBool,
     heard: Instant,
 }
@@ -952,7 +1080,7 @@ impl Reader<'_> {
             if self.stop.load(Ordering::Relaxed) {
                 return Err(End::Stopped);
             }
-            match (&*self.s).read(&mut buf[n..]) {
+            match self.s.read(&mut buf[n..]) {
                 Ok(0) => return Err(End::Retry("leader closed the link".into())),
                 Ok(k) => {
                     n += k;
@@ -964,7 +1092,7 @@ impl Reader<'_> {
                     }
                 }
                 Err(e) if e.kind() == ErrorKind::Interrupted => {}
-                Err(e) => return Err(End::Retry(e.to_string())),
+                Err(e) => return Err(link_end(e, "read")),
             }
         }
         Ok(())
@@ -972,7 +1100,7 @@ impl Reader<'_> {
 }
 
 /// One `\n`-terminated line, bounded (the leader's view of the handshake).
-fn read_line(mut s: &TcpStream) -> std::io::Result<Vec<u8>> {
+fn read_line(s: &mut impl Read) -> std::io::Result<Vec<u8>> {
     let mut line = Vec::new();
     let mut b = [0u8; 1];
     loop {

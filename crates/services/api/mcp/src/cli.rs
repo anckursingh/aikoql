@@ -31,7 +31,7 @@ pub(crate) fn print_usage() {
         "  report [PATH]          Print knowledge report for directory\n",
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
-        "  follow DIR --leader ADDR [--token T]  Stream a leader's log into a standby DIR\n",
+        "  follow DIR --leader ADDR [--token T] [--tls-ca CA.pem]  Stream a leader's log into a standby DIR\n",
         "                         (token: an admin --tcp-token of the leader, or AIKOQL_REPLICATION_TOKEN)\n",
         "\n",
         "Server options (serve mode):\n",
@@ -41,7 +41,10 @@ pub(crate) fn print_usage() {
         "                         (dev-only: tokens hit the process list — set AIKOQL_TCP_TOKEN or\n",
         "                         AIKOQL_TCP_TOKEN_FILE in production instead; env replaces flags)\n",
         "  --metrics-addr ADDR    HTTP metrics + health endpoint (e.g., 127.0.0.1:9091)\n",
-        "  --replicate-listen ADDR  Replication stream for standbys (loopback-only; admin --tcp-token)\n",
+        "  --replicate-listen ADDR  Replication stream for standbys (admin --tcp-token; loopback-only without TLS)\n",
+        "  --replicate-tls-cert PEM --replicate-tls-key PEM  TLS for the replication stream (any interface)\n",
+        "  --replicate-tls-ca PEM   Trust for the leader's replication cert (HA standbys)\n",
+        "  --replicate-advertise HOST:PORT  The replication address recorded in the HA lease\n",
         "  --replicate-sync-ms MS   Ack a write only once a standby holds it; fail after MS\n",
         "  --advertise HOST:PORT    This node's client address, the NOT_LEADER hint standbys pass on\n",
         "  --ha-lease PATH|s3://BUCKET/KEY|k8s://NS/NAME --ha-node ID [--ha-ttl-ms MS]  Automatic failover on a shared lease\n",
@@ -130,19 +133,21 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             let tail: Vec<&str> = subcmd_idx
                 .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
                 .unwrap_or_default();
-            let (mut dir, mut leader, mut token) = (None, None, None);
+            let (mut dir, mut leader, mut token, mut ca) = (None, None, None, None);
             let mut it = tail.iter();
             while let Some(a) = it.next() {
                 match *a {
                     "--leader" => leader = it.next().map(|s| s.to_string()),
                     "--token" => token = it.next().map(|s| s.to_string()),
+                    // R3c: the CA that signed the leader's replication cert
+                    "--tls-ca" => ca = it.next().map(|s| s.to_string()),
                     _ => dir = Some(a.to_string()),
                 }
             }
             let token = token.or_else(|| std::env::var("AIKOQL_REPLICATION_TOKEN").ok());
             let (Some(dir), Some(leader), Some(token)) = (dir, leader, token) else {
                 eprintln!(
-                    "Usage: aikoql-mcp follow <STANDBY_DIR> --leader HOST:PORT [--token TOKEN]\n  (or set AIKOQL_REPLICATION_TOKEN)"
+                    "Usage: aikoql-mcp follow <STANDBY_DIR> --leader HOST:PORT [--token TOKEN] [--tls-ca CA.pem]\n  (or set AIKOQL_REPLICATION_TOKEN)"
                 );
                 std::process::exit(2);
             };
@@ -150,7 +155,20 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             // R3b: shipped index checkpoints land where `serve` resumes them
             let ckpt = std::path::PathBuf::from(format!("{dir}.ckpt"));
             let path = std::path::Path::new(&dir);
-            if let Err(e) = crate::replication::follow_loop(path, &leader, &token, &ckpt, &stop) {
+            let trust = match ca
+                .as_deref()
+                .map(|p| crate::tls::read(p).and_then(|b| crate::tls::client_config(&b)))
+            {
+                Some(Ok(t)) => Some(t),
+                Some(Err(e)) => {
+                    eprintln!("--tls-ca: {e}");
+                    std::process::exit(2);
+                }
+                None => None,
+            };
+            if let Err(e) =
+                crate::replication::follow_loop(path, &leader, &token, &ckpt, &stop, trust.as_ref())
+            {
                 eprintln!("follow stopped: {e}");
                 std::process::exit(1);
             }

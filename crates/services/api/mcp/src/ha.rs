@@ -344,25 +344,13 @@ impl K8sLease {
             "a k8s:// lease runs in a pod (KUBERNETES_SERVICE_HOST unset)".to_string()
         })?;
         let port = std::env::var("KUBERNETES_SERVICE_PORT").unwrap_or_else(|_| "443".into());
-        let read =
-            |f: &str| std::fs::read(format!("{SA}/{f}")).map_err(|e| format!("{SA}/{f}: {e}"));
+        let read = |f: &str| crate::tls::read(&format!("{SA}/{f}"));
         let token = String::from_utf8_lossy(&read("token")?).trim().to_string();
-        let mut roots = rustls::RootCertStore::empty();
-        use rustls::pki_types::{pem::PemObject, CertificateDer};
-        for cert in CertificateDer::pem_slice_iter(&read("ca.crt")?) {
-            let cert = cert.map_err(|e| format!("cluster CA: {e}"))?;
-            roots.add(cert).map_err(|e| format!("cluster CA: {e}"))?;
-        }
-        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .map_err(|e| e.to_string())?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+        let tls =
+            crate::tls::client_config(&read("ca.crt")?).map_err(|e| format!("cluster CA: {e}"))?;
         let agent = ureq::AgentBuilder::new()
             .timeout(timeout)
-            .tls_config(Arc::new(tls))
+            .tls_config(tls)
             .build();
         let host = if host.contains(':') {
             format!("[{host}]")
@@ -564,6 +552,8 @@ pub(crate) struct HaConfig {
     pub(crate) client: Option<String>,
     /// Presented to the leader when following.
     pub(crate) token: String,
+    /// R3c — trust for the leader's replication certificate.
+    pub(crate) tls: Option<Arc<rustls::ClientConfig>>,
     pub(crate) dir: PathBuf,
 }
 
@@ -749,7 +739,9 @@ impl Follower {
         let (c, l, st) = (cfg.clone(), leader.clone(), stop.clone());
         let handle = std::thread::spawn(move || {
             let ckpt = PathBuf::from(format!("{}.ckpt", c.dir.display()));
-            if let Err(e) = replication::follow_loop(&c.dir, &l, &c.token, &ckpt, &st) {
+            if let Err(e) =
+                replication::follow_loop(&c.dir, &l, &c.token, &ckpt, &st, c.tls.as_ref())
+            {
                 warn!("ha: following {l}: {e}");
             }
         });

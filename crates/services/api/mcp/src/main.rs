@@ -34,6 +34,7 @@ mod replication;
 mod session;
 mod shell;
 mod studio;
+mod tls;
 mod tool_registry;
 mod tools;
 mod transport;
@@ -271,13 +272,49 @@ fn main() {
     // a node deposed by a newer term keeps serving reads, never writes.
     // MRFC-0080 R5a: with a lease, block as a standby of its holder until
     // this node wins it (or resumes its own), then serve as the leader.
+    // MRFC-0080 R3c: TLS for the replication stream. With a certificate
+    // the stream is encrypted and the listener may bind any interface;
+    // without one it stays loopback-only.
+    let repl_tls = match (&cfg.replicate_tls_cert, &cfg.replicate_tls_key) {
+        (Some(c), Some(k)) => {
+            match tls::read(c).and_then(|c| tls::read(k).and_then(|k| tls::server_config(&c, &k))) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    eprintln!("--replicate-tls-cert/--replicate-tls-key: {e}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        (None, None) => None,
+        _ => {
+            eprintln!("--replicate-tls-cert and --replicate-tls-key go together");
+            std::process::exit(2);
+        }
+    };
+    let repl_trust = cfg.replicate_tls_ca.as_deref().map(|ca| {
+        match tls::read(ca).and_then(|p| tls::client_config(&p)) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("--replicate-tls-ca: {e}");
+                std::process::exit(2);
+            }
+        }
+    });
+    let repl_listen_addr = |a: &str| {
+        if repl_tls.is_some() {
+            Ok(a.to_string())
+        } else {
+            validate_listen(a)
+        }
+    };
     let ha_slot = cfg.ha_lease.as_ref().map(|lease| {
         let (Some(repl), Some(node)) = (replicate_listen.as_deref(), cfg.ha_node.clone()) else {
             eprintln!("--ha-lease needs --ha-node and --replicate-listen");
             std::process::exit(2);
         };
-        let repl = match validate_listen(repl) {
-            Ok(a) => a,
+        let repl = match repl_listen_addr(repl) {
+            // the address standbys dial: the advertised one across hosts
+            Ok(a) => cfg.replicate_advertise.clone().unwrap_or(a),
             Err(e) => {
                 eprintln!("{e}");
                 std::process::exit(2);
@@ -322,6 +359,7 @@ fn main() {
             repl,
             client: cfg.advertise.clone(),
             token,
+            tls: repl_trust.clone(),
             dir: std::path::PathBuf::from(&db_path),
         };
         match ha::lead(ha) {
@@ -587,7 +625,7 @@ fn main() {
                 std::process::exit(2);
             }
         };
-        let addr = match validate_listen(&addr) {
+        let addr = match repl_listen_addr(&addr) {
             Ok(a) => a,
             Err(e) => {
                 eprintln!("{e}");
@@ -605,7 +643,7 @@ fn main() {
             eprintln!("--replicate-listen needs the storage admin surface");
             std::process::exit(2);
         };
-        info!(%addr, "replication stream listening");
+        info!(%addr, tls = repl_tls.is_some(), "replication stream listening");
         let shipped = replication::ShippedCheckpoint {
             dir: ckpt_dir.clone(),
             lock: ckpt_lock.clone(),
@@ -627,6 +665,7 @@ fn main() {
                 Some(shipped),
                 repl_dir,
                 acked,
+                repl_tls,
             )
         });
         // R3b: a leader that crashes leaves no shutdown checkpoint — take

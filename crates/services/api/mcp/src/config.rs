@@ -26,6 +26,16 @@ pub(crate) struct RuntimeConfig {
     /// (`--ha-lease`), this node's id in it (`--ha-node`) and its TTL
     /// (`--ha-ttl-ms`, default 10 s). CLI-only.
     pub ha_lease: Option<String>,
+    /// MRFC-0080 R3c: TLS on the replication stream — the leader's
+    /// certificate chain and key (`--replicate-tls-cert/-key`, both or
+    /// neither; with them the listener may bind any interface), the CA a
+    /// standby trusts (`--replicate-tls-ca`), and the replication address
+    /// recorded in the HA lease (`--replicate-advertise`, default the
+    /// listen address). CLI-only.
+    pub replicate_tls_cert: Option<String>,
+    pub replicate_tls_key: Option<String>,
+    pub replicate_tls_ca: Option<String>,
+    pub replicate_advertise: Option<String>,
     pub ha_node: Option<String>,
     pub ha_ttl_ms: u64,
     pub metrics_addr: Option<String>,
@@ -273,6 +283,10 @@ pub(crate) fn load(
         replicate_listen: None,
         advertise: None,
         ha_lease: None,
+        replicate_tls_cert: None,
+        replicate_tls_key: None,
+        replicate_tls_ca: None,
+        replicate_advertise: None,
         ha_node: None,
         ha_ttl_ms: 10_000,
         metrics_addr: None,
@@ -488,6 +502,30 @@ pub(crate) fn load(
                 );
                 i += 2;
             }
+            flag @ ("--replicate-tls-cert" | "--replicate-tls-key" | "--replicate-tls-ca") => {
+                let Some(v) = args.get(i + 1) else {
+                    return Err(format!("{flag} requires a path"));
+                };
+                let slot = match flag {
+                    "--replicate-tls-cert" => &mut cfg.replicate_tls_cert,
+                    "--replicate-tls-key" => &mut cfg.replicate_tls_key,
+                    _ => &mut cfg.replicate_tls_ca,
+                };
+                *slot = Some(v.clone());
+                i += 2;
+            }
+            "--replicate-advertise" => match args.get(i + 1) {
+                Some(v) if crate::replication::valid_addr(v) => {
+                    cfg.replicate_advertise = Some(v.clone());
+                    i += 2;
+                }
+                Some(v) => {
+                    return Err(format!(
+                        "--replicate-advertise requires HOST:PORT, got {v:?}"
+                    ))
+                }
+                None => return Err("--replicate-advertise requires an address".into()),
+            },
             "--ha-lease" => match args.get(i + 1) {
                 Some(v) => {
                     cfg.ha_lease = Some(v.clone());
