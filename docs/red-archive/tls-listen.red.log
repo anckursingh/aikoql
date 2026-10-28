@@ -1,0 +1,52 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running tests/tls_listen.rs (target/debug/deps/tls_listen-efd88f49761f8d51)
+
+running 7 tests
+test tls006_cert_and_key_go_together ... ok
+test tls003_plaintext_non_loopback_still_refused ... ok
+test tls002_plaintext_client_is_not_served ... FAILED
+test tls001_mcp_over_tls_on_any_interface ... FAILED
+test tls004_native_protocol_over_tls ... FAILED
+test tls007_shutdown_drains_an_open_tls_connection ... FAILED
+test tls005_tls_from_the_environment ... FAILED
+
+failures:
+
+---- tls002_plaintext_client_is_not_served stdout ----
+
+thread 'tls002_plaintext_client_is_not_served' (1636579) panicked at crates/services/api/mcp/tests/tls_listen.rs:75:9:
+server never listened on 59393
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tls001_mcp_over_tls_on_any_interface stdout ----
+
+thread 'tls001_mcp_over_tls_on_any_interface' (1636578) panicked at crates/services/api/mcp/tests/tls_listen.rs:75:9:
+server never listened on 59394
+
+---- tls004_native_protocol_over_tls stdout ----
+
+thread 'tls004_native_protocol_over_tls' (1636581) panicked at crates/services/api/mcp/tests/tls_listen.rs:75:9:
+server never listened on 59396
+
+---- tls007_shutdown_drains_an_open_tls_connection stdout ----
+
+thread 'tls007_shutdown_drains_an_open_tls_connection' (1636584) panicked at crates/services/api/mcp/tests/tls_listen.rs:75:9:
+server never listened on 59391
+
+---- tls005_tls_from_the_environment stdout ----
+
+thread 'tls005_tls_from_the_environment' (1636582) panicked at crates/services/api/mcp/tests/tls_listen.rs:75:9:
+server never listened on 59392
+
+
+failures:
+    tls001_mcp_over_tls_on_any_interface
+    tls002_plaintext_client_is_not_served
+    tls004_native_protocol_over_tls
+    tls005_tls_from_the_environment
+    tls007_shutdown_drains_an_open_tls_connection
+
+test result: FAILED. 2 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.06s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test tls_listen`
+EXIT=101
