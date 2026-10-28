@@ -46,7 +46,7 @@ an exact copy, which the verifiable-knowledge claim requires.
 | automatic failover: lease agent (file + S3), self-fencing, in-process promotion | R5a ✅ |
 | k8s `Lease` backend, SDKs follow leader hints | R5b ✅ (Java SDK pending) |
 | standby serving reads (a read-only kernel over a replicating db) | later |
-| split-brain certs on the fault proxy | R5c |
+| split-brain certs: partition, kill mid-write, rejected store | R5c ✅ |
 | log + snapshot archive to S3 (PITR) — the enterprise S3 leg | R6 |
 | state outside the DB: KMS master key file (`security/kms.rs`, needed by followers — frames are ciphertext), MCP tool-call audit log (`mcp/src/audit.rs`), backup `meta.json` | R2 (documented per-node or moved in) |
 
@@ -406,7 +406,7 @@ removed the index rebuild) → ~10–15 s, tunable through the TTL.
 - **R5b** — k8s `Lease` backend; SDKs follow leader hints. ✅
 - **R5c** — split-brain certs on the fault proxy: partition the leader,
   kill it mid-write, skew its clock; prove no acked write is lost and
-  never more than one writer per term.
+  never more than one writer per term. ✅ (see R5c below)
 
 ### Risks to settle before R5a (status after R5a: clock drift designed out — see R5a; S3-compatible stores still unverified)
 
@@ -518,6 +518,53 @@ R5b limits:
 - Standby reads are not in R5b: a standby still answers no client
   traffic until it leads. It needs a kernel that opens without writing
   over a db being replicated into — a separate milestone.
+
+## R5c — split-brain certs ✅
+
+Harness (`replication_failover.rs`): a fake S3 with conditional PUT
+holds the lease; a **Gate** in front of one node's S3 endpoint is open,
+**blackholes** it (connections hang — a partition) or **rejects** it
+(403 `RequestTimeTooSkewed`). The SDK fault proxy works on one client's
+wire and cannot cut a node from its lease store, hence the Gate.
+
+**One writer per term — proven, not timed.** Both nodes log to one
+machine's clock. The old leader logs `fenced; exiting` *after* its Db
+fence took effect; the standby logs `the lease lapsed — taking over`
+*before* its CAS (added for this cert). `fenced < taking over` on the
+log timestamps therefore orders the real events: the old leader stopped
+writing before the new one could start.
+
+| cert | fault | proves |
+|---|---|---|
+| partition | the leader's lease store blackholed, writes continue | it fences (exit 75, `1 fenced`) **before** the standby takes over (`2 leader`); every write acked before or during the partition is on the new leader |
+| kill mid-write | SIGKILL with a write in flight (sync acks) | every acked write is on the promoted standby |
+| rejected store | the store answers 403 (a skewed SigV4 clock) | the leader fences itself — fail-safe |
+
+Measured (TTL 1.5 s): the old leader fenced **~0.79 s** before the
+standby began taking over, every run — the designed ≥ TTL/3 margin; 54–64
+writes acked across the partition, none lost.
+
+Found and fixed: `fence()` read the lease for the NOT_LEADER hint before
+recording `fenced`; under a partition that read waits out its timeout
+(TTL/3), delaying the record and the exit by ~0.5 s. The hint is now
+read last, best-effort.
+
+**Clock skew.** The agent's timing reads only monotonic clocks — no
+wall-clock comparison between nodes — so wall-clock skew cannot open a
+split brain; it can only make a store reject the leader (SigV4), which
+fences it (the third cert). Clock-*rate* drift is what the TTL/3 margin
+covers: the leader may run up to a third slow before the bound breaks.
+
+RED: `r5c-split-brain` (no "taking over" line to order against).
+
+R5c limits:
+- Single host: replication is loopback-only until TLS (R3c), so the
+  certs partition the lease path, not a real network between hosts.
+- A partition of the replication link alone is not certified: takeover
+  depends only on the lease, so a standby cut off from the leader's
+  frames but not from the store never promotes — by construction, not
+  by a cert.
+- Clock-rate drift is argued, not injected.
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
