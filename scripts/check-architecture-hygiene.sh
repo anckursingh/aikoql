@@ -41,6 +41,10 @@
 # all eleven §12 mutants, the F-02 lifecycle state machine).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
+# `grep -q` quits at the first match, so under pipefail a writer still
+# writing (sed, printf) dies of SIGPIPE and the match reads as a miss —
+# `has` reads all of its input
+has() { grep "$@" >/dev/null; }
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$root"
 fail=0
@@ -180,12 +184,12 @@ else
     fail=1
   fi
   if grep -q 'competitor_bench/scale.py' ".github/workflows/release.yml" && \
-     ! sed -n '/^  tier3-scale:/,/^  [a-z][a-z0-9_-]*:$/p' ".github/workflows/release.yml" | grep -q 'competitor_bench/scale.py'; then
+     ! sed -n '/^  tier3-scale:/,/^  [a-z][a-z0-9_-]*:$/p' ".github/workflows/release.yml" | has 'competitor_bench/scale.py'; then
     echo "ARCH: release.yml's scale leg must live in the tier3-scale job (CI-09)" >&2
     fail=1
   fi
   if grep -q 'competitor_bench/bench.py' ".github/workflows/release.yml" && \
-     ! sed -n '/^  tier3-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' ".github/workflows/release.yml" | grep -q 'competitor_bench/bench.py'; then
+     ! sed -n '/^  tier3-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' ".github/workflows/release.yml" | has 'competitor_bench/bench.py'; then
     echo "ARCH: release.yml's matrix leg must live in the tier3-matrix job (CI-09)" >&2
     fail=1
   fi
@@ -269,7 +273,7 @@ for spec in "ci check test-linux lint build-release connectors python-sdk perf-s
             "release windows linux-gnu linux-musl macos-intel macos-arm pypi-wheel-matrix tier3-correctness tier3-correctness-windows tier3-coverage tier3-scale tier3-matrix"; do
   wf="${spec%% *}"
   for job in ${spec#* }; do
-    if ! sed -n "/^  $job:/,/^  [a-z][a-z0-9_-]*:$/p" ".github/workflows/$wf.yml" | grep -q 'Swatinem/rust-cache'; then
+    if ! sed -n "/^  $job:/,/^  [a-z][a-z0-9_-]*:$/p" ".github/workflows/$wf.yml" | has 'Swatinem/rust-cache'; then
       echo "ARCH: $wf.yml job $job builds without Swatinem/rust-cache (CI-05)" >&2
       fail=1
     fi
@@ -320,12 +324,12 @@ if ! grep -qE '^  competitor-matrix:' "$BENCH"; then
   echo "ARCH: $BENCH lacks the competitor-matrix job (CI-07)" >&2
   fail=1
 fi
-if ! sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q 'competitor_bench/bench.py'; then
+if ! sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | has 'competitor_bench/bench.py'; then
   echo "ARCH: the competitor-matrix job must run bench.py (CI-07)" >&2
   fail=1
 fi
 for img in pgvector/pgvector neo4j:5-community qdrant/qdrant mongo:7; do
-  if ! sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q "$img"; then
+  if ! sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | has "$img"; then
     echo "ARCH: the competitor-matrix job lacks the composed-stack image: $img (CI-07)" >&2
     fail=1
   fi
@@ -353,15 +357,15 @@ if grep -q ':latest' scripts/competitor_bench/containers.sh; then
   fail=1
 fi
 matrix=$(sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH")
-if printf '%s\n' "$matrix" | grep -q ':latest'; then
+if printf '%s\n' "$matrix" | has ':latest'; then
   echo "ARCH: the competitor-matrix job carries an unpinned :latest image (§18, CI-08)" >&2
   fail=1
 fi
-if ! printf '%s\n' "$matrix" | grep -q 'artifact_schema.py docs/certification/competitors/result.json'; then
+if ! printf '%s\n' "$matrix" | has 'artifact_schema.py docs/certification/competitors/result.json'; then
   echo "ARCH: the competitor-matrix job must schema-validate its artifact (§13, CI-08)" >&2
   fail=1
 fi
-if ! printf '%s\n' "$matrix" | grep -q 'result.csv'; then
+if ! printf '%s\n' "$matrix" | has 'result.csv'; then
   echo "ARCH: the competitor-matrix job must upload the §14 csv leg (CI-08)" >&2
   fail=1
 fi
@@ -399,7 +403,7 @@ fi
 # pin is a one-line live-invocation match (the L-20 lesson), so the flag
 # must sit on the scale.py line itself.
 t3s=$(sed -n '/^  tier3-scale:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL")
-if ! printf '%s\n' "$t3s" | grep -q -- 'scale.py --no-1m'; then
+if ! printf '%s\n' "$t3s" | has -- 'scale.py --no-1m'; then
   echo "ARCH: the tier3-scale job must run the scale harness with --no-1m (the 1M leg cannot fit a 360m CI job, L-27 round 3)" >&2
   fail=1
 fi
@@ -411,7 +415,7 @@ fi
 for scale_home in "release.yml:tier3-scale" "benchmark.yml:competitor-scale"; do
   wf=${scale_home%%:*}; job=${scale_home##*:}
   blk=$(sed -n "/^  $job:/,/^  [a-z][a-z0-9_-]*:$/p" ".github/workflows/$wf")
-  if ! printf '%s\n' "$blk" | grep -q 'image: pgvector/pgvector:pg16'; then
+  if ! printf '%s\n' "$blk" | has 'image: pgvector/pgvector:pg16'; then
     echo "ARCH: the $job job's PG service must use pgvector/pgvector:pg16 (bench.py needs the vector extension, L-27 round 4)" >&2
     fail=1
   fi
@@ -421,16 +425,16 @@ if ! grep -q 'competitor_bench/bench.py' "$REL"; then
   fail=1
 fi
 t3m=$(sed -n '/^  tier3-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL")
-if ! printf '%s\n' "$t3m" | grep -q 'artifact_schema.py docs/certification/competitors/result.json'; then
+if ! printf '%s\n' "$t3m" | has 'artifact_schema.py docs/certification/competitors/result.json'; then
   echo "ARCH: the tier3-matrix job must schema-validate its artifact (§13, CI-09)" >&2
   fail=1
 fi
-if printf '%s\n' "$t3m" | grep -q ':latest'; then
+if printf '%s\n' "$t3m" | has ':latest'; then
   echo "ARCH: the tier3-matrix job carries an unpinned image (§18, CI-09)" >&2
   fail=1
 fi
 for img in pgvector/pgvector neo4j:5-community qdrant/qdrant mongo:7; do
-  if ! printf '%s\n' "$t3m" | grep -q "$img"; then
+  if ! printf '%s\n' "$t3m" | has "$img"; then
     echo "ARCH: the tier3-matrix job lacks the composed-stack image: $img (CI-09)" >&2
     fail=1
   fi
@@ -443,16 +447,16 @@ done
 # the schedule/dispatch gate inside the guard slice); the 100K main job
 # stays armed (its re-seed is minutes within a 240-min budget).
 guard=$(sed -n '/^  guard:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH")
-if ! printf '%s\n' "$guard" | grep -q 'AIKOQL_RSS=1'; then
+if ! printf '%s\n' "$guard" | has 'AIKOQL_RSS=1'; then
   echo "ARCH: the guard job lacks the RSS arm (CI-10)" >&2
   fail=1
 fi
-if ! printf '%s\n' "$guard" | grep -q "if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"; then
+if ! printf '%s\n' "$guard" | has "if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"; then
   echo "ARCH: the guard job must gate its RSS arm to the weekly/dispatch runs (CI-10)" >&2
   fail=1
 fi
 main=$(sed -n '/^  self-regression-main:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH")
-if ! printf '%s\n' "$main" | grep -q 'AIKOQL_RSS=1'; then
+if ! printf '%s\n' "$main" | has 'AIKOQL_RSS=1'; then
   echo "ARCH: the self-regression-main job lacks the RSS arm (CI-10)" >&2
   fail=1
 fi
@@ -465,7 +469,7 @@ fi
 # contract is MCP-over-stdio (docker run -i) or a sidecar that shares the
 # network namespace.
 for cf in docker-compose.yml docker-compose.release.yml; do
-  if sed -n '/^  aikoql:/,/^  [a-z][a-z0-9_-]*:$/p' "$cf" | grep -qE '^ *- "90(90|91):'; then
+  if sed -n '/^  aikoql:/,/^  [a-z][a-z0-9_-]*:$/p' "$cf" | has -E '^ *- "90(90|91):'; then
     echo "ARCH: $cf publishes dead aikoql host ports (CI-11)" >&2
     fail=1
   fi
@@ -489,7 +493,7 @@ fi
 # `:?` gates require.
 dock=$(sed -n '/^  docker:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF")
 for cf in docker-compose.yml docker-compose.release.yml; do
-  if ! printf '%s\n' "$dock" | grep -q "compose -f $cf config --quiet"; then
+  if ! printf '%s\n' "$dock" | has "compose -f $cf config --quiet"; then
     echo "ARCH: the docker job does not parse $cf (CI-13)" >&2
     fail=1
   fi
@@ -501,7 +505,7 @@ done
 # (one level short; the workflow expression had never been executed
 # anywhere before the push).
 gs=$(sed -n '/^  go-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF")
-if ! printf '%s\n' "$gs" | grep -q '"$PWD/../../../target/release/aikoql-mcp"'; then
+if ! printf '%s\n' "$gs" | has '"$PWD/../../../target/release/aikoql-mcp"'; then
   echo "ARCH: the go-sdk job's AIKOQL_MCP_BIN is not pinned at the workspace-root depth (CI-13)" >&2
   fail=1
 fi
@@ -534,7 +538,7 @@ if ! grep -qE '^  storage-mutation:' "$BENCH"; then
   fail=1
 fi
 if ! grep -qE '^  storage-mutation:' "$BENCH" || \
-   ! sed -n '/^  storage-mutation:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q 'storage-mutation-harness.sh all'; then
+   ! sed -n '/^  storage-mutation:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | has 'storage-mutation-harness.sh all'; then
   echo "ARCH: the storage-mutation job must run the harness in all-mode (F-04)" >&2
   fail=1
 fi
@@ -561,7 +565,7 @@ if ! grep -qE '^  storage-fuzz:' "$BENCH"; then
   fail=1
 fi
 if ! grep -qE '^  storage-fuzz:' "$BENCH" || \
-   ! sed -n '/^  storage-fuzz:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q 'fuzz/smoke.sh'; then
+   ! sed -n '/^  storage-fuzz:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | has 'fuzz/smoke.sh'; then
   echo "ARCH: the storage-fuzz job must run the fuzz crate's smoke.sh (F-05)" >&2
   fail=1
 fi
@@ -627,12 +631,12 @@ fi
 # invisible to the Go ecosystem (the D-18 row's RED: "Go has no tagged
 # module"). The job gates on github-release success (a module tag for a
 # release that never landed is a phantom version).
-if ! sed -n '/^  go-tag:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'TAG: crates/sdk/go/v'; then
+if ! sed -n '/^  go-tag:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has 'TAG: crates/sdk/go/v'; then
   echo "ARCH: release.yml has no go-tag job pushing the crates/sdk/go/ module tag (D-18, V-05)" >&2
   fail=1
 fi
 if grep -q '^  go-tag:' "$REL" && \
-   ! sed -n '/^  go-tag:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'github-release'; then
+   ! sed -n '/^  go-tag:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has 'github-release'; then
   echo "ARCH: the go-tag job is not gated on the github-release job (D-18)" >&2
   fail=1
 fi
@@ -640,7 +644,7 @@ fi
 # workflow test 20b — test_pypi_publish_needs_every_wheel (V-05): v0.2.3
 # reached PyPI without the mac wheel — always() published the survivors of
 # a failed matrix leg. The publish job must gate on the whole matrix.
-if ! sed -n '/^  pypi-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q "needs.pypi-wheel-matrix.result == 'success'"; then
+if ! sed -n '/^  pypi-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has "needs.pypi-wheel-matrix.result == 'success'"; then
   echo "ARCH: pypi-publish is not gated on every wheel-matrix leg succeeding (V-05)" >&2
   fail=1
 fi
@@ -663,17 +667,17 @@ fi
 # equal the release version before any upload; the pom's Central Portal
 # plugin does the upload itself). Like every publisher it gates on
 # github-release so a failed release never publishes artifacts.
-if ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'repo1.maven.org/maven2/com/aikoql/aikoql-client'; then
+if ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has 'repo1.maven.org/maven2/com/aikoql/aikoql-client'; then
   echo "ARCH: the maven-central-publish job loses the Maven Central skip guard (D-18)" >&2
   fail=1
 fi
 if grep -q '^  maven-central-publish:' "$REL" && \
-   ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'help:evaluate'; then
+   ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has 'help:evaluate'; then
   echo "ARCH: the maven-central-publish job lost the pom/release version parity assert (D-18)" >&2
   fail=1
 fi
 if grep -q '^  maven-central-publish:' "$REL" && \
-   ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'github-release'; then
+   ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has 'github-release'; then
   echo "ARCH: the maven-central-publish job is not gated on the github-release job (D-18)" >&2
   fail=1
 fi
@@ -695,7 +699,7 @@ if ! grep -qF 'maturin build --release --out dist --target universal2-apple-darw
   fail=1
 fi
 if grep -q '^  pypi-wheel-matrix:' "$REL" && \
-   ! sed -n '/^  pypi-wheel-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'python -c "import aikoql"'; then
+   ! sed -n '/^  pypi-wheel-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has 'python -c "import aikoql"'; then
   echo "ARCH: the pypi-wheel-matrix job lost the wheel install smoke (D-18)" >&2
   fail=1
 fi
@@ -710,17 +714,17 @@ if ! grep -q '^  sdk-release-cert:' "$REL"; then
   fail=1
 fi
 if grep -q '^  sdk-release-cert:' "$REL" && \
-   ! sed -n '/^  sdk-release-cert:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'scripts/sdk-release-cert.sh'; then
+   ! sed -n '/^  sdk-release-cert:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has 'scripts/sdk-release-cert.sh'; then
   echo "ARCH: the sdk-release-cert job lost its certification script (D-18)" >&2
   fail=1
 fi
 if grep -q '^  sdk-release-cert:' "$REL" && \
-   ! sed -n '/^  sdk-release-cert:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'github-release'; then
+   ! sed -n '/^  sdk-release-cert:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has 'github-release'; then
   echo "ARCH: the sdk-release-cert job lost its github-release gate (D-18)" >&2
   fail=1
 fi
 if grep -q '^  sdk-release-cert:' "$REL" && \
-   ! sed -n '/^  sdk-release-cert:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'syft'; then
+   ! sed -n '/^  sdk-release-cert:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has 'syft'; then
   echo "ARCH: the sdk-release-cert job lost the SBOM leg (D-18)" >&2
   fail=1
 fi
@@ -737,7 +741,7 @@ if ! grep -q '^  ts-sdk:' "$CIWF"; then
   fail=1
 fi
 if grep -q '^  ts-sdk:' "$CIWF" && \
-   ! sed -n '/^  ts-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'node --test tests/\*.test.ts'; then
+   ! sed -n '/^  ts-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has 'node --test tests/\*.test.ts'; then
   echo "ARCH: the ts-sdk job lost its suite command (D-19)" >&2
   fail=1
 fi
@@ -745,7 +749,7 @@ fi
 # proxy — the proxy build is pinned so the legs cannot quietly drop out.
 # python-sdk runs the same matrix in its suite with the same silent skip.
 if grep -q '^  ts-sdk:' "$CIWF" && \
-   ! sed -n '/^  ts-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q -- '-p aikoql-fault-proxy'; then
+   ! sed -n '/^  ts-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has -- '-p aikoql-fault-proxy'; then
   echo "ARCH: the ts-sdk job lost the fault-proxy build (D-19)" >&2
   fail=1
 fi
@@ -754,7 +758,7 @@ if ! grep -q '^  python-sdk:' "$CIWF"; then
   fail=1
 fi
 if grep -q '^  python-sdk:' "$CIWF" && \
-   ! sed -n '/^  python-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q -- '-p aikoql-fault-proxy'; then
+   ! sed -n '/^  python-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has -- '-p aikoql-fault-proxy'; then
   echo "ARCH: the python-sdk job lost the fault-proxy build (D-19)" >&2
   fail=1
 fi
@@ -766,7 +770,7 @@ if ! grep -q '^  java-sdk:' "$CIWF"; then
   fail=1
 fi
 if grep -q '^  java-sdk:' "$CIWF" && \
-   ! sed -n '/^  java-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'mvn -B test'; then
+   ! sed -n '/^  java-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has 'mvn -B test'; then
   echo "ARCH: the java-sdk job lost its surefire suite (D-19)" >&2
   fail=1
 fi
@@ -778,14 +782,14 @@ if ! grep -q '^  rust-sdk:' "$CIWF"; then
   fail=1
 fi
 if grep -q '^  rust-sdk:' "$CIWF" && \
-   ! sed -n '/^  rust-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'cargo test -p aikoql-sdk'; then
+   ! sed -n '/^  rust-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has 'cargo test -p aikoql-sdk'; then
   echo "ARCH: the rust-sdk job lost its suite command (D-19)" >&2
   fail=1
 fi
 # the fault suite panics without the §18 proxy (not a skip — a RED), so
 # the rust-sdk job must build it.
 if grep -q '^  rust-sdk:' "$CIWF" && \
-   ! sed -n '/^  rust-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q -- '-p aikoql-fault-proxy'; then
+   ! sed -n '/^  rust-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has -- '-p aikoql-fault-proxy'; then
   echo "ARCH: the rust-sdk job lost the fault-proxy build (D-19)" >&2
   fail=1
 fi
@@ -799,12 +803,12 @@ if ! grep -q '^  sdk-contract:' "$CIWF"; then
   fail=1
 fi
 if grep -q '^  sdk-contract:' "$CIWF" && \
-   ! sed -n '/^  sdk-contract:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'scripts/check-sdk-compat.sh'; then
+   ! sed -n '/^  sdk-contract:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has 'scripts/check-sdk-compat.sh'; then
   echo "ARCH: the sdk-contract gate lost the version-parity leg (D-19)" >&2
   fail=1
 fi
 if grep -q '^  sdk-contract:' "$CIWF" && \
-   ! sed -n '/^  sdk-contract:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'fuzz_corpus_pin'; then
+   ! sed -n '/^  sdk-contract:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has 'fuzz_corpus_pin'; then
   echo "ARCH: the sdk-contract gate lost the rust corpus pin (D-19)" >&2
   fail=1
 fi
@@ -816,12 +820,12 @@ if ! grep -q '^  sdk-fuzz-smoke:' "$CIWF"; then
   fail=1
 fi
 if grep -q '^  sdk-fuzz-smoke:' "$CIWF" && \
-   ! sed -n '/^  sdk-fuzz-smoke:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'jazzer-smoke.sh'; then
+   ! sed -n '/^  sdk-fuzz-smoke:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has 'jazzer-smoke.sh'; then
   echo "ARCH: the sdk-fuzz-smoke gate lost the java jazzer leg (D-19)" >&2
   fail=1
 fi
 if grep -q '^  sdk-fuzz-smoke:' "$CIWF" && \
-   ! sed -n '/^  sdk-fuzz-smoke:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'fuzztime 5s'; then
+   ! sed -n '/^  sdk-fuzz-smoke:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has 'fuzztime 5s'; then
   echo "ARCH: the sdk-fuzz-smoke gate lost the go fuzz leg (D-19)" >&2
   fail=1
 fi
@@ -836,7 +840,7 @@ if ! grep -q '^  sdk-nightly:' "$BENCH"; then
   fail=1
 fi
 if grep -q '^  sdk-nightly:' "$BENCH" && \
-   ! sed -n '/^  sdk-nightly:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q 'bash scripts/sdk-nightly.sh'; then
+   ! sed -n '/^  sdk-nightly:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | has 'bash scripts/sdk-nightly.sh'; then
   echo "ARCH: the sdk-nightly job lost its battery script (D-19)" >&2
   fail=1
 fi
@@ -880,12 +884,12 @@ if [ -f "$TRAIN" ] && ! grep -q 'training/\*\*' "$TRAIN"; then
   fail=1
 fi
 if [ -f "$TRAIN" ] && \
-   ! sed -n '/^  gate-teeth:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q 'mutation_leg.py'; then
+   ! sed -n '/^  gate-teeth:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | has 'mutation_leg.py'; then
   echo "ARCH: the gate-teeth leg lost the mutation leg (T-14)" >&2
   fail=1
 fi
 if [ -f "$TRAIN" ] && \
-   ! sed -n '/^  determinism:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q 'generate_corpus.py'; then
+   ! sed -n '/^  determinism:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | has 'generate_corpus.py'; then
   echo "ARCH: the determinism leg lost the corpus regeneration cell (T-14)" >&2
   fail=1
 fi
@@ -898,15 +902,15 @@ fi
 # `pip install -e training` rides the hack instead of the product.
 if [ -f training/pyproject.toml ] && \
    grep -qE '^\[tool\.pytest' training/pyproject.toml && \
-   sed -n '/^\[tool\.pytest/,/^\[/p' training/pyproject.toml | grep -q 'pythonpath'; then
+   sed -n '/^\[tool\.pytest/,/^\[/p' training/pyproject.toml | has 'pythonpath'; then
   echo "ARCH: training/pyproject.toml still sets pytest pythonpath=src (PR9 §34)" >&2
   fail=1
 fi
 if [ -f "$TRAIN" ]; then
   for _tjob in $(grep -oE '^  [a-z][a-z0-9_-]*:' "$TRAIN" | sed 's/^  //; s/:$//'); do
     _tblock=$(sed -n "/^  $_tjob:/,/^  [a-z][a-z0-9_-]*:$/p" "$TRAIN")
-    if ! printf '%s\n' "$_tblock" | grep -q 'runs-on:'; then continue; fi
-    if ! printf '%s\n' "$_tblock" | grep -qE 'pip install .*training'; then
+    if ! printf '%s\n' "$_tblock" | has 'runs-on:'; then continue; fi
+    if ! printf '%s\n' "$_tblock" | has -E 'pip install .*training'; then
       echo "ARCH: training-data.yml job $_tjob has no pip install -e training (PR9 §34)" >&2
       fail=1
     fi
@@ -920,7 +924,7 @@ fi
 # it, and the workflow declares a schedule trigger. The fuzz-estate
 # leg runs the WHOLE fuzz estate, not the two files it accreted with.
 if [ -f "$TRAIN" ] && \
-   sed -n '/^  integration:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q -- '--target 10000'; then
+   sed -n '/^  integration:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | has -- '--target 10000'; then
   echo "ARCH: the integration leg still carries the 10K sweep (PR9 §33)" >&2
   fail=1
 fi
@@ -930,24 +934,24 @@ if [ -f "$TRAIN" ]; then
     fail=1
   fi
   _nblock=$(sed -n '/^  nightly:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN")
-  if ! printf '%s\n' "$_nblock" | grep -q -- '--target 10000'; then
+  if ! printf '%s\n' "$_nblock" | has -- '--target 10000'; then
     echo "ARCH: the nightly leg lost the 10K corpus sweep (PR9 §33)" >&2
     fail=1
   fi
-  if ! printf '%s\n' "$_nblock" | grep -q 'upload-artifact'; then
+  if ! printf '%s\n' "$_nblock" | has 'upload-artifact'; then
     echo "ARCH: the nightly leg lost the corpus artifact upload (PR9 §33)" >&2
     fail=1
   fi
-  if ! printf '%s\n' "$_nblock" | grep -q 'event_name'; then
+  if ! printf '%s\n' "$_nblock" | has 'event_name'; then
     echo "ARCH: the nightly leg is not event-guarded (PR9 §33)" >&2
     fail=1
   fi
-  if ! sed -n '/^on:/,/^jobs:/p' "$TRAIN" | grep -q '^  schedule:'; then
+  if ! sed -n '/^on:/,/^jobs:/p' "$TRAIN" | has '^  schedule:'; then
     echo "ARCH: training-data.yml declares no schedule trigger (PR9 §33)" >&2
     fail=1
   fi
   for _fz in test_protocol_fuzz.py test_grounding_fuzz.py; do
-    if ! sed -n '/^  fuzz-estate:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q "$_fz"; then
+    if ! sed -n '/^  fuzz-estate:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | has "$_fz"; then
       echo "ARCH: the fuzz-estate leg does not run $_fz (PR9 §33)" >&2
       fail=1
     fi
@@ -991,11 +995,11 @@ if [ -f "$REL" ] && ! grep -q '^  training-pypi-publish:' "$REL"; then
 fi
 if [ -f "$REL" ]; then
   _tpblock=$(sed -n '/^  training-pypi-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL")
-  if ! printf '%s\n' "$_tpblock" | grep -q 'pypa/gh-action-pypi-publish'; then
+  if ! printf '%s\n' "$_tpblock" | has 'pypa/gh-action-pypi-publish'; then
     echo "ARCH: training-pypi-publish lacks the trusted-publisher action (T-31)" >&2
     fail=1
   fi
-  if ! printf '%s\n' "$_tpblock" | grep -q 'id-token: write'; then
+  if ! printf '%s\n' "$_tpblock" | has 'id-token: write'; then
     echo "ARCH: training-pypi-publish lacks the OIDC id-token permission (T-31)" >&2
     fail=1
   fi
@@ -1036,7 +1040,7 @@ fi
 for _wf in .github/workflows/*.yml; do
   for _job in $(grep -oE '^  [a-z][a-z0-9_-]*:' "$_wf" | sed 's/^  //; s/:$//'); do
     _block=$(sed -n "/^  $_job:/,/^  [a-z][a-z0-9_-]*:$/p" "$_wf")
-    if ! printf '%s\n' "$_block" | grep -q 'python -m venv'; then continue; fi
+    if ! printf '%s\n' "$_block" | has 'python -m venv'; then continue; fi
     if bad=$(printf '%s\n' "$_block" | grep -nE '^[[:space:]]+(maturin|pytest) '); then
       echo "ARCH: bare venv binary in a venv-creating CI job:" >&2
       echo "$bad" | sed "s|^|ARCH: $_wf $_job:|" >&2
@@ -1069,8 +1073,8 @@ for _wf in .github/workflows/*.yml; do
     # it): the corpus sweep died at `from aikoql_training.client
     # import ...` (run 37190350754, determinism + integration). Any
     # job that runs such a script must install the package first.
-    if printf '%s\n' "$_block" | grep -qE '^[[:space:]]*\.venv/bin/python[[:space:]]+training/scripts/'; then
-      if ! printf '%s\n' "$_block" | grep -qE 'pip install .*-e[ ]+training'; then
+    if printf '%s\n' "$_block" | has -E '^[[:space:]]*\.venv/bin/python[[:space:]]+training/scripts/'; then
+      if ! printf '%s\n' "$_block" | has -E 'pip install .*-e[ ]+training'; then
         echo "ARCH: training/scripts run without a package install: $_wf $_job" >&2
         fail=1
       fi
