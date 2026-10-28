@@ -46,8 +46,12 @@ pub trait StorageAdminApi: Send + Sync {
     fn log_since(&self, after: u64, max: usize) -> KResult<Vec<WalFrame>>;
     fn release_log(&self, upto: u64) -> KResult<()>;
     fn last_seq(&self) -> u64;
-    /// MRFC-0080 R4 — refuse client writes from now on.
+    /// MRFC-0080 R4 — refuse client writes from now on (a later call
+    /// replaces the reason).
     fn fence(&self, why: String);
+    /// MRFC-0080 standby reads — apply one leader frame (a read replica
+    /// replicates into its open engine).
+    fn apply_replicated(&self, seq: u64, ops: &[Op]) -> KResult<u64>;
     /// MRFC-0080 R4b — arm the synchronous-replication wait.
     fn set_commit_gate(&self, gate: crate::db::CommitGate);
 }
@@ -126,6 +130,10 @@ impl StorageAdminApi for AikoqlStorageEngineV2 {
 
     fn fence(&self, why: String) {
         self.db.fence(why)
+    }
+
+    fn apply_replicated(&self, seq: u64, ops: &[Op]) -> KResult<u64> {
+        self.db.apply_replicated(seq, ops).map_err(se)
     }
 
     fn set_commit_gate(&self, gate: crate::db::CommitGate) {

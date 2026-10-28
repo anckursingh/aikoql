@@ -309,6 +309,18 @@ fn main() {
             validate_listen(a)
         }
     };
+    // MRFC-0080 standby reads: `--follow LEADER` serves a read replica —
+    // never promoted by `serve`, finishing a re-bootstrap it recorded.
+    if cfg.follow.is_some() {
+        if cfg.ha_lease.is_some() || replicate_listen.is_some() || cfg.archive.is_some() {
+            eprintln!("--follow (a read replica) does not combine with --ha-lease, --replicate-listen or --archive");
+            std::process::exit(2);
+        }
+        if let Err(e) = replication::finish_rebootstrap(std::path::Path::new(&db_path)) {
+            eprintln!("read replica: {e}");
+            std::process::exit(1);
+        }
+    }
     let ha_slot = cfg.ha_lease.as_ref().map(|lease| {
         let (Some(repl), Some(node)) = (replicate_listen.as_deref(), cfg.ha_node.clone()) else {
             eprintln!("--ha-lease needs --ha-node and --replicate-listen");
@@ -322,15 +334,7 @@ fn main() {
                 std::process::exit(2);
             }
         };
-        // the token this node presents when following: the operator's
-        // replication token, else its own first admin --tcp-token
-        let token = std::env::var("AIKOQL_REPLICATION_TOKEN").ok().or_else(|| {
-            tcp_tokens
-                .iter()
-                .find(|t| t.split(':').nth(2).is_some_and(|r| r.split(',').any(|r| r == "admin")))
-                .and_then(|t| t.split(':').next().map(str::to_string))
-        });
-        let Some(token) = token else {
+        let Some(token) = replication_token(&tcp_tokens) else {
             eprintln!("--ha-lease needs an admin --tcp-token (or AIKOQL_REPLICATION_TOKEN) to follow with");
             std::process::exit(2);
         };
@@ -372,7 +376,12 @@ fn main() {
             }
         }
     });
-    let (term, role) = match replication::claim_leadership(std::path::Path::new(&db_path)) {
+    let claimed = if cfg.follow.is_some() {
+        replication::load_term(std::path::Path::new(&db_path))
+    } else {
+        replication::claim_leadership(std::path::Path::new(&db_path))
+    };
+    let (term, role) = match claimed {
         Ok(t) => t,
         Err(e) => {
             eprintln!("replication term: {e}");
@@ -385,6 +394,12 @@ fn main() {
             &db_path,
             &cfg.encryption,
             replicate_listen.is_some() || cfg.archive.is_some(),
+            cfg.follow.as_ref().map(|l| {
+                format!(
+                    "this node is a read replica of {l}{}",
+                    replication::leader_hint(std::path::Path::new(&db_path))
+                )
+            }),
         ) {
             Ok((k, admin)) => (k, admin),
             Err(e) => {
@@ -523,6 +538,27 @@ fn main() {
         kernel
     };
     let kernel = Arc::new(kernel);
+    if let Some(leader) = cfg.follow.clone() {
+        let Some(token) = replication_token(&tcp_tokens) else {
+            eprintln!(
+                "--follow needs AIKOQL_REPLICATION_TOKEN (or an admin --tcp-token) to follow with"
+            );
+            std::process::exit(2);
+        };
+        let Some(a) = admin.clone() else {
+            eprintln!("--follow needs the storage admin surface");
+            std::process::exit(2);
+        };
+        info!(%leader, "serving as a read replica");
+        replication::serve_replica(
+            kernel.clone(),
+            a,
+            leader,
+            token,
+            repl_trust.clone(),
+            std::path::PathBuf::from(db_path.as_str()),
+        );
+    }
 
     // PRR-3: enrichment runs on a worker thread — serve comes up immediately
     // and /health reports semantic readiness while the scan runs.
@@ -942,6 +978,21 @@ fn resume_or_start_maintainer(
 /// the bearer token would travel in plaintext, so plaintext TCP is
 /// loopback-only in MVP. Hostnames resolve; every resolved address must be
 /// loopback.
+/// The token a standby presents to its leader: the operator's
+/// AIKOQL_REPLICATION_TOKEN, else this node's first admin --tcp-token.
+fn replication_token(tcp_tokens: &[String]) -> Option<String> {
+    std::env::var("AIKOQL_REPLICATION_TOKEN").ok().or_else(|| {
+        tcp_tokens
+            .iter()
+            .find(|t| {
+                t.split(':')
+                    .nth(2)
+                    .is_some_and(|r| r.split(',').any(|r| r == "admin"))
+            })
+            .and_then(|t| t.split(':').next().map(str::to_string))
+    })
+}
+
 fn validate_listen(addr: &str) -> Result<String, String> {
     let expanded = match addr.rsplit_once(':') {
         Some(("", port)) => format!("127.0.0.1:{port}"),

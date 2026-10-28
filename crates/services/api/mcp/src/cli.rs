@@ -48,6 +48,7 @@ pub(crate) fn print_usage() {
         "  --replicate-advertise HOST:PORT  The replication address recorded in the HA lease\n",
         "  --replicate-sync-ms MS   Ack a write only once a standby holds it; fail after MS\n",
         "  --advertise HOST:PORT    This node's client address, the NOT_LEADER hint standbys pass on\n",
+        "  --follow HOST:PORT       Serve as a read replica of that leader (writes answer NOT_LEADER)\n",
         "  --archive DIR|s3://BUCKET[/PREFIX] [--archive-log-ms MS] [--archive-snapshot-secs S]  Continuous archive (PITR)\n",
         "  --ha-lease PATH|s3://BUCKET/KEY|k8s://NS/NAME --ha-node ID [--ha-ttl-ms MS]  Automatic failover on a shared lease\n",
         "  --embedding-provider P  Embedding provider: \"candle\" (default), \"http\", or \"ollama\"\n",

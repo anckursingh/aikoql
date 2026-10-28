@@ -312,12 +312,22 @@ impl JobScheduler {
     /// live-locked to it) — mark it Failed("interrupted"). Never silently
     /// dropped (cb004).
     pub fn recover(store: Arc<dyn StorageEngine>, max_running: usize) -> KResult<Self> {
+        Self::recover_with(store, max_running, true)
+    }
+
+    /// `mark_interrupted: false` — a standby reads the leader's job rows
+    /// and never rewrites them.
+    pub fn recover_with(
+        store: Arc<dyn StorageEngine>,
+        max_running: usize,
+        mark_interrupted: bool,
+    ) -> KResult<Self> {
         let mut next_id = 0u64;
         let mut by_hash = HashMap::new();
         let mut interrupted = WriteBatch::new();
         for (k, v) in store.scan(JOB_PREFIX)? {
             let mut rec = decode_job(&v)?;
-            if rec.status == JobStatus::Running {
+            if mark_interrupted && rec.status == JobStatus::Running {
                 rec.status = JobStatus::Failed;
                 rec.error = Some("interrupted by process exit".into());
                 interrupted.put(k, encode_job(&rec));

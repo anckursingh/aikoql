@@ -441,7 +441,7 @@ pub struct Db {
     pub(crate) wal_fail_next: AtomicBool,
     /// MRFC-0080 R4 — set once a newer replication term deposed this
     /// node: client writes are refused, replicated frames still apply.
-    fenced: std::sync::OnceLock<String>,
+    fenced: RwLock<Option<String>>,
     /// MRFC-0080 R4b — the synchronous-replication wait, when armed.
     commit_gate: std::sync::OnceLock<CommitGate>,
 }
@@ -947,7 +947,7 @@ impl Db {
             trace: TraceState::new(),
             control: ControlStats::default(),
             wal_fail_next: AtomicBool::new(wal_fail_next_armed),
-            fenced: std::sync::OnceLock::new(),
+            fenced: RwLock::new(None),
             commit_gate: std::sync::OnceLock::new(),
         })
     }
@@ -1079,7 +1079,8 @@ impl Db {
     /// MRFC-0080 R4 — refuse every client write from now on (a newer
     /// term deposed this node); `why` rides each refusal.
     pub fn fence(&self, why: String) {
-        let _ = self.fenced.set(why);
+        // justified: RwLock poison is unrecoverable
+        *self.fenced.write().unwrap() = Some(why); // a newer reason replaces
     }
 
     /// MRFC-0080 R1 — the newest committed seq (0 on an empty db): a
@@ -1187,8 +1188,11 @@ impl Db {
                 )));
             }
         }
-        if let (None, Some(why)) = (expected, self.fenced.get()) {
-            return Err(FormatError::Stale(format!("not leader: {why}")));
+        if expected.is_none() {
+            // justified: RwLock poison is unrecoverable
+            if let Some(why) = self.fenced.read().unwrap().as_ref() {
+                return Err(FormatError::Stale(format!("not leader: {why}")));
+            }
         }
         if expected.is_none() && self.config.durability == DurabilityMode::GroupCommit {
             let seq = self.writer()?.write(ops)?;

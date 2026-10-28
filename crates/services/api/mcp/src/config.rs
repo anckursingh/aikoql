@@ -31,6 +31,9 @@ pub(crate) struct RuntimeConfig {
     /// archive's RPO) and snapshot period (`--archive-snapshot-secs`,
     /// default 3600 — bounds restore replay). CLI-only.
     pub archive: Option<String>,
+    /// MRFC-0080 standby reads: serve as a read replica of the leader's
+    /// replication address (`--follow HOST:PORT`). CLI-only.
+    pub follow: Option<String>,
     pub archive_log_ms: u64,
     pub archive_snapshot_secs: u64,
     /// MRFC-0080 R3c: TLS on the replication stream — the leader's
@@ -291,6 +294,7 @@ pub(crate) fn load(
         advertise: None,
         ha_lease: None,
         archive: None,
+        follow: None,
         archive_log_ms: 5_000,
         archive_snapshot_secs: 3_600,
         replicate_tls_cert: None,
@@ -535,6 +539,13 @@ pub(crate) fn load(
                     ))
                 }
                 None => return Err("--replicate-advertise requires an address".into()),
+            },
+            "--follow" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.follow = Some(v.clone());
+                    i += 2;
+                }
+                None => return Err("--follow requires the leader's replication address".into()),
             },
             "--archive" => match args.get(i + 1) {
                 Some(v) => {

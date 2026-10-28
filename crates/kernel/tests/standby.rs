@@ -67,6 +67,13 @@ fn a_standby_kernel_opens_without_writing_and_catches_up() {
         .recv_timeout(Duration::from_secs(1))
         .expect("catch_up broadcast the replicated event");
     assert_eq!(ev.koid, second);
+    // reads snapshot at the kernel's clock: it must cover what it caught up to
+    assert!(
+        standby.snapshot() >= ev.commit_ts,
+        "the standby's read snapshot {} predates the replicated commit {}",
+        standby.snapshot(),
+        ev.commit_ts
+    );
     assert_eq!(
         standby.get(&alice, &second).unwrap().properties.get("n"),
         Some(&Value::Int(2))

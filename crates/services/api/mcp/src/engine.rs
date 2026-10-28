@@ -21,12 +21,28 @@ pub(crate) fn open_kernel(
     db_path: &str,
     enc: &RuntimeEncryption,
     retain_log: bool,
+    standby: Option<String>,
 ) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
     // The runtime's ONE opener; every subcommand funnels through here.
     let (engine, admin) =
         aikoql_runtime::backend::open_engine_with(std::path::Path::new(db_path), retain_log)?;
+    // MRFC-0080 standby reads: a read replica's store is fenced before the
+    // kernel opens — any client write (or a stray open-time one) fails
+    // NOT_LEADER; the replication stream still applies.
+    let open = |store: Arc<dyn StorageEngine>| match &standby {
+        Some(_) => Kernel::open_standby(store, Arc::new(SystemClock), 0xA9C9),
+        None => Kernel::open(store, Arc::new(SystemClock), 0xA9C9),
+    };
+    if let Some(why) = standby.clone() {
+        let Some(a) = admin.as_ref() else {
+            return Err(KError::Store(
+                "a read replica needs the v2 storage admin surface".into(),
+            ));
+        };
+        a.fence(why);
+    }
     if !enc.enabled {
-        return Ok((Kernel::open(engine, Arc::new(SystemClock), 0xA9C9)?, admin));
+        return Ok((open(engine)?, admin));
     }
     let Some(pass) = enc.passphrase.as_deref() else {
         return Err(KError::Store(
@@ -43,8 +59,7 @@ pub(crate) fn open_kernel(
     let envelope = Arc::new(Envelope::init(&kms, pass, crypto.clone()).map_err(KError::Store)?);
     let store: Arc<dyn StorageEngine> =
         Arc::new(EncryptedStore::new(engine, crypto.clone(), store_key));
-    let kernel = Kernel::open(store, Arc::new(SystemClock), 0xA9C9)?
-        .with_field_encryption(crypto, envelope)?;
+    let kernel = open(store)?.with_field_encryption(crypto, envelope)?;
     for (type_name, fields) in &enc.policies {
         kernel.set_encryption_policy(type_name, EncryptionPolicy::new(fields.clone()));
     }
@@ -58,7 +73,7 @@ pub(crate) fn open_kernel_auto(
     db_path: &str,
 ) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
     let cfg = crate::config::load(&[], None, None).map_err(KError::Store)?;
-    open_kernel(db_path, &cfg.encryption, false)
+    open_kernel(db_path, &cfg.encryption, false, None)
 }
 
 #[cfg(test)]

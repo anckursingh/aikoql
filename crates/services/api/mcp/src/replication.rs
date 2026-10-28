@@ -108,6 +108,44 @@ impl Write for Link {
     }
 }
 
+/// What a standby applies the stream to: a closed directory's `Db`
+/// (`follow`) or a serving read replica's engine.
+pub(crate) trait Replica {
+    fn last_seq(&self) -> u64;
+    fn apply(&self, seq: u64, ops: &[aikoql_storage_v2::wal::Op]) -> Result<(), String>;
+}
+
+impl Replica for Db {
+    fn last_seq(&self) -> u64 {
+        Db::last_seq(self)
+    }
+    fn apply(&self, seq: u64, ops: &[aikoql_storage_v2::wal::Op]) -> Result<(), String> {
+        self.apply_replicated(seq, ops)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+impl Replica for dyn StorageAdminApi {
+    fn last_seq(&self) -> u64 {
+        StorageAdminApi::last_seq(self)
+    }
+    fn apply(&self, seq: u64, ops: &[aikoql_storage_v2::wal::Op]) -> Result<(), String> {
+        self.apply_replicated(seq, ops)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+impl<T: Replica + ?Sized> Replica for Arc<T> {
+    fn last_seq(&self) -> u64 {
+        (**self).last_seq()
+    }
+    fn apply(&self, seq: u64, ops: &[aikoql_storage_v2::wal::Op]) -> Result<(), String> {
+        (**self).apply(seq, ops)
+    }
+}
+
 /// R4 — the term file inside the database directory.
 pub(crate) const TERM_FILE: &str = "REPL-TERM";
 
@@ -872,6 +910,79 @@ fn sibling(dir: &Path, ext: &str) -> PathBuf {
     PathBuf::from(format!("{}.{ext}", dir.display()))
 }
 
+/// MRFC-0080 standby reads — `serve --follow`: apply the leader's stream
+/// into this read replica's open engine (fenced: writes answer
+/// NOT_LEADER) and catch the kernel up every 100 ms, so reads — and the
+/// index maintainer, through the broadcast events — follow the leader.
+/// A shipped snapshot cannot be swapped under a live kernel: it is
+/// recorded in `{dir}.rejoin.json` and the replica exits 75 for its
+/// supervisor; the restart finishes the re-bootstrap.
+pub(crate) fn serve_replica(
+    kernel: Arc<aikoql_kernel::Kernel>,
+    admin: Arc<dyn StorageAdminApi>,
+    leader: String,
+    token: String,
+    tls: Option<Arc<rustls::ClientConfig>>,
+    dir: PathBuf,
+) {
+    let (a, d) = (admin.clone(), dir.clone());
+    std::thread::spawn(move || {
+        let stop = AtomicBool::new(false);
+        match follow(&leader, &token, &a, &d, None, &stop, tls.as_ref()) {
+            Ok(Followed::Rebootstrap { term, history }) => {
+                let pending = serde_json::json!({ "term": term, "history": history });
+                let parent = d.parent().unwrap_or(Path::new("."));
+                let name = format!(
+                    "{}.rejoin.json",
+                    d.file_name().unwrap_or_default().to_string_lossy()
+                );
+                if let Err(e) = write_durable(parent, &name, &pending.to_string()) {
+                    eprintln!("read replica: record the re-bootstrap: {e}");
+                    std::process::exit(1);
+                }
+                eprintln!("read replica: the leader shipped a snapshot — exiting to re-bootstrap on restart");
+                std::process::exit(75);
+            }
+            Ok(Followed::Stopped) => {}
+            Err(e) => {
+                eprintln!("follow stopped: {e}");
+                std::process::exit(1);
+            }
+        }
+    });
+    std::thread::spawn(move || {
+        let mut hint = None;
+        loop {
+            std::thread::sleep(Duration::from_millis(100));
+            if let Err(e) = kernel.catch_up() {
+                warn!("read replica: catch up: {e}");
+            }
+            let now = load_leader(&dir);
+            if now != hint {
+                admin.fence(format!("this node is a read replica{}", leader_hint(&dir)));
+                hint = now;
+            }
+        }
+    });
+}
+
+/// Finish a re-bootstrap a read replica recorded before exiting (see
+/// `serve_replica`).
+pub(crate) fn finish_rebootstrap(dir: &Path) -> Result<(), String> {
+    let pending = sibling(dir, "rejoin.json");
+    let Ok(body) = std::fs::read_to_string(&pending) else {
+        return Ok(());
+    };
+    let v: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("{}: {e}", pending.display()))?;
+    let term = v["term"].as_u64().unwrap_or(0);
+    let history: History = serde_json::from_value(v["history"].clone()).unwrap_or_default();
+    rebootstrap(dir, term, &history)?;
+    std::fs::remove_file(&pending).map_err(|e| format!("{}: {e}", pending.display()))?;
+    eprintln!("read replica: re-bootstrapped from the leader's snapshot");
+    Ok(())
+}
+
 /// R4c — replace the standby at `dir` (closed) with the snapshot in
 /// `{dir}.rejoin`, carrying the leader's term and history. A crash
 /// between the two renames leaves no `dir`: the next `follow` starts
@@ -913,7 +1024,7 @@ pub(crate) fn rebootstrap(dir: &Path, term: u64, history: &[(u64, u64)]) -> Resu
 pub(crate) fn follow(
     addr: &str,
     token: &str,
-    standby: &Db,
+    standby: &dyn Replica,
     dir: &Path,
     checkpoint: Option<&Path>,
     stop: &AtomicBool,
@@ -943,7 +1054,7 @@ pub(crate) fn follow(
 fn follow_once(
     addr: &str,
     token: &str,
-    standby: &Db,
+    standby: &dyn Replica,
     dir: &Path,
     checkpoint: Option<&Path>,
     stop: &AtomicBool,
@@ -1070,7 +1181,7 @@ fn follow_once(
                     Ok((f, _)) => f,
                     Err(e) => return End::Fatal(format!("bad frame from the leader: {e}")),
                 };
-                if let Err(e) = standby.apply_replicated(f.seq, &f.ops) {
+                if let Err(e) = standby.apply(f.seq, &f.ops) {
                     return End::Fatal(format!("apply frame {}: {e}", f.seq));
                 }
                 if let Err(e) = r.s.write_all(&f.seq.to_le_bytes()) {

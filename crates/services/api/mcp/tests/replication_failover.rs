@@ -1237,6 +1237,33 @@ fn a_read_replica_serves_converging_reads_and_refuses_writes() {
         json!(2)
     );
 
+    // queries and text search follow too: the type index (storage) and the
+    // text index, which the replica's maintainer feeds from caught-up events
+    let zebra = leader.tool(
+        "remember",
+        json!({"subject": "admin", "type_name": "note", "properties": {"text": "a zebra crossing"}}),
+    )["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let q = replica.request("tools/call", json!({"name": "aikoql", "arguments": {"subject": "admin", "query": "MATCH note RETURN *"}}));
+        let s = replica.request("tools/call", json!({"name": "find_similar", "arguments": {"subject": "admin", "text": "zebra", "k": 5}}));
+        let (q, s) = (q.to_string(), s.to_string());
+        if q.contains(&zebra) && s.contains(&zebra) {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let l = leader.request(
+                "tools/call",
+                json!({"name": "find_similar", "arguments": {"subject": "admin", "text": "zebra", "k": 5}}),
+            );
+            panic!("replica query/search never saw it:\n{q}\n{s}\nleader search: {l}");
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
     let res = replica.request(
         "tools/call",
         json!({"name": "remember", "arguments": {"subject": "admin", "type_name": "note", "properties": {"n": 3}}}),

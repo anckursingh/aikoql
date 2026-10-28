@@ -1,0 +1,29 @@
+   Compiling aikoql-kernel v0.2.4 (/Users/pukku/coding/aikoql/crates/kernel)
+   Compiling aikoql-storage-v2 v0.2.4 (/Users/pukku/coding/aikoql/crates/storage/aikoql-v2)
+   Compiling aikoql-vector v0.2.4 (/Users/pukku/coding/aikoql/crates/engines/vector)
+   Compiling aikoql-compiler v0.2.4 (/Users/pukku/coding/aikoql/crates/compiler)
+   Compiling aikoql-graph v0.2.4 (/Users/pukku/coding/aikoql/crates/engines/graph)
+   Compiling aikoql-runtime v0.2.4 (/Users/pukku/coding/aikoql/crates/runtime)
+   Compiling aikoql-scheduler v0.2.4 (/Users/pukku/coding/aikoql/crates/engines/scheduler)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.68s
+     Running tests/standby.rs (target/debug/deps/standby-44bcc4967c019398)
+
+running 1 test
+test a_standby_kernel_opens_without_writing_and_catches_up ... FAILED
+
+failures:
+
+---- a_standby_kernel_opens_without_writing_and_catches_up stdout ----
+
+thread 'a_standby_kernel_opens_without_writing_and_catches_up' (945597) panicked at crates/kernel/tests/standby.rs:71:5:
+the standby's read snapshot 117518625241104385 predates the replicated commit 117518625241104386
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_standby_kernel_opens_without_writing_and_catches_up
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-kernel --test standby`
+EXIT=101
