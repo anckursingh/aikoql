@@ -63,3 +63,115 @@ pub(crate) fn server_name(addr: &str) -> Result<ServerName<'static>, String> {
     ServerName::try_from(host.to_string())
         .map_err(|e| format!("{host:?} is not a TLS server name: {e}"))
 }
+
+/// One served TLS connection split for the client listeners' model — a
+/// reader thread blocked on the socket while responses are written from
+/// others. rustls state lives behind one lock; the reader waits for
+/// ciphertext with `peek` outside it, so a write never queues behind an
+/// idle read, and the shutdown drain's socket close still wakes it.
+pub(crate) struct TlsReader {
+    conn: Arc<std::sync::Mutex<rustls::ServerConnection>>,
+    sock: std::net::TcpStream,
+}
+
+pub(crate) struct TlsWriter {
+    conn: Arc<std::sync::Mutex<rustls::ServerConnection>>,
+    sock: std::net::TcpStream,
+}
+
+/// The handshake, then the reader/writer pair. The handshake is bounded
+/// (a silent peer cannot hold the handler thread); the socket's previous
+/// read timeout is restored after it.
+pub(crate) fn accept(
+    sock: std::net::TcpStream,
+    cfg: Arc<rustls::ServerConfig>,
+) -> std::io::Result<(TlsReader, TlsWriter)> {
+    let mut conn = rustls::ServerConnection::new(cfg).map_err(std::io::Error::other)?;
+    let before = sock.read_timeout()?;
+    sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+    while conn.is_handshaking() {
+        conn.complete_io(&mut &sock)?;
+    }
+    sock.set_read_timeout(before)?;
+    let conn = Arc::new(std::sync::Mutex::new(conn));
+    let reader = TlsReader {
+        conn: conn.clone(),
+        sock: sock.try_clone()?,
+    };
+    Ok((reader, TlsWriter { conn, sock }))
+}
+
+/// Everything rustls has queued (handshake replies, alerts, records) out.
+fn flush_tls(
+    conn: &mut rustls::ServerConnection,
+    sock: &std::net::TcpStream,
+) -> std::io::Result<()> {
+    while conn.wants_write() {
+        conn.write_tls(&mut &*sock)?;
+    }
+    Ok(())
+}
+
+impl std::io::Read for TlsReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::ErrorKind;
+        loop {
+            {
+                let mut conn = self.conn.lock().unwrap(); // justified: Mutex poison is unrecoverable
+                match conn.reader().read(buf) {
+                    Ok(n) => return Ok(n), // 0: the peer's close_notify
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            // no plaintext yet: wait for ciphertext without holding the lock
+            if self.sock.peek(&mut [0u8; 1])? == 0 {
+                return Ok(0);
+            }
+            let mut conn = self.conn.lock().unwrap(); // justified: Mutex poison is unrecoverable
+            if conn.read_tls(&mut &self.sock)? == 0 {
+                return Ok(0);
+            }
+            if let Err(e) = conn.process_new_packets() {
+                let _ = flush_tls(&mut conn, &self.sock); // the alert, best effort
+                return Err(std::io::Error::new(ErrorKind::InvalidData, e));
+            }
+            flush_tls(&mut conn, &self.sock)?;
+        }
+    }
+}
+
+impl std::io::Write for TlsWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut conn = self.conn.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        let n = conn.writer().write(buf)?;
+        flush_tls(&mut conn, &self.sock)?;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut conn = self.conn.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        conn.writer().flush()?;
+        flush_tls(&mut conn, &self.sock)
+    }
+}
+
+/// A client connection's read and write halves, plaintext or TLS.
+pub(crate) type Halves = (
+    Box<dyn std::io::Read + Send>,
+    Box<dyn std::io::Write + Send>,
+);
+
+/// Split an accepted client socket: a plain clone pair, or the TLS pair.
+pub(crate) fn split(
+    sock: std::net::TcpStream,
+    cfg: Option<&Arc<rustls::ServerConfig>>,
+) -> std::io::Result<Halves> {
+    match cfg {
+        None => Ok((Box::new(sock.try_clone()?), Box::new(sock))),
+        Some(cfg) => {
+            let (r, w) = accept(sock, cfg.clone())?;
+            Ok((Box::new(r), Box::new(w)))
+        }
+    }
+}

@@ -92,12 +92,22 @@ pub(crate) fn handle_tcp_client(
     admin: Option<Arc<dyn StorageAdminApi>>,
     request_timeout_secs: u64,
     max_connections: u64,
+    tls: Option<Arc<rustls::ServerConfig>>,
 ) {
     let peer = stream
         .peer_addr()
         .map(|a| a.to_string())
         // justified: log-only cosmetic — unknown peer on failure
         .unwrap_or_default();
+    // the drain's handle on the raw socket (closing it wakes a TLS reader too)
+    let reg_stream = stream.try_clone();
+    let (read_half, mut write_half) = match crate::tls::split(stream, tls.as_ref()) {
+        Ok(h) => h,
+        Err(e) => {
+            warn!(%peer, %e, "client connection setup failed (TLS handshake?) — dropping it");
+            return;
+        }
+    };
     // P1-19: CAS admission (the P0-04 pattern) — the slot is RESERVED
     // atomically here, so an accept burst can never push the served count
     // over the cap (sv012). Rejection keeps sv003's frame-before-drop order.
@@ -107,9 +117,8 @@ pub(crate) fn handle_tcp_client(
         })
         .is_ok();
     if !admitted {
-        let mut s = stream;
         write_frame(
-            &mut s,
+            &mut write_half,
             err_frame(
                 &J::Null,
                 -32000,
@@ -122,17 +131,11 @@ pub(crate) fn handle_tcp_client(
     info!(%peer, "client connected");
     // Register for the shutdown drain (active close wakes idle handlers).
     let sid = STREAM_ID.fetch_add(1, Ordering::Relaxed);
-    if let Ok(reg_stream) = stream.try_clone() {
+    if let Ok(reg_stream) = reg_stream {
         CLIENT_STREAMS.lock().unwrap().push((sid, reg_stream)); // justified: Mutex poison is unrecoverable
     }
-    let Ok(clone) = stream.try_clone() else {
-        eprintln!("clone stream failed — dropping connection");
-        // The slot was reserved above — release it or the cap leaks.
-        ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
-        return;
-    };
-    let mut reader = BufReader::new(clone);
-    let writer = Arc::new(Mutex::new(stream));
+    let mut reader = BufReader::new(read_half);
+    let writer = Arc::new(Mutex::new(write_half));
     let mut sub_ids: HashSet<String> = HashSet::new();
     // R5 (review round 3): the limiter is process-shared and keyed by
     // principal in the dispatcher — not created per connection here.
@@ -271,10 +274,12 @@ pub(crate) fn run_tcp_listener(
     admin: Option<Arc<dyn StorageAdminApi>>,
     request_timeout_secs: u64,
     max_connections: u64,
+    tls: Option<Arc<rustls::ServerConfig>>,
 ) {
     info!(
         addr = %listener.local_addr().map(|a| a.to_string()).unwrap_or_default(),
         db = %db_path,
+        tls = tls.is_some(),
         "aikoql-mcp TCP server ready (token auth required)"
     );
     // P5-M11: nonblocking accept so the shutdown flag can stop the loop —
@@ -295,6 +300,7 @@ pub(crate) fn run_tcp_listener(
                 let auth = auth.clone();
                 let rl = rate_limit.clone();
                 let admin = admin.clone();
+                let tls = tls.clone();
                 thread::spawn(move || {
                     handle_tcp_client(
                         &k,
@@ -305,6 +311,7 @@ pub(crate) fn run_tcp_listener(
                         admin,
                         request_timeout_secs,
                         max_connections,
+                        tls,
                     )
                 });
             }
@@ -460,6 +467,7 @@ mod tcp_auth_tests {
                 None,
                 30,
                 1000,
+                None,
             )
         });
         addr

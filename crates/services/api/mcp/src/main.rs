@@ -293,6 +293,34 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // TLS on the client listeners and the HTTP surface (--tls-cert/--tls-key)
+    let client_tls = match (&cfg.tls_cert, &cfg.tls_key) {
+        (Some(c), Some(k)) => {
+            match tls::read(c).and_then(|c| tls::read(k).and_then(|k| tls::server_config(&c, &k))) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    eprintln!("--tls-cert/--tls-key: {e}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        (None, None) => None,
+        _ => {
+            eprintln!(
+                "--tls-cert and --tls-key go together (or AIKOQL_TLS_CERT and AIKOQL_TLS_KEY)"
+            );
+            std::process::exit(2);
+        }
+    };
+    // with TLS the token is encrypted, so a client listener may bind any
+    // interface; without it the R1 loopback-only rule holds
+    let client_listen_addr = |a: &str| {
+        if client_tls.is_some() {
+            Ok(a.to_string())
+        } else {
+            validate_listen(a)
+        }
+    };
     let repl_trust = cfg.replicate_tls_ca.as_deref().map(|ca| {
         match tls::read(ca).and_then(|p| tls::client_config(&p)) {
             Ok(t) => t,
@@ -824,11 +852,10 @@ fn main() {
             }
         };
         if let Some(addr) = listen_addr {
-            // R1 (review round 3): loopback-only plaintext TCP — a non-loopback
-            // bind would put the bearer token on the wire unencrypted, so it is
-            // rejected fail-closed. TLS arrives post-MVP (terminate TLS at a
-            // reverse proxy in front of the loopback listener).
-            let addr = match validate_listen(&addr) {
+            // R1 (review round 3): plaintext TCP is loopback-only — a
+            // non-loopback bind would put the bearer token on the wire
+            // unencrypted, so it is rejected fail-closed unless TLS is on.
+            let addr = match client_listen_addr(&addr) {
                 Ok(a) => a,
                 Err(e) => {
                     eprintln!("{e}");
@@ -847,12 +874,13 @@ fn main() {
             // main thread reaches the native loop below; otherwise it blocks
             // main as before. The clones keep the originals for that loop.
             let has_native = native_addr.is_some();
-            let (k, a, d, rl, adm) = (
+            let (k, a, d, rl, adm, t) = (
                 kernel.clone(),
                 auth.clone(),
                 db_path.clone(),
                 mcp_rate_limit.clone(),
                 admin.clone(),
+                client_tls.clone(),
             );
             let serve = move || {
                 run_tcp_listener(
@@ -864,6 +892,7 @@ fn main() {
                     adm,
                     cfg.request_timeout_secs,
                     cfg.max_connections,
+                    t,
                 )
             };
             if has_native {
@@ -873,9 +902,9 @@ fn main() {
             }
         }
         if let Some(addr) = native_addr {
-            // D-15: the same R1 loopback-only rule — the framed protocol
-            // carries the same bearer token in plaintext.
-            let addr = match validate_listen(&addr) {
+            // D-15: the same R1 rule — the framed protocol carries the same
+            // bearer token, so plaintext stays loopback-only.
+            let addr = match client_listen_addr(&addr) {
                 Ok(a) => a,
                 Err(e) => {
                     eprintln!("{e}");
@@ -898,6 +927,7 @@ fn main() {
                 admin,
                 cfg.request_timeout_secs,
                 cfg.max_connections,
+                client_tls,
             );
         }
     } else if metrics_addr.is_some() {

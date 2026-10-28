@@ -48,6 +48,12 @@ pub(crate) struct RuntimeConfig {
     pub replicate_tls_cert: Option<String>,
     pub replicate_tls_key: Option<String>,
     pub replicate_tls_ca: Option<String>,
+    /// TLS on the client listeners (`--listen`, `--native-port`) and the HTTP
+    /// surface: the certificate chain and key (`--tls-cert/--tls-key` or
+    /// AIKOQL_TLS_CERT / AIKOQL_TLS_KEY, both or neither). With them the
+    /// bearer token travels encrypted, so the listeners may bind any interface.
+    pub tls_cert: Option<String>,
+    pub tls_key: Option<String>,
     pub replicate_advertise: Option<String>,
     pub ha_node: Option<String>,
     pub ha_ttl_ms: u64,
@@ -304,6 +310,8 @@ pub(crate) fn load(
         replicate_tls_cert: None,
         replicate_tls_key: None,
         replicate_tls_ca: None,
+        tls_cert: None,
+        tls_key: None,
         replicate_advertise: None,
         ha_node: None,
         ha_ttl_ms: 10_000,
@@ -439,6 +447,12 @@ pub(crate) fn load(
     if let Some(v) = env_opt("AIKOQL_METRICS_ADDR") {
         cfg.metrics_addr = Some(v);
     }
+    if let Some(v) = env_opt("AIKOQL_TLS_CERT") {
+        cfg.tls_cert = Some(v);
+    }
+    if let Some(v) = env_opt("AIKOQL_TLS_KEY") {
+        cfg.tls_key = Some(v);
+    }
     // R2 (review round 3): an env credential REPLACES the TOML list (one
     // token per env var — role lists use commas, so multi-token env strings
     // would be ambiguous). R4: AIKOQL_TCP_TOKEN_FILE is the production
@@ -518,6 +532,17 @@ pub(crate) fn load(
                         .cloned()
                         .unwrap_or_else(|| "127.0.0.1:9070".into()),
                 );
+                i += 2;
+            }
+            flag @ ("--tls-cert" | "--tls-key") => {
+                let Some(v) = args.get(i + 1) else {
+                    return Err(format!("{flag} requires a path"));
+                };
+                if flag == "--tls-cert" {
+                    cfg.tls_cert = Some(v.clone());
+                } else {
+                    cfg.tls_key = Some(v.clone());
+                }
                 i += 2;
             }
             flag @ ("--replicate-tls-cert" | "--replicate-tls-key" | "--replicate-tls-ca") => {

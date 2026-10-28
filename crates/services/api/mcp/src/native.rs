@@ -28,6 +28,9 @@ use aikoql_storage_v2::engine::StorageAdminApi;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+/// A connection's write half, plaintext or TLS, shared with the chunk pump.
+type Writer = Arc<Mutex<Box<dyn Write + Send>>>;
+
 /// Sends one response frame: FLAG_RESPONSE + the request's id echoed back
 /// (§6 invariant 2 — every response references exactly one request).
 fn write_native_frame(w: &mut impl Write, request_id: u64, msg_type: u16, payload: &J) {
@@ -50,7 +53,7 @@ fn write_native_frame(w: &mut impl Write, request_id: u64, msg_type: u16, payloa
     let _ = w.write_all(&buf);
 }
 
-fn respond(writer: &Arc<Mutex<TcpStream>>, request_id: u64, msg_type: u16, payload: &J) {
+fn respond(writer: &Writer, request_id: u64, msg_type: u16, payload: &J) {
     let mut w = writer.lock().unwrap(); // justified: Mutex poison is unrecoverable
     write_native_frame(&mut *w, request_id, msg_type, payload);
 }
@@ -58,7 +61,7 @@ fn respond(writer: &Arc<Mutex<TcpStream>>, request_id: u64, msg_type: u16, paylo
 /// Reads one full frame with bounded, exact-size reads. `Ok(None)` is a
 /// clean EOF before any byte of the frame; any decode failure (truncated,
 /// corrupt, oversized — §6 invariants 4/5) closes the connection.
-fn read_native_frame(reader: &mut TcpStream) -> Result<Option<(nat::Header, Vec<u8>)>, String> {
+fn read_native_frame(reader: &mut impl Read) -> Result<Option<(nat::Header, Vec<u8>)>, String> {
     // D-20 (sv013): a blocked read is only woken by the drain's timeout (on
     // Windows, shutdown() on a duplicated socket handle does not wake a
     // pending recv on another handle). WouldBlock/TimedOut => the timeout
@@ -126,7 +129,7 @@ fn read_native_frame(reader: &mut TcpStream) -> Result<Option<(nat::Header, Vec<
 /// connection cancel flag between chunks (§6 invariant 10 — cancellation is
 /// observable: QUERY_END records cancelled + the chunks actually sent).
 fn pump_native_chunks(
-    writer: Arc<Mutex<TcpStream>>,
+    writer: Writer,
     request_id: u64,
     stream_id: String,
     remaining: Vec<J>,
@@ -168,12 +171,28 @@ pub(crate) fn handle_native_client(
     admin: Option<Arc<dyn StorageAdminApi>>,
     request_timeout_secs: u64,
     max_connections: u64,
+    tls: Option<Arc<rustls::ServerConfig>>,
 ) {
     let peer = stream
         .peer_addr()
         .map(|a| a.to_string())
         // justified: log-only cosmetic — unknown peer on failure
         .unwrap_or_default();
+    // D-20 (sv013): the read timeout is the shutdown wake — on Windows the
+    // drain's shutdown() on the registered clone does NOT wake a blocked
+    // recv on a duplicate handle, so without it an idle connection stalls
+    // the drain for its whole deadline (read_native_frame checks
+    // SHUTDOWN_FLAG on each timeout). Set on the socket before the split:
+    // every clone shares it, and a TLS handshake restores it after its own.
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+    let reg = stream.try_clone();
+    let (mut reader, mut write_half) = match crate::tls::split(stream, tls.as_ref()) {
+        Ok(h) => h,
+        Err(e) => {
+            warn!(%peer, %e, "native connection setup failed (TLS handshake?) — dropping it");
+            return;
+        }
+    };
     // P1-19 CAS admission — the same slot-reservation pattern as the MCP
     // listener, so the shared ACTIVE_CONNECTIONS counter stays exact.
     let admitted = ACTIVE_CONNECTIONS
@@ -182,9 +201,8 @@ pub(crate) fn handle_native_client(
         })
         .is_ok();
     if !admitted {
-        let mut s = stream;
         write_native_frame(
-            &mut s,
+            &mut write_half,
             0,
             nat::ERROR,
             &json!({
@@ -198,22 +216,10 @@ pub(crate) fn handle_native_client(
     info!(%peer, "native client connected");
     // Register for the shutdown drain (active close wakes blocked reads).
     let sid = STREAM_ID.fetch_add(1, Ordering::Relaxed);
-    if let Ok(reg) = stream.try_clone() {
+    if let Ok(reg) = reg {
         CLIENT_STREAMS.lock().unwrap().push((sid, reg)); // justified: Mutex poison is unrecoverable
     }
-    let Ok(mut reader) = stream.try_clone() else {
-        eprintln!("clone stream failed — dropping native connection");
-        // The slot was reserved above — release it or the cap leaks.
-        ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
-        return;
-    };
-    // D-20 (sv013): the read timeout is the shutdown wake — on Windows the
-    // drain's shutdown() on the registered clone does NOT wake a blocked
-    // recv on this duplicate handle, so without it an idle connection
-    // stalls the drain for its whole deadline (read_native_frame checks
-    // SHUTDOWN_FLAG on each timeout).
-    let _ = reader.set_read_timeout(Some(Duration::from_millis(200)));
-    let writer = Arc::new(Mutex::new(stream));
+    let writer: Writer = Arc::new(Mutex::new(write_half));
     // PRR-2: identity comes exclusively from a verified --tcp-token.
     let mut session = McpSession {
         trust_mode: TrustMode::Tcp,
@@ -600,10 +606,12 @@ pub(crate) fn run_native_listener(
     admin: Option<Arc<dyn StorageAdminApi>>,
     request_timeout_secs: u64,
     max_connections: u64,
+    tls: Option<Arc<rustls::ServerConfig>>,
 ) {
     info!(
         addr = %listener.local_addr().map(|a| a.to_string()).unwrap_or_default(),
         db = %db_path,
+        tls = tls.is_some(),
         "aikoql-mcp native server ready (framed protocol, token auth required)"
     );
     // The same P5-M11 nonblocking accept loop as run_tcp_listener.
@@ -619,6 +627,7 @@ pub(crate) fn run_native_listener(
                 let auth = auth.clone();
                 let rl = rate_limit.clone();
                 let admin = admin.clone();
+                let tls = tls.clone();
                 thread::spawn(move || {
                     handle_native_client(
                         &k,
@@ -629,6 +638,7 @@ pub(crate) fn run_native_listener(
                         admin,
                         request_timeout_secs,
                         max_connections,
+                        tls,
                     )
                 });
             }
