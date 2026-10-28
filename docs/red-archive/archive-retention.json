@@ -1,0 +1,8 @@
+{
+  "id": "archive-retention",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp archive::tests::pruning",
+  "captured_at": "2026-10-28T14:15:23Z",
+  "captured_head": "a47a512be0ddbebd1a58f159a598ab5b776bfdc7",
+  "exit_code": 101
+}

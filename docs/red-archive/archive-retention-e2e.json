@@ -1,0 +1,8 @@
+{
+  "id": "archive-retention-e2e",
+  "pre_fix_commit": "HEAD",
+  "command": "perl -e alarm 200; exec @ARGV cargo test -p aikoql-mcp --test replication_failover archive_retention",
+  "captured_at": "2026-10-28T14:15:28Z",
+  "captured_head": "a47a512be0ddbebd1a58f159a598ab5b776bfdc7",
+  "exit_code": 101
+}

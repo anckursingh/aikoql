@@ -908,4 +908,96 @@ mod tests {
         assert_eq!(seq, e.db().last_seq());
         assert_eq!(rows(&out), e.db().scan(b"").unwrap());
     }
+
+    /// Retention: keep the newest N complete snapshots (across terms) and
+    /// every log object after the oldest kept one in its term; the rest
+    /// goes — and the newest state still restores, while a target before
+    /// the oldest kept snapshot is gone by design.
+    #[test]
+    fn pruning_keeps_the_newest_snapshots_and_what_they_need() {
+        let e = engine("prune");
+        let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("prune-store")));
+        let source: Arc<dyn StorageAdminApi> = e.clone();
+        let mut t1 = Archiver::start(
+            store.clone(),
+            source.clone(),
+            Arc::new(Acked::default()),
+            1,
+            tmp("prune-s1"),
+        )
+        .unwrap();
+        put(&e, 0, 20);
+        t1.pass().unwrap();
+        let early = e.db().last_seq();
+        let mut t2 = Archiver::start(
+            store.clone(),
+            source,
+            Arc::new(Acked::default()),
+            2,
+            tmp("prune-s2"),
+        )
+        .unwrap();
+        put(&e, 20, 40);
+        t2.pass().unwrap();
+        t2.snapshot().unwrap();
+        put(&e, 40, 60);
+        t2.pass().unwrap();
+
+        assert!(prune(&*store, 2).unwrap() > 0, "nothing pruned");
+        let keys = store.list("").unwrap();
+        assert!(
+            !keys.iter().any(|k| k.starts_with("term-0000000001/")),
+            "{keys:?}"
+        );
+        let out = tmp("prune-latest");
+        let (seq, term) = restore(&*store, &out, Until::Latest, &tmp("prune-r1")).unwrap();
+        assert_eq!((seq, term), (e.db().last_seq(), 2));
+        assert_eq!(rows(&out), e.db().scan(b"").unwrap());
+        assert!(restore(
+            &*store,
+            &tmp("prune-early"),
+            Until::Seq(early),
+            &tmp("prune-r2")
+        )
+        .is_err());
+
+        prune(&*store, 1).unwrap();
+        let snaps = store
+            .list("")
+            .unwrap()
+            .into_iter()
+            .filter(|k| k.ends_with("/COMPLETE"))
+            .count();
+        assert_eq!(snaps, 1);
+        let out = tmp("prune-latest2");
+        let (seq, _) = restore(&*store, &out, Until::Latest, &tmp("prune-r3")).unwrap();
+        assert_eq!(seq, e.db().last_seq());
+        assert_eq!(prune(&*store, 1).unwrap(), 0, "a second prune found more");
+    }
+
+    /// An upload in flight (a newer snapshot without COMPLETE yet — a new
+    /// leader's first one) is never pruned.
+    #[test]
+    fn pruning_leaves_an_unfinished_upload_alone() {
+        let e = engine("prune-wip");
+        let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("prune-wip-store")));
+        let source: Arc<dyn StorageAdminApi> = e.clone();
+        let mut a = Archiver::start(
+            store.clone(),
+            source,
+            Arc::new(Acked::default()),
+            1,
+            tmp("prune-wip-s"),
+        )
+        .unwrap();
+        put(&e, 0, 20);
+        a.pass().unwrap();
+        let wip = "term-0000000002/snap/00000000000000000020-9999999999999/SEGMENT-000001.seg";
+        store.put(wip, b"half an upload").unwrap();
+        prune(&*store, 1).unwrap();
+        assert!(
+            store.list("").unwrap().iter().any(|k| k == wip),
+            "an in-flight upload was pruned"
+        );
+    }
 }

@@ -1564,3 +1564,85 @@ fn real_s3_ha_failover_then_pitr_from_the_bucket() {
         assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
     }
 }
+
+/// Archive retention end to end: `serve --archive-keep 2` prunes after
+/// each snapshot (so at most 2 complete snapshots stay), and
+/// `archive-prune --keep 1` trims further — the newest state still
+/// restores.
+#[test]
+fn archive_retention_keeps_the_newest_snapshots() {
+    let (ldir, store) = (tmp("keep-leader"), tmp("keep-archive"));
+    let mut leader = Mcp::start(
+        &ldir,
+        &[
+            "--archive",
+            store.to_str().unwrap(),
+            "--archive-log-ms",
+            "200",
+            "--archive-snapshot-secs",
+            "1",
+            "--archive-keep",
+            "2",
+        ],
+    );
+    let koids: Vec<String> = (0..5).map(|i| leader.remember(i)).collect();
+    std::thread::sleep(Duration::from_secs(5)); // ≥ 4 snapshot periods
+    drop(leader);
+    let complete = || {
+        let mut n = 0;
+        let mut stack = vec![store.clone()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.file_name().is_some_and(|n| n == "COMPLETE") {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    let kept = complete();
+    assert!(
+        (1..=2).contains(&kept),
+        "{kept} complete snapshots kept with --archive-keep 2"
+    );
+    let pruned = Command::new(bin())
+        .args([
+            "archive-prune",
+            "--archive",
+            store.to_str().unwrap(),
+            "--keep",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        pruned.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pruned.stderr)
+    );
+    assert_eq!(complete(), 1);
+    let out = tmp("keep-restored");
+    let restored = Command::new(bin())
+        .args([
+            "pitr",
+            "--archive",
+            store.to_str().unwrap(),
+            "--to",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        restored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restored.stderr)
+    );
+    let mut m = Mcp::start(&out, &[]);
+    for (i, koid) in koids.iter().enumerate() {
+        let got = m.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
+}

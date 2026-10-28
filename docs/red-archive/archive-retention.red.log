@@ -1,0 +1,28 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0425]: cannot find function `prune` in this scope
+   --> crates/services/api/mcp/src/archive.rs:946:17
+    |
+946 |         assert!(prune(&*store, 2).unwrap() > 0, "nothing pruned");
+    |                 ^^^^^ not found in this scope
+
+error[E0425]: cannot find function `prune` in this scope
+   --> crates/services/api/mcp/src/archive.rs:964:9
+    |
+964 |         prune(&*store, 1).unwrap();
+    |         ^^^^^ not found in this scope
+
+error[E0425]: cannot find function `prune` in this scope
+   --> crates/services/api/mcp/src/archive.rs:975:20
+    |
+975 |         assert_eq!(prune(&*store, 1).unwrap(), 0, "a second prune found more");
+    |                    ^^^^^ not found in this scope
+
+error[E0425]: cannot find function `prune` in this scope
+   --> crates/services/api/mcp/src/archive.rs:997:9
+    |
+997 |         prune(&*store, 1).unwrap();
+    |         ^^^^^ not found in this scope
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 4 previous errors
+EXIT=101
