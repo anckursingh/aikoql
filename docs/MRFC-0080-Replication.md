@@ -682,9 +682,8 @@ R6 limits:
 - Time granularity is one log batch: `--until-ms` restores what had
   been *uploaded* by then, not each write's commit time (frames carry no
   wall-clock stamp).
-- No archive retention: old snapshots and log objects are kept until a
-  bucket lifecycle rule (or an operator) removes them; a retention
-  command is a later item.
+- ~~No archive retention~~ — `--archive-keep N` / `archive-prune` (see
+  "Archive retention" below).
 - Snapshot files are uploaded whole, one in memory at a time (shortcut
   comment) — multipart streaming once single segments outgrow memory.
 - A restored directory is a standalone node (term 0, no history); with
@@ -799,6 +798,34 @@ Green on MinIO RELEASE.2025-10-15T17-29-55Z. CI: the `s3-compat` job
 (MinIO + mc containers) — `continue-on-error` until its first pushed run
 is green, then a gate. Still open: AWS S3 itself (needs credentials) and
 R2; the Kubernetes lease (fake API only).
+
+## Archive retention ✅
+
+`serve --archive … --archive-keep N` prunes after each periodic
+snapshot; `aikoql-mcp archive-prune --archive URL --keep N` prunes on
+demand (`archive::prune`).
+
+- **Kept:** the newest N complete snapshots across terms, ordered by
+  (term, seq, ms), and every log object after the oldest kept snapshot
+  in its term.
+- **Deleted:** older snapshots in a kept term (by (seq, ms) — an idle db
+  snapshots the same seq again), log objects whose last seq the oldest
+  kept snapshot covers, and every object of an older term with no kept
+  snapshot.
+- **Never touched:** an upload in flight — a snapshot without COMPLETE
+  at or after its term's oldest kept one, or a newer term whose first
+  snapshot is still uploading.
+- A restore target older than the oldest kept snapshot is gone: that is
+  the retention boundary (`--archive-keep × --archive-snapshot-secs` of
+  history).
+- The archiver no longer re-snapshots an unchanged db every period.
+
+Tests: `archive.rs` (two terms → the older one goes, the newest
+restores, an early target no longer does; keep 1; idempotent; a
+same-seq tie; an in-flight upload survives; on MinIO via
+`scripts/s3-it.sh`), `replication_failover.rs` (`--archive-keep 2` with
+1 s snapshots keeps ≤ 2; `archive-prune --keep 1`; pitr restores every
+object). RED: `archive-retention{,-e2e}`.
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
