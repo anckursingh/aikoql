@@ -31,6 +31,9 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN mkdir -p /data
 VOLUME /data
+# agent memory (MRFC-0070) is mutable state: in the volume, not ./memory
+# (= /memory, lost on recreate); --memory-dir still wins
+ENV AIKOQL_MEMORY_DIR=/data/memory
 
 EXPOSE 9090 9091
 
