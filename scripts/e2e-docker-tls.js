@@ -6,7 +6,7 @@
 // MCP port is never answered. Without TLS (the image default) nothing here can
 // connect: the server binds loopback inside the container.
 // Usage: node scripts/e2e-docker-tls.js [image]
-const { execSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
@@ -19,15 +19,19 @@ const ca = fs.readFileSync(path.join(FX, 'ca.pem'));
 
 setTimeout(() => { console.error('e2e-docker-tls: watchdog timeout (120s) — aborting'); cleanup(); process.exit(1); }, 120000).unref();
 
-function sh(cmd) { try { execSync(cmd, { stdio: 'ignore' }); } catch (_) { /* best-effort cleanup */ } }
-function cleanup() { sh(`docker rm -f -v ${NAME}`); } // -v: the image's anonymous /data volume
+// docker with an argument list — no shell parses a path or a value
+const docker = (args, opts = {}) => execFileSync('docker', args, opts);
+function sh(args) { try { docker(args, { stdio: 'ignore' }); } catch (_) { /* best-effort cleanup */ } }
+function cleanup() { sh(['rm', '-f', '-v', NAME]); } // -v: the image's anonymous /data volume
 function fail(msg) {
   console.error('e2e-docker-tls: FAIL ' + msg);
-  try { console.error(execSync(`docker logs ${NAME} 2>&1`, { encoding: 'utf8' }).slice(-3000)); } catch (_) { /* gone */ }
+  // the server logs to stderr: both streams, as `docker logs … 2>&1` did
+  const logs = spawnSync('docker', ['logs', NAME], { encoding: 'utf8' });
+  console.error(`${logs.stdout || ''}${logs.stderr || ''}`.slice(-3000));
   cleanup(); process.exit(1);
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const port = (p) => execSync(`docker port ${NAME} ${p}/tcp`, { encoding: 'utf8' }).trim().split('\n')[0].split(':').pop();
+const port = (p) => docker(['port', NAME, `${p}/tcp`], { encoding: 'utf8' }).trim().split('\n')[0].split(':').pop();
 
 function open(p) {
   return new Promise((res, rej) => {
@@ -63,15 +67,15 @@ function rpc(s) {
 
 (async () => {
   cleanup();
-  execSync([
-    'docker run -d --name', NAME,
-    '-p 127.0.0.1::9090 -p 127.0.0.1::9091',
-    `-v ${FX}:/certs:ro`,
-    '-e AIKOQL_TLS_CERT=/certs/server.pem -e AIKOQL_TLS_KEY=/certs/server.key',
-    '-e AIKOQL_TCP_TOKEN=tls-e2e::admin',
-    '-e AIKOQL_ALLOW_REMOTE_HTTP=1 -e AIKOQL_ADMIN_PASSWORD=tls-e2e-pw',
+  docker([
+    'run', '-d', '--name', NAME,
+    '-p', '127.0.0.1::9090', '-p', '127.0.0.1::9091',
+    '-v', `${FX}:/certs:ro`,
+    '-e', 'AIKOQL_TLS_CERT=/certs/server.pem', '-e', 'AIKOQL_TLS_KEY=/certs/server.key',
+    '-e', 'AIKOQL_TCP_TOKEN=tls-e2e::admin',
+    '-e', 'AIKOQL_ALLOW_REMOTE_HTTP=1', '-e', 'AIKOQL_ADMIN_PASSWORD=tls-e2e-pw',
     image,
-  ].join(' '), { stdio: 'ignore' });
+  ], { stdio: 'ignore' });
   const [mcp, http] = [port(9090), port(9091)];
 
   // MCP over TLS through the published port
