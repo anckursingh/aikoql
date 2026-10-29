@@ -177,6 +177,10 @@ jobs:
       # last release with the old layout upgrades in place, knowledge intact.
       - name: Upgrade from 0.2.3 keeps the knowledge base
         run: node scripts/e2e-docker-upgrade.js aikoql:test ghcr.io/anckursingh/aikoql:0.2.3
+      # TLS from outside the container: the published MCP port over TLS and
+      # the published HTTP port over HTTPS (the test certificates mounted).
+      - name: TLS through published ports
+        run: node scripts/e2e-docker-tls.js aikoql:test
       # CI-13: the compose files are config-under-test, not docs — the
       # PR #7 watch found they had never been executed (the dead host-port
       # mappings shipped unnoticed; CI-11 removed them). Parse both with

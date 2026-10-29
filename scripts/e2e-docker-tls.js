@@ -20,7 +20,7 @@ const ca = fs.readFileSync(path.join(FX, 'ca.pem'));
 setTimeout(() => { console.error('e2e-docker-tls: watchdog timeout (120s) — aborting'); cleanup(); process.exit(1); }, 120000).unref();
 
 function sh(cmd) { try { execSync(cmd, { stdio: 'ignore' }); } catch (_) { /* best-effort cleanup */ } }
-function cleanup() { sh(`docker rm -f ${NAME}`); }
+function cleanup() { sh(`docker rm -f -v ${NAME}`); } // -v: the image's anonymous /data volume
 function fail(msg) {
   console.error('e2e-docker-tls: FAIL ' + msg);
   try { console.error(execSync(`docker logs ${NAME} 2>&1`, { encoding: 'utf8' }).slice(-3000)); } catch (_) { /* gone */ }

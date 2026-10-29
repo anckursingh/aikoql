@@ -38,9 +38,11 @@ ENV AIKOQL_MEMORY_DIR=/data/memory
 EXPOSE 9090 9091
 
 # PRR-1a: no `aikoql health` subcommand exists — probe the HTTP /health
-# endpoint on the metrics port instead.
+# endpoint on the metrics port instead: HTTPS when TLS is configured (-k:
+# the probe is loopback inside the container, the certificate names the
+# published host), plain HTTP otherwise.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:9091/health || exit 1
+    CMD curl -fsSk https://127.0.0.1:9091/health || curl -fsS http://127.0.0.1:9091/health || exit 1
 
 # `aikoql "$@"` after the one-time /data/aikoql.redb → /data/aikoql move
 # (docker-entrypoint.sh); `--entrypoint aikoql` still runs the binary bare.
@@ -50,11 +52,12 @@ ENTRYPOINT ["docker-entrypoint.sh"]
 # is needed (an exec-form CMD with ${...} is NOT expanded by Docker, and a
 # sh -c CMD here would run `aikoql sh -c ...` — double invocation).
 # Unset AIKOQL_TCP_TOKEN -> no tokens -> TCP listener refuses (fail-closed).
-# R1/R3 (review round 3): loopback-only plaintext TCP — the server rejects
-# non-loopback binds fail-closed (see validate_listen), so the container
-# binds 127.0.0.1. Remote access is post-MVP: terminate TLS at a sidecar
-# proxy that shares the container's network namespace (the loopback bind is
-# reachable there), or use the stdio/npm path.
+# R1/R3 (review round 3): plaintext TCP is loopback-only — the server
+# rejects a non-loopback plaintext bind fail-closed (validate_listen), so by
+# default the container binds 127.0.0.1. Mount a certificate and set
+# AIKOQL_TLS_CERT / AIKOQL_TLS_KEY and the entrypoint opens 9090 on every
+# interface (TLS) — `-p 9090:9090` then works; 9091 (HTTPS) also needs
+# AIKOQL_ALLOW_REMOTE_HTTP=1 and a login (AIKOQL_ADMIN_PASSWORD or [auth]).
 # Container contract: everything mutable lives under the /data volume —
 # the aikoql-v2 database directory, memory dir, and the local embedding model store (PRR-3 installs
 # there via `docker exec aikoql aikoql model install`; the image itself stays
