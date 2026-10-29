@@ -5,6 +5,7 @@ Talks to a aikoql-mcp server over TCP. No native dependencies.
 
 import json
 import socket
+import ssl
 import time
 import uuid
 from importlib import metadata as _importlib_metadata
@@ -133,11 +134,17 @@ class Transaction:
 class McpClient:
     """JSON-RPC 2.0 client for aikoql-mcp over TCP."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9090, token: Optional[str] = None):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9090, token: Optional[str] = None,
+                 tls: Optional[ssl.SSLContext] = None):
         self.host = host
         self.port = port
         # P3-M1 servers require a --tcp-token: it rides initialize params.
         self.token = token
+        # A server started with --tls-cert/--tls-key: the context's trust
+        # anchors verify its certificate for `host` before the token is sent
+        # (ssl.create_default_context() for public CAs, cafile= for a private
+        # one). Kept for the NOT_LEADER re-dial.
+        self.tls = tls
         self._sock: Optional[socket.socket] = None
         self._buf = b""
         # The transport died (EOF / over-cap frame / write failure): a
@@ -151,7 +158,14 @@ class McpClient:
 
     def connect(self, timeout: float = 5.0) -> "McpClient":
         self._timeout = timeout
-        self._sock = socket.create_connection((self.host, self.port), timeout=timeout)
+        sock = socket.create_connection((self.host, self.port), timeout=timeout)
+        if self.tls is not None:
+            try:
+                sock = self.tls.wrap_socket(sock, server_hostname=self.host)
+            except BaseException:
+                sock.close()
+                raise
+        self._sock = sock
         self._sock.settimeout(timeout)
         self._dead = False
         return self

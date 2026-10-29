@@ -42,7 +42,7 @@ class Agent:
             host, port = target
             agent._mode = "mcp"
             from .mcp_client import McpClient
-            agent._backend = McpClient(host, port, kwargs.get("token")).connect(timeout=kwargs.get("timeout", 5.0))
+            agent._backend = McpClient(host, port, kwargs.get("token"), tls=kwargs.get("tls")).connect(timeout=kwargs.get("timeout", 5.0))
             agent._backend.initialize(
                 kwargs.get("client_name", "aikoql-py"),
                 kwargs.get("client_version"),
@@ -61,7 +61,7 @@ class Agent:
                 agent._mode = "mcp"
                 host, _, port = target.partition(":")
                 from .mcp_client import McpClient
-                agent._backend = McpClient(host, int(port), kwargs.get("token")).connect(timeout=kwargs.get("timeout", 5.0))
+                agent._backend = McpClient(host, int(port), kwargs.get("token"), tls=kwargs.get("tls")).connect(timeout=kwargs.get("timeout", 5.0))
                 agent._backend.initialize(
                     kwargs.get("client_name", "aikoql-py"),
                     kwargs.get("client_version", "0.1.0"),
