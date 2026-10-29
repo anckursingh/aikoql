@@ -1,0 +1,8 @@
+{
+  "id": "perf-write-per-sync",
+  "pre_fix_commit": "HEAD",
+  "command": "python3 scripts/test_perf_smoke_check.py",
+  "captured_at": "2026-10-29T18:54:13Z",
+  "captured_head": "37e2099c3e5f33fd48fe911e67eaf4a25a4ff1d8",
+  "exit_code": 1
+}
