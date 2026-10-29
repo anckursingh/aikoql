@@ -588,6 +588,15 @@ impl AuthResolver {
 
     /// argon2id-verify `password` against the configured hash for
     /// `username`; the user's roles on match.
+    /// A configured login's current roles (None: no such login) — what an
+    /// OAuth grant carries at each check, so removing a login revokes it.
+    pub(crate) fn roles_of(&self, username: &str) -> Option<Vec<String>> {
+        self.users
+            .iter()
+            .find(|u| u.username == username)
+            .map(|u| u.roles.clone())
+    }
+
     pub(crate) fn verify(&self, username: &str, password: &str) -> Option<Vec<String>> {
         use argon2::password_hash::PasswordVerifier;
         for u in &self.users {

@@ -888,6 +888,15 @@ impl Kernel {
         self
     }
 
+    /// The store under the repository — the encrypted one when encryption is
+    /// on — for a server's own reserved `sys/` keys outside the repository
+    /// (aikoql-mcp's OAuth grants under `sys/oauth/`): written through it
+    /// they are encrypted at rest, replicated, backed up and durable like
+    /// the knowledge itself. The repository never reads them.
+    pub fn system_store(&self) -> Arc<dyn StorageEngine> {
+        self.store.clone()
+    }
+
     /// Enable field-level encryption (MRFC-0020 Phase 3).
     /// Only effective when called on the originally opened kernel.
     /// Loads persisted wrapped DEKs from the store. Fails closed on a corrupt

@@ -722,9 +722,13 @@ fn main() {
             // MCP over Streamable HTTP on the same surface: bearer = a
             // --tcp-token, or an OAuth access token when [auth] logins exist
             {
-                let oauth = http_auth
-                    .is_configured()
-                    .then(|| Arc::new(oauth::OAuth::new(http_auth.clone(), client_tls.is_some())));
+                let oauth = http_auth.is_configured().then(|| {
+                    Arc::new(oauth::OAuth::new(
+                        http_auth.clone(),
+                        client_tls.is_some(),
+                        kernel.system_store(),
+                    ))
+                });
                 TcpAuthTable::parse(&tcp_tokens)
                     .ok()
                     .filter(|_| !tcp_tokens.is_empty() || oauth.is_some())

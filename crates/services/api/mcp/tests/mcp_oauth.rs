@@ -593,3 +593,61 @@ fn o007_a_sign_in_survives_a_restart() {
         again.body
     );
 }
+
+fn tool_text(port: u16, bearer: &str, sid: &str, name: &str, args: J) -> String {
+    let auth = format!("Bearer {bearer}");
+    let r = http(
+        port,
+        "POST",
+        "/mcp",
+        &[("Authorization", &auth), ("Mcp-Session-Id", sid), ("Content-Type", "application/json")],
+        &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": name, "arguments": args}}).to_string(),
+    );
+    assert_eq!(r.status, 200, "{name}: {}", r.body);
+    r.json()["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// The grants live under the store's reserved sys/oauth/ keys, outside the
+/// repository: a sign-in adds no knowledge object, and nothing of it shows
+/// in the schema a user can discover.
+#[test]
+fn o008_sign_ins_are_not_knowledge() {
+    let srv = serve("008");
+    let sid = mcp_initialize(srv.port, "static-tok")
+        .header("mcp-session-id")
+        .unwrap()
+        .to_string();
+    let objects = |sid: &str| {
+        serde_json::from_str::<J>(&tool_text(
+            srv.port,
+            "static-tok",
+            sid,
+            "metrics",
+            json!({}),
+        ))
+        .unwrap()["total_objects"]
+            .clone()
+    };
+    let before = objects(&sid);
+    assert!(before.is_u64(), "metrics reports total_objects: {before}");
+    let client = register(srv.port, &[CLAUDE_CALLBACK]);
+    let ok = authorize(&srv, &client, CLAUDE_CALLBACK, VERIFIER, "oauth-pw");
+    let t = exchange(
+        &srv,
+        &client,
+        CLAUDE_CALLBACK,
+        &code_of(ok.header("location").unwrap()),
+        VERIFIER,
+    )
+    .json();
+    assert!(t["access_token"].is_string());
+    assert_eq!(objects(&sid), before, "a sign-in is not a knowledge object");
+    let schema = tool_text(srv.port, "static-tok", &sid, "discover_schema", json!({}));
+    assert!(
+        !schema.contains("oauth") && !schema.contains(&client),
+        "OAuth state leaks into the schema"
+    );
+}

@@ -3,9 +3,11 @@
 `mcp` SDK's OAuthClientProvider runs the whole client side against a real
 aikoql-mcp server — the 401, protected resource + authorization server
 discovery, dynamic client registration, S256 PKCE, the code exchange — and
-then an MCP session (initialize, tools/list, remember + get). The only part
-scripted here is the person at the browser: the redirect handler posts the
-login form (as signing in on the consent page would).
+then an MCP session (initialize, tools/list, remember + get). Then the
+server restarts on the same data and port, and the same client reconnects
+with the tokens it kept: no second sign-in (the grants are in the database).
+The only part scripted here is the person at the browser: the redirect
+handler posts the login form (as signing in on the consent page would).
 
   pip install mcp
   python scripts/e2e-mcp-oauth.py [path/to/aikoql-mcp]
@@ -55,10 +57,11 @@ def free_port():
         return s.getsockname()[1]
 
 
-async def run(base):
+async def run(base, storage, signed_in_before=False):
     got = {}
 
     async def sign_in(authorization_url):
+        assert not signed_in_before, "asked to sign in again after the restart"
         # the person at the browser: the consent page's form, posted back
         params = dict(parse_qsl(urlsplit(authorization_url).query))
         params.update(username="admin", password=PASSWORD, approve="1")
@@ -73,7 +76,6 @@ async def run(base):
     async def callback():
         return AuthorizationCodeResult(code=got["code"], state=got.get("state"))
 
-    storage = Memory()
     provider = OAuthClientProvider(
         server_url=f"{base}/mcp",
         client_metadata=OAuthClientMetadata(
@@ -101,6 +103,31 @@ async def run(base):
                 got_ko = await session.call_tool("get", {"koid": koid})
                 assert json.loads(got_ko.content[0].text)["properties"]["via"] == "oauth"
                 print(f"tools/list {len(names)} tools; remember + get {koid} round-trips")
+                return koid
+
+
+def start(binary, port, db):
+    proc = subprocess.Popen(
+        [binary, "serve", "--metrics-addr", f"127.0.0.1:{port}", db],
+        env={"AIKOQL_ADMIN_PASSWORD": PASSWORD, "PATH": "/usr/bin:/bin"},
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.time() + 20
+    while True:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+            return proc
+        except OSError:
+            if time.time() > deadline or proc.poll() is not None:
+                sys.exit("e2e-mcp-oauth: FAIL the server never listened")
+            time.sleep(0.1)
+
+
+def stop(proc):
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def main():
@@ -108,28 +135,18 @@ def main():
     port = free_port()
     db = tempfile.mkdtemp(prefix="e2e-mcp-oauth-")
     shutil.rmtree(db)
-    proc = subprocess.Popen(
-        [binary, "serve", "--metrics-addr", f"127.0.0.1:{port}", db],
-        env={"AIKOQL_ADMIN_PASSWORD": PASSWORD, "PATH": "/usr/bin:/bin"},
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    base = f"http://127.0.0.1:{port}"
+    storage = Memory()
+    proc = start(binary, port, db)
     try:
-        deadline = time.time() + 20
-        while True:
-            try:
-                socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
-                break
-            except OSError:
-                if time.time() > deadline or proc.poll() is not None:
-                    sys.exit("e2e-mcp-oauth: FAIL the server never listened")
-                time.sleep(0.1)
-        asyncio.run(run(f"http://127.0.0.1:{port}"))
-        print("e2e-mcp-oauth: PASS — the official MCP SDK signs in over OAuth and uses the session")
+        asyncio.run(run(base, storage))
+        stop(proc)
+        proc = start(binary, port, db)  # the same data, the same URL
+        asyncio.run(run(base, storage, signed_in_before=True))
+        print("after a restart: reconnected with the kept tokens, no new sign-in")
+        print("e2e-mcp-oauth: PASS — the official MCP SDK signs in over OAuth, and stays signed in across a restart")
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        stop(proc)
         shutil.rmtree(db, ignore_errors=True)
 
 

@@ -5,13 +5,17 @@
 //! 8414 authorization server metadata, RFC 7591 dynamic registration of
 //! public clients, the authorization-code grant with S256 PKCE behind a
 //! login + consent page (the server's argon2 `[auth]` logins), and rotating
-//! refresh tokens. Tokens are opaque, bound to the MCP resource they were
-//! issued for (the audience check), and held in memory: a restart signs
-//! everyone out (the client re-runs the flow).
+//! refresh tokens. Tokens are opaque and bound to the MCP resource they were
+//! issued for (the audience check). Registered clients and grants live in
+//! the database under `sys/oauth/` — keyed by the token's SHA-256, never the
+//! token — so a sign-in survives restarts and failovers, and is encrypted,
+//! replicated and backed up with the data. Authorization codes (10 minutes,
+//! single-use) stay in memory.
 
 use crate::http::AuthResolver;
 use crate::mcp_http::{header, Reply};
 use crate::{json, Arc, HashMap, Mutex, J};
+use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
 use base64::Engine as _;
 use sha2::Digest as _;
 use std::time::{Duration, Instant};
@@ -21,7 +25,11 @@ const ACCESS_TTL: Duration = Duration::from_secs(3600);
 const REFRESH_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
 /// Registered clients held at once (DCR registers one per fresh connection).
 const MAX_CLIENTS: usize = 10_000;
-const MAX_GRANTS: usize = 100_000;
+/// Expired grants are swept from the store every this many issuances.
+const SWEEP_EVERY: u64 = 256;
+const P_CLIENT: &str = "sys/oauth/client/";
+const P_ACCESS: &str = "sys/oauth/access/";
+const P_REFRESH: &str = "sys/oauth/refresh/";
 
 struct Client {
     name: String,
@@ -34,26 +42,51 @@ struct Code {
     challenge: String,
     resource: String,
     user: String,
-    roles: Vec<String>,
     expires: Instant,
 }
 
-/// What an access or refresh token stands for.
+/// What an access or refresh token stands for — stored as JSON under the
+/// token's SHA-256. The roles are not stored: each check reads the login's
+/// current ones, so a removed login (or role) stops working at once.
 #[derive(Clone)]
 struct Grant {
     client_id: String,
     user: String,
-    roles: Vec<String>,
     resource: String,
-    expires: Instant,
+    /// unix seconds (an Instant does not outlive the process)
+    expires: u64,
 }
 
-#[derive(Default)]
-struct State {
-    clients: HashMap<String, Client>,
-    codes: HashMap<String, Code>,
-    access: HashMap<String, Grant>,
-    refresh: HashMap<String, Grant>,
+impl Grant {
+    fn to_json(&self) -> Vec<u8> {
+        json!({"client_id": self.client_id, "user": self.user, "resource": self.resource, "expires": self.expires})
+            .to_string()
+            .into_bytes()
+    }
+
+    fn from_json(raw: &[u8]) -> Option<Grant> {
+        let v: J = serde_json::from_slice(raw).ok()?;
+        Some(Grant {
+            client_id: v.get("client_id")?.as_str()?.to_string(),
+            user: v.get("user")?.as_str()?.to_string(),
+            resource: v.get("resource")?.as_str()?.to_string(),
+            expires: v.get("expires")?.as_u64()?,
+        })
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// A token's store key: its SHA-256, so a copied data directory or backup
+/// holds no usable token.
+fn token_key(prefix: &str, token: &str) -> Vec<u8> {
+    let d = sha2::Sha256::digest(token.as_bytes());
+    let hex: String = d.iter().map(|b| format!("{b:02x}")).collect();
+    format!("{prefix}{hex}").into_bytes()
 }
 
 /// The identity an access token carries to /mcp.
@@ -69,11 +102,19 @@ pub(crate) struct OAuth {
     https: bool,
     /// AIKOQL_PUBLIC_URL — the externally visible origin behind a proxy
     public_url: Option<String>,
-    state: Mutex<State>,
+    /// the kernel's store (the encrypted one when encryption is on)
+    store: Arc<dyn StorageEngine>,
+    codes: Mutex<HashMap<String, Code>>,
+    /// serializes the token endpoint's read-check-write (rotation)
+    issuing: Mutex<u64>,
 }
 
 impl OAuth {
-    pub(crate) fn new(logins: Arc<AuthResolver>, https: bool) -> Self {
+    pub(crate) fn new(
+        logins: Arc<AuthResolver>,
+        https: bool,
+        store: Arc<dyn StorageEngine>,
+    ) -> Self {
         let public_url = std::env::var("AIKOQL_PUBLIC_URL")
             .ok()
             .map(|u| u.trim().trim_end_matches('/').to_string())
@@ -82,7 +123,47 @@ impl OAuth {
             logins,
             https,
             public_url,
-            state: Mutex::new(State::default()),
+            store,
+            codes: Mutex::new(HashMap::new()),
+            issuing: Mutex::new(0),
+        }
+    }
+
+    fn client(&self, id: &str) -> Option<Client> {
+        let raw = self
+            .store
+            .get(format!("{P_CLIENT}{id}").as_bytes())
+            .ok()??;
+        let v: J = serde_json::from_slice(&raw).ok()?;
+        Some(Client {
+            name: v.get("name")?.as_str()?.to_string(),
+            redirect_uris: v
+                .get("redirect_uris")?
+                .as_array()?
+                .iter()
+                .filter_map(|u| u.as_str().map(String::from))
+                .collect(),
+        })
+    }
+
+    fn grant(&self, prefix: &str, token: &str) -> Option<Grant> {
+        let raw = self.store.get(&token_key(prefix, token)).ok()??;
+        Grant::from_json(&raw)
+    }
+
+    /// Deletes the store's expired grants.
+    fn sweep(&self) {
+        let now = unix_now();
+        let mut batch = WriteBatch::new();
+        for prefix in [P_ACCESS, P_REFRESH] {
+            for (k, v) in self.store.scan(prefix.as_bytes()).unwrap_or_default() {
+                if Grant::from_json(&v).is_none_or(|g| g.expires <= now) {
+                    batch.del(k);
+                }
+            }
+        }
+        if !batch.is_empty() {
+            let _ = self.store.write_batch(&batch);
         }
     }
 
@@ -154,16 +235,17 @@ impl OAuth {
 
     /// The identity behind an access token issued for this server's /mcp.
     pub(crate) fn validate(&self, token: &str, headers: &str) -> Option<OAuthIdentity> {
-        let st = self.state.lock().unwrap(); // justified: Mutex poison is unrecoverable
-        let g = st.access.get(token)?;
+        let g = self.grant(P_ACCESS, token)?;
         // the audience: a token issued for another resource is refused
-        if g.expires <= Instant::now() || g.resource != format!("{}/mcp", self.base(headers)) {
+        if g.expires <= unix_now() || g.resource != format!("{}/mcp", self.base(headers)) {
             return None;
         }
+        // the login's current roles; a removed login is refused
+        let roles = self.logins.roles_of(&g.user)?;
         Some(OAuthIdentity {
             principal: format!("oauth:{}:{}", g.client_id, g.user),
-            user: g.user.clone(),
-            roles: g.roles.clone(),
+            user: g.user,
+            roles,
         })
     }
 
@@ -211,21 +293,29 @@ impl OAuth {
             .take(100)
             .collect::<String>();
         let id = random_token();
-        let mut st = self.state.lock().unwrap(); // justified: Mutex poison is unrecoverable
-        if st.clients.len() >= MAX_CLIENTS {
+        let registered = self.store.scan(P_CLIENT.as_bytes()).map_or(0, |c| c.len());
+        if registered >= MAX_CLIENTS {
             return oauth_error(
                 "503 Service Unavailable",
                 "temporarily_unavailable",
                 "too many registered clients",
             );
         }
-        st.clients.insert(
-            id.clone(),
-            Client {
-                name: name.clone(),
-                redirect_uris: uris.clone(),
-            },
+        let mut batch = WriteBatch::new();
+        batch.put(
+            format!("{P_CLIENT}{id}").into_bytes(),
+            json!({"name": name, "redirect_uris": uris})
+                .to_string()
+                .into_bytes(),
         );
+        if self.store.write_batch(&batch).is_err() {
+            // a read replica's store refuses writes
+            return oauth_error(
+                "503 Service Unavailable",
+                "temporarily_unavailable",
+                "this server cannot register clients now (a read replica?)",
+            );
+        }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
@@ -254,8 +344,7 @@ impl OAuth {
         headers: &str,
     ) -> Result<(String, String), Reply> {
         let get = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
-        let st = self.state.lock().unwrap(); // justified: Mutex poison is unrecoverable
-        let Some(client) = st.clients.get(get("client_id")) else {
+        let Some(client) = self.client(get("client_id")) else {
             return Err(page(
                 "400 Bad Request",
                 "Unknown client",
@@ -378,14 +467,14 @@ impl OAuth {
             return redirect_to(&redirect, &[("error", "access_denied")], state);
         }
         let user = get("username");
-        let Some(roles) = self.logins.verify(user, get("password")) else {
+        if self.logins.verify(user, get("password")).is_none() {
             return self.authorize_page(f, headers, Some("The username or password is wrong."));
-        };
+        }
         let code = random_token();
-        let mut st = self.state.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        let mut codes = self.codes.lock().unwrap(); // justified: Mutex poison is unrecoverable
         let now = Instant::now();
-        st.codes.retain(|_, c| c.expires > now);
-        st.codes.insert(
+        codes.retain(|_, c| c.expires > now);
+        codes.insert(
             code.clone(),
             Code {
                 client_id: get("client_id").to_string(),
@@ -393,23 +482,25 @@ impl OAuth {
                 challenge: get("code_challenge").to_string(),
                 resource,
                 user: user.to_string(),
-                roles,
                 expires: now + CODE_TTL,
             },
         );
-        drop(st);
+        drop(codes);
         redirect_to(&redirect, &[("code", &code)], state)
     }
 
     /// POST /oauth/token: the code exchange and the refresh (rotating).
     fn token(&self, f: &HashMap<String, String>, headers: &str) -> Reply {
         let get = |k: &str| f.get(k).map(String::as_str).unwrap_or("");
-        let mut st = self.state.lock().unwrap(); // justified: Mutex poison is unrecoverable
-        let now = Instant::now();
+        // one issuance at a time: a refresh token cannot rotate twice
+        let mut issued = self.issuing.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        let now = unix_now();
+        let mut batch = WriteBatch::new();
         let grant = match get("grant_type") {
             "authorization_code" => {
                 // single-use: taken before it is checked
-                let Some(code) = st.codes.remove(get("code")) else {
+                let taken = self.codes.lock().unwrap().remove(get("code")); // justified: Mutex poison is unrecoverable
+                let Some(code) = taken else {
                     return oauth_error("400 Bad Request", "invalid_grant", "unknown or used code");
                 };
                 let verifier_ok = get("code_verifier").len() >= 43
@@ -419,7 +510,7 @@ impl OAuth {
                 let resource_ok = f
                     .get("resource")
                     .is_none_or(|r| r.trim_end_matches('/') == code.resource);
-                if code.expires <= now
+                if code.expires <= Instant::now()
                     || code.client_id != get("client_id")
                     || code.redirect_uri != get("redirect_uri")
                     || !verifier_ok
@@ -434,20 +525,24 @@ impl OAuth {
                 Grant {
                     client_id: code.client_id,
                     user: code.user,
-                    roles: code.roles,
                     resource: code.resource,
                     expires: now,
                 }
             }
             "refresh_token" => {
-                let Some(old) = st.refresh.remove(get("refresh_token")) else {
+                let Some(old) = self.grant(P_REFRESH, get("refresh_token")) else {
                     return oauth_error(
                         "400 Bad Request",
                         "invalid_grant",
                         "unknown or used refresh token",
                     );
                 };
-                if old.expires <= now || old.client_id != get("client_id") {
+                // rotated: the old refresh token dies in the same batch
+                batch.del(token_key(P_REFRESH, get("refresh_token")));
+                if old.expires <= now
+                    || old.client_id != get("client_id")
+                    || self.logins.roles_of(&old.user).is_none()
+                {
                     return oauth_error(
                         "400 Bad Request",
                         "invalid_grant",
@@ -472,30 +567,31 @@ impl OAuth {
             }
         };
         let _ = headers;
-        st.access.retain(|_, g| g.expires > now);
-        st.refresh.retain(|_, g| g.expires > now);
-        if st.access.len() >= MAX_GRANTS || st.refresh.len() >= MAX_GRANTS {
+        let (access, refresh) = (random_token(), random_token());
+        let access_grant = Grant {
+            expires: now + ACCESS_TTL.as_secs(),
+            ..grant.clone()
+        };
+        let refresh_grant = Grant {
+            expires: now + REFRESH_TTL.as_secs(),
+            ..grant
+        };
+        batch.put(token_key(P_ACCESS, &access), access_grant.to_json());
+        batch.put(token_key(P_REFRESH, &refresh), refresh_grant.to_json());
+        // one atomic batch: the old refresh token dies exactly when the new
+        // pair is born, and a crash leaves one of the two, never both
+        if self.store.write_batch(&batch).is_err() {
             return oauth_error(
                 "503 Service Unavailable",
                 "temporarily_unavailable",
-                "too many live tokens",
+                "this server cannot issue tokens now (a read replica?)",
             );
         }
-        let (access, refresh) = (random_token(), random_token());
-        st.access.insert(
-            access.clone(),
-            Grant {
-                expires: now + ACCESS_TTL,
-                ..grant.clone()
-            },
-        );
-        st.refresh.insert(
-            refresh.clone(),
-            Grant {
-                expires: now + REFRESH_TTL,
-                ..grant
-            },
-        );
+        *issued += 1;
+        if issued.is_multiple_of(SWEEP_EVERY) {
+            self.sweep();
+        }
+        drop(issued);
         (
             "200 OK",
             no_store(),
@@ -659,6 +755,137 @@ fn oauth_error(status: &'static str, error: &str, description: &str) -> Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One full sign-in against a store: (client_id, access, refresh).
+    fn sign_in(o: &OAuth, h: &str) -> (String, String, String) {
+        let reg = o.register(r#"{"redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]}"#);
+        let client = serde_json::from_str::<J>(&reg.3).unwrap()["client_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let verifier = "v".repeat(50);
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sha2::Sha256::digest(verifier.as_bytes()));
+        let form: HashMap<String, String> = [
+            ("response_type", "code"),
+            ("client_id", client.as_str()),
+            ("redirect_uri", "https://claude.ai/api/mcp/auth_callback"),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("username", "admin"),
+            ("password", "pw"),
+            ("approve", "1"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let r = o.authorize(&form, h);
+        let loc =
+            r.1.iter()
+                .find(|(k, _)| *k == "Location")
+                .unwrap()
+                .1
+                .clone();
+        let code = loc
+            .split("code=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .to_string();
+        let tok: HashMap<String, String> = [
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("client_id", client.as_str()),
+            ("redirect_uri", "https://claude.ai/api/mcp/auth_callback"),
+            ("code_verifier", verifier.as_str()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let t: J = serde_json::from_str(&o.token(&tok, h).3).unwrap();
+        (
+            client,
+            t["access_token"].as_str().unwrap().into(),
+            t["refresh_token"].as_str().unwrap().into(),
+        )
+    }
+
+    fn refresh(o: &OAuth, client: &str, token: &str, h: &str) -> J {
+        let f: HashMap<String, String> = [
+            ("grant_type", "refresh_token"),
+            ("refresh_token", token),
+            ("client_id", client),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        serde_json::from_str(&o.token(&f, h).3).unwrap()
+    }
+
+    const H: &str = "POST /mcp HTTP/1.1\r\nHost: kb.test\r\n";
+
+    fn store() -> Arc<dyn StorageEngine> {
+        Arc::new(aikoql_kernel::storage::store::MemoryEngine::default())
+    }
+
+    #[test]
+    fn the_store_holds_no_usable_token() {
+        let st = store();
+        let o = OAuth::new(
+            Arc::new(AuthResolver::new(vec![], Some("pw"), 3600)),
+            true,
+            st.clone(),
+        );
+        let (_, access, refresh) = sign_in(&o, H);
+        for (k, v) in st.scan(b"sys/oauth/").unwrap() {
+            let (k, v) = (String::from_utf8_lossy(&k), String::from_utf8_lossy(&v));
+            for t in [&access, &refresh] {
+                assert!(
+                    !k.contains(t.as_str()) && !v.contains(t.as_str()),
+                    "a raw token is stored: {k}"
+                );
+            }
+        }
+        assert!(o.validate(&access, H).is_some());
+    }
+
+    #[test]
+    fn a_removed_login_loses_its_tokens() {
+        let st = store();
+        let o = OAuth::new(
+            Arc::new(AuthResolver::new(vec![], Some("pw"), 3600)),
+            true,
+            st.clone(),
+        );
+        let (client, access, refresh_token) = sign_in(&o, H);
+        // the same store, the login gone (a restart with a changed [auth])
+        let gone = OAuth::new(Arc::new(AuthResolver::new(vec![], None, 3600)), true, st);
+        assert!(
+            gone.validate(&access, H).is_none(),
+            "the access token of a removed login"
+        );
+        assert_eq!(
+            refresh(&gone, &client, &refresh_token, H)["error"],
+            json!("invalid_grant")
+        );
+    }
+
+    #[test]
+    fn a_refresh_token_rotates_once() {
+        let o = OAuth::new(
+            Arc::new(AuthResolver::new(vec![], Some("pw"), 3600)),
+            true,
+            store(),
+        );
+        let (client, _, refresh_token) = sign_in(&o, H);
+        assert!(refresh(&o, &client, &refresh_token, H)["access_token"].is_string());
+        assert_eq!(
+            refresh(&o, &client, &refresh_token, H)["error"],
+            json!("invalid_grant")
+        );
+    }
 
     #[test]
     fn redirects() {
