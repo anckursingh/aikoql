@@ -1,0 +1,8 @@
+{
+  "id": "docker-tls-e2e",
+  "pre_fix_commit": "HEAD",
+  "command": "node scripts/e2e-docker-tls.js ghcr.io/anckursingh/aikoql:0.2.3",
+  "captured_at": "2026-10-29T13:14:15Z",
+  "captured_head": "6d39943f04e8c17ef9b1cc0a5ee67cf8446503ee",
+  "exit_code": 1
+}

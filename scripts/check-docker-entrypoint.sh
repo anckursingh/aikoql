@@ -51,5 +51,28 @@ d="$t/other"; mkdir -p "$d/aikoql.redb"
 run "$d" --version
 [ "$(cat "$t/args")" = "--version" ] && [ -d "$d/aikoql.redb" ] || bad "--version: not a plain pass-through"
 
+# TLS: with AIKOQL_TLS_CERT the default loopback --listen opens to every
+# interface (the token is encrypted, so a published port works); the HTTP
+# port only with AIKOQL_ALLOW_REMOTE_HTTP too (it needs logins); anything
+# not the image default is left alone. ENV passes through `run`'s sh.
+DEF="serve /data/aikoql --listen 127.0.0.1:9090 --metrics-addr 127.0.0.1:9091 --model-dir /data/models"
+d="$t/tls"; mkdir -p "$d"
+args() { echo "$DEF" | sed "s|/data|$d|g"; }
+# shellcheck disable=SC2046
+AIKOQL_TLS_CERT=/c.pem AIKOQL_TLS_KEY=/k.pem run "$d" $(args)
+[ "$(cat "$t/args")" = "serve $d/aikoql --listen 0.0.0.0:9090 --metrics-addr 127.0.0.1:9091 --model-dir $d/models" ] ||
+  bad "tls: --listen not opened, or HTTP opened without allow_remote_http ($(cat "$t/args"))"
+# shellcheck disable=SC2046
+AIKOQL_TLS_CERT=/c.pem AIKOQL_TLS_KEY=/k.pem AIKOQL_ALLOW_REMOTE_HTTP=true run "$d" $(args)
+[ "$(cat "$t/args")" = "serve $d/aikoql --listen 0.0.0.0:9090 --metrics-addr 0.0.0.0:9091 --model-dir $d/models" ] ||
+  bad "tls + allow_remote_http: both not opened ($(cat "$t/args"))"
+# shellcheck disable=SC2046
+run "$d" $(args)
+[ "$(cat "$t/args")" = "serve $d/aikoql --listen 127.0.0.1:9090 --metrics-addr 127.0.0.1:9091 --model-dir $d/models" ] ||
+  bad "no tls: the loopback binds changed ($(cat "$t/args"))"
+AIKOQL_TLS_CERT=/c.pem run "$d" serve "$d/aikoql" --listen 127.0.0.1:7000 --replicate-listen 127.0.0.1:9090
+[ "$(cat "$t/args")" = "serve $d/aikoql --listen 127.0.0.1:7000 --replicate-listen 127.0.0.1:9090" ] ||
+  bad "tls: a non-default address was rewritten ($(cat "$t/args"))"
+
 [ "$fail" = 0 ] || exit 1
 echo "docker entrypoint — OK"
