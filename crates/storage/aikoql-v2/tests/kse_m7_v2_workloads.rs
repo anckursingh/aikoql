@@ -297,6 +297,31 @@ struct Seeded {
     wall_ms: f64,
     seed_read: u64,
     disk: u64,
+    /// The machine reference for the sync-bound W6 cell (0 in memory).
+    sync_ref_ns: u64,
+}
+
+/// The machine's own sync cost on this disk: the median of 64 small appends
+/// each followed by `sync_all` — the WAL's call — in a sibling of the store.
+/// The perf smoke divides the W6 commit cost by it, so a runner with slow
+/// syncs does not read as a regression (CI 37e2099: identical code 4.4x-9.7x
+/// the laptop baseline with the runner's disk).
+fn machine_sync_p50_ns(store: &Path) -> u64 {
+    use std::io::Write as _;
+    let p = store.with_extension("sync-ref");
+    let mut f = std::fs::File::create(&p).unwrap();
+    let mut samples: Vec<u64> = (0..64)
+        .map(|_| {
+            let t = Instant::now();
+            f.write_all(&[0u8; 128]).unwrap();
+            f.sync_all().unwrap();
+            t.elapsed().as_nanos() as u64
+        })
+        .collect();
+    drop(f);
+    let _ = std::fs::remove_file(&p);
+    samples.sort_unstable();
+    samples[samples.len() / 2]
 }
 
 fn file_len(path: &PathBuf) -> u64 {
@@ -397,6 +422,11 @@ fn seed(kind: BackendKind, path: &Path, sz: Size) -> Seeded {
     } else {
         file_len(&path.to_path_buf())
     };
+    let sync_ref_ns = if kind.is_memory() {
+        0
+    } else {
+        machine_sync_p50_ns(path)
+    };
     Seeded {
         k,
         counting,
@@ -407,6 +437,7 @@ fn seed(kind: BackendKind, path: &Path, sz: Size) -> Seeded {
         wall_ms,
         seed_read,
         disk,
+        sync_ref_ns,
     }
 }
 
@@ -589,6 +620,18 @@ fn run_workloads(seeded: &Seeded, sz: Size) -> Vec<Row> {
         p99: mean_ns,
         read: seeded.seed_read,
         written: bytes_written(&seeded.counting),
+    });
+    // every backend carries the row (0 in memory): the report indexes
+    // rows by position across backends
+    rows.push(Row {
+        label: "machine sync (ref)".into(),
+        ops: 64,
+        wall_ms: 0.0,
+        p50: seeded.sync_ref_ns,
+        p95: seeded.sync_ref_ns,
+        p99: seeded.sync_ref_ns,
+        read: 0,
+        written: 0,
     });
     rows
 }

@@ -665,13 +665,13 @@ evidence = "reopen_replays_only_the_active_wal"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs"
-line = 1280
+line = 1323
 text = "// every answer byte-exact from the bounded-memory engine"
 evidence = "v2_gate2_3_dataset_larger_than_ram"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs"
-line = 2712
+line = 2755
 text = "// folded in), and the two backlog gauges inside maybe_compact's O(1)"
 evidence = "v2_p3m2_write_stats_overhead"
 

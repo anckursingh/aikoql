@@ -118,6 +118,7 @@ def validate_smoke_cells(path):
         "w1_ko_get_p50_ns",
         "w2_head_get_p50_ns",
         "write_p50_ns",
+        "write_per_sync",
         "scan_p50_ns",
         "hot_head_p50_ns",
         "compact_wall_ms",

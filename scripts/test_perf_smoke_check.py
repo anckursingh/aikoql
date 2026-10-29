@@ -23,7 +23,7 @@ psc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(psc)
 
 BACKEND = "aikoql-v2"
-CELLS = {"write_per_sync": 1.2}  # baseline: 1.2 syncs' worth of time per commit
+CELLS = {"write_per_sync": 1.0}  # baseline: a commit costs one sync (measured 1.00-1.04)
 
 
 def rows(write_ns, sync_ns):
@@ -35,14 +35,19 @@ def rows(write_ns, sync_ns):
 
 class WriteCellTest(unittest.TestCase):
     def test_a_slow_machine_passes(self):
-        # 37e2099's runner: write 7.2 ms — but its syncs were slow too
-        ratio = psc.check_write(rows(7_218_326, 6_000_000), CELLS)
-        self.assertLess(ratio, psc.BOUND)
+        # 37e2099's runner: write 7.2 ms (9.66x the laptop) — its syncs
+        # were as slow, so the commit still costs about one sync
+        ratio = psc.check_write(rows(7_218_326, 7_000_000), CELLS)
+        self.assertLess(ratio, psc.SYNC_BOUND)
 
-    def test_an_extra_sync_per_commit_fails(self):
-        # the same machine, the write path now costs 4.8 syncs per commit
+    def test_run_to_run_noise_passes(self):
+        # the spread measured on one machine: 1.00-1.04 syncs per commit
+        psc.check_write(rows(3_150_651, 3_026_125), CELLS)
+
+    def test_one_extra_sync_per_commit_fails(self):
+        # the same machine, the write path now syncs twice per commit
         with self.assertRaises(psc.PerfFail) as e:
-            psc.check_write(rows(7_200_000, 1_500_000), CELLS)
+            psc.check_write(rows(6_000_000, 3_000_000), CELLS)
         self.assertIn("ingestion (W6)", str(e.exception))
 
     def test_a_missing_machine_reference_fails_by_name(self):

@@ -663,7 +663,9 @@ jobs:
       # artifact freshness stamp — the pins must hold before the gate runs.
       - name: Checker schema pins
         shell: bash
-        run: python scripts/test_artifact_schema.py
+        run: |
+          python scripts/test_artifact_schema.py
+          python scripts/test_perf_smoke_check.py
       - name: Perf smoke cells + budget check
         shell: bash
         run: bash scripts/perf-smoke.sh
