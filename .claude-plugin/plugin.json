@@ -25,7 +25,7 @@
     "KB_PATH": {
       "type": "directory",
       "title": "Knowledge base directory",
-      "description": "Where aikoql stores your knowledge base. A fresh path auto-creates an aikoql-v2 database directory; existing redb files, v1 WALs and snapshots still auto-detect.",
+      "description": "Where aikoql stores your knowledge base. A fresh path auto-creates an aikoql-v2 database directory; an existing aikoql-v2 directory is reopened.",
       "default": "./aikoql-kb"
     }
   },

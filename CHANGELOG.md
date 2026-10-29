@@ -19,6 +19,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   Go `WithTLS(*tls.Config)`, TypeScript `Client.dial(addr, { tls })`, Java
   `AikoqlClient.dial(addr, SSLContext)` — the server's certificate is
   verified before the token is sent; a NOT_LEADER re-dial keeps TLS.
+- **MCP over Streamable HTTP**: `POST /mcp` on the HTTP surface —
+  bearer-token auth (the `--tcp-token` tokens), `Mcp-Session-Id` sessions
+  bound to their token, `DELETE` to end one, a loopback-only `Origin` guard
+  (`AIKOQL_MCP_ALLOWED_ORIGINS` to extend it), 1 MiB bodies; HTTPS with
+  `--tls-cert`. For remote MCP clients (`claude mcp add --transport http`).
+  Not yet: `GET /mcp` streams (405) and OAuth.
 - **Docker publishes over TLS**: with a mounted certificate and
   `AIKOQL_TLS_CERT` / `AIKOQL_TLS_KEY`, the image listens on 0.0.0.0:9090
   (`-p 9090:9090` works); 9091 too when armed with

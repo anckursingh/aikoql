@@ -84,13 +84,34 @@ portable MCP config block, e.g. `.vscode/mcp.json` / `.cursor/mcp.json`:
 aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token s3cret:team:admin /data/kb
 ```
 
-The TCP listener is loopback-only — binding a non-loopback address exits 2.
+Plaintext TCP is loopback-only — binding a non-loopback address exits 2;
+with `--tls-cert/--tls-key` (or `AIKOQL_TLS_CERT` / `AIKOQL_TLS_KEY`) the
+listener serves TLS and may bind any interface.
 TCP auth is fail-closed: the token is `TOKEN[:TENANT[:ROLE1,ROLE2]]` and a
 bare `TOKEN` (no roles) **exits 2**. In production use `AIKOQL_TCP_TOKEN`
 or `AIKOQL_TCP_TOKEN_FILE` (CLI flags leak into the process list). On TCP,
 identity is server-assigned by the token — clients must not send an
 `agent_id`; on stdio, the session is trusted and you declare identity with
 `session_init`.
+
+**Remote MCP over HTTP** (Streamable HTTP — what remote MCP clients speak):
+the HTTP surface serves `POST /mcp`, authenticated with the same tokens.
+
+```bash
+aikoql-mcp serve --metrics-addr 127.0.0.1:9091 --tcp-token s3cret:team:admin /data/kb
+claude mcp add --transport http aikoql http://127.0.0.1:9091/mcp \
+  --header "Authorization: Bearer s3cret"
+```
+
+Every request carries `Authorization: Bearer <token>`; `initialize` opens a
+session (`Mcp-Session-Id`) that only that token can use. Off the host it
+follows the HTTP surface's rule — HTTPS (`--tls-cert/--tls-key`) plus
+`allow_remote_http` and a login — so the URL becomes `https://…/mcp`.
+Browser `Origin`s other than loopback are refused unless listed in
+`AIKOQL_MCP_ALLOWED_ORIGINS`. Not yet: server-initiated streams (`GET /mcp`
+is 405 — subscriptions stay on stdio/TCP) and OAuth (bearer tokens only, so
+an OAuth-only connector flow, e.g. some claude.ai connector setups, cannot
+attach yet).
 
 ## First 10 minutes (validated flow)
 
