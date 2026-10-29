@@ -1,0 +1,6 @@
+# github.com/anckursingh/aikoql/crates/sdk/go [github.com/anckursingh/aikoql/crates/sdk/go.test]
+./tls_test.go:51:49: undefined: WithTLS
+./tls_test.go:76:49: undefined: WithTLS
+FAIL	github.com/anckursingh/aikoql/crates/sdk/go [build failed]
+FAIL
+EXIT=1

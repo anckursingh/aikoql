@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-func startRealServer(t *testing.T, bin string) (addr string, stop func()) {
+func startRealServer(t *testing.T, bin string, extra ...string) (addr string, stop func()) {
 	t.Helper()
 	// A free port: bind :0, remember the port, release it. The server
 	// binds it again moments later — the dial retry below absorbs the
@@ -36,10 +36,8 @@ func startRealServer(t *testing.T, bin string) (addr string, stop func()) {
 	// caught this.
 	dbDir := filepath.Join(t.TempDir(), "kb")
 	var stderr bytes.Buffer
-	cmd := exec.Command(bin, "serve",
-		"--listen", addr,
-		"--tcp-token", "s3cret:acme:admin",
-		dbDir)
+	args := append([]string{"serve", "--listen", addr, "--tcp-token", "s3cret:acme:admin"}, extra...)
+	cmd := exec.Command(bin, append(args, dbDir)...)
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("spawn %s: %v", bin, err)
