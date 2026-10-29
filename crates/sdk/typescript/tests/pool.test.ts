@@ -65,6 +65,25 @@ function poolFactory(t: TestContext, respond: (req: Record<string, unknown>) => 
   };
 }
 
+// healthCheckIntervalMs: 0 pings every borrow — even one in the same
+// millisecond as the release (a whole-millisecond clock skipped the ping,
+// handing back a connection whose server had just died: the restart-test
+// flake below).
+test("a zero health-check interval pings every borrow", async (t) => {
+  const log: TxnCall[] = [];
+  const { factory } = poolFactory(t, poolResponder(log));
+  const p = new Pool({ factory, maxConns: 1, healthCheckIntervalMs: 0 });
+  t.after(() => {
+    void p.close();
+  });
+  for (let i = 0; i < 20; i++) {
+    const pc = await p.acquire();
+    await pc.release();
+  }
+  // the first borrow dials (nothing idle to ping); each of the other 19 pings
+  assert.equal(log.filter((c) => c.name === "health").length, 19);
+});
+
 test("exhaustion waits then RESOURCE_EXHAUSTED; a freed connection goes to a waiter", async (t) => {
   const log: TxnCall[] = [];
   const { factory, dials } = poolFactory(t, poolResponder(log));
@@ -242,9 +261,9 @@ test(
       }
       return c;
     };
-    // A near-zero health-check interval: every borrow pings, so a dead
+    // A zero health-check interval: every borrow pings, so a dead
     // connection is caught and replaced at checkout.
-    const p = new Pool({ factory, maxConns: 1, acquireTimeoutMs: 10_000, healthCheckIntervalMs: 1 });
+    const p = new Pool({ factory, maxConns: 1, acquireTimeoutMs: 10_000, healthCheckIntervalMs: 0 });
     t.after(() => {
       void p.close();
     });
