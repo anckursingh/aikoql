@@ -767,6 +767,10 @@ jobs:
           # machine-readable file (protocol/compatibility.json) — workspace,
           # Go and Python constants must all pin to it; a version bump that
           # misses a constant fails here, not at tag time (the review §3.2).
+          # every file carrying the release version moves with it — a file
+          # bump-version.py does not track drifts silently (AGENTIC-QUICKSTART)
+          echo "Checking release version pins..."
+          python3 scripts/bump-version.py --check
           echo "Checking SDK compat contract..."
           bash scripts/check-sdk-compat.sh
           # P5-M0 (gd001): the baseline-certification guard
