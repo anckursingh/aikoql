@@ -1,12 +1,12 @@
 {
   "generated_at": "2026-09-25T07:45:00Z",
   "machine": "windows/x86_64; 8 logical cores; AMD64 Family 23 Model 24 Stepping 1, AuthenticAMD (laptop, first genuine measurement)",
-  "note": "The harness result rows label the field p50_us but carry nanoseconds (58900 = 58.9 us at 1M — the gate-5 magnitude); the budget is ratio-wise, so units cancel. Budget 3x until CI runs pin the runner variance. CI-03 (review W1–W5): write_p50_ns is the matrix's ingestion (W6) row — the mean commit wall per put (fsync-bound, sync durability); scan_p50_ns is the type scan (W5) row; compact_wall_ms + compact_allocs are the compaction_smoke cell — one merge of two 25K-key segments under a counting allocator. write_per_sync (the gated write cell): the W6 commit cost divided by a plain sync_all on the same disk in the same run (the 'machine sync (ref)' row) — dimensionless, so the machine cancels; 1.01 = the median of three runs on darwin/arm64 (APFS, F_FULLFSYNC) measuring 1.00/1.01/1.04 while the absolute wall moved 25%. write_p50_ns stays as the reported laptop reference.",
+  "note": "The harness result rows label the field p50_us but carry nanoseconds (58900 = 58.9 us at 1M — the gate-5 magnitude); the budget is ratio-wise, so units cancel. Budget 3x until CI runs pin the runner variance. CI-03 (review W1–W5): write_p50_ns is the matrix's ingestion (W6) row — the mean commit wall per put (fsync-bound, sync durability); scan_p50_ns is the type scan (W5) row; compact_wall_ms + compact_allocs are the compaction_smoke cell — one merge of two 25K-key segments under a counting allocator. write_per_sync (the gated write cell): the W6 commit cost divided by a plain sync_all on the same disk in the same run (the 'machine sync (ref)' row) — dimensionless, so the machine cancels; 1.35 = the median of the Windows CI runs that gate it (run 40937044377, attempts 1-3: 1.36 / 1.35 westus / 1.20 eastus); darwin/arm64 (APFS, F_FULLFSYNC) measures 1.00-1.04 — a Windows commit costs ~0.3 syncs more, while within each platform the ratio holds as the absolute wall moves. write_p50_ns stays as the reported laptop reference.",
   "cells": {
     "w1_ko_get_p50_ns": 6600.0,
     "w2_head_get_p50_ns": 6300.0,
     "write_p50_ns": 747055.0,
-    "write_per_sync": 1.01,
+    "write_per_sync": 1.35,
     "scan_p50_ns": 99300.0,
     "hot_head_p50_ns": 1300.0,
     "compact_wall_ms": 37.0,
