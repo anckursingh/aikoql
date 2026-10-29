@@ -1,0 +1,37 @@
+..EEE....
+======================================================================
+ERROR: test_consistently_slow_merges_still_fail (__main__.CompactWallTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/pukku/coding/aikoql/scripts/test_perf_smoke_check.py", line 95, in test_consistently_slow_merges_still_fail
+    wall = psc.compact_wall_ms({"compact_wall_samples": [340, 361, 355, 349, 370]})
+AttributeError: module 'perf_smoke_check' has no attribute 'compact_wall_ms'
+
+======================================================================
+ERROR: test_one_stalled_merge_does_not_fail_the_cell (__main__.CompactWallTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/pukku/coding/aikoql/scripts/test_perf_smoke_check.py", line 91, in test_one_stalled_merge_does_not_fail_the_cell
+    wall = psc.compact_wall_ms({"compact_wall_samples": [64, 361, 71, 58, 77]})
+AttributeError: module 'perf_smoke_check' has no attribute 'compact_wall_ms'
+
+======================================================================
+ERROR: test_too_few_samples_fail_by_name (__main__.CompactWallTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/pukku/coding/aikoql/scripts/test_perf_smoke_check.py", line 101, in test_too_few_samples_fail_by_name
+    psc.compact_wall_ms(cells)
+AttributeError: module 'perf_smoke_check' has no attribute 'compact_wall_ms'
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.001s
+
+FAILED (errors=3)
+write_per_sync: 2350000 ns / 1000000 ns sync = 2.35 vs baseline 1.35 = 1.74x (bound 1.5x)
+write_per_sync: 1360000 ns / 1000000 ns sync = 1.36 vs baseline 1.35 = 1.01x (bound 1.5x)
+write_per_sync: 1350000 ns / 1000000 ns sync = 1.35 vs baseline 1.35 = 1.00x (bound 1.5x)
+write_per_sync: 1200000 ns / 1000000 ns sync = 1.20 vs baseline 1.35 = 0.89x (bound 1.5x)
+write_per_sync: 7218326 ns / 7000000 ns sync = 1.03 vs baseline 1.00 = 1.03x (bound 1.5x)
+write_per_sync: 6000000 ns / 3000000 ns sync = 2.00 vs baseline 1.00 = 2.00x (bound 1.5x)
+write_per_sync: 3150651 ns / 3026125 ns sync = 1.04 vs baseline 1.00 = 1.04x (bound 1.5x)
+EXIT=1

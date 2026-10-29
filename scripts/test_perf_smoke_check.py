@@ -81,5 +81,26 @@ class CommittedBaselineTest(unittest.TestCase):
             psc.check_write(rows((median + 1.0) * 1e6, 1e6), self.cells)
 
 
+class CompactWallTest(unittest.TestCase):
+    """The compaction cell is the median of several merges: c2af329's perf
+    run failed on ONE stalled merge (361 ms; the same code reads 49-102 ms,
+    the allocations were exactly the baseline's) — a single sample let a
+    one-off stall (the runner, not the merge) fail the gate."""
+
+    def test_one_stalled_merge_does_not_fail_the_cell(self):
+        wall = psc.compact_wall_ms({"compact_wall_samples": [64, 361, 71, 58, 77]})
+        self.assertEqual(wall, 71)
+
+    def test_consistently_slow_merges_still_fail(self):
+        wall = psc.compact_wall_ms({"compact_wall_samples": [340, 361, 355, 349, 370]})
+        self.assertGreater(wall / 37.0, psc.FSYNC_BOUND)
+
+    def test_too_few_samples_fail_by_name(self):
+        for cells in ({}, {"compact_wall_samples": [64]}, {"compact_wall_samples": [64, 70]}):
+            with self.assertRaises(psc.PerfFail) as e:
+                psc.compact_wall_ms(cells)
+            self.assertIn("compact_wall_samples", str(e.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
