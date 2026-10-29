@@ -30,6 +30,7 @@ package aikoql
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,6 +79,7 @@ type clientConfig struct {
 	name        string
 	version     string
 	dialTimeout time.Duration
+	tls         *tls.Config
 }
 
 // Option tunes Dial.
@@ -87,6 +89,14 @@ type Option func(*clientConfig)
 // (required by every TCP server since P3-M1).
 func WithToken(token string) Option {
 	return func(c *clientConfig) { c.token = token }
+}
+
+// WithTLS dials over TLS, for a server started with --tls-cert/--tls-key:
+// the server's certificate is verified with cfg (nil RootCAs: the system
+// roots) for the host in the address — ServerName is inferred from it when
+// unset — before the token is ever sent. A NOT_LEADER re-dial uses it too.
+func WithTLS(cfg *tls.Config) Option {
+	return func(c *clientConfig) { c.tls = cfg }
 }
 
 // WithClientInfo sets the MCP client identity advertised at initialize.
@@ -123,12 +133,21 @@ func Dial(ctx context.Context, addr string, opts ...Option) (*Client, error) {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	d := net.Dialer{Timeout: cfg.dialTimeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	conn, err := dialConn(ctx, addr, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("aikoql: dial %s: %w", addr, err)
 	}
 	return &Client{tr: conn, r: bufio.NewReader(conn), cfg: cfg, addr: addr}, nil
+}
+
+// dialConn opens the TCP connection, with the TLS handshake when configured.
+func dialConn(ctx context.Context, addr string, cfg clientConfig) (net.Conn, error) {
+	d := net.Dialer{Timeout: cfg.dialTimeout}
+	if cfg.tls == nil {
+		return d.DialContext(ctx, "tcp", addr)
+	}
+	td := tls.Dialer{NetDialer: &d, Config: cfg.tls}
+	return td.DialContext(ctx, "tcp", addr)
 }
 
 // DialStdio spawns bin with args and speaks MCP over its stdin/stdout.
@@ -602,8 +621,7 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments any) (json
 // follow replaces the connection with one to the leader at addr and
 // re-runs the handshake.
 func (c *Client) follow(ctx context.Context, addr string) error {
-	d := net.Dialer{Timeout: c.cfg.dialTimeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	conn, err := dialConn(ctx, addr, c.cfg)
 	if err != nil {
 		return fmt.Errorf("aikoql: follow the leader hint %s: %w", addr, err)
 	}
