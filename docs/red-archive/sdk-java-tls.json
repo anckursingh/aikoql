@@ -1,0 +1,8 @@
+{
+  "id": "sdk-java-tls",
+  "pre_fix_commit": "HEAD",
+  "command": "env AIKOQL_MCP_BIN=/Users/pukku/coding/aikoql/target/debug/aikoql-mcp sh -c cd crates/sdk/java && mvn -B -q test -Dtest=TlsTest",
+  "captured_at": "2026-10-29T13:27:40Z",
+  "captured_head": "48bced0cd9663789f246ce05ce92597eca924334",
+  "exit_code": 1
+}
