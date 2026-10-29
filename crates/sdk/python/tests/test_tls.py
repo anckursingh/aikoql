@@ -92,3 +92,10 @@ def test_the_client_never_offers_below_tls_1_2():
     strict.minimum_version = ssl.TLSVersion.TLSv1_3
     McpClient("127.0.0.1", 1, tls=strict)
     assert strict.minimum_version == ssl.TLSVersion.TLSv1_3
+
+    newest = ssl.create_default_context(cafile=str(FX / "ca.pem"))
+    # MAXIMUM_SUPPORTED is -1, but OpenSSL resolves it on set: it reads
+    # back as the newest version, so it is never mistaken for a weak floor
+    newest.minimum_version = ssl.TLSVersion.MAXIMUM_SUPPORTED
+    McpClient("127.0.0.1", 1, tls=newest)
+    assert newest.minimum_version == ssl.TLSVersion.TLSv1_3

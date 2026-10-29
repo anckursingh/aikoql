@@ -143,7 +143,10 @@ class McpClient:
         # A server started with --tls-cert/--tls-key: the context's trust
         # anchors verify its certificate for `host` before the token is sent
         # (ssl.create_default_context() for public CAs, cafile= for a private
-        # one). Kept for the NOT_LEADER re-dial.
+        # one). Kept for the NOT_LEADER re-dial. Its floor is raised to TLS 1.2
+        # (never lowered): Python 3.9's default context can still allow 1.0/1.1.
+        if tls is not None and tls.minimum_version < ssl.TLSVersion.TLSv1_2:
+            tls.minimum_version = ssl.TLSVersion.TLSv1_2
         self.tls = tls
         self._sock: Optional[socket.socket] = None
         self._buf = b""
