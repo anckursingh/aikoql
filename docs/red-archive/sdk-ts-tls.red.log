@@ -1,0 +1,39 @@
+✖ MCP over TLS (138.263041ms)
+✖ an untrusted server is refused at the dial (108.472542ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 368.591667
+
+✖ failing tests:
+
+test at tests/tls.test.ts:60:1
+✖ MCP over TLS (138.263041ms)
+  Error [McpError]: [IO] connection closed by the server
+      at McpError.io (file:///Users/pukku/coding/aikoql/crates/sdk/typescript/src/error.ts:77:12)
+      at file:///Users/pukku/coding/aikoql/crates/sdk/typescript/src/client.ts:197:26 {
+    code: 'IO',
+    retryable: false,
+    suggestion: '',
+    leader: undefined
+  }
+
+test at tests/tls.test.ts:71:1
+✖ an untrusted server is refused at the dial (108.472542ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (file:///Users/pukku/coding/aikoql/crates/sdk/typescript/tests/tls.test.ts:73:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+EXIT=1

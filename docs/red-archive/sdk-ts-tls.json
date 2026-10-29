@@ -1,0 +1,8 @@
+{
+  "id": "sdk-ts-tls",
+  "pre_fix_commit": "HEAD",
+  "command": "env AIKOQL_MCP_BIN=/Users/pukku/coding/aikoql/target/debug/aikoql-mcp sh -c cd crates/sdk/typescript && node --test tests/tls.test.ts",
+  "captured_at": "2026-10-29T13:25:27Z",
+  "captured_head": "f0483a1c83a6d678a26968e0aadbbc97137fa3df",
+  "exit_code": 1
+}
