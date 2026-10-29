@@ -1,0 +1,8 @@
+{
+  "id": "oauth-persistence",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_oauth -- o007",
+  "captured_at": "2026-10-29T20:53:22Z",
+  "captured_head": "961998d01a6321e4da22487b5f2636d5104efb79",
+  "exit_code": 101
+}

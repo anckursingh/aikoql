@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/mcp_oauth.rs (target/debug/deps/mcp_oauth-a3bd16264d00672a)
+
+running 1 test
+test o007_a_sign_in_survives_a_restart ... FAILED
+
+failures:
+
+---- o007_a_sign_in_survives_a_restart stdout ----
+
+thread 'o007_a_sign_in_survives_a_restart' (2368662) panicked at crates/services/api/mcp/tests/mcp_oauth.rs:566:5:
+assertion `left == right` failed: the access token outlives the restart
+  left: 401
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    o007_a_sign_in_survives_a_restart
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 1.94s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_oauth`
+EXIT=101

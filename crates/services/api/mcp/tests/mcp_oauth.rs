@@ -59,6 +59,31 @@ fn serve(tag: &str) -> Server {
     let port = free_port();
     let db = std::env::temp_dir().join(format!("mcp-oauth-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&db);
+    spawn(db, port)
+}
+
+impl Server {
+    /// The same server again — same data directory, same port (tokens are
+    /// bound to the URL they were issued for).
+    fn restart(mut self) -> Server {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let (db, port) = (std::mem::take(&mut self.db), self.port);
+        std::mem::forget(self); // its Drop would remove the data directory
+                                // the old process must have released the port before the new one binds
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            assert!(
+                Instant::now() < deadline,
+                "the old server never released {port}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        spawn(db, port)
+    }
+}
+
+fn spawn(db: PathBuf, port: u16) -> Server {
     let child = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
         .arg("serve")
         .args(["--metrics-addr", &format!("127.0.0.1:{port}")])
@@ -512,5 +537,59 @@ fn o006_bad_tokens_are_401_and_static_tokens_still_work() {
         mcp_initialize(srv.port, "static-tok").status,
         200,
         "the --tcp-token tokens are unchanged"
+    );
+}
+
+/// A sign-in survives a restart: the grants live in the database (as the
+/// sign-ins of database-backed connectors do), so the access token still
+/// opens a session, the refresh token still rotates, and the registered
+/// client is still known — no new sign-in.
+#[test]
+fn o007_a_sign_in_survives_a_restart() {
+    let srv = serve("007");
+    let client = register(srv.port, &[CLAUDE_CALLBACK]);
+    let ok = authorize(&srv, &client, CLAUDE_CALLBACK, VERIFIER, "oauth-pw");
+    let t = exchange(
+        &srv,
+        &client,
+        CLAUDE_CALLBACK,
+        &code_of(ok.header("location").unwrap()),
+        VERIFIER,
+    )
+    .json();
+    let (access, refresh) = (
+        t["access_token"].as_str().unwrap().to_string(),
+        t["refresh_token"].as_str().unwrap().to_string(),
+    );
+
+    let srv = srv.restart();
+    assert_eq!(
+        mcp_initialize(srv.port, &access).status,
+        200,
+        "the access token outlives the restart"
+    );
+    let r = post_form(
+        srv.port,
+        "/oauth/token",
+        &[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", &refresh),
+            ("client_id", &client),
+        ],
+    );
+    assert_eq!(
+        r.status, 200,
+        "the refresh token outlives the restart: {}",
+        r.body
+    );
+    assert_eq!(
+        mcp_initialize(srv.port, r.json()["access_token"].as_str().unwrap()).status,
+        200
+    );
+    let again = authorize(&srv, &client, CLAUDE_CALLBACK, VERIFIER, "oauth-pw");
+    assert_eq!(
+        again.status, 302,
+        "the registered client is still known: {}",
+        again.body
     );
 }
