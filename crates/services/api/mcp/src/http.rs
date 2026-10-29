@@ -169,20 +169,6 @@ pub(crate) fn serve_metrics(
     }
 }
 
-/// Writes one /mcp reply (HTTP/1.0, closed after: the surface's shape).
-fn write_reply(stream: &mut impl Write, (status, extra, ct, body): crate::mcp_http::Reply) {
-    let mut resp = format!(
-        "HTTP/1.0 {status}\r\nContent-Type: {ct}\r\nContent-Length: {}\r\n",
-        body.len()
-    );
-    for (k, v) in extra {
-        resp.push_str(&format!("{k}: {v}\r\n"));
-    }
-    resp.push_str("\r\n");
-    resp.push_str(&body);
-    let _ = stream.write_all(resp.as_bytes());
-}
-
 /// The TLS handshake for one HTTPS connection, bounded so a silent peer
 /// cannot hold the thread; `None` (logged in debug) when it fails.
 fn https_accept(
@@ -967,7 +953,7 @@ pub(crate) fn handle_http(
     }
     // MCP over Streamable HTTP: its bodies are capped before they are read
     if route == "/mcp" && content_len.is_some_and(|cl| cl > crate::mcp_http::MAX_BODY) {
-        write_reply(
+        crate::mcp_http::write_reply(
             stream,
             (
                 "413 Payload Too Large",
@@ -995,6 +981,10 @@ pub(crate) fn handle_http(
     }
 
     if route == "/mcp" {
+        if let (Some(m), "GET") = (mcp, method) {
+            m.stream(hdr_part, stream); // the session's event stream, held open
+            return;
+        }
         let reply = match mcp {
             Some(m) => m.handle(method, hdr_part, &body_str, k, db_path, rate_limit, admin),
             None => (
@@ -1004,7 +994,7 @@ pub(crate) fn handle_http(
                 "MCP over HTTP needs --tcp-token (the bearer tokens it accepts)".to_string(),
             ),
         };
-        write_reply(stream, reply);
+        crate::mcp_http::write_reply(stream, reply);
         return;
     }
 

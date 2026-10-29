@@ -108,10 +108,11 @@ session (`Mcp-Session-Id`) that only that token can use. Off the host it
 follows the HTTP surface's rule — HTTPS (`--tls-cert/--tls-key`) plus
 `allow_remote_http` and a login — so the URL becomes `https://…/mcp`.
 Browser `Origin`s other than loopback are refused unless listed in
-`AIKOQL_MCP_ALLOWED_ORIGINS`. Not yet: server-initiated streams (`GET /mcp`
-is 405 — subscriptions stay on stdio/TCP) and OAuth (bearer tokens only, so
-an OAuth-only connector flow, e.g. some claude.ai connector setups, cannot
-attach yet).
+`AIKOQL_MCP_ALLOWED_ORIGINS`. `GET /mcp` opens the session's event stream:
+subscription events and a streamed query's later chunks arrive there (a
+newer GET takes the session over; `Last-Event-ID` resumes after a drop).
+Not yet: OAuth (bearer tokens only, so an OAuth-only connector flow, e.g.
+some claude.ai connector setups, cannot attach yet).
 
 ## First 10 minutes (validated flow)
 

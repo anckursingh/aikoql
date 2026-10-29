@@ -2,9 +2,9 @@
 //! MCP clients — claude.ai connectors, `claude mcp add --transport http` —
 //! speak. One JSON-RPC message per POST, answered as application/json;
 //! `initialize` opens a session (`Mcp-Session-Id`), every request carries
-//! `Authorization: Bearer <--tcp-token>`; DELETE ends the session; GET (a
-//! server-initiated stream) is 405. Foreign `Origin`s are refused (DNS
-//! rebinding), bodies are capped at 1 MiB.
+//! `Authorization: Bearer <--tcp-token>`; DELETE ends the session; GET is the
+//! session's event stream. Foreign `Origin`s are refused (DNS rebinding),
+//! bodies are capped at 1 MiB.
 
 use rustls::pki_types::{pem::PemObject, CertificateDer, ServerName};
 use serde_json::{json, Value as J};
@@ -355,11 +355,18 @@ fn h006_a_foreign_origin_is_refused() {
     assert_eq!(ok.status, 200, "a loopback origin is fine: {}", ok.body);
 }
 
+/// GET is the session's event stream (h012-h016): without a session it is
+/// 400; methods other than GET, POST and DELETE are 405.
 #[test]
-fn h007_get_is_method_not_allowed() {
+fn h007_get_needs_a_session_and_other_methods_are_not_allowed() {
     let srv = serve("007", &[]);
-    let r = request(srv.port, "GET", &[BEARER], "");
-    assert_eq!(r.status, 405);
+    assert_eq!(request(srv.port, "GET", &[BEARER], "").status, 400);
+    let put = request(srv.port, "PUT", &[BEARER], "");
+    assert_eq!(put.status, 405);
+    assert!(
+        put.header("allow").is_some_and(|a| a.contains("GET")),
+        "Allow names GET, POST, DELETE"
+    );
 }
 
 #[test]
@@ -659,18 +666,19 @@ fn h013_stream_query_chunks_arrive_on_the_get_stream() {
     assert_eq!(ev["params"]["done"], json!(true), "{ev}");
 }
 
-/// One stream per session; it needs a known session.
+/// One stream per session: a newer GET takes the session over and the
+/// older stream ends (a reconnecting client is never locked out by its own
+/// half-dead connection, which the server only notices on its next write);
+/// it needs a known session.
 #[test]
-fn h014_one_stream_per_known_session() {
+fn h014_a_newer_stream_supersedes_the_older_one() {
     let srv = serve("014", &[]);
     let sid = initialize(srv.port);
-    let _first = open_stream(srv.port, &sid, None);
-    std::thread::sleep(Duration::from_millis(200));
-    assert_eq!(
-        open_stream(srv.port, &sid, None).status,
-        409,
-        "a second stream on the session"
-    );
+    let mut first = open_stream(srv.port, &sid, None);
+    assert_eq!(first.status, 200);
+    let second = open_stream(srv.port, &sid, None);
+    assert_eq!(second.status, 200, "a newer stream opens");
+    assert!(first.next().is_none(), "and the older one ends");
     assert_eq!(
         open_stream(srv.port, "00ff00ff00ff00ff00ff00ff00ff00ff", None).status,
         404
