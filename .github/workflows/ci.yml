@@ -378,12 +378,11 @@ jobs:
 
   # MRFC-0080: the real-S3 legs (HA lease conditional writes, continuous
   # archive, PITR) against MinIO — locally `scripts/s3-it.sh` (brew install
-  # minio minio-mc). continue-on-error until its first pushed run is green
-  # (the images are not pinned to a verified tag yet); then flip it to a gate.
+  # minio minio-mc). A gate: MinIO built from pinned commits (below), green
+  # on every pushed run since.
   s3-compat:
     name: Real S3 legs (MinIO)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -402,8 +401,7 @@ jobs:
         run: PATH="$PATH:$(go env GOPATH)/bin" bash scripts/s3-it.sh
 
   # MRFC-0080: the same real-S3 certs against Moto — an independent S3
-  # implementation, pinned and Docker-free, so this one gates (MinIO above
-  # stays advisory until its from-source job has run green).
+  # implementation, pinned and Docker-free — a second, independent gate.
   s3-compat-moto:
     name: Real S3 legs (Moto)
     runs-on: ubuntu-latest
@@ -423,11 +421,10 @@ jobs:
 
   # MRFC-0080: the Kubernetes Lease store against a real kube-apiserver —
   # envtest's apiserver + etcd binaries, no cluster (scripts/k8s-it.sh).
-  # continue-on-error until its first pushed run is green, then a gate.
+  # A gate: setup-envtest and the apiserver version are both pinned.
   k8s-lease:
     name: Kubernetes lease (envtest apiserver)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -436,7 +433,7 @@ jobs:
         with:
           go-version: stable
       - name: envtest binaries
-        run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+        run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2
       - name: Real-apiserver tests
         env:
           ENVTEST_K8S_VERSION: 1.37.0

@@ -799,9 +799,9 @@ RELEASE.2025-10-15T17-29-55Z and Moto 5.2.5 (`S3_IT_BACKEND=moto`, or
 `"minio moto"` for both). A signed probe confirms Moto enforces the
 conditional writes (412 on a repeated `If-None-Match: *` and on a stale
 `If-Match`), so it is a valid lease target — an emulator that ignored
-them would fail the lease cert. CI: `s3-compat-moto` (pinned, no Docker)
-gates; `s3-compat` (MinIO containers) is `continue-on-error` until its
-images are pinned.
+them would fail the lease cert. CI: both gate — `s3-compat-moto`
+(pinned, no Docker) and `s3-compat` (MinIO built from pinned commits: its
+images and binaries are no longer published).
 
 **AWS:** the virtual-hosted request targets AWS uses are pinned by unit
 tests (`s3.rs`), and the same certs run on AWS itself with
@@ -855,8 +855,8 @@ unless `AIKOQL_TEST_K8S_API` / `_TOKEN` / `_CA` are set):
 
 `AIKOQL_K8S_SA_DIR` points the in-cluster path at a token + `ca.crt`
 outside a pod (default: the pod mount). Green on kube-apiserver v1.37.0
-(`ENVTEST_K8S_VERSION` pins it). CI: `k8s-lease`, `continue-on-error`
-until its first pushed run is green. Not covered: a real cluster's pod
+(`ENVTEST_K8S_VERSION` pins it). CI: `k8s-lease` gates (setup-envtest
+pinned to v0.25.2). Not covered: a real cluster's pod
 (service-account projection, RBAC scoped to `leases` — the certs run as
 `system:masters`). RED: `k8s-lease-e2e`.
 

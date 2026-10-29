@@ -6,7 +6,7 @@
 # sets them.
 #
 #   scripts/k8s-it.sh        needs `setup-envtest` (go install
-#                            sigs.k8s.io/controller-runtime/tools/setup-envtest@latest)
+#                            sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2)
 #                            or KUBEBUILDER_ASSETS pointing at the binaries;
 #                            ENVTEST_K8S_VERSION=1.37.0 pins the apiserver
 #
@@ -33,7 +33,7 @@ trap stop EXIT
 
 if [ -z "${KUBEBUILDER_ASSETS:-}" ]; then
   command -v setup-envtest >/dev/null ||
-    { echo "k8s-it: setup-envtest not on PATH (go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest)" >&2; exit 2; }
+    { echo "k8s-it: setup-envtest not on PATH (go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2)" >&2; exit 2; }
   # ENVTEST_K8S_VERSION pins the apiserver (e.g. 1.37.0); default: latest
   KUBEBUILDER_ASSETS="$(setup-envtest use ${ENVTEST_K8S_VERSION:-} -p path --bin-dir "${ENVTEST_BIN_DIR:-$HOME/.cache/aikoql-envtest}")"
 fi
