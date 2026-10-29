@@ -99,6 +99,19 @@ export function streamNotify(frame: Record<string, unknown>, streamId: string): 
   return p;
 }
 
+/** One wire line as a JSON object, or undefined for noise: not JSON, or
+ * JSON that is not an object (null, a number, a string, an array) — never
+ * a response, never a notify. */
+function parseFrame(line: string): Record<string, unknown> | undefined {
+  let v: unknown;
+  try {
+    v = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+}
+
 /**
  * One MCP JSON-RPC connection to an aikoql-mcp server. One in-flight call
  * per connection (a stream holds the connection for its whole life); calls
@@ -202,12 +215,8 @@ export class Client {
           this.closed = true;
           throw McpError.io("connection closed by the server");
         }
-        let resp: Record<string, unknown>;
-        try {
-          resp = JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          continue; // tolerate non-JSON noise frames
-        }
+        const resp = parseFrame(line);
+        if (resp === undefined) continue; // non-JSON or non-object noise
         const rid = resp["id"] ?? 0;
         if (typeof rid !== "number") continue; // not our numeric correlation
         switch (classifyID(id, rid)) {
@@ -379,12 +388,8 @@ export class Client {
           this.closed = true;
           throw McpError.io("connection closed by the server");
         }
-        let resp: Record<string, unknown>;
-        try {
-          resp = JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          continue;
-        }
+        const resp = parseFrame(line);
+        if (resp === undefined) continue; // non-JSON or non-object noise
         const rid = resp["id"] ?? 0;
         if (typeof rid === "number" && rid === id) {
           if (resp["error"] !== undefined) {
