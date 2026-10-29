@@ -13,12 +13,13 @@ use crate::fuzz::{
     decode_notify, decode_response, map_native_error, parse_version, version_less, RpcResponse,
 };
 use aikoql_native as nat;
+use rustls::pki_types::{pem::PemObject, CertificateDer, ServerName};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tokio_stream::wrappers::ReceiverStream;
@@ -28,6 +29,86 @@ use tokio_stream::wrappers::ReceiverStream;
 pub const MIN_SERVER_VERSION: &str = "0.2.4";
 
 const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A connection's byte stream: plain TCP, or TLS over it.
+trait Conn: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Conn for T {}
+type Io = BufReader<Box<dyn Conn>>;
+
+/// The trust anchors for a server started with `--tls-cert/--tls-key`.
+#[derive(Clone)]
+pub struct Tls(Arc<rustls::ClientConfig>);
+
+impl std::fmt::Debug for Tls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tls").finish_non_exhaustive()
+    }
+}
+
+impl Tls {
+    /// Trusts exactly the CA certificates in `ca_pem` — a private CA, or a
+    /// self-signed server certificate.
+    pub fn with_ca(ca_pem: &[u8]) -> Result<Tls, Error> {
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in CertificateDer::pem_slice_iter(ca_pem) {
+            roots.add(cert.map_err(tls_err)?).map_err(tls_err)?;
+        }
+        if roots.is_empty() {
+            return Err(tls_err("no CA certificate in the PEM"));
+        }
+        Ok(Self::with_roots(roots))
+    }
+
+    /// Trusts the public web PKI (Mozilla's roots) — a server with a
+    /// publicly issued certificate.
+    pub fn public() -> Tls {
+        Self::with_roots(rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        })
+    }
+
+    fn with_roots(roots: rustls::RootCertStore) -> Tls {
+        let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("ring supports the default protocol versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        Tls(Arc::new(cfg))
+    }
+}
+
+fn tls_err(e: impl std::fmt::Display) -> Error {
+    Error::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("tls: {e}"),
+    ))
+}
+
+/// Dials `addr` ("host:port"); with `tls`, the handshake verifies the
+/// server's certificate for that host (an IP or a DNS name).
+async fn open(addr: &str, tls: Option<&Tls>) -> Result<Io, Error> {
+    let stream = tokio::time::timeout(DIAL_TIMEOUT, TcpStream::connect(addr))
+        .await
+        .map_err(|_| McpError::deadline())?
+        .map_err(Error::Io)?;
+    let conn: Box<dyn Conn> = match tls {
+        None => Box::new(stream),
+        Some(t) => {
+            let host = addr.rsplit_once(':').map_or(addr, |(h, _)| h);
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            let name = ServerName::try_from(host.to_string()).map_err(tls_err)?;
+            let connector = tokio_rustls::TlsConnector::from(t.0.clone());
+            let s = tokio::time::timeout(DIAL_TIMEOUT, connector.connect(name, stream))
+                .await
+                .map_err(|_| McpError::deadline())?
+                .map_err(Error::Io)?;
+            Box::new(s)
+        }
+    };
+    Ok(BufReader::new(conn))
+}
 
 #[derive(Serialize)]
 struct RpcRequest {
@@ -46,7 +127,7 @@ struct ClientConfig {
 }
 
 struct Inner {
-    io: Mutex<Option<BufReader<TcpStream>>>,
+    io: Mutex<Option<Io>>,
     next_id: AtomicU64,
     closed: AtomicBool,
     /// Set once by connect_native — every call after that speaks §6 frames.
@@ -54,6 +135,8 @@ struct Inner {
     cfg: std::sync::Mutex<ClientConfig>,
     /// The TCP address dialed — moved by a NOT_LEADER leader hint.
     addr: std::sync::Mutex<String>,
+    /// The trust a leader hint is dialed with too (None: plaintext).
+    tls: Option<Tls>,
 }
 
 /// One MCP JSON-RPC connection to an aikoql-mcp server. Clone shares the
@@ -75,13 +158,21 @@ impl Client {
     /// (initialize) so a pooled client can dial first and authenticate
     /// later; every aikoql-mcp TCP server requires the token.
     pub async fn dial(addr: &str) -> Result<Client, Error> {
-        let stream = tokio::time::timeout(DIAL_TIMEOUT, TcpStream::connect(addr))
-            .await
-            .map_err(|_| McpError::deadline())?
-            .map_err(Error::Io)?;
+        Self::dial_with(addr, None).await
+    }
+
+    /// `dial` over TLS, for a server started with `--tls-cert/--tls-key`:
+    /// the certificate is verified against `tls` for the host in `addr`
+    /// before the token is ever sent.
+    pub async fn dial_tls(addr: &str, tls: &Tls) -> Result<Client, Error> {
+        Self::dial_with(addr, Some(tls.clone())).await
+    }
+
+    async fn dial_with(addr: &str, tls: Option<Tls>) -> Result<Client, Error> {
+        let io = open(addr, tls.as_ref()).await?;
         Ok(Client {
             inner: Arc::new(Inner {
-                io: Mutex::new(Some(BufReader::new(stream))),
+                io: Mutex::new(Some(io)),
                 next_id: AtomicU64::new(0),
                 closed: AtomicBool::new(false),
                 native: AtomicBool::new(false),
@@ -91,6 +182,7 @@ impl Client {
                     version: env!("CARGO_PKG_VERSION").into(),
                 }),
                 addr: std::sync::Mutex::new(addr.to_string()),
+                tls,
             }),
         })
     }
@@ -101,7 +193,16 @@ impl Client {
     /// token still arrives at initialize (the AUTH frame) — the API surface
     /// is exactly dial + initialize, only the transport differs.
     pub async fn connect_native(addr: &str) -> Result<Client, Error> {
-        let client = Self::dial(addr).await?;
+        Self::connect_native_with(addr, None).await
+    }
+
+    /// `connect_native` over TLS (see `dial_tls`).
+    pub async fn connect_native_tls(addr: &str, tls: &Tls) -> Result<Client, Error> {
+        Self::connect_native_with(addr, Some(tls.clone())).await
+    }
+
+    async fn connect_native_with(addr: &str, tls: Option<Tls>) -> Result<Client, Error> {
+        let client = Self::dial_with(addr, tls).await?;
         let (name, version) = {
             let cfg = client.inner.cfg.lock().unwrap();
             (cfg.name.clone(), cfg.version.clone())
@@ -413,11 +514,8 @@ impl Client {
     /// Replaces the connection with one to the leader at `addr` and
     /// re-runs the handshake.
     async fn follow(&self, addr: &str) -> Result<(), Error> {
-        let stream = tokio::time::timeout(DIAL_TIMEOUT, TcpStream::connect(addr))
-            .await
-            .map_err(|_| McpError::deadline())?
-            .map_err(Error::Io)?;
-        *self.inner.io.lock().await = Some(BufReader::new(stream));
+        let io = open(addr, self.inner.tls.as_ref()).await?;
+        *self.inner.io.lock().await = Some(io);
         *self.inner.addr.lock().unwrap() = addr.to_string();
         self.initialize().await
     }
@@ -526,7 +624,7 @@ impl Client {
 
 /// Writes one native request frame — header, payload, checksum (§6).
 async fn native_send(
-    io: &mut BufReader<TcpStream>,
+    io: &mut Io,
     request_id: u64,
     msg_type: u16,
     payload: &[u8],
@@ -564,7 +662,7 @@ async fn native_send(
 /// A well-formed frame without the response flag is skipped (the §6 wire
 /// has no notification class; MCP parity — CI-16's "call() skips
 /// non-response frames").
-async fn native_recv(io: &mut BufReader<TcpStream>) -> Result<(u16, u64, Vec<u8>), Error> {
+async fn native_recv(io: &mut Io) -> Result<(u16, u64, Vec<u8>), Error> {
     loop {
         let mut header = [0u8; nat::HEADER_LEN];
         io.read_exact(&mut header).await.map_err(|e| {
