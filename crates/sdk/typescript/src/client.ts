@@ -10,6 +10,7 @@
 // transport changes).
 
 import { randomBytes } from "node:crypto";
+import type { ConnectionOptions } from "node:tls";
 import { readFileSync } from "node:fs";
 import { McpError } from "./error.ts";
 import { TcpTransport, type Transport } from "./tcp.ts";
@@ -116,18 +117,23 @@ export class Client {
   // The TCP address dialed (undefined for other transports) — moved by a
   // NOT_LEADER leader hint (MRFC-0080 R5b).
   private addr: string | undefined;
+  // The TLS options a leader hint is re-dialed with too (none: plaintext).
+  private tls: ConnectionOptions | undefined;
 
-  private constructor(transport: Transport, addr?: string) {
+  private constructor(transport: Transport, addr?: string, tlsOptions?: ConnectionOptions) {
     this.transport = transport;
     this.addr = addr;
+    this.tls = tlsOptions;
   }
 
   /** Opens a TCP connection ("host:port"). The handshake is separate
    * (initialize) so a pooled client can dial first and authenticate later;
-   * every aikoql-mcp TCP server requires the token. */
-  static async dial(addr: string): Promise<Client> {
-    const transport = await TcpTransport.connect(addr, DIAL_TIMEOUT_MS);
-    return new Client(transport, addr);
+   * every aikoql-mcp TCP server requires the token. `opts.tls` (Node's
+   * tls.ConnectionOptions — e.g. `{ ca }` for a private CA; `{}` for the
+   * system roots) dials a server started with --tls-cert/--tls-key. */
+  static async dial(addr: string, opts: { tls?: ConnectionOptions } = {}): Promise<Client> {
+    const transport = await TcpTransport.connect(addr, DIAL_TIMEOUT_MS, opts.tls);
+    return new Client(transport, addr, opts.tls);
   }
 
   /** Sends the --tcp-token credential in the initialize handshake
@@ -270,7 +276,7 @@ export class Client {
   /** Replaces the connection with one to the leader at `addr` and
    * re-runs the handshake. */
   private async follow(addr: string, signal?: AbortSignal): Promise<void> {
-    const next = await TcpTransport.connect(addr, DIAL_TIMEOUT_MS);
+    const next = await TcpTransport.connect(addr, DIAL_TIMEOUT_MS, this.tls);
     await this.withLock(async () => {
       this.transport.close();
       this.transport = next;
