@@ -1118,3 +1118,21 @@ fn s07_rest_query_aligns_with_mcp_for_stored_unregistered_types() {
     let _ = std::fs::remove_dir_all(&db);
     let _ = std::fs::remove_file(format!("{db}.audit.log"));
 }
+
+/// The HTTP surface's query/form decoding: percent-escapes are bytes, the
+/// result is UTF-8 — a multi-byte character decodes whole, an escape at
+/// the very end decodes, and a '%' followed by a multi-byte character is
+/// kept literally (a str slice there used to panic the handler thread).
+#[test]
+fn url_decode_handles_utf8_a_trailing_escape_and_never_panics() {
+    assert_eq!(crate::http::url_decode("caf%C3%A9"), "café");
+    assert_eq!(crate::http::url_decode("pw%21"), "pw!");
+    assert_eq!(crate::http::url_decode("x+y"), "x y");
+    assert_eq!(crate::http::url_decode("100%"), "100%");
+    let r = std::panic::catch_unwind(|| crate::http::url_decode("%é1"));
+    assert_eq!(
+        r.ok().as_deref(),
+        Some("%é1"),
+        "no panic on '%' before a multi-byte character"
+    );
+}
