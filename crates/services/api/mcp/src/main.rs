@@ -144,7 +144,20 @@ pub(crate) fn model_store_dir(flag: Option<&str>) -> std::path::PathBuf {
     }
 }
 
-pub(crate) const PROTOCOL_VERSION: &str = "2024-11-05";
+/// The MCP versions this server speaks, oldest → newest: initialize echoes
+/// a supported requested version and answers anything else with the newest
+/// (the MCP negotiation rule).
+pub(crate) const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] =
+    ["2024-11-05", "2025-03-26", "2025-06-18"];
+pub(crate) const PROTOCOL_VERSION: &str = SUPPORTED_PROTOCOL_VERSIONS[2];
+
+/// The version initialize answers for a client that `requested` one.
+pub(crate) fn negotiate_protocol(requested: Option<&str>) -> &'static str {
+    requested
+        .and_then(|r| SUPPORTED_PROTOCOL_VERSIONS.iter().find(|v| **v == r))
+        .copied()
+        .unwrap_or(PROTOCOL_VERSION)
+}
 
 // main() is the orchestrator: CLI dispatch + server bootstrap. Everything
 // else lives in the modules above (R7).

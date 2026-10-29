@@ -25,6 +25,10 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   (`AIKOQL_MCP_ALLOWED_ORIGINS` to extend it), 1 MiB bodies; HTTPS with
   `--tls-cert`. For remote MCP clients (`claude mcp add --transport http`).
   Not yet: `GET /mcp` streams (405) and OAuth.
+- **MCP protocol version negotiation**: `initialize` answers the client's
+  requested version when supported (2024-11-05, 2025-03-26, 2025-06-18),
+  else the newest; it used to answer 2024-11-05 to everyone. Over HTTP an
+  unsupported `MCP-Protocol-Version` header is 400.
 - **Docker publishes over TLS**: with a mounted certificate and
   `AIKOQL_TLS_CERT` / `AIKOQL_TLS_KEY`, the image listens on 0.0.0.0:9090
   (`-p 9090:9090` works); 9091 too when armed with

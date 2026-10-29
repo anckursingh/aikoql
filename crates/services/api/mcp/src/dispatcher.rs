@@ -6,7 +6,7 @@ use crate::session::*;
 use crate::tools::*;
 use crate::{
     error, info_span, json, warn, Arc, EventFilter, EventKind, HashSet, Kernel, Mutex, Ordering,
-    Write, J, KOID, PROTOCOL_VERSION,
+    Write, J, KOID,
 };
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -95,7 +95,11 @@ pub(crate) fn handle_message(
                         "jsonrpc": "2.0",
                         "id": id,
                         "result": {
-                            "protocolVersion": PROTOCOL_VERSION,
+                            "protocolVersion": crate::negotiate_protocol(
+                                msg.get("params")
+                                    .and_then(|p| p.get("protocolVersion"))
+                                    .and_then(|v| v.as_str()),
+                            ),
                             "capabilities": {"tools": {}},
                             "serverInfo": {"name": "aikoql-mcp", "version": env!("CARGO_PKG_VERSION")}
                         }

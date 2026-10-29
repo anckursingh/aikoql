@@ -106,6 +106,12 @@ impl McpHttp {
             return unauthorized("invalid token");
         };
         let sid = header(headers, "mcp-session-id").map(str::to_string);
+        // 2025-06-18: requests after initialize name the negotiated version
+        if let Some(v) = header(headers, "mcp-protocol-version") {
+            if !crate::SUPPORTED_PROTOCOL_VERSIONS.contains(&v) {
+                return plain("400 Bad Request", "unsupported MCP-Protocol-Version");
+            }
+        }
 
         if method == "DELETE" {
             let Some(sid) = sid else {
