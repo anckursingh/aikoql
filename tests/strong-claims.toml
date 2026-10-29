@@ -557,7 +557,7 @@ evidence = "m42_batch_sweep_cells"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/batch_sweep.rs"
-line = 181
+line = 191
 text = "// R4-P2-02 — allocations scale no worse than O(B) (the regression"
 evidence = "m42_batch_sweep_cells"
 
