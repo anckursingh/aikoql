@@ -41,6 +41,14 @@ fn tmp_db(suffix: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// tmp_db hands every call its own path. A shared one (the per-server
+/// "ctx-model" store every Mcp::start asked for) was deleted under a
+/// running server whenever another test's thread exited and swept it.
+#[test]
+fn tmp_db_paths_are_unique_per_call() {
+    assert_ne!(tmp_db("unique-pin"), tmp_db("unique-pin"));
+}
+
 /// The local model store for F13's end-to-end pin: `AIKOQL_TEST_MODEL_DIR`
 /// wins, else the platform default (~/.aikoql/models). Returns the models
 /// ROOT (the serve joins the model slug itself) when all-MiniLM-L6-v2 is

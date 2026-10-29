@@ -1,0 +1,8 @@
+{
+  "id": "mcp-real-world-tmp",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -q -p aikoql-mcp --test mcp_real_world -- tmp_db_paths",
+  "captured_at": "2026-10-29T15:05:58Z",
+  "captured_head": "6f44be0625f6f58ac478544e66cdd61769ff2c8b",
+  "exit_code": 101
+}
