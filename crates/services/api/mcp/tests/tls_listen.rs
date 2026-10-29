@@ -28,12 +28,24 @@ fn fixture(name: &str) -> String {
         .into_owned()
 }
 
+/// A free port, never the same one twice in this process: the tests run in
+/// parallel and each server binds its port only after the probe released
+/// it, so two probes handed one port would point one test at the other's
+/// server (a TLS client at a plaintext one).
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    loop {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut given = GIVEN.lock().unwrap();
+        if !given.contains(&port) {
+            given.push(port);
+            return port;
+        }
+    }
 }
 
 fn tmp(name: &str) -> PathBuf {
@@ -428,5 +440,54 @@ fn tls009_remote_plaintext_http_refused() {
         err.contains("--tls-cert"),
         "the refusal names the fix: {err}"
     );
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+/// The same drain with an idle PLAINTEXT MCP connection open — the Windows
+/// leg of tls007: a blocked read on a duplicated handle is not woken by the
+/// drain's socket close there, only by the read-timeout wake.
+#[test]
+fn tls010_shutdown_drains_an_open_plain_connection() {
+    let (db, port) = (tmp("010"), free_port());
+    let listen = format!("127.0.0.1:{port}");
+    let mut srv = serve(&db, &["--listen", &listen], &[]);
+    let mut idle = connect(port);
+    writeln!(
+        idle,
+        "{}",
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+               "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "token": "tls-tok",
+                          "clientInfo": {"name": "idle", "version": "0"}}})
+    )
+    .unwrap();
+    let mut line = String::new();
+    BufReader::new(idle.try_clone().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert!(line.contains("\"result\""), "idle initialize: {line}");
+    let mut s = connect(port);
+    writeln!(
+        s,
+        "{}",
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "token": "tls-tok",
+                   "clientInfo": {"name": "s", "version": "0"}}})
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "{}",
+        json!({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": {}})
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while srv.0.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the drain stalled on an open plaintext connection"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    drop(idle);
     let _ = std::fs::remove_dir_all(&db);
 }
