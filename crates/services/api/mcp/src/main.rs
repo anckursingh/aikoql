@@ -27,6 +27,7 @@ mod http;
 mod imports;
 mod ingest;
 mod knowledge_runtime;
+mod mcp_http;
 mod model;
 mod native;
 mod protocol;
@@ -704,6 +705,16 @@ fn main() {
             http_auth.clone(),
             admin.clone(),
             client_tls.clone(),
+            // MCP over Streamable HTTP on the same surface: bearer = --tcp-token
+            TcpAuthTable::parse(&tcp_tokens)
+                .ok()
+                .filter(|_| !tcp_tokens.is_empty())
+                .map(|t| {
+                    Arc::new(mcp_http::McpHttp::new(
+                        Arc::new(t),
+                        cfg.request_timeout_secs,
+                    ))
+                }),
         );
     }
 

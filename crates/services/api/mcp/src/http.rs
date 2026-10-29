@@ -105,6 +105,7 @@ pub(crate) fn serve_metrics(
     auth: Arc<AuthResolver>,
     admin: Option<Arc<dyn aikoql_storage_v2::engine::StorageAdminApi>>,
     tls: Option<Arc<rustls::ServerConfig>>,
+    mcp: Option<Arc<crate::mcp_http::McpHttp>>,
 ) {
     let listener = match TcpListener::bind(addr) {
         Ok(l) => l,
@@ -125,13 +126,34 @@ pub(crate) fn serve_metrics(
                 let auth = auth.clone();
                 let admin = admin.clone();
                 let tls = tls.clone();
+                let mcp = mcp.clone();
                 std::thread::spawn(move || match tls {
-                    None => handle_http(&mut s, &k, &sess, &db, &ont, &rl, &auth, admin.as_deref()),
+                    None => handle_http(
+                        &mut s,
+                        &k,
+                        &sess,
+                        &db,
+                        &ont,
+                        &rl,
+                        &auth,
+                        admin.as_deref(),
+                        mcp.as_deref(),
+                    ),
                     Some(cfg) => {
                         let Some(mut t) = https_accept(s, cfg) else {
                             return;
                         };
-                        handle_http(&mut t, &k, &sess, &db, &ont, &rl, &auth, admin.as_deref());
+                        handle_http(
+                            &mut t,
+                            &k,
+                            &sess,
+                            &db,
+                            &ont,
+                            &rl,
+                            &auth,
+                            admin.as_deref(),
+                            mcp.as_deref(),
+                        );
                         t.conn.send_close_notify();
                         let _ = t.flush();
                     }
@@ -145,6 +167,20 @@ pub(crate) fn serve_metrics(
             }
         }
     }
+}
+
+/// Writes one /mcp reply (HTTP/1.0, closed after: the surface's shape).
+fn write_reply(stream: &mut impl Write, (status, extra, ct, body): crate::mcp_http::Reply) {
+    let mut resp = format!(
+        "HTTP/1.0 {status}\r\nContent-Type: {ct}\r\nContent-Length: {}\r\n",
+        body.len()
+    );
+    for (k, v) in extra {
+        resp.push_str(&format!("{k}: {v}\r\n"));
+    }
+    resp.push_str("\r\n");
+    resp.push_str(&body);
+    let _ = stream.write_all(resp.as_bytes());
 }
 
 /// The TLS handshake for one HTTPS connection, bounded so a silent peer
@@ -900,6 +936,7 @@ pub(crate) fn handle_http(
     rate_limit: &Mutex<crate::rate_limiter::RateLimiter>,
     auth: &AuthResolver,
     admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+    mcp: Option<&crate::mcp_http::McpHttp>,
 ) {
     // ponytail: 64 KB buffer fits all practical HTTP requests. Browsers send
     // ~2-8 KB of headers; single read captures the full request.
@@ -928,6 +965,22 @@ pub(crate) fn handle_http(
             content_len = line.split(':').nth(1).and_then(|s| s.trim().parse().ok());
         }
     }
+    // MCP over Streamable HTTP: its bodies are capped before they are read
+    if route == "/mcp" && content_len.is_some_and(|cl| cl > crate::mcp_http::MAX_BODY) {
+        write_reply(
+            stream,
+            (
+                "413 Payload Too Large",
+                vec![],
+                "text/plain; charset=utf-8",
+                format!(
+                    "an MCP request is at most {} bytes",
+                    crate::mcp_http::MAX_BODY
+                ),
+            ),
+        );
+        return;
+    }
     if let Some(cl) = content_len {
         while body_str.len() < cl {
             let needed = cl - body_str.len();
@@ -939,6 +992,20 @@ pub(crate) fn handle_http(
                 Err(_) => break,
             }
         }
+    }
+
+    if route == "/mcp" {
+        let reply = match mcp {
+            Some(m) => m.handle(method, hdr_part, &body_str, k, db_path, rate_limit, admin),
+            None => (
+                "401 Unauthorized",
+                vec![("WWW-Authenticate", "Bearer".to_string())],
+                "text/plain; charset=utf-8",
+                "MCP over HTTP needs --tcp-token (the bearer tokens it accepts)".to_string(),
+            ),
+        };
+        write_reply(stream, reply);
+        return;
     }
 
     // Extract token from query string or Authorization header.
@@ -1231,11 +1298,12 @@ pub(crate) fn spawn_metrics(
     auth: Arc<AuthResolver>,
     admin: Option<Arc<dyn aikoql_storage_v2::engine::StorageAdminApi>>,
     tls: Option<Arc<rustls::ServerConfig>>,
+    mcp: Option<Arc<crate::mcp_http::McpHttp>>,
 ) {
-    info!(addr = %addr, https = tls.is_some(), "metrics HTTP server started");
+    info!(addr = %addr, https = tls.is_some(), mcp_http = mcp.is_some(), "metrics HTTP server started");
     thread::spawn(move || {
         serve_metrics(
-            kernel, ontology, &addr, &db_path, rate_limit, auth, admin, tls,
+            kernel, ontology, &addr, &db_path, rate_limit, auth, admin, tls, mcp,
         )
     });
 }
