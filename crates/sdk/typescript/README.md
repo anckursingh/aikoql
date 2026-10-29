@@ -5,7 +5,9 @@ The first-party TypeScript client for the [aikoql](https://github.com/anckursing
 ```ts
 import { Client } from "@aikoql/client";
 
-const client = await Client.dial("127.0.0.1:9090", { token: "s3cret" });
+const client = (await Client.dial("127.0.0.1:9090")).withToken("s3cret");
+// a server started with --tls-cert/--tls-key ({} for a public CA):
+// await Client.dial("db.internal:9090", { tls: { ca: readFileSync("ca.pem") } })
 const agent = await client.agent();
 await agent.remember("person", { name: "ada" });
 for await (const row of client.queryStream("MATCH person RETURN *")) { /* ... */ }

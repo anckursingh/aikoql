@@ -5,6 +5,37 @@ Format: <https://keepachangelog.com/>-inspired, but terser. This file starts
 at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 (`git log v0.1.0..v0.1.19`).
 
+## [Unreleased]
+
+### Added
+
+- **TLS on every client-facing listener**: `--tls-cert/--tls-key` (or
+  `AIKOQL_TLS_CERT` / `AIKOQL_TLS_KEY`) put TLS on `--listen`,
+  `--native-port` and the HTTP surface (`--metrics-addr`, served as
+  HTTPS). With TLS a client listener may bind any interface; without it
+  plaintext stays loopback-only.
+- **TLS in all five SDKs**: Rust `Client::dial_tls` / `connect_native_tls`
+  with `Tls::with_ca` / `Tls::public`, Python `McpClient(tls=SSLContext)`,
+  Go `WithTLS(*tls.Config)`, TypeScript `Client.dial(addr, { tls })`, Java
+  `AikoqlClient.dial(addr, SSLContext)` — the server's certificate is
+  verified before the token is sent; a NOT_LEADER re-dial keeps TLS.
+- **Docker publishes over TLS**: with a mounted certificate and
+  `AIKOQL_TLS_CERT` / `AIKOQL_TLS_KEY`, the image listens on 0.0.0.0:9090
+  (`-p 9090:9090` works); 9091 too when armed with
+  `AIKOQL_ALLOW_REMOTE_HTTP` and a login.
+
+### Changed
+
+- **Breaking — remote HTTP needs TLS**: a non-loopback `--metrics-addr`
+  with `allow_remote_http = true` and credentials used to serve logins and
+  session tokens in plaintext; it is now refused (exit 2) unless
+  `--tls-cert/--tls-key` are set. Loopback HTTP is unchanged.
+- **Docker**: the database lives at `/data/aikoql` (was the redb-era name
+  `/data/aikoql.redb`; a volume from an image up to 0.2.3 is renamed once,
+  in place, on first start) and agent memory at `/data/memory`
+  (`AIKOQL_MEMORY_DIR`; it used to live outside the volume and was lost on
+  recreate).
+
 ## [0.2.1] — 2026-10-03 (SDK wave + fuzz hardening)
 
 The five-language SDK wave and the Layer B fuzz estate. No storage-format

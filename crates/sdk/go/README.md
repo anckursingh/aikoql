@@ -7,6 +7,9 @@ import "github.com/anckursingh/aikoql/crates/sdk/go"
 
 client, err := aikoql.Dial(ctx, "127.0.0.1:9090", aikoql.WithToken("s3cret"))
 defer client.Close()
+// a server started with --tls-cert/--tls-key (nil RootCAs: the system roots):
+// aikoql.Dial(ctx, "db.internal:9090", aikoql.WithToken("s3cret"),
+//     aikoql.WithTLS(&tls.Config{RootCAs: pool}))
 ```
 
 `DialStdio` spawns and talks to an `aikoql-mcp` binary directly (the docker `-i` contract). The [web-service example](examples/web-service) is the "other application" proof: an HTTP API on top of one pooled client.

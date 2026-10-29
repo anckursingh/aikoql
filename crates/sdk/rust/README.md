@@ -5,11 +5,13 @@ The reference implementation of the canonical Database API for [aikoql](https://
 ```rust
 use aikoql_sdk::Client;
 
-let mut client = Client::dial("127.0.0.1:9090").await?;
-client.with_token("s3cret");
+let client = Client::dial("127.0.0.1:9090").await?.with_token("s3cret");
 client.initialize().await?;
 // native transport (--native-port):
 let native = Client::connect_native("127.0.0.1:9091").await?;
+// a server started with --tls-cert/--tls-key (Tls::public() for a public CA):
+let tls = aikoql_sdk::Tls::with_ca(&std::fs::read("ca.pem")?)?;
+let secure = Client::dial_tls("db.internal:9090", &tls).await?.with_token("s3cret");
 ```
 
 - Embedded: `aikoql_sdk::Kernel::open("kb")` — the same opener the server uses

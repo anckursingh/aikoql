@@ -107,13 +107,12 @@ docker run -d --name aikoql \
 
 `AIKOQL_TCP_TOKEN` is required — TCP auth is fail-closed
 (`TOKEN[:TENANT[:ROLES]]`). State lives under the `/data` volume (the
-`aikoql-v2` database directory, models in `/data/models`); the memory
-directory defaults to `./memory` (`/memory` in the image). Tags: `0.2.4`
-(pin this), `0.2`, `latest`.
+`aikoql-v2` database directory, models in `/data/models`, agent memory in
+`/data/memory`). Tags: `0.2.4` (pin this), `0.2`, `latest`.
 
-The server binds loopback-only inside the container (plaintext bearer tokens
-never leave the host), so published ports don't reach it — probe and use it
-from inside:
+Without TLS the server binds loopback-only inside the container (plaintext
+bearer tokens never leave it), so published ports don't reach it — probe and
+use it from inside:
 
 ```bash
 docker exec aikoql curl -fsS http://127.0.0.1:9091/health
@@ -121,9 +120,28 @@ docker exec aikoql aikoql --version
 docker exec aikoql aikoql model install --model-dir /data/models   # optional: offline embeddings
 ```
 
-For MCP over TCP from another process, share the container's network
-namespace (`docker run --rm --network container:aikoql ...`); for MCP stdio
-from the host, use the npm binary instead. A compose file
+With a certificate the image publishes its MCP port like any database image —
+mount it and set `AIKOQL_TLS_CERT` / `AIKOQL_TLS_KEY`:
+
+```bash
+docker run -d --name aikoql -p 9090:9090 \
+  -v /path/to/certs:/certs:ro \
+  -e AIKOQL_TLS_CERT=/certs/server.pem -e AIKOQL_TLS_KEY=/certs/server.key \
+  -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
+  -v aikoql_data:/data \
+  ghcr.io/anckursingh/aikoql:0.2.4
+```
+
+Clients connect over TLS (Rust `Client::dial_tls`, Python `tls=`, Go
+`WithTLS`, TypeScript `{ tls }`, Java `dial(addr, sslContext)`); the
+certificate must name the host they dial. The HTTP port (9091 — login, query
+API, Studio, `/health`) serves HTTPS with the same certificate and is
+published only when armed too: `-p 9091:9091 -e AIKOQL_ALLOW_REMOTE_HTTP=1
+-e AIKOQL_ADMIN_PASSWORD=…`.
+
+Without TLS, for MCP over TCP from another process, share the container's
+network namespace (`docker run --rm --network container:aikoql ...`); for MCP
+stdio from the host, use the npm binary instead. A compose file
 (`docker-compose.release.yml`) exists for production deploys.
 
 ### Verify

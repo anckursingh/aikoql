@@ -7,6 +7,9 @@ from aikoql import McpClient, Pool
 
 client = McpClient("127.0.0.1", 9090, token="s3cret")
 client.connect()
+# a server started with --tls-cert/--tls-key (omit cafile= for a public CA):
+# McpClient("db.internal", 9090, token="s3cret",
+#           tls=ssl.create_default_context(cafile="ca.pem"))
 agent = client.agent()
 agent.remember("person", {"name": "ada"})
 print(agent.query("MATCH person RETURN *"))
