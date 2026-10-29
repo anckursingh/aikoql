@@ -201,7 +201,12 @@ class McpClient:
                 text = line.decode("utf-8").strip()
                 if not text:
                     continue
-                return json.loads(text)
+                frame = json.loads(text)
+                if not isinstance(frame, dict):
+                    # valid JSON but not an object (a number, string, array,
+                    # null): malformed — never a response, never a notify
+                    continue
+                return frame
             chunk = self._sock.recv(4096)
             if not chunk:
                 # EOF: the server (or the fault proxy) closed — latch so a
