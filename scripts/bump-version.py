@@ -48,6 +48,7 @@ PINNED = [
     ("website/index.html", 1),
     ("website/docs/getting-started.md", 1),
     ("QUICKSTART.md", 1),
+    ("AGENTIC-QUICKSTART.md", 4),  # the Docker tag + three npx pins
     ("docker-compose.release.yml", 1),
 ]
 

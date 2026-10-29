@@ -1,0 +1,8 @@
+{
+  "id": "bump-agentic-quickstart",
+  "pre_fix_commit": "HEAD",
+  "command": "python3 scripts/bump-version.py --check",
+  "captured_at": "2026-10-29T14:32:59Z",
+  "captured_head": "37738cda4e35b8f17237422dfb866ceef4ca8eec",
+  "exit_code": 1
+}

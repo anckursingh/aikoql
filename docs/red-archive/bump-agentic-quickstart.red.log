@@ -1,0 +1,3 @@
+drifted: AGENTIC-QUICKSTART.md carries 0 of 4+ pins of 0.2.4
+1 pin drift(s) - run bump-version.py 0.2.4 after fixing the source
+EXIT=1
