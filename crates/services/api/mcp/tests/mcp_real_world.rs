@@ -35,7 +35,11 @@ impl Drop for TempSweeper {
 }
 
 fn tmp_db(suffix: &str) -> String {
-    let p = std::env::temp_dir().join(format!("mcp-{suffix}-{}", std::process::id()));
+    // a per-call counter: tests run in parallel threads of one process, and
+    // a shared path is swept by whichever test's thread exits first
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let p = std::env::temp_dir().join(format!("mcp-{suffix}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
     p.to_string_lossy().into_owned()
