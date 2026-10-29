@@ -99,6 +99,13 @@ pub(crate) fn handle_tcp_client(
         .map(|a| a.to_string())
         // justified: log-only cosmetic — unknown peer on failure
         .unwrap_or_default();
+    // D-20 (sv013, as the native listener): the read timeout is the
+    // shutdown wake — on Windows the drain's shutdown() on the registered
+    // clone does not wake a read blocked on another handle (a plain recv or
+    // the TLS reader's peek), so without it an idle connection stalls the
+    // drain for its whole deadline. Set before the split: every clone shares
+    // it, and a TLS handshake restores it after its own bound.
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
     // the drain's handle on the raw socket (closing it wakes a TLS reader too)
     let reg_stream = stream.try_clone();
     let (read_half, mut write_half) = match crate::tls::split(stream, tls.as_ref()) {
@@ -157,6 +164,19 @@ pub(crate) fn handle_tcp_client(
         loop {
             let available = match reader.fill_buf() {
                 Ok(a) => a,
+                // the 200 ms wake: stop for the drain, else keep waiting (a
+                // partial line stays in line_buf)
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    if SHUTDOWN_FLAG.load(Ordering::Relaxed) {
+                        break 'conn;
+                    }
+                    continue;
+                }
                 Err(_) => break 'conn,
             };
             if available.is_empty() {
