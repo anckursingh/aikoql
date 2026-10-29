@@ -30,9 +30,10 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   `[auth]` logins the server is its own authorization server (RFC 9728 /
   8414 discovery from /mcp's 401, RFC 7591 registration of public clients,
   authorization code + S256 PKCE behind a login/consent page, rotating
-  refresh tokens, audience-bound opaque tokens). Tokens are in memory (a
-  restart signs everyone out); `AIKOQL_PUBLIC_URL` sets the advertised URL
-  behind a proxy.
+  refresh tokens, audience-bound opaque tokens). Sign-ins persist in the
+  database (SHA-256-keyed under reserved `sys/oauth/` keys: restarts,
+  failovers, encryption and backups included; a removed login is revoked);
+  `AIKOQL_PUBLIC_URL` sets the advertised URL behind a proxy.
 - **MCP protocol version negotiation**: `initialize` answers the client's
   requested version when supported (2024-11-05, 2025-03-26, 2025-06-18),
   else the newest; it used to answer 2024-11-05 to everyone. Over HTTP an

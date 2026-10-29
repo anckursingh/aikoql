@@ -120,9 +120,11 @@ Claude add a custom connector with the URL `https://your-host/mcp`. Claude
 registers itself (dynamic client registration), sends you to aikoql's sign-in
 page, and connects as that login (its roles). Claude Code can use the same
 flow (`claude mcp add --transport http aikoql https://your-host/mcp`), or a
-static token as above. Limits: tokens live in memory, so a server restart
-means signing in again; client ID metadata documents (CIMD) are not offered,
-so Claude uses registration.
+static token as above. Sign-ins persist in the knowledge base itself
+(hashed, under reserved keys): they survive restarts and HA failovers, and
+are encrypted and backed up with the data; removing a login revokes its
+sign-ins. Limit: client ID metadata documents (CIMD) are not offered, so
+Claude uses registration.
 
 ## First 10 minutes (validated flow)
 
