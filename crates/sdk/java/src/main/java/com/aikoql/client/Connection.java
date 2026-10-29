@@ -43,8 +43,12 @@ public final class Connection implements AutoCloseable {
     private String name = "aikoql-java";
     private String version = AikoqlClient.VERSION;
 
-    Connection(String addr) {
-        this.transport = Transport.connect(addr, AikoqlClient.DIAL_TIMEOUT_MS);
+    /** The TLS a leader hint is re-dialed with too (null: plaintext). */
+    private final javax.net.ssl.SSLContext tls;
+
+    Connection(String addr, javax.net.ssl.SSLContext tls) {
+        this.tls = tls;
+        this.transport = Transport.connect(addr, AikoqlClient.DIAL_TIMEOUT_MS, tls);
     }
 
     /** Sends the --tcp-token credential in the initialize handshake
@@ -236,7 +240,7 @@ public final class Connection implements AutoCloseable {
     /** Replaces the transport with one to the leader at {@code addr} and
      * re-runs the handshake. */
     private void follow(String addr, Deadline dl) throws AikoqlException {
-        Transport next = Transport.connect(addr, AikoqlClient.DIAL_TIMEOUT_MS);
+        Transport next = Transport.connect(addr, AikoqlClient.DIAL_TIMEOUT_MS, tls);
         lock.lock();
         try {
             transport.close();

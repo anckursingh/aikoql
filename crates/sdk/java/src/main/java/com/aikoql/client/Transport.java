@@ -9,6 +9,9 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Queue;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
 
 // Newline-framed TCP transport with one waiting reader: the session
 // serializes calls, so at most one readLine is pending at a time; a line
@@ -35,7 +38,13 @@ final class Transport implements AutoCloseable {
     private AikoqlException pendingErr;
     private Deadline registeredDl;
 
-    static Transport connect(String addr, int timeoutMs) {
+    /** Connects; with {@code tls} (a server started with --tls-cert/--tls-key)
+     * the handshake verifies the certificate for the host (HTTPS endpoint
+     * identification: a DNS name or an IP against the SAN), bounded by the
+     * dial timeout, before the transport exists — the token is never sent
+     * to an unverified peer. SSLSocket allows the reader thread and a
+     * writer at once, so the transport is otherwise unchanged. */
+    static Transport connect(String addr, int timeoutMs, SSLContext tls) {
         int colon = addr.lastIndexOf(':');
         if (colon <= 0) throw AikoqlException.invalidArgument("addr must be host:port, got " + addr);
         int port;
@@ -44,9 +53,20 @@ final class Transport implements AutoCloseable {
         } catch (NumberFormatException e) {
             throw AikoqlException.invalidArgument("addr must be host:port, got " + addr);
         }
+        String host = addr.substring(0, colon);
         Socket s = new Socket();
         try {
-            s.connect(new InetSocketAddress(addr.substring(0, colon), port), timeoutMs);
+            s.connect(new InetSocketAddress(host, port), timeoutMs);
+            if (tls != null) {
+                SSLSocket t = (SSLSocket) tls.getSocketFactory().createSocket(s, host, port, true);
+                s = t;
+                SSLParameters p = t.getSSLParameters();
+                p.setEndpointIdentificationAlgorithm("HTTPS");
+                t.setSSLParameters(p);
+                t.setSoTimeout(timeoutMs);
+                t.startHandshake();
+                t.setSoTimeout(0);
+            }
             return new Transport(s);
         } catch (IOException e) {
             try {

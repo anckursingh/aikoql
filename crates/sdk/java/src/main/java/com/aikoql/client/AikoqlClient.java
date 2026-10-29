@@ -46,7 +46,16 @@ public final class AikoqlClient {
      * (initialize) so a caller can dial first and authenticate later;
      * every aikoql-mcp TCP server requires the token. */
     public static Connection dial(String addr) {
-        return new Connection(addr);
+        return new Connection(addr, null);
+    }
+
+    /** {@link #dial(String)} over TLS, for a server started with
+     * --tls-cert/--tls-key: the server's certificate is verified with
+     * {@code tls}'s trust managers for the host in {@code addr} before the
+     * token is ever sent ({@code SSLContext.getDefault()} trusts the JDK's
+     * CAs; a context initialized with a private CA trusts that CA). */
+    public static Connection dial(String addr, javax.net.ssl.SSLContext tls) {
+        return new Connection(addr, tls);
     }
 
     /** Runs fn under a response deadline: elapsed → the frozen retryable
