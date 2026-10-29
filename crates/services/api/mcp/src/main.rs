@@ -30,6 +30,7 @@ mod knowledge_runtime;
 mod mcp_http;
 mod model;
 mod native;
+mod oauth;
 mod protocol;
 mod rate_limiter;
 mod replication;
@@ -718,16 +719,23 @@ fn main() {
             http_auth.clone(),
             admin.clone(),
             client_tls.clone(),
-            // MCP over Streamable HTTP on the same surface: bearer = --tcp-token
-            TcpAuthTable::parse(&tcp_tokens)
-                .ok()
-                .filter(|_| !tcp_tokens.is_empty())
-                .map(|t| {
-                    Arc::new(mcp_http::McpHttp::new(
-                        Arc::new(t),
-                        cfg.request_timeout_secs,
-                    ))
-                }),
+            // MCP over Streamable HTTP on the same surface: bearer = a
+            // --tcp-token, or an OAuth access token when [auth] logins exist
+            {
+                let oauth = http_auth
+                    .is_configured()
+                    .then(|| Arc::new(oauth::OAuth::new(http_auth.clone(), client_tls.is_some())));
+                TcpAuthTable::parse(&tcp_tokens)
+                    .ok()
+                    .filter(|_| !tcp_tokens.is_empty() || oauth.is_some())
+                    .map(|t| {
+                        Arc::new(mcp_http::McpHttp::new(
+                            Arc::new(t),
+                            oauth,
+                            cfg.request_timeout_secs,
+                        ))
+                    })
+            },
         );
     }
 

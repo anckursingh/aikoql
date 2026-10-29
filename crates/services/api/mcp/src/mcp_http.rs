@@ -9,7 +9,7 @@
 //! the token that opened it. DELETE ends a session (and its stream).
 
 use crate::dispatcher::handle_message;
-use crate::session::{McpSession, TcpAuthTable, TcpIdentity, TrustMode};
+use crate::session::{McpSession, TcpAuthTable, TrustMode};
 use crate::tools::TxnRegistry;
 use crate::{json, Arc, HashMap, HashSet, Kernel, Mutex, J};
 use aikoql_storage_v2::engine::StorageAdminApi;
@@ -99,8 +99,18 @@ impl Write for OutWriter {
     }
 }
 
+/// Who a request is from: a static --tcp-token, or an OAuth access token.
+struct Caller {
+    /// what a session is bound to (the token itself, or the OAuth grant's
+    /// client + user — stable across refreshed access tokens)
+    principal: String,
+    agent: String,
+    tenant: Option<String>,
+    roles: Vec<String>,
+}
+
 struct HttpSession {
-    /// the token that opened it — the only one that may use it
+    /// the principal that opened it — the only one that may use it
     token: String,
     session: McpSession,
     sub_ids: HashSet<String>,
@@ -124,6 +134,8 @@ impl HttpSession {
 /// The endpoint's state: the token table and the live sessions.
 pub(crate) struct McpHttp {
     auth: Arc<TcpAuthTable>,
+    /// the built-in OAuth authorization server, when logins are configured
+    oauth: Option<Arc<crate::oauth::OAuth>>,
     sessions: Mutex<HashMap<String, Arc<Mutex<HttpSession>>>>,
     streams: AtomicUsize,
     request_timeout_secs: u64,
@@ -140,7 +152,11 @@ pub(crate) type Reply = (
 );
 
 impl McpHttp {
-    pub(crate) fn new(auth: Arc<TcpAuthTable>, request_timeout_secs: u64) -> Self {
+    pub(crate) fn new(
+        auth: Arc<TcpAuthTable>,
+        oauth: Option<Arc<crate::oauth::OAuth>>,
+        request_timeout_secs: u64,
+    ) -> Self {
         let allowed_origins = std::env::var("AIKOQL_MCP_ALLOWED_ORIGINS")
             .unwrap_or_default()
             .split(',')
@@ -149,6 +165,7 @@ impl McpHttp {
             .collect();
         McpHttp {
             auth,
+            oauth,
             sessions: Mutex::new(HashMap::new()),
             streams: AtomicUsize::new(0),
             request_timeout_secs,
@@ -156,9 +173,14 @@ impl McpHttp {
         }
     }
 
+    /// The built-in OAuth authorization server, when logins are configured.
+    pub(crate) fn oauth(&self) -> Option<&crate::oauth::OAuth> {
+        self.oauth.as_deref()
+    }
+
     /// The checks every /mcp request passes: Origin, bearer token, and the
     /// MCP-Protocol-Version header when present.
-    fn admit<'h>(&self, headers: &'h str) -> Result<(&'h str, &TcpIdentity), Reply> {
+    fn admit(&self, headers: &str) -> Result<Caller, Reply> {
         if let Some(origin) = header(headers, "origin") {
             if !self.origin_allowed(origin) {
                 return Err(plain("403 Forbidden", "origin not allowed"));
@@ -171,19 +193,47 @@ impl McpHttp {
             })
             .map(str::trim)
             .ok_or_else(|| {
-                unauthorized("an Authorization: Bearer <--tcp-token> header is required")
+                self.unauthorized(headers, "an Authorization: Bearer token is required")
             })?;
-        let ident = self
-            .auth
-            .lookup(token)
-            .ok_or_else(|| unauthorized("invalid token"))?;
+        let caller = match self.auth.lookup(token) {
+            Some(ident) => Caller {
+                principal: token.to_string(),
+                agent: "http-agent".into(),
+                tenant: ident.tenant.clone(),
+                roles: ident.roles.clone(),
+            },
+            None => {
+                let oauth = self.oauth.as_ref().and_then(|o| o.validate(token, headers));
+                let Some(id) = oauth else {
+                    return Err(self.unauthorized(headers, "invalid or expired token"));
+                };
+                Caller {
+                    principal: id.principal,
+                    agent: format!("oauth:{}", id.user),
+                    tenant: None,
+                    roles: id.roles,
+                }
+            }
+        };
         // 2025-06-18: requests after initialize name the negotiated version
         if let Some(v) = header(headers, "mcp-protocol-version") {
             if !crate::SUPPORTED_PROTOCOL_VERSIONS.contains(&v) {
                 return Err(plain("400 Bad Request", "unsupported MCP-Protocol-Version"));
             }
         }
-        Ok((token, ident))
+        Ok(caller)
+    }
+
+    /// A 401: with OAuth on, it points at the protected resource metadata
+    /// (the MCP authorization spec; Claude starts sign-in from it).
+    fn unauthorized(&self, headers: &str, msg: &str) -> Reply {
+        let mut r = plain("401 Unauthorized", msg);
+        let challenge = match &self.oauth {
+            Some(o) => o.challenge(headers),
+            None => "Bearer".into(),
+        };
+        r.1.push(("WWW-Authenticate", challenge));
+        r
     }
 
     /// The session named in the headers, if it is `token`'s.
@@ -223,10 +273,11 @@ impl McpHttp {
             r.1.push(("Allow", "GET, POST, DELETE".into()));
             return r;
         }
-        let (token, ident) = match self.admit(headers) {
+        let caller = match self.admit(headers) {
             Ok(a) => a,
             Err(r) => return r,
         };
+        let token = caller.principal.as_str();
 
         if method == "DELETE" {
             let (sid, entry) = match self.owned(headers, token) {
@@ -263,9 +314,9 @@ impl McpHttp {
                 );
             }
             let session = McpSession {
-                agent_id: "http-agent".into(),
-                tenant: ident.tenant.clone(),
-                roles: ident.roles.clone(),
+                agent_id: caller.agent.clone(),
+                tenant: caller.tenant.clone(),
+                roles: caller.roles.clone(),
                 trust_mode: TrustMode::Tcp,
                 ..Default::default()
             };
@@ -328,10 +379,11 @@ impl McpHttp {
     /// newer GET supersedes it, or the session ends. With Last-Event-ID the
     /// events sent after that one are sent again first.
     pub(crate) fn stream(&self, headers: &str, w: &mut impl Write) {
-        let (token, _) = match self.admit(headers) {
+        let caller = match self.admit(headers) {
             Ok(a) => a,
             Err(r) => return write_reply(w, r),
         };
+        let token = caller.principal.as_str();
         let (sid, entry) = match self.owned(headers, token) {
             Ok(o) => o,
             Err(r) => return write_reply(w, r),
@@ -493,12 +545,6 @@ fn plain(status: &'static str, msg: &str) -> Reply {
     (status, vec![], "text/plain; charset=utf-8", msg.to_string())
 }
 
-fn unauthorized(msg: &str) -> Reply {
-    let mut r = plain("401 Unauthorized", msg);
-    r.1.push(("WWW-Authenticate", "Bearer".into()));
-    r
-}
-
 fn rpc_error(id: &J, code: i64, msg: &str) -> Reply {
     let body = json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": msg}});
     (
@@ -517,6 +563,7 @@ mod tests {
     fn origins() {
         let m = McpHttp::new(
             Arc::new(TcpAuthTable::parse(&["t::admin".into()]).unwrap()),
+            None,
             30,
         );
         for ok in [

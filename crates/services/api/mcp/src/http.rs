@@ -951,8 +951,11 @@ pub(crate) fn handle_http(
             content_len = line.split(':').nth(1).and_then(|s| s.trim().parse().ok());
         }
     }
-    // MCP over Streamable HTTP: its bodies are capped before they are read
-    if route == "/mcp" && content_len.is_some_and(|cl| cl > crate::mcp_http::MAX_BODY) {
+    // MCP over Streamable HTTP and its OAuth endpoints: bodies are capped
+    // before they are read
+    if (route == "/mcp" || route.starts_with("/oauth/"))
+        && content_len.is_some_and(|cl| cl > crate::mcp_http::MAX_BODY)
+    {
         crate::mcp_http::write_reply(
             stream,
             (
@@ -980,6 +983,14 @@ pub(crate) fn handle_http(
         }
     }
 
+    // the OAuth authorization server (discovery, registration, sign-in, tokens)
+    if let Some(o) = mcp.and_then(|m| m.oauth()) {
+        if let Some(reply) = o.route(method, route, path, hdr_part, &body_str) {
+            crate::mcp_http::write_reply(stream, reply);
+            return;
+        }
+    }
+
     if route == "/mcp" {
         if let (Some(m), "GET") = (mcp, method) {
             m.stream(hdr_part, stream); // the session's event stream, held open
@@ -991,7 +1002,7 @@ pub(crate) fn handle_http(
                 "401 Unauthorized",
                 vec![("WWW-Authenticate", "Bearer".to_string())],
                 "text/plain; charset=utf-8",
-                "MCP over HTTP needs --tcp-token (the bearer tokens it accepts)".to_string(),
+                "MCP over HTTP needs --tcp-token or [auth] logins (OAuth)".to_string(),
             ),
         };
         crate::mcp_http::write_reply(stream, reply);
