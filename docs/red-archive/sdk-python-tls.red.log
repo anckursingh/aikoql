@@ -1,0 +1,76 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+______________________________ test_mcp_over_tls _______________________________
+
+tls_server = 50076
+
+    def test_mcp_over_tls(tls_server):
+>       c = McpClient("127.0.0.1", tls_server, token="py-tls", tls=_trust("ca.pem")).connect()
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: McpClient.__init__() got an unexpected keyword argument 'tls'
+
+crates/sdk/python/tests/test_tls.py:57: TypeError
+_________________________ test_agent_connect_over_tls __________________________
+
+tls_server = 50079
+
+    def test_agent_connect_over_tls(tls_server):
+>       agent = Agent.connect(("127.0.0.1", tls_server), token="py-tls", tls=_trust("ca.pem"))
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+crates/sdk/python/tests/test_tls.py:68: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+crates/sdk/python/python/aikoql/agent.py:46: in connect
+    agent._backend.initialize(
+crates/sdk/python/python/aikoql/mcp_client.py:305: in initialize
+    result = self._rpc("initialize", params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+crates/sdk/python/python/aikoql/mcp_client.py:226: in _rpc
+    resp = self._recv_response(self._next_id, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+crates/sdk/python/python/aikoql/mcp_client.py:260: in _recv_response
+    frame = self._recv()
+            ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <aikoql.mcp_client.McpClient object at 0x106b7f8c0>
+
+    def _recv(self) -> dict:
+        while True:
+            # Check if we already have a full line in buffer.
+            if b"\n" in self._buf:
+                line, self._buf = self._buf.split(b"\n", 1)
+                text = line.decode("utf-8").strip()
+                if not text:
+                    continue
+                return json.loads(text)
+            chunk = self._sock.recv(4096)
+            if not chunk:
+                # EOF: the server (or the fault proxy) closed — latch so a
+                # later call fails fast instead of reading a dead socket.
+                self._dead = True
+>               raise McpError(
+                    code="UNAVAILABLE",
+                    message="the server closed the connection",
+                    suggestion="Connect again.",
+                )
+E               aikoql.mcp_client.McpError: [UNAVAILABLE] the server closed the connection
+
+crates/sdk/python/python/aikoql/mcp_client.py:193: McpError
+_____________________ test_an_untrusted_server_is_refused ______________________
+
+tls_server = 50083
+
+    def test_an_untrusted_server_is_refused(tls_server):
+        with pytest.raises(ssl.SSLError):
+>           McpClient("127.0.0.1", tls_server, token="py-tls", tls=_trust("other-ca.pem")).connect()
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: McpClient.__init__() got an unexpected keyword argument 'tls'
+
+crates/sdk/python/tests/test_tls.py:74: TypeError
+=========================== short test summary info ============================
+FAILED crates/sdk/python/tests/test_tls.py::test_mcp_over_tls - TypeError: Mc...
+FAILED crates/sdk/python/tests/test_tls.py::test_agent_connect_over_tls - aik...
+FAILED crates/sdk/python/tests/test_tls.py::test_an_untrusted_server_is_refused
+3 failed in 0.46s
+EXIT=1
