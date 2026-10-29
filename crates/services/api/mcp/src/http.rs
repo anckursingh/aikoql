@@ -814,26 +814,33 @@ pub(crate) fn parse_query_param(path: &str, key: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Percent-decoding over bytes ('+' is a space), then UTF-8 (lossy):
+/// a multi-byte character decodes whole, an escape at the very end
+/// decodes, and an invalid escape is kept as written. The hex digits are
+/// read as bytes — a str slice there could split a character and panic.
 pub(crate) fn url_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
-    let bytes = s.as_bytes();
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(hex) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(hex as char);
-                i += 3;
-                continue;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => {
+                let hex = |c: u8| (c as char).to_digit(16);
+                match (hex(b[i + 1]), hex(b[i + 2])) {
+                    (Some(h), Some(l)) => {
+                        out.push((h * 16 + l) as u8);
+                        i += 3;
+                        continue;
+                    }
+                    _ => out.push(b'%'),
+                }
             }
-        }
-        if bytes[i] == b'+' {
-            out.push(' ');
-        } else {
-            out.push(bytes[i] as char);
+            c => out.push(c),
         }
         i += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 // ---------------------------------------------------------------------------

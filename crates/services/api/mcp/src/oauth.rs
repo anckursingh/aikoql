@@ -570,37 +570,9 @@ pub(crate) fn parse_form(s: &str) -> HashMap<String, String> {
         .filter(|p| !p.is_empty())
         .map(|p| {
             let (k, v) = p.split_once('=').unwrap_or((p, ""));
-            (pct_decode(k), pct_decode(v))
+            (crate::http::url_decode(k), crate::http::url_decode(v))
         })
         .collect()
-}
-
-/// Percent-decoding over bytes ('+' is a space), then UTF-8.
-fn pct_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'+' => out.push(b' '),
-            // the hex digits read from bytes: a str slice could split a
-            // multi-byte character and panic
-            b'%' if i + 2 < b.len() => {
-                let hex = |c: u8| (c as char).to_digit(16);
-                match (hex(b[i + 1]), hex(b[i + 2])) {
-                    (Some(h), Some(l)) => {
-                        out.push((h * 16 + l) as u8);
-                        i += 3;
-                        continue;
-                    }
-                    _ => out.push(b'%'),
-                }
-            }
-            c => out.push(c),
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn esc(s: &str) -> String {
