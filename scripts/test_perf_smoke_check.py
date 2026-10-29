@@ -56,5 +56,30 @@ class WriteCellTest(unittest.TestCase):
         self.assertIn("machine sync (ref)", str(e.exception))
 
 
+# The write_per_sync measured where the gate runs — Windows CI runners,
+# run 40937044377 (1effc8c), attempts 1-3: 1.36, 1.35 (westus), 1.20 (eastus).
+# (macOS measured 1.00-1.04: a Windows commit costs ~0.3 syncs more.)
+WINDOWS_SAMPLES = (1.36, 1.35, 1.20)
+
+
+class CommittedBaselineTest(unittest.TestCase):
+    def setUp(self):
+        import json
+
+        base = json.loads((HERE.parent / psc.BASE).read_text(encoding="utf-8"))
+        self.cells = base["cells"]
+
+    def test_the_measured_windows_spread_keeps_its_headroom(self):
+        # the noise must sit well inside the budget, not at its edge
+        for per_sync in WINDOWS_SAMPLES:
+            ratio = psc.check_write(rows(per_sync * 1e6, 1e6), self.cells)
+            self.assertLess(ratio, 0.8 * psc.SYNC_BOUND, f"sample {per_sync}")
+
+    def test_one_extra_sync_over_the_windows_median_fails(self):
+        median = sorted(WINDOWS_SAMPLES)[1]
+        with self.assertRaises(psc.PerfFail):
+            psc.check_write(rows((median + 1.0) * 1e6, 1e6), self.cells)
+
+
 if __name__ == "__main__":
     unittest.main()

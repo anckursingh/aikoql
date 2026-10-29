@@ -1,0 +1,8 @@
+{
+  "id": "perf-windows-baseline",
+  "pre_fix_commit": "HEAD",
+  "command": "python3 scripts/test_perf_smoke_check.py",
+  "captured_at": "2026-10-29T19:41:48Z",
+  "captured_head": "1effc8c1540e1fc086f718b9511b90109440b7da",
+  "exit_code": 1
+}

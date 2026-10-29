@@ -1,0 +1,19 @@
+.F....
+======================================================================
+FAIL: test_the_measured_windows_spread_keeps_its_headroom (__main__.CommittedBaselineTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/pukku/coding/aikoql/scripts/test_perf_smoke_check.py", line 76, in test_the_measured_windows_spread_keeps_its_headroom
+    self.assertLess(ratio, 0.8 * psc.SYNC_BOUND, f"sample {per_sync}")
+AssertionError: 1.3465346534653466 not less than 1.2000000000000002 : sample 1.36
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.001s
+
+FAILED (failures=1)
+write_per_sync: 2350000 ns / 1000000 ns sync = 2.35 vs baseline 1.01 = 2.33x (bound 1.5x)
+write_per_sync: 1360000 ns / 1000000 ns sync = 1.36 vs baseline 1.01 = 1.35x (bound 1.5x)
+write_per_sync: 7218326 ns / 7000000 ns sync = 1.03 vs baseline 1.00 = 1.03x (bound 1.5x)
+write_per_sync: 6000000 ns / 3000000 ns sync = 2.00 vs baseline 1.00 = 2.00x (bound 1.5x)
+write_per_sync: 3150651 ns / 3026125 ns sync = 1.04 vs baseline 1.00 = 1.04x (bound 1.5x)
+EXIT=1
