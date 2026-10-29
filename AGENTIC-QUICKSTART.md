@@ -111,8 +111,18 @@ Browser `Origin`s other than loopback are refused unless listed in
 `AIKOQL_MCP_ALLOWED_ORIGINS`. `GET /mcp` opens the session's event stream:
 subscription events and a streamed query's later chunks arrive there (a
 newer GET takes the session over; `Last-Event-ID` resumes after a drop).
-Not yet: OAuth (bearer tokens only, so an OAuth-only connector flow, e.g.
-some claude.ai connector setups, cannot attach yet).
+**As a claude.ai connector** (claude.ai, Desktop, mobile — the OAuth sign-in):
+with `[auth]` logins configured (`AIKOQL_ADMIN_PASSWORD`, or `[auth].users`
+with `aikoql hash-password`), the server is its own OAuth 2.1 authorization
+server. Serve it on a public HTTPS URL (`--tls-cert/--tls-key`,
+`allow_remote_http = true`; behind a proxy set `AIKOQL_PUBLIC_URL`), then in
+Claude add a custom connector with the URL `https://your-host/mcp`. Claude
+registers itself (dynamic client registration), sends you to aikoql's sign-in
+page, and connects as that login (its roles). Claude Code can use the same
+flow (`claude mcp add --transport http aikoql https://your-host/mcp`), or a
+static token as above. Limits: tokens live in memory, so a server restart
+means signing in again; client ID metadata documents (CIMD) are not offered,
+so Claude uses registration.
 
 ## First 10 minutes (validated flow)
 
