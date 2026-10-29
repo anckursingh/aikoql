@@ -1,0 +1,19 @@
+✖ a frame that is JSON but not an object is skipped (3.580167ms)
+ℹ Error: Test "a frame that is JSON but not an object is skipped" at tests/wire.test.ts:197:1 generated asynchronous activity after the test ended. This activity created the error "Error: read ECONNRESET" and would have caused the test to fail, but instead triggered an uncaughtException event.
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 122.267125
+
+✖ failing tests:
+
+test at tests/wire.test.ts:197:1
+✖ a frame that is JSON but not an object is skipped (3.580167ms)
+  TypeError [Error]: Cannot read properties of null (reading 'id')
+      at file:///Users/pukku/coding/aikoql/crates/sdk/typescript/src/client.ts:211:25
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+EXIT=1
