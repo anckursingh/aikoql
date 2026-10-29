@@ -1,0 +1,8 @@
+{
+  "id": "mcp-protocol-negotiation",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -q -p aikoql-mcp --test mcp_http -- h010 h011",
+  "captured_at": "2026-10-29T20:27:10Z",
+  "captured_head": "5cf3110fa7e406b6ec6742f233ee60a0cffeb983",
+  "exit_code": 101
+}

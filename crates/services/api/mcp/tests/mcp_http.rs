@@ -444,3 +444,69 @@ fn h009_the_endpoint_serves_over_https() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(r.header("mcp-session-id").is_some());
 }
+
+fn negotiated(port: u16, requested: &str) -> String {
+    let r = request(
+        port,
+        "POST",
+        &[BEARER],
+        &rpc(
+            1,
+            "initialize",
+            json!({"protocolVersion": requested, "capabilities": {}}),
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    r.json()["result"]["protocolVersion"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// The MCP version negotiation (the dispatcher's, shared by every
+/// transport): a supported version is answered as requested; anything else
+/// gets the newest supported one — the server no longer answers 2024-11-05
+/// (which predates Streamable HTTP) to a client asking for a newer version.
+#[test]
+fn h010_initialize_negotiates_the_protocol_version() {
+    let srv = serve("010", &[]);
+    for v in ["2024-11-05", "2025-03-26", "2025-06-18"] {
+        assert_eq!(negotiated(srv.port, v), v, "a supported version is echoed");
+    }
+    assert_eq!(
+        negotiated(srv.port, "2099-01-01"),
+        "2025-06-18",
+        "an unknown one gets the newest supported"
+    );
+}
+
+/// 2025-06-18: after initialize, an HTTP request carries
+/// MCP-Protocol-Version; an unsupported value is 400.
+#[test]
+fn h011_an_unsupported_protocol_version_header_is_refused() {
+    let srv = serve("011", &[]);
+    let sid = initialize(srv.port);
+    let list = rpc(2, "tools/list", json!({}));
+    let ok = request(
+        srv.port,
+        "POST",
+        &[
+            BEARER,
+            ("Mcp-Session-Id", &sid),
+            ("MCP-Protocol-Version", "2025-06-18"),
+        ],
+        &list,
+    );
+    assert_eq!(ok.status, 200, "{}", ok.body);
+    let bad = request(
+        srv.port,
+        "POST",
+        &[
+            BEARER,
+            ("Mcp-Session-Id", &sid),
+            ("MCP-Protocol-Version", "1999-01-01"),
+        ],
+        &list,
+    );
+    assert_eq!(bad.status, 400, "{}", bad.body);
+}
