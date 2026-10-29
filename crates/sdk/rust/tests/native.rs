@@ -242,10 +242,28 @@ impl Drop for NativeServer {
     }
 }
 
+/// A free port, never the same one twice in this process: tests run in
+/// parallel and each server binds only after the probe released its port,
+/// so two probes handed one port would point one test at the other's
+/// server — "connection refused" once that test's server is gone.
+fn free_port() -> u16 {
+    static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    loop {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .expect("probe port")
+            .local_addr()
+            .expect("probe addr")
+            .port();
+        let mut given = GIVEN.lock().unwrap();
+        if !given.contains(&port) {
+            given.push(port);
+            return port;
+        }
+    }
+}
+
 fn spawn_native(bin: &str, token: &str) -> NativeServer {
-    let probe = TcpListener::bind("127.0.0.1:0").expect("probe port");
-    let port = probe.local_addr().expect("probe addr").port();
-    drop(probe);
+    let port = free_port();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
