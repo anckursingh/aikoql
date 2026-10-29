@@ -1,0 +1,104 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/mcp_http.rs (target/debug/deps/mcp_http-13ac7a836db1d791)
+
+running 9 tests
+test h004_delete_ends_the_session ... FAILED
+test h008_bodies_are_read_whole_up_to_the_cap ... FAILED
+test h005_notifications_are_accepted_without_a_body ... FAILED
+test h003_sessions_are_required_known_and_bound_to_their_token ... FAILED
+test h001_initialize_then_tools_round_trip_in_a_session ... FAILED
+test h007_get_is_method_not_allowed ... FAILED
+test h002_the_bearer_token_is_required_on_every_request ... FAILED
+test h009_the_endpoint_serves_over_https ... FAILED
+test h006_a_foreign_origin_is_refused ... FAILED
+
+failures:
+
+---- h004_delete_ends_the_session stdout ----
+
+thread 'h004_delete_ends_the_session' (2251140) panicked at crates/services/api/mcp/tests/mcp_http.rs:182:5:
+assertion `left == right` failed: initialize: Not Found
+
+  left: 404
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- h008_bodies_are_read_whole_up_to_the_cap stdout ----
+
+thread 'h008_bodies_are_read_whole_up_to_the_cap' (2251144) panicked at crates/services/api/mcp/tests/mcp_http.rs:182:5:
+assertion `left == right` failed: initialize: Not Found
+
+  left: 404
+ right: 200
+
+---- h005_notifications_are_accepted_without_a_body stdout ----
+
+thread 'h005_notifications_are_accepted_without_a_body' (2251141) panicked at crates/services/api/mcp/tests/mcp_http.rs:182:5:
+assertion `left == right` failed: initialize: Not Found
+
+  left: 404
+ right: 200
+
+---- h003_sessions_are_required_known_and_bound_to_their_token stdout ----
+
+thread 'h003_sessions_are_required_known_and_bound_to_their_token' (2251139) panicked at crates/services/api/mcp/tests/mcp_http.rs:279:5:
+assertion `left == right` failed: a non-initialize request without a session: Not Found
+
+  left: 404
+ right: 400
+
+---- h001_initialize_then_tools_round_trip_in_a_session stdout ----
+
+thread 'h001_initialize_then_tools_round_trip_in_a_session' (2251137) panicked at crates/services/api/mcp/tests/mcp_http.rs:182:5:
+assertion `left == right` failed: initialize: Not Found
+
+  left: 404
+ right: 200
+
+---- h007_get_is_method_not_allowed stdout ----
+
+thread 'h007_get_is_method_not_allowed' (2251143) panicked at crates/services/api/mcp/tests/mcp_http.rs:362:5:
+assertion `left == right` failed
+  left: 404
+ right: 405
+
+---- h002_the_bearer_token_is_required_on_every_request stdout ----
+
+thread 'h002_the_bearer_token_is_required_on_every_request' (2251138) panicked at crates/services/api/mcp/tests/mcp_http.rs:254:5:
+assertion `left == right` failed: Not Found
+
+  left: 404
+ right: 401
+
+---- h009_the_endpoint_serves_over_https stdout ----
+
+thread 'h009_the_endpoint_serves_over_https' (2251145) panicked at crates/services/api/mcp/tests/mcp_http.rs:444:5:
+assertion `left == right` failed: Not Found
+
+  left: 404
+ right: 200
+
+---- h006_a_foreign_origin_is_refused stdout ----
+
+thread 'h006_a_foreign_origin_is_refused' (2251142) panicked at crates/services/api/mcp/tests/mcp_http.rs:352:5:
+assertion `left == right` failed: DNS-rebinding guard: Not Found
+
+  left: 404
+ right: 403
+
+
+failures:
+    h001_initialize_then_tools_round_trip_in_a_session
+    h002_the_bearer_token_is_required_on_every_request
+    h003_sessions_are_required_known_and_bound_to_their_token
+    h004_delete_ends_the_session
+    h005_notifications_are_accepted_without_a_body
+    h006_a_foreign_origin_is_refused
+    h007_get_is_method_not_allowed
+    h008_bodies_are_read_whole_up_to_the_cap
+    h009_the_endpoint_serves_over_https
+
+test result: FAILED. 0 passed; 9 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.47s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_http`
+EXIT=101
