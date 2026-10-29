@@ -61,6 +61,17 @@ def die(msg):
     sys.exit(1)
 
 
+def compact_wall_ms(compact_cells):
+    """The compaction wall: the median of the smoke's repeated merges, so
+    one stalled merge (c2af329: 361 ms where the same code reads 49-102 ms,
+    the allocations unchanged) cannot fail the cell. Raises PerfFail
+    without at least three samples."""
+    samples = compact_cells.get("compact_wall_samples")
+    if not isinstance(samples, list) or len(samples) < 3:
+        raise PerfFail("'compact_wall_samples' missing or under 3 samples in the fresh compact smoke")
+    return sorted(samples)[len(samples) // 2]
+
+
 def check_write(fresh, cells):
     """The ingestion (W6) cell against the machine it ran on: its mean
     commit wall per put divided by a plain sync on the same disk in the
@@ -143,7 +154,13 @@ def main():
     except SchemaError as e:
         die(f"compact smoke: {e}")
     for key in ("compact_wall_ms", "compact_allocs"):
-        got = compact.get("cells", {}).get(key)
+        if key == "compact_wall_ms":
+            try:
+                got = compact_wall_ms(compact.get("cells", {}))
+            except PerfFail as e:
+                die(str(e))
+        else:
+            got = compact.get("cells", {}).get(key)
         if got is None:
             die(f"{key!r} missing from fresh compact smoke")
         want = cells[key]
