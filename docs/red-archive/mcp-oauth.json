@@ -1,0 +1,8 @@
+{
+  "id": "mcp-oauth",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_oauth",
+  "captured_at": "2026-10-29T20:39:40Z",
+  "captured_head": "d2562f66885408dbb112b006f3195de8192f9a32",
+  "exit_code": 101
+}

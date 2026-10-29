@@ -1,0 +1,69 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/mcp_oauth.rs (target/debug/deps/mcp_oauth-a3bd16264d00672a)
+
+running 6 tests
+test o005_claude_code_loopback_redirects_match_on_any_port ... FAILED
+test o004_refresh_tokens_rotate ... FAILED
+test o006_bad_tokens_are_401_and_static_tokens_still_work ... FAILED
+test o001_discovery_from_a_401 ... FAILED
+test o002_the_full_flow_ends_in_a_working_mcp_session ... FAILED
+test o003_what_the_flow_refuses ... FAILED
+
+failures:
+
+---- o005_claude_code_loopback_redirects_match_on_any_port stdout ----
+
+thread 'o005_claude_code_loopback_redirects_match_on_any_port' (2334913) panicked at crates/services/api/mcp/tests/mcp_oauth.rs:179:5:
+assertion `left == right` failed: register: Not Found
+
+  left: 404
+ right: 201
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- o004_refresh_tokens_rotate stdout ----
+
+thread 'o004_refresh_tokens_rotate' (2334912) panicked at crates/services/api/mcp/tests/mcp_oauth.rs:179:5:
+assertion `left == right` failed: register: Not Found
+
+  left: 404
+ right: 201
+
+---- o006_bad_tokens_are_401_and_static_tokens_still_work stdout ----
+
+thread 'o006_bad_tokens_are_401_and_static_tokens_still_work' (2334914) panicked at crates/services/api/mcp/tests/mcp_oauth.rs:508:5:
+assertion failed: r.header("www-authenticate").is_some_and(|w| w.contains("resource_metadata="))
+
+---- o001_discovery_from_a_401 stdout ----
+
+thread 'o001_discovery_from_a_401' (2334909) panicked at crates/services/api/mcp/tests/mcp_oauth.rs:263:5:
+WWW-Authenticate: Bearer
+
+---- o002_the_full_flow_ends_in_a_working_mcp_session stdout ----
+
+thread 'o002_the_full_flow_ends_in_a_working_mcp_session' (2334910) panicked at crates/services/api/mcp/tests/mcp_oauth.rs:179:5:
+assertion `left == right` failed: register: Not Found
+
+  left: 404
+ right: 201
+
+---- o003_what_the_flow_refuses stdout ----
+
+thread 'o003_what_the_flow_refuses' (2334911) panicked at crates/services/api/mcp/tests/mcp_oauth.rs:179:5:
+assertion `left == right` failed: register: Not Found
+
+  left: 404
+ right: 201
+
+
+failures:
+    o001_discovery_from_a_401
+    o002_the_full_flow_ends_in_a_working_mcp_session
+    o003_what_the_flow_refuses
+    o004_refresh_tokens_rotate
+    o005_claude_code_loopback_redirects_match_on_any_port
+    o006_bad_tokens_are_401_and_static_tokens_still_work
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.78s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_oauth`
+EXIT=101
