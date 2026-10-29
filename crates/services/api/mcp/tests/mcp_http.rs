@@ -510,3 +510,223 @@ fn h011_an_unsupported_protocol_version_header_is_refused() {
     );
     assert_eq!(bad.status, 400, "{}", bad.body);
 }
+
+/// An open GET /mcp event stream: SSE events as (id, JSON data).
+struct Events {
+    reader: std::io::BufReader<TcpStream>,
+    status: u16,
+}
+
+fn open_stream(port: u16, sid: &str, last_event_id: Option<&str>) -> Events {
+    use std::io::BufRead;
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+    let mut req = format!(
+        "GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: text/event-stream\r\n\
+         Authorization: Bearer http-tok\r\nMcp-Session-Id: {sid}\r\n"
+    );
+    if let Some(id) = last_event_id {
+        req.push_str(&format!("Last-Event-ID: {id}\r\n"));
+    }
+    req.push_str("\r\n");
+    s.write_all(req.as_bytes()).unwrap();
+    let mut reader = std::io::BufReader::new(s);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let status = line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+            break; // end of the headers
+        }
+    }
+    Events { reader, status }
+}
+
+impl Events {
+    /// The next event (keep-alive comments skipped); None at EOF.
+    fn next(&mut self) -> Option<(String, J)> {
+        use std::io::BufRead;
+        let (mut id, mut data) = (String::new(), String::new());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if self.reader.read_line(&mut line).ok()? == 0 {
+                return None;
+            }
+            let l = line.trim_end_matches(['\r', '\n']);
+            if l.is_empty() {
+                if !data.is_empty() {
+                    return Some((id, serde_json::from_str(&data).unwrap()));
+                }
+                continue;
+            }
+            if let Some(v) = l.strip_prefix("id: ") {
+                id = v.to_string();
+            } else if let Some(v) = l.strip_prefix("data: ") {
+                data.push_str(v);
+            }
+        }
+    }
+
+    /// The next event whose method is `method`.
+    fn next_method(&mut self, method: &str) -> (String, J) {
+        loop {
+            let (id, ev) = self
+                .next()
+                .unwrap_or_else(|| panic!("the stream ended before a {method}"));
+            if ev["method"] == json!(method) {
+                return (id, ev);
+            }
+        }
+    }
+}
+
+fn remember_n(port: u16, sid: &str, n: usize) -> Vec<String> {
+    (0..n)
+        .map(|i| {
+            tool(
+                port,
+                sid,
+                100 + i as u64,
+                "remember",
+                json!({"subject": "admin", "type_name": "note", "properties": {"n": i}}),
+            )["koid"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect()
+}
+
+/// A subscription's events reach the session's GET stream (they were
+/// written into a per-request buffer and lost before).
+#[test]
+fn h012_subscription_events_arrive_on_the_get_stream() {
+    let srv = serve("012", &[]);
+    let sid = initialize(srv.port);
+    let mut events = open_stream(srv.port, &sid, None);
+    assert_eq!(events.status, 200, "GET /mcp opens the stream");
+    let sub = request(
+        srv.port,
+        "POST",
+        &[BEARER, ("Mcp-Session-Id", &sid)],
+        &rpc(2, "notifications/subscribe", json!({"id": "sub-1"})),
+    );
+    assert_eq!(sub.status, 200, "{}", sub.body);
+    assert_eq!(
+        sub.json()["result"]["subscribed"],
+        json!(true),
+        "{}",
+        sub.body
+    );
+    let koids = remember_n(srv.port, &sid, 1);
+    let (_, ev) = events.next_method("notifications/notify");
+    assert_eq!(ev["params"]["id"], json!("sub-1"));
+    assert!(
+        ev.to_string().contains(&koids[0]),
+        "the event names the new object: {ev}"
+    );
+}
+
+/// A streamed query's chunks after the first arrive on the GET stream.
+#[test]
+fn h013_stream_query_chunks_arrive_on_the_get_stream() {
+    let srv = serve("013", &[]);
+    let sid = initialize(srv.port);
+    remember_n(srv.port, &sid, 130); // CHUNK_SIZE is 100: two chunks
+    let mut events = open_stream(srv.port, &sid, None);
+    let r = request(
+        srv.port,
+        "POST",
+        &[BEARER, ("Mcp-Session-Id", &sid)],
+        &rpc(
+            3,
+            "aikoql/stream",
+            json!({"query": "MATCH note RETURN *", "subject": "admin"}),
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    let first = r.json();
+    assert_eq!(first["result"]["chunk"], json!(0), "{first}");
+    assert_eq!(first["result"]["total_chunks"], json!(2), "{first}");
+    let (_, ev) = events.next_method("notifications/notify");
+    assert_eq!(ev["params"]["chunk"], json!(1), "{ev}");
+    assert_eq!(ev["params"]["done"], json!(true), "{ev}");
+}
+
+/// One stream per session; it needs a known session.
+#[test]
+fn h014_one_stream_per_known_session() {
+    let srv = serve("014", &[]);
+    let sid = initialize(srv.port);
+    let _first = open_stream(srv.port, &sid, None);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        open_stream(srv.port, &sid, None).status,
+        409,
+        "a second stream on the session"
+    );
+    assert_eq!(
+        open_stream(srv.port, "00ff00ff00ff00ff00ff00ff00ff00ff", None).status,
+        404
+    );
+}
+
+/// DELETE ends the session's stream.
+#[test]
+fn h015_delete_ends_the_stream() {
+    let srv = serve("015", &[]);
+    let sid = initialize(srv.port);
+    let mut events = open_stream(srv.port, &sid, None);
+    assert_eq!(events.status, 200, "the stream opened");
+    let del = request(srv.port, "DELETE", &[BEARER, ("Mcp-Session-Id", &sid)], "");
+    assert!(del.status == 200 || del.status == 204);
+    assert!(
+        events.next().is_none(),
+        "the stream closes when its session ends"
+    );
+}
+
+/// Last-Event-ID resumes after the last seen event: nothing repeats,
+/// nothing sent while away is lost.
+#[test]
+fn h016_last_event_id_resumes_the_stream() {
+    let srv = serve("016", &[]);
+    let sid = initialize(srv.port);
+    let sub = request(
+        srv.port,
+        "POST",
+        &[BEARER, ("Mcp-Session-Id", &sid)],
+        &rpc(2, "notifications/subscribe", json!({"id": "sub-r"})),
+    );
+    assert_eq!(sub.status, 200, "{}", sub.body);
+    let mut events = open_stream(srv.port, &sid, None);
+    let first = remember_n(srv.port, &sid, 1);
+    let (seen, ev) = events.next_method("notifications/notify");
+    assert!(ev.to_string().contains(&first[0]));
+    drop(events); // the client goes away
+    std::thread::sleep(Duration::from_millis(300));
+    let later = tool(
+        srv.port,
+        &sid,
+        50,
+        "remember",
+        json!({"subject": "admin", "type_name": "note", "properties": {"n": 99}}),
+    )["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut resumed = open_stream(srv.port, &sid, Some(&seen));
+    assert_eq!(resumed.status, 200);
+    let (id2, ev2) = resumed.next_method("notifications/notify");
+    assert_ne!(id2, seen, "the last seen event is not repeated");
+    assert!(
+        ev2.to_string().contains(&later),
+        "the event sent while away arrives: {ev2}"
+    );
+}

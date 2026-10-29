@@ -1,0 +1,8 @@
+{
+  "id": "mcp-http-get-stream",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_http -- h012 h013 h014 h015 h016",
+  "captured_at": "2026-10-29T20:32:37Z",
+  "captured_head": "7b866e84584b6ddc658059a16f64e2e6eab97aae",
+  "exit_code": 101
+}

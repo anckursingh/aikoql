@@ -1,0 +1,57 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/mcp_http.rs (target/debug/deps/mcp_http-13ac7a836db1d791)
+
+running 5 tests
+test h012_subscription_events_arrive_on_the_get_stream ... FAILED
+test h015_delete_ends_the_stream ... FAILED
+test h016_last_event_id_resumes_the_stream ... FAILED
+test h014_one_stream_per_known_session ... FAILED
+test h013_stream_query_chunks_arrive_on_the_get_stream ... FAILED
+
+failures:
+
+---- h012_subscription_events_arrive_on_the_get_stream stdout ----
+
+thread 'h012_subscription_events_arrive_on_the_get_stream' (2309758) panicked at crates/services/api/mcp/tests/mcp_http.rs:613:5:
+assertion `left == right` failed: GET /mcp opens the stream
+  left: 405
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- h015_delete_ends_the_stream stdout ----
+
+thread 'h015_delete_ends_the_stream' (2309761) panicked at crates/services/api/mcp/tests/mcp_http.rs:686:5:
+assertion `left == right` failed: the stream opened
+  left: 405
+ right: 200
+
+---- h016_last_event_id_resumes_the_stream stdout ----
+
+thread 'h016_last_event_id_resumes_the_stream' (2309762) panicked at crates/services/api/mcp/tests/mcp_http.rs:581:36:
+the stream ended before a notifications/notify
+
+---- h014_one_stream_per_known_session stdout ----
+
+thread 'h014_one_stream_per_known_session' (2309760) panicked at crates/services/api/mcp/tests/mcp_http.rs:669:5:
+assertion `left == right` failed: a second stream on the session
+  left: 405
+ right: 409
+
+---- h013_stream_query_chunks_arrive_on_the_get_stream stdout ----
+
+thread 'h013_stream_query_chunks_arrive_on_the_get_stream' (2309759) panicked at crates/services/api/mcp/tests/mcp_http.rs:581:36:
+the stream ended before a notifications/notify
+
+
+failures:
+    h012_subscription_events_arrive_on_the_get_stream
+    h013_stream_query_chunks_arrive_on_the_get_stream
+    h014_one_stream_per_known_session
+    h015_delete_ends_the_stream
+    h016_last_event_id_resumes_the_stream
+
+test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 11 filtered out; finished in 1.87s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_http`
+EXIT=101
