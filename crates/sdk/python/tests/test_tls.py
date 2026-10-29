@@ -72,3 +72,23 @@ def test_agent_connect_over_tls(tls_server):
 def test_an_untrusted_server_is_refused(tls_server):
     with pytest.raises(ssl.SSLError):
         McpClient("127.0.0.1", tls_server, token="py-tls", tls=_trust("other-ca.pem")).connect()
+
+
+def test_the_client_never_offers_below_tls_1_2():
+    """A caller's context that still allows TLS 1.0/1.1 (Python 3.9's
+    create_default_context can, per the system OpenSSL) is raised to a
+    TLS 1.2 floor — the SDK never offers a broken protocol. A stricter
+    floor is left as it is."""
+    import warnings
+
+    weak = ssl.create_default_context(cafile=str(FX / "ca.pem"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)  # TLSv1 is deprecated
+        weak.minimum_version = ssl.TLSVersion.TLSv1
+    McpClient("127.0.0.1", 1, tls=weak)
+    assert weak.minimum_version == ssl.TLSVersion.TLSv1_2
+
+    strict = ssl.create_default_context(cafile=str(FX / "ca.pem"))
+    strict.minimum_version = ssl.TLSVersion.TLSv1_3
+    McpClient("127.0.0.1", 1, tls=strict)
+    assert strict.minimum_version == ssl.TLSVersion.TLSv1_3
