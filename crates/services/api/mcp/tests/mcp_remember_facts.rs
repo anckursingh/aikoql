@@ -216,3 +216,26 @@ fn f05_a_bad_fact_fails_alone() {
         "the next fact still lands: {r:?}"
     );
 }
+
+/// explain must answer "why is this believed" with the evidence records
+/// themselves — its `evidence` list holds the object's edges (kept as it
+/// is), so the records come as `evidence_records`.
+#[test]
+fn f06_explain_shows_the_evidence_records() {
+    let mut m = Mcp::serve("explain");
+    let r = m.facts(
+        "chat-9",
+        json!([{"statement": "Backups run nightly at 2am", "messages": [7, 8]}]),
+    );
+    let ex = m.tool("explain", json!({"koid": r[0]["koid"]}));
+    let rec = &ex["evidence_records"][0];
+    assert_eq!(rec["source_artifact"], json!("conversation:chat-9"), "{ex}");
+    assert_eq!(rec["method"], json!("llm_inference"), "{ex}");
+    assert_eq!(rec["location"], json!("messages 7-8"), "{ex}");
+    assert!(ex["evidence"].is_array(), "the edge list stays: {ex}");
+    let p = m.tool("provenance", json!({"koid": r[0]["koid"]}));
+    assert!(
+        p.to_string().contains("conversation:chat-9"),
+        "provenance lists them too: {p}"
+    );
+}

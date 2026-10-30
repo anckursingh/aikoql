@@ -1,0 +1,8 @@
+{
+  "id": "explain-evidence-records",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_remember_facts f06",
+  "captured_at": "2026-10-30T18:01:26Z",
+  "captured_head": "b3139826b4b2423455f0b3da25fa516c7142b629",
+  "exit_code": 101
+}

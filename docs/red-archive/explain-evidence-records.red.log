@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running tests/mcp_remember_facts.rs (target/debug/deps/mcp_remember_facts-7d5a5eea6d1bbd30)
+
+running 1 test
+test f06_explain_shows_the_evidence_records ... FAILED
+
+failures:
+
+---- f06_explain_shows_the_evidence_records stdout ----
+
+thread 'f06_explain_shows_the_evidence_records' (3099879) panicked at crates/services/api/mcp/tests/mcp_remember_facts.rs:232:5:
+assertion `left == right` failed: {"koid":"01a18df94e280000000000000000a9c9","version":1,"origin":"Agent(\"mcp-agent\")","source":"conversation:chat-9","confidence":0.800000011920929,"verified":false,"evidence":[],"event_refs":[{"seq":2,"commit_ts":1793383288360}]}
+  left: Null
+ right: String("conversation:chat-9")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    f06_explain_shows_the_evidence_records
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 1.21s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_remember_facts`
+EXIT=101
