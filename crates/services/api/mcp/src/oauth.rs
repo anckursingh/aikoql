@@ -650,10 +650,18 @@ fn is_loopback_uri(u: &str) -> bool {
 }
 
 /// A registrable redirect: HTTPS, or loopback http (RFC 8252); no fragment.
+/// The URI is written into headers (Location, CSP): printable ASCII only,
+/// and a plain host[:port] authority.
 fn redirect_allowed(u: &str) -> bool {
     !u.contains('#')
-        && split_uri(u)
-            .is_some_and(|(s, h, _, _)| !h.is_empty() && (s == "https" || is_loopback_uri(u)))
+        && u.bytes().all(|b| b.is_ascii_graphic())
+        && split_uri(u).is_some_and(|(s, h, port, _)| {
+            !h.is_empty()
+                && h.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-.:".contains(&b))
+                && port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+                && (s == "https" || is_loopback_uri(u))
+        })
 }
 
 /// Exact match, except a loopback redirect matches on any port (RFC 8252
