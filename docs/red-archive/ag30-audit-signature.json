@@ -1,0 +1,8 @@
+{
+  "id": "ag30-audit-signature",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test audit_signature",
+  "captured_at": "2026-10-30T16:48:04Z",
+  "captured_head": "8f7147bb219e72375b6ab51d730ac979168465d4",
+  "exit_code": 101
+}

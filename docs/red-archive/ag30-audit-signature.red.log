@@ -1,0 +1,32 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+     Running tests/audit_signature.rs (target/debug/deps/audit_signature-f2e8a8400b2b1570)
+
+running 3 tests
+test as02_no_key_no_signature ... ok
+test as01_a_signing_server_signs_the_audit_chain ... FAILED
+test as03_an_unusable_key_refuses_to_start ... FAILED
+
+failures:
+
+---- as01_a_signing_server_signs_the_audit_chain stdout ----
+
+thread 'as01_a_signing_server_signs_the_audit_chain' (2996593) panicked at crates/services/api/mcp/tests/audit_signature.rs:86:5:
+assertion `left == right` failed: {"framework":"gdpr","audit_chain":"e024756a93a32cb1264add497f5d03486bc6709e15cba1bdab97d5fbbde65573","journal_seq":2,"object_inventory":{"total":2,"by_state":{"draft":2}},"pii_filtering":{"active":true,"detector_kinds":["API_KEY","BEARER_TOKEN","JWT_TOKEN","AWS_KEY","PRIVATE_KEY","PASSWORD","EMAIL","CREDIT_CARD","SSN","CONNECTION_STRING","GENERIC_TOKEN"],"known_limits":"pattern-based detection catches known formats only; it does not decode URL-encoded or base64-encoded text or reassemble secrets split across lines (MRFC-0070 A7, R8.1)"},"retention":{"retained_objects":0,"live_windows":0,"expired":0,"purge_coverage":"expired objects are counted and purge-eligible; physical deletion is caller-side — the kernel has no purge op (MRFC-0020 Phase 4 honest row)"},"encryption":{"encryption_enabled":false,"policies_registered":0,"policy_types":[],"field_encryption_enabled":false,"tenant_keys":0,"audit_events":[],"compliance_grade":"C"}}
+  left: Null
+ right: String("ed25519")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- as03_an_unusable_key_refuses_to_start stdout ----
+
+thread 'as03_an_unusable_key_refuses_to_start' (2996595) panicked at crates/services/api/mcp/tests/audit_signature.rs:129:13:
+a server with an unusable signing key kept running
+
+
+failures:
+    as01_a_signing_server_signs_the_audit_chain
+    as03_an_unusable_key_refuses_to_start
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.40s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test audit_signature`
+EXIT=101
