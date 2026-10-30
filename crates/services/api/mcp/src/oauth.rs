@@ -145,6 +145,9 @@ impl OAuth {
     }
 
     fn client(&self, id: &str) -> Option<Client> {
+        if id.starts_with("https://") {
+            return self.metadata_client(id);
+        }
         let raw = self
             .store
             .get(format!("{P_CLIENT}{id}").as_bytes())
@@ -159,6 +162,39 @@ impl OAuth {
                 .filter_map(|u| u.as_str().map(String::from))
                 .collect(),
         })
+    }
+
+    /// A metadata-document client, fetched at most once per 5 minutes (a
+    /// failure: per minute); the fetch runs outside the lock.
+    fn metadata_client(&self, url: &str) -> Option<Client> {
+        const FRESH: Duration = Duration::from_secs(300);
+        const RETRY: Duration = Duration::from_secs(60);
+        if !metadata_url_ok(url) {
+            return None;
+        }
+        // justified: Mutex poison is unrecoverable
+        if let Some((at, c)) = self.metadata.lock().unwrap().get(url) {
+            if at.elapsed() < if c.is_some() { FRESH } else { RETRY } {
+                return c.clone();
+            }
+        }
+        let client = match (self.fetch)(url) {
+            Ok(raw) => parse_metadata(url, &raw),
+            Err(e) => {
+                tracing::warn!(url, error = %e, "client metadata document unavailable");
+                None
+            }
+        };
+        // justified: Mutex poison is unrecoverable
+        let mut cache = self.metadata.lock().unwrap();
+        if cache.len() >= 1024 {
+            cache.retain(|_, (at, _)| at.elapsed() < FRESH);
+            if cache.len() >= 1024 {
+                cache.clear();
+            }
+        }
+        cache.insert(url.to_string(), (Instant::now(), client.clone()));
+        client
     }
 
     fn grant(&self, prefix: &str, token: &str) -> Option<Grant> {
@@ -234,6 +270,7 @@ impl OAuth {
                     "grant_types_supported": ["authorization_code", "refresh_token"],
                     "code_challenge_methods_supported": ["S256"],
                     "token_endpoint_auth_methods_supported": ["none"],
+                    "client_id_metadata_document_supported": true,
                     "scopes_supported": ["mcp", "offline_access"],
                 }))
             }
@@ -673,18 +710,140 @@ fn is_loopback_uri(u: &str) -> bool {
 /// A registrable redirect: HTTPS, or loopback http (RFC 8252); no fragment.
 /// A client_id that names a metadata document: an https URL with a path,
 /// no fragment, credentials or dot segments.
-fn metadata_url_ok(_u: &str) -> bool {
-    false
+fn metadata_url_ok(u: &str) -> bool {
+    !u.contains('#')
+        && u.bytes().all(|b| b.is_ascii_graphic())
+        && split_uri(u).is_some_and(|(s, h, port, tail)| {
+            let path = tail.split('?').next().unwrap_or("");
+            s == "https"
+                && plain_authority(h, port)
+                && path.len() > 1
+                && !path.split('/').any(|seg| seg == "." || seg == "..")
+        })
+}
+
+/// A host[:port] with nothing else in it (no userinfo, no stray characters).
+fn plain_authority(host: &str, port: Option<&str>) -> bool {
+    !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-.:".contains(&b))
+        && port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// An address a metadata fetch may connect to: public unicast only.
-fn public_ip(_ip: std::net::IpAddr) -> bool {
-    true
+fn public_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(a) => {
+            let [o0, o1, ..] = a.octets();
+            !(a.is_loopback()
+                || a.is_private()
+                || a.is_link_local()
+                || a.is_unspecified()
+                || a.is_broadcast()
+                || a.is_multicast()
+                || a.is_documentation()
+                || o0 == 0
+                || (o0 == 100 && o1 & 0xc0 == 64)) // shared address space (CGNAT)
+        }
+        std::net::IpAddr::V6(a) => match a.to_ipv4_mapped() {
+            Some(v4) => public_ip(v4.into()),
+            None => {
+                let s0 = a.segments()[0];
+                !(a.is_loopback()
+                    || a.is_unspecified()
+                    || a.is_multicast()
+                    || s0 & 0xfe00 == 0xfc00 // unique local
+                    || s0 & 0xffc0 == 0xfe80) // link-local
+            }
+        },
+    }
 }
 
-/// GET a client ID metadata document.
-fn fetch_metadata(_url: &str) -> Result<Vec<u8>, String> {
-    Err("client ID metadata documents are not supported".into())
+/// The largest metadata document read.
+const MAX_METADATA: u64 = 64 * 1024;
+
+/// GET a client ID metadata document: no redirects, short timeouts, a size
+/// cap, and only public addresses — checked in the resolver the connection
+/// uses, so a DNS answer cannot swap in an internal address afterwards.
+fn fetch_metadata(url: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    use std::net::ToSocketAddrs as _;
+    if !metadata_url_ok(url) {
+        return Err(format!("{url} is not a metadata document URL"));
+    }
+    let agent = ureq::AgentBuilder::new()
+        .redirects(0)
+        .timeout_connect(Duration::from_secs(3))
+        .timeout(Duration::from_secs(5))
+        .resolver(
+            |netloc: &str| -> std::io::Result<Vec<std::net::SocketAddr>> {
+                let addrs: Vec<_> = netloc.to_socket_addrs()?.collect();
+                if addrs.is_empty() || !addrs.iter().all(|a| public_ip(a.ip())) {
+                    return Err(std::io::Error::other(format!(
+                        "{netloc} is not a public address"
+                    )));
+                }
+                Ok(addrs)
+            },
+        )
+        .build();
+    let resp = agent
+        .get(url)
+        .set("Accept", "application/json")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Transport(t) => format!(
+                "{t}{}",
+                std::error::Error::source(&t).map_or(String::new(), |s| format!(": {s}"))
+            ),
+            e => e.to_string(),
+        })?;
+    if resp.status() != 200 {
+        return Err(format!("{url} answered {}", resp.status()));
+    }
+    let mut body = Vec::new();
+    resp.into_reader()
+        .take(MAX_METADATA + 1)
+        .read_to_end(&mut body)
+        .map_err(|e| e.to_string())?;
+    if body.len() as u64 > MAX_METADATA {
+        return Err(format!("{url}: the document is over {MAX_METADATA} bytes"));
+    }
+    Ok(body)
+}
+
+/// The client a metadata document describes: it must name itself (the URL
+/// it was fetched from), be a public client, and list valid redirect URIs.
+fn parse_metadata(url: &str, raw: &[u8]) -> Option<Client> {
+    let v: J = serde_json::from_slice(raw).ok()?;
+    if v.get("client_id")?.as_str()? != url
+        || v.get("token_endpoint_auth_method")
+            .map_or(Some("none"), J::as_str)?
+            != "none"
+    {
+        return None;
+    }
+    let redirect_uris: Vec<String> = v
+        .get("redirect_uris")?
+        .as_array()?
+        .iter()
+        .map(|u| u.as_str().filter(|u| redirect_allowed(u)).map(String::from))
+        .collect::<Option<_>>()?;
+    if redirect_uris.is_empty() {
+        return None;
+    }
+    // the name is the client's own claim: show where the document lives too
+    let host = split_uri(url).map_or("", |(_, h, _, _)| h);
+    let name = v
+        .get("client_name")
+        .and_then(J::as_str)
+        .map(|n| n.chars().take(80).collect::<String>())
+        .filter(|n| !n.trim().is_empty());
+    Some(Client {
+        name: name.map_or(host.to_string(), |n| format!("{n} ({host})")),
+        redirect_uris,
+    })
 }
 
 /// The URI is written into headers (Location, CSP): printable ASCII only,
@@ -693,11 +852,7 @@ fn redirect_allowed(u: &str) -> bool {
     !u.contains('#')
         && u.bytes().all(|b| b.is_ascii_graphic())
         && split_uri(u).is_some_and(|(s, h, port, _)| {
-            !h.is_empty()
-                && h.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-.:".contains(&b))
-                && port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-                && (s == "https" || is_loopback_uri(u))
+            plain_authority(h, port) && (s == "https" || is_loopback_uri(u))
         })
 }
 
