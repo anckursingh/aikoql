@@ -613,6 +613,21 @@ fn main() {
         kernel
     };
     let kernel = Arc::new(kernel);
+    // AG-10: memories still only on disk join the knowledge base, once —
+    // on a node that writes (a standby or replica gets them replicated)
+    if !serving_standby && role != replication::Role::Fenced {
+        if let Some(dir) = MEMORY_DIR.get() {
+            match crate::tools::import_memory_dir(&kernel, dir) {
+                Ok(0) => {}
+                Ok(n) => {
+                    info!(dir = %dir, imported = n, "memory directory imported into the knowledge base")
+                }
+                Err(e) => {
+                    warn!(dir = %dir, error = %e, "memory directory import failed — the files stay as they are")
+                }
+            }
+        }
+    }
     if let Some(ha) = ha_standby {
         let Some(a) = admin.clone() else {
             eprintln!("--ha-lease needs the storage admin surface");

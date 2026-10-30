@@ -430,10 +430,10 @@ pub(crate) fn call_tool(
         "discover_ontology" => tool_discover_ontology(k),
         "health" => tool_health(k),
         "agent_memory" => tool_agent_memory(k, args),
-        "memory_search" => tool_memory_search(args),
-        "memory_store" => tool_memory_store(args),
-        "memory_update" => tool_memory_update(args),
-        "memory_delete" => tool_memory_delete(args),
+        "memory_search" => tool_memory_search(k, args),
+        "memory_store" => tool_memory_store(k, args),
+        "memory_update" => tool_memory_update(k, args),
+        "memory_delete" => tool_memory_delete(k, args),
         "batch" => tool_batch(k, args),
         // P5-M11 (ND-11): the P5-M10-deferred transaction tools — the
         // handle registry is connection-scoped (sv011).

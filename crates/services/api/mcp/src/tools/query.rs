@@ -323,6 +323,22 @@ pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
     }))
 }
 
+/// The query's embedding, or why there is none. The model fails fast while
+/// background enrichment holds it (T-44); a deliberate retrieval waits a
+/// little before falling back to text-only — and says so.
+pub(crate) fn embed_query(k: &Kernel, query: &str) -> (Option<Vec<f32>>, Option<String>) {
+    let started = std::time::Instant::now();
+    loop {
+        match k.embed_text(query, None) {
+            Ok(v) => return (Some(v), None),
+            Err(KError::Retryable(_)) if started.elapsed() < Duration::from_millis(1500) => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => return (None, Some(format!("text-only: {e}"))),
+        }
+    }
+}
+
 /// AG-02: retrieval as one call — hybrid search (text, plus the query's
 /// embedding when a model is loaded) over current truth, each item with
 /// its status, authority, a provenance one-liner and the open conflicts
@@ -347,19 +363,7 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
             .unwrap_or(1000),
     );
     let subject = subject_of(args);
-    // The model fails fast while background enrichment holds it (T-44);
-    // recall is a deliberate retrieval, so it waits a little before falling
-    // back to text-only — and says so.
-    let started = std::time::Instant::now();
-    let (vector, semantic_note) = loop {
-        match k.embed_text(query, None) {
-            Ok(v) => break (Some(v), None),
-            Err(KError::Retryable(_)) if started.elapsed() < Duration::from_millis(1500) => {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Err(e) => break (None, Some(format!("text-only: {e}"))),
-        }
-    };
+    let (vector, semantic_note) = embed_query(k, query);
     let semantic = vector.is_some();
     let hits = k
         .find_similar(SimilarityQuery {

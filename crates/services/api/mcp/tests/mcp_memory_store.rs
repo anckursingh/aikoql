@@ -243,3 +243,34 @@ fn m05_memory_search_answers_from_the_knowledge_base_in_its_old_shape() {
     );
     assert!(r["score"].as_f64().is_some_and(|v| v > 0.0), "{s}");
 }
+
+/// The old memory_update looked for a second `---` after the closing
+/// delimiter to find the body, found none, and wrote an empty body: an
+/// update of only the description wiped the memory.
+#[test]
+fn m06_updating_only_the_description_keeps_the_body() {
+    let root = tmp("desc-only");
+    let mut m = Mcp::serve(&root);
+    m.store(
+        "standup",
+        "when standup is",
+        "Standup is at 9:30 every weekday.",
+    );
+    m.tool(
+        "memory_update",
+        json!({"name": "standup", "description": "the daily standup time"}),
+    );
+    let file = std::fs::read_to_string(root.join("memory/standup.md")).unwrap();
+    assert!(
+        file.contains("Standup is at 9:30 every weekday."),
+        "the body survived: {file}"
+    );
+    assert!(file.contains("the daily standup time"), "{file}");
+    let s = m.tool("memory_search", json!({"query": "standup"}));
+    assert!(
+        s["results"][0]["snippet"]
+            .as_str()
+            .is_some_and(|t| t.contains("9:30")),
+        "{s}"
+    );
+}
