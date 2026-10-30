@@ -100,7 +100,7 @@ pub(crate) fn handle_message(
                                     .and_then(|p| p.get("protocolVersion"))
                                     .and_then(|v| v.as_str()),
                             ),
-                            "capabilities": {"tools": {}},
+                            "capabilities": {"tools": if crate::tool_registry::core_profile() { json!({"listChanged": true}) } else { json!({}) }},
                             "serverInfo": {"name": "aikoql-mcp", "version": env!("CARGO_PKG_VERSION")}
                         }
                     }),
@@ -272,7 +272,7 @@ pub(crate) fn handle_message(
             if let Some(id) = id {
                 write_frame(
                     &mut *out,
-                    json!({"jsonrpc":"2.0","id":id,"result":tools_list()}),
+                    json!({"jsonrpc":"2.0","id":id,"result":crate::tool_registry::tools_list_for(session)}),
                 );
             }
         }
@@ -287,6 +287,7 @@ pub(crate) fn handle_message(
             let args = params.get("arguments").cloned().unwrap_or(J::Null);
             let args = inject_for_session(&args, session);
             let span = info_span!("tool_call", tool = %name);
+            let groups_before = session.tool_groups.len();
             let result = span
                 .in_scope(|| call_tool(k, &name, &args, db_path.as_ref(), session, admin, txns));
             if result.is_err() {
@@ -295,6 +296,13 @@ pub(crate) fn handle_message(
             // Notifications are streamed immediately by background threads;
             // no drain needed.
             let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
+                                                  // AG-01: tools_more enabled a group — the listed surface changed
+            if crate::tool_registry::core_profile() && session.tool_groups.len() > groups_before {
+                write_frame(
+                    &mut *out,
+                    json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"}),
+                );
+            }
             if let Some(id) = id {
                 let frame = match result {
                     Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),

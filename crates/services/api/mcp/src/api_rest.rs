@@ -431,19 +431,19 @@ fn route_inner(
         // Memory tools (MRFC-0070)
         ("POST", "/api/v1/agent/memory-search") => {
             need_auth()?;
-            tool_memory_search(&args())
+            tool_memory_search(k, &args())
         }
         ("POST", "/api/v1/agent/memory-store") => {
             need_auth()?;
-            tool_memory_store(&args())
+            tool_memory_store(k, &args())
         }
         ("POST", "/api/v1/agent/memory-update") => {
             need_auth()?;
-            tool_memory_update(&args())
+            tool_memory_update(k, &args())
         }
         ("POST", "/api/v1/agent/memory-delete") => {
             need_auth()?;
-            tool_memory_delete(&args())
+            tool_memory_delete(k, &args())
         }
 
         _ => Err("Not Found".into()),

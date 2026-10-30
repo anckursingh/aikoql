@@ -199,21 +199,26 @@ pub(crate) fn compiler_expr_to_value(e: &aikoql_compiler::parser::ast::Expr) -> 
     }
 }
 
+/// Wait up to `ms` for the index maintainer to drain (a broken index is
+/// skipped: answers still come, and lag is surfaced per hit).
+fn wait_fresh(k: &Kernel, ms: u64) {
+    if let Some(m) = k.index_maintainer() {
+        let healthy = m
+            .status(k)
+            .map(|s| s.status != IndexStatusKind::Error)
+            .unwrap_or(true);
+        if healthy {
+            let _ = m.wait_caught_up(k, Duration::from_millis(ms));
+        }
+    }
+}
+
 pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
     // P5-M27 (IDX-P1-02): freshness is the client's choice. The default is
     // query-now — index_lag_ms is reported per hit — and an explicit
-    // wait_for_freshness_ms waits here, once, ahead of both paths (a broken
-    // index is skipped; answers still come, lag is surfaced).
+    // wait_for_freshness_ms waits here, once, ahead of both paths.
     if let Some(ms) = args.get("wait_for_freshness_ms").and_then(|v| v.as_u64()) {
-        if let Some(m) = k.index_maintainer() {
-            let healthy = m
-                .status(k)
-                .map(|s| s.status != IndexStatusKind::Error)
-                .unwrap_or(true);
-            if healthy {
-                let _ = m.wait_caught_up(k, Duration::from_millis(ms));
-            }
-        }
+        wait_fresh(k, ms);
     }
     // IR path: when type_name is explicit, compile to IR and execute via runtime.
     if let Some(type_name) = args.get("type_name").and_then(|t| t.as_str()) {
@@ -316,6 +321,157 @@ pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
             "version": s.ko.version
         })).collect::<Vec<_>>()
     }))
+}
+
+/// The query's embedding, or why there is none. The model fails fast while
+/// background enrichment holds it (T-44); a deliberate retrieval waits a
+/// little before falling back to text-only — and says so.
+pub(crate) fn embed_query(k: &Kernel, query: &str) -> (Option<Vec<f32>>, Option<String>) {
+    let started = std::time::Instant::now();
+    loop {
+        match k.embed_text(query, None) {
+            Ok(v) => return (Some(v), None),
+            Err(KError::Retryable(_)) if started.elapsed() < Duration::from_millis(1500) => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => return (None, Some(format!("text-only: {e}"))),
+        }
+    }
+}
+
+/// AG-02: retrieval as one call — hybrid search (text, plus the query's
+/// embedding when a model is loaded) over current truth, each item with
+/// its status, authority, a provenance one-liner and the open conflicts
+/// touching it, inside a token budget.
+pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
+    let query = args
+        .get("query")
+        .and_then(J::as_str)
+        .filter(|q| !q.trim().is_empty())
+        .ok_or("missing argument: query")?;
+    let k_req = args.get("k").and_then(J::as_u64).unwrap_or(10).clamp(1, 50) as usize;
+    let max_tokens = args
+        .get("max_tokens")
+        .and_then(J::as_u64)
+        .unwrap_or(2000)
+        .max(100) as usize;
+    // an agent recalls right after it remembers: wait briefly by default
+    wait_fresh(
+        k,
+        args.get("wait_for_freshness_ms")
+            .and_then(J::as_u64)
+            .unwrap_or(1000),
+    );
+    let subject = subject_of(args);
+    let (vector, semantic_note) = embed_query(k, query);
+    let semantic = vector.is_some();
+    let hits = k
+        .find_similar(SimilarityQuery {
+            context: subject.clone().into(),
+            filter: None,
+            text: Some(query.to_string()),
+            vector,
+            embedding_model: None,
+            // headroom for the system records and statuses filtered below
+            k: k_req * 2,
+            // semantic-led by default: on natural-language questions the
+            // lexical leg mostly matches stopwords (6 no-shared-word
+            // questions: vector 5/6 top-1, rrf 3/6, text 2/6); an explicit
+            // fusion (e.g. rrf for an exact identifier) wins
+            fusion: match (args.get("fusion"), semantic) {
+                (Some(_), _) => parse_fusion(args),
+                (None, true) => crate::Fusion::VectorOnly,
+                (None, false) => crate::Fusion::TextOnly,
+            },
+        })
+        .map_err(|e| e.to_string())?;
+    // shortcut: open conflicts by a scan of the conflict records (no claim →
+    // conflict index), add one when conflicts number in the thousands
+    let open: Vec<(String, String, String)> = k
+        .scan_by_type(&subject, "aikoql:conflict")
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(
+            |c| matches!(c.extensions.get("resolution"), Some(Value::Text(r)) if r == "unresolved"),
+        )
+        .map(|c| {
+            let side = |n: &str| match c.properties.get(n) {
+                Some(Value::Text(t)) => t.clone(),
+                _ => String::new(),
+            };
+            (c.koid.to_hex(), side("claim_a"), side("claim_b"))
+        })
+        .collect();
+    let budget = max_tokens * 4; // ~4 bytes per token
+    let (mut items, mut used, mut truncated) = (Vec::new(), 2usize, false);
+    for hit in hits {
+        let ko = &hit.ko;
+        let status = ko.epistemic_status();
+        // a zero score is filler from the fused list, not a match
+        if hit.score <= 0.0
+            || ko.metadata.type_name.starts_with("aikoql:")
+            || matches!(status, crate::EpistemicStatus::Superseded)
+        {
+            continue;
+        }
+        if items.len() == k_req {
+            truncated = true;
+            break;
+        }
+        let koid = ko.koid.to_hex();
+        let why = match (ko.derivation(), ko.evidence().first()) {
+            (Some(d), _) => format!(
+                "{} from {} source(s){}",
+                d.operation,
+                d.sources.len(),
+                d.reason.map(|r| format!(": {r}")).unwrap_or_default()
+            ),
+            (None, Some(e)) => format!(
+                "{} v{}, evidence {}",
+                status.as_str(),
+                ko.version,
+                e.source_artifact
+            ),
+            (None, None) => format!("{} v{}, no recorded evidence", status.as_str(), ko.version),
+        };
+        let mut snippet: String = ko
+            .properties
+            .iter()
+            .map(|(name, v)| match v {
+                Value::Text(t) => format!("{name}: {t}"),
+                other => format!("{name}: {}", value_to_json(other)),
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        if snippet.chars().count() > 300 {
+            snippet = snippet.chars().take(300).collect::<String>() + "…";
+        }
+        let item = json!({
+            "koid": koid,
+            "type_name": ko.metadata.type_name,
+            "version": ko.version,
+            "score": hit.score,
+            "status": status.as_str(),
+            "authority": ko.authority().map(|a| a.as_str()),
+            "snippet": snippet,
+            "why": why,
+            "conflicts": open.iter().filter(|(_, a, b)| *a == koid || *b == koid).map(|(c, _, _)| c).collect::<Vec<_>>(),
+            "related": ko.relationships.iter().take(5).map(|r| json!({"rel_type": r.rel_type, "target": r.target.to_hex()})).collect::<Vec<_>>(),
+        });
+        let size = item.to_string().len() + 1;
+        if used + size > budget {
+            truncated = true;
+            break;
+        }
+        used += size;
+        items.push(item);
+    }
+    let mut out =
+        json!({ "query": query, "semantic": semantic, "items": items, "truncated": truncated });
+    if let Some(note) = semantic_note {
+        out["semantic_note"] = json!(note);
+    }
+    Ok(out)
 }
 
 pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {

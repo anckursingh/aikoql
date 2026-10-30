@@ -57,6 +57,9 @@ pub(crate) struct RuntimeConfig {
     pub replicate_advertise: Option<String>,
     pub ha_node: Option<String>,
     pub ha_ttl_ms: u64,
+    /// AG-01: the listed tool surface — "full" (every tool) or "core" (a
+    /// small set + tools_more). Listing only; calls are governed by roles.
+    pub tool_profile: String,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -170,6 +173,8 @@ struct TomlServer {
     // P3-M1 (auth004): the HTTP surface is loopback-only unless explicitly
     // armed — and arming it requires [auth] credentials (fail-closed).
     allow_remote_http: Option<bool>,
+    /// AG-01: "core" | "full"
+    tool_profile: Option<String>,
 }
 
 /// P3-M1 (§53): HTTP login credentials — argon2id hashes (see
@@ -223,6 +228,14 @@ struct TomlLogging {
 }
 
 const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+
+/// AG-01: the listed tool surface, validated at every layer.
+fn tool_profile(v: &str) -> Result<String, String> {
+    match v {
+        "core" | "full" => Ok(v.into()),
+        _ => Err(format!("tool_profile must be core or full, got {v:?}")),
+    }
+}
 
 fn env_opt(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -319,6 +332,7 @@ pub(crate) fn load(
         replicate_advertise: None,
         ha_node: None,
         ha_ttl_ms: 10_000,
+        tool_profile: "full".into(),
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -383,6 +397,10 @@ pub(crate) fn load(
             }
             if let Some(v) = s.allow_remote_http {
                 cfg.allow_remote_http = v;
+            }
+            if let Some(v) = s.tool_profile {
+                cfg.tool_profile =
+                    tool_profile(&v).map_err(|e| format!("config {path}: server.{e}"))?;
             }
         }
         if let Some(a) = t.auth {
@@ -498,6 +516,9 @@ pub(crate) fn load(
     }
     if let Some(v) = env_opt("AIKOQL_MODEL_DIR") {
         cfg.model_dir = Some(v);
+    }
+    if let Some(v) = env_opt("AIKOQL_TOOL_PROFILE") {
+        cfg.tool_profile = tool_profile(&v).map_err(|e| format!("AIKOQL_TOOL_PROFILE: {e}"))?;
     }
     if let Some(v) = env_opt("AIKOQL_MODEL_AUTO_INSTALL") {
         cfg.model_auto_install = v == "1" || v.eq_ignore_ascii_case("true");
@@ -630,6 +651,13 @@ pub(crate) fn load(
                 }
                 Some(v) => return Err(format!("--ha-node requires a plain id, got {v:?}")),
                 None => return Err("--ha-node requires an id".into()),
+            },
+            "--tool-profile" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.tool_profile = tool_profile(v).map_err(|e| format!("--{e}"))?;
+                    i += 2;
+                }
+                None => return Err("--tool-profile requires core or full".into()),
             },
             "--ha-ttl-ms" => match args.get(i + 1) {
                 Some(v) => {
@@ -1199,6 +1227,39 @@ employee = ["salary", "ssn"]
         assert_eq!(cfg.db_path, "/env/db"); // env > TOML (database)
         assert_eq!(cfg.embedding_provider.as_deref(), Some("openai")); // env > TOML (embedding)
         assert_eq!(cfg.metrics_addr.as_deref(), Some("127.0.0.1:2000")); // CLI > all (server)
+    }
+
+    #[test]
+    fn tool_profile_from_toml_env_and_cli() {
+        assert_eq!(
+            load_bare(&argv(&["aikoql-mcp"])).unwrap().tool_profile,
+            "full"
+        );
+        let p = tmp_toml("[server]\ntool_profile = \"core\"\n");
+        let file = argv(&["aikoql-mcp", "--config", &p]);
+        assert_eq!(load_t(&file, None, None).unwrap().tool_profile, "core");
+        let bad = tmp_toml("[server]\ntool_profile = \"tiny\"\n");
+        assert!(load_t(&argv(&["aikoql-mcp", "--config", &bad]), None, None).is_err());
+        let env = |v: &str, args: &[String]| {
+            load_with_env(|| {
+                std::env::set_var("AIKOQL_TOOL_PROFILE", v);
+                let r = load(args, None, None);
+                std::env::remove_var("AIKOQL_TOOL_PROFILE");
+                r
+            })
+        };
+        assert_eq!(
+            env("full", &file).unwrap().tool_profile,
+            "full",
+            "env > TOML"
+        );
+        assert!(env("tiny", &argv(&["aikoql-mcp"])).is_err());
+        let cli = argv(&["aikoql-mcp", "--config", &p, "--tool-profile", "full"]);
+        assert_eq!(
+            load_t(&cli, None, None).unwrap().tool_profile,
+            "full",
+            "CLI > all"
+        );
     }
 
     #[test]

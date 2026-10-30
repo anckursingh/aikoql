@@ -86,6 +86,8 @@ pub(crate) struct McpSession {
     pub(crate) roles: Vec<String>,
     /// PRR-2: identity source — stdio trusts the caller, TCP trusts the token.
     pub(crate) trust_mode: TrustMode,
+    /// AG-01: tool groups this session enabled through tools_more (core profile)
+    pub(crate) tool_groups: std::collections::BTreeSet<&'static str>,
 }
 
 impl Default for McpSession {
@@ -96,6 +98,7 @@ impl Default for McpSession {
             tenant: None,
             roles: vec![],
             trust_mode: TrustMode::Stdio,
+            tool_groups: Default::default(),
         }
     }
 }
@@ -299,6 +302,7 @@ mod tests {
     fn forced_injection_overrides_identity() {
         let mut s = McpSession {
             trust_mode: TrustMode::Tcp,
+            tool_groups: Default::default(),
             agent_id: "tcp-agent".into(),
             tenant: Some("acme".into()),
             roles: vec!["viewer".into()],
@@ -324,6 +328,7 @@ mod tests {
     fn tcp_session_init_rejects_client_agent_id() {
         let mut s = McpSession {
             trust_mode: TrustMode::Tcp,
+            tool_groups: Default::default(),
             ..Default::default()
         };
         // The auth gate sets this on successful token verify (see

@@ -9,6 +9,8 @@ repository.workspace = true
 [dependencies]
 tokio = { version = "1", features = ["rt", "sync", "macros"] }
 sha2 = "0.10"
+# Ed25519 audit signatures (AG-30) — the same ring rustls already links
+ring = "0.17"
 hmac = "0.12"
 aes-gcm = "0.10"
 chacha20poly1305 = "0.10"

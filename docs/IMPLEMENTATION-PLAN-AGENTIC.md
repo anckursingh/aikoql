@@ -63,7 +63,7 @@ to win head-to-head evaluations; **P2** = differentiation / polish.
 
 ### Phase A — the agent surface (what an agent sees first)
 
-**AG-01 (P0) Tool profiles — a small default surface.**
+**AG-01 (P0) Tool profiles — a small default surface.** — **DONE 2026-10-30** (`--tool-profile core`: 13 tools / 6 169 bytes vs 103 / 43 284; ten groups via `tools_more`; config `[server] tool_profile`, `AIKOQL_TOOL_PROFILE`). Deviation: the default stays `full` — flipping it changes every existing agent's surface, so it is a separate decision.
 - *Problem:* 103 tools / 45 KB of schema in context. Tool-selection accuracy
   degrades with tool count and every token of schema is paid on every turn.
 - *Design:* `--tool-profile core|full|<custom>` (config
@@ -78,7 +78,7 @@ to win head-to-head evaluations; **P2** = differentiation / polish.
 - *Gate:* core `tools/list` ≤ 8 KB; every `full` tool reachable through a
   group; existing clients unchanged under `full`.
 
-**AG-02 (P0) One `recall` tool — retrieval as a single good call.**
+**AG-02 (P0) One `recall` tool — retrieval as a single good call.** — **DONE 2026-10-30** (semantic-led by default: 6 no-shared-word questions, vector 5/6 top-1 vs rrf 3/6 and text 2/6). Deviations: graph expansion lists each item's `related` edges rather than re-ranking with them; the token budget is a ~4 bytes/token estimate, not a tokenizer count; the recall@10 gate waits for the agent eval set (AG-61).
 - *Problem:* an agent must choose among `find_similar`, `memory_search`,
   `traverse`, `aikoql`, `compile_context`, `agent_memory` — the choice is the
   failure mode.
@@ -111,7 +111,7 @@ string error (architecture hygiene leg).
 
 ### Phase M — memory that manages itself
 
-**AG-10 (P0) One memory store.**
+**AG-10 (P0) One memory store.** — **DONE 2026-10-30** (Memory KOs as the source of truth, the Markdown files written as a view; `memory_search` served from the knowledge base; an idempotent import at start on writing nodes). Deviations: the files stay authoritative-looking rather than becoming an export-only format, for compatibility; memories are found by name with a scan of the Memory KOs (shortcut-marked).
 - *Problem:* `memory_*` tools write Markdown files outside the knowledge
   base — none of the moat applies to them.
 - *Design:* `memory_*` become views over KOs of type `Memory`
@@ -194,7 +194,7 @@ models never serves mixed-dimension results; migration survives a kill.
 
 ### Phase T — trust debt (the moat's own credibility)
 
-**AG-30 (P0) Real Ed25519 audit signatures** (ed25519-dalek, RFC 8032),
+**AG-30 (P0) Real Ed25519 audit signatures** — **DONE 2026-10-30** (`ring` Ed25519, RFC 8032 TEST 1-3; `evidence_pack` signs the audit chain under `AIKOQL_AUDIT_SIGNING_KEY`; verified by Python `cryptography` from the public key). The placeholder turned out never to have been called, so no chain migration was needed. Not yet: signing the journal per commit, CI wiring of the e2e script. (ed25519-dalek, RFC 8032),
 verifiable outside aikoql; migrate existing chains (re-sign with a marked
 algorithm switch, never rewrite history). *Gate:* RFC 8032 test vectors;
 an external verifier (Python `cryptography`) accepts an exported chain.

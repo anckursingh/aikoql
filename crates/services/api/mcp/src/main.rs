@@ -85,6 +85,26 @@ pub(crate) use tracing::{error, info, info_span, warn};
 
 pub(crate) static SERVER_START: OnceLock<Instant> = OnceLock::new();
 pub(crate) static MEMORY_DIR: OnceLock<String> = OnceLock::new();
+/// AG-30: the audit-signing key (AIKOQL_AUDIT_SIGNING_KEY), loaded once.
+pub(crate) static AUDIT_SIGNER: OnceLock<aikoql_kernel::security::SigningKey> = OnceLock::new();
+
+/// The Ed25519 seed in `path`: 64 hex characters (surrounding whitespace
+/// ignored), e.g. `openssl rand -hex 32 > audit.key`.
+fn load_audit_key(path: &str) -> Result<aikoql_kernel::security::SigningKey, String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let hex = raw.trim();
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!(
+            "{path} must hold a 32-byte Ed25519 seed as 64 hex characters"
+        ));
+    }
+    let mut seed = [0u8; 32];
+    for (i, byte) in seed.iter_mut().enumerate() {
+        // justified: validated as 64 ASCII hex digits above
+        *byte = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("hex digits");
+    }
+    Ok(aikoql_kernel::security::SigningKey::from_seed(seed))
+}
 
 /// P5-M22 (P1-15): the production maintainer's strong owner. The kernel's
 /// coordinator holds the maintainer WEAKLY (the P5-M18 Arc-cycle trap), so
@@ -257,9 +277,28 @@ fn main() {
     #[allow(unused_assignments, unused_variables)]
     let embedding_api_key = cfg.embedding_api_key;
     // PRR-3: local model store override (default ~/.aikoql/models).
+    // AG-01: once per process (serve runs once)
+    crate::tool_registry::CORE_PROFILE.get_or_init(|| cfg.tool_profile == "core");
     let model_dir_flag = cfg.model_dir;
     let model_auto_install = cfg.model_auto_install;
     MEMORY_DIR.set(memory_dir).ok();
+    // AG-30: a server meant to sign never runs unsigned — an unusable key exits
+    if let Some(path) = std::env::var("AIKOQL_AUDIT_SIGNING_KEY")
+        .ok()
+        .filter(|p| !p.is_empty())
+    {
+        match load_audit_key(&path) {
+            Ok(key) => {
+                info!(public_key = %key.public_key().iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                    "audit evidence will be signed (Ed25519)");
+                AUDIT_SIGNER.get_or_init(|| key);
+            }
+            Err(e) => {
+                eprintln!("AIKOQL_AUDIT_SIGNING_KEY: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
 
     // P3-M1 (§53–54): build the HTTP login resolver once — argon2id hashes
     // verified per login, bootstrap admin hashed here (the plaintext then
@@ -611,6 +650,21 @@ fn main() {
         kernel
     };
     let kernel = Arc::new(kernel);
+    // AG-10: memories still only on disk join the knowledge base, once —
+    // on a node that writes (a standby or replica gets them replicated)
+    if !serving_standby && role != replication::Role::Fenced {
+        if let Some(dir) = MEMORY_DIR.get() {
+            match crate::tools::import_memory_dir(&kernel, dir) {
+                Ok(0) => {}
+                Ok(n) => {
+                    info!(dir = %dir, imported = n, "memory directory imported into the knowledge base")
+                }
+                Err(e) => {
+                    warn!(dir = %dir, error = %e, "memory directory import failed — the files stay as they are")
+                }
+            }
+        }
+    }
     if let Some(ha) = ha_standby {
         let Some(a) = admin.clone() else {
             eprintln!("--ha-lease needs the storage admin surface");

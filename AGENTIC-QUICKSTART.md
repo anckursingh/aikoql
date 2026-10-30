@@ -94,6 +94,30 @@ identity is server-assigned by the token — clients must not send an
 `agent_id`; on stdio, the session is trusted and you declare identity with
 `session_init`.
 
+**Memories are knowledge too**: `memory_store` / `memory_update` /
+`memory_delete` keep each memory as a `Memory` object in the knowledge
+base — versioned, traceable, found by `recall` — and still write the
+Markdown file and its `MEMORY.md` line, so tools that read the directory
+keep working. A memory directory that already exists is imported once at
+startup; an unchanged file adds nothing on later starts.
+
+**One call to recall**: `recall {"query": "what is our refund policy?"}`
+answers in one call with what is currently known — semantic search when
+the embedding model is installed (keyword search otherwise, and the
+answer says so), superseded versions left out, and each item carrying its
+status, authority, a short provenance line (`why`) and any open conflict
+about it. `max_tokens` (default 2000) bounds the answer; `fusion: "rrf"`
+adds keyword matching for exact identifiers.
+
+**A smaller tool surface**: `serve --tool-profile core` lists 13 tools
+(session_init, remember, get, find_similar, relate, traverse, forget,
+trace, find_conflicts, resolve_conflict, aikoql, health, tools_more) in
+about 6 KB instead of the full 103 (~43 KB in every agent context). Call
+`tools_more` to see the other groups (knowledge, epistemic, memory,
+ingestion, engineering, eval, txn, compliance, admin, programs) and
+`tools_more {"group": "txn"}` to add one — clients that honour
+`list_changed` reload the list. Any tool can still be called by name.
+
 **Remote MCP over HTTP** (Streamable HTTP — what remote MCP clients speak):
 the HTTP surface serves `POST /mcp`, authenticated with the same tokens.
 
