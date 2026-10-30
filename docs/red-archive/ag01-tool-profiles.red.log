@@ -1,0 +1,39 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/mcp_tools_profile.rs (target/debug/deps/mcp_tools_profile-c01fc2ab9db3b909)
+
+running 4 tests
+test ag01c_enabling_a_group_lists_it_and_says_so ... FAILED
+test ag01a_the_core_profile_is_small ... FAILED
+test ag01b_every_full_tool_is_reachable_through_exactly_one_group ... FAILED
+test ag01d_full_stays_the_default_and_core_never_blocks_a_call ... ok
+
+failures:
+
+---- ag01c_enabling_a_group_lists_it_and_says_so stdout ----
+
+thread 'ag01c_enabling_a_group_lists_it_and_says_so' (2876746) panicked at crates/services/api/mcp/tests/mcp_tools_profile.rs:188:5:
+assertion `left == right` failed: {"jsonrpc":"2.0","id":2,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"aikoql-mcp","version":"0.2.4"}}}
+  left: Null
+ right: Bool(true)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- ag01a_the_core_profile_is_small stdout ----
+
+thread 'ag01a_the_core_profile_is_small' (2876744) panicked at crates/services/api/mcp/tests/mcp_tools_profile.rs:128:5:
+core tools/list is 43171 bytes > 8192 (103 tools)
+
+---- ag01b_every_full_tool_is_reachable_through_exactly_one_group stdout ----
+
+thread 'ag01b_every_full_tool_is_reachable_through_exactly_one_group' (2876745) panicked at crates/services/api/mcp/tests/mcp_tools_profile.rs:167:28:
+tools_more lists no groups: {"ok":false,"error":{"code":"INTERNAL","message":"unknown tool: tools_more","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+
+
+failures:
+    ag01a_the_core_profile_is_small
+    ag01b_every_full_tool_is_reachable_through_exactly_one_group
+    ag01c_enabling_a_group_lists_it_and_says_so
+
+test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.23s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_tools_profile`
+EXIT=101

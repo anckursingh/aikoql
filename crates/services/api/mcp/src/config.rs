@@ -57,6 +57,9 @@ pub(crate) struct RuntimeConfig {
     pub replicate_advertise: Option<String>,
     pub ha_node: Option<String>,
     pub ha_ttl_ms: u64,
+    /// AG-01: the listed tool surface — "full" (every tool) or "core" (a
+    /// small set + tools_more). Listing only; calls are governed by roles.
+    pub tool_profile: String,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -319,6 +322,7 @@ pub(crate) fn load(
         replicate_advertise: None,
         ha_node: None,
         ha_ttl_ms: 10_000,
+        tool_profile: "full".into(),
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -630,6 +634,17 @@ pub(crate) fn load(
                 }
                 Some(v) => return Err(format!("--ha-node requires a plain id, got {v:?}")),
                 None => return Err("--ha-node requires an id".into()),
+            },
+            "--tool-profile" => match args.get(i + 1).map(String::as_str) {
+                Some(v @ ("core" | "full")) => {
+                    cfg.tool_profile = v.into();
+                    i += 2;
+                }
+                other => {
+                    return Err(format!(
+                        "--tool-profile requires core or full, got {other:?}"
+                    ))
+                }
             },
             "--ha-ttl-ms" => match args.get(i + 1) {
                 Some(v) => {
