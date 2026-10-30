@@ -40,7 +40,7 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   (checked in the resolver the connection uses), no redirects, short
   timeouts, 64 KB, cached 5 min; the document must name itself and be a
   public client. Advertised as `client_id_metadata_document_supported`.
-- **`AIKOQL_MODEL_AUTO_INSTALL=1`**: `serve` downloads the default embedding
+- **`AIKOQL_MODEL_AUTO_INSTALL=1`** (or `[embedding] auto_install = true`): `serve` downloads the default embedding
   model once when it is missing (in Docker: into the `/data/models` volume);
   a failed download still serves, and `/health` says why. Off by default —
   the runtime still never downloads unasked. Model downloads honour
