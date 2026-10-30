@@ -1,0 +1,8 @@
+{
+  "id": "model-auto-install",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test model_auto_install",
+  "captured_at": "2026-10-30T07:46:35Z",
+  "captured_head": "8d6e4cb3bd50a4dfaced6c3635ab795a6af97c46",
+  "exit_code": 101
+}
