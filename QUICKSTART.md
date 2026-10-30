@@ -145,7 +145,7 @@ Try it with any PDF on your machine.
 | **Agent Runtime** | `agent_memory`, `session_init`, `batch` |
 | **Audit** | `trace`, `explain`, `prove`, `verify`, `audit_report` |
 | **Backup** | `backup`, `verify_backup`, `restore`, `list_backups` |
-| **Compliance** | `compliance_report` (encryption audit) |
+| **Compliance** | `compliance_report` (encryption audit), `evidence_pack` (GDPR/HIPAA pack; Ed25519-signed with `AIKOQL_AUDIT_SIGNING_KEY`) |
 | **Ops** | `health`, `metrics`, `eval_recall`, `eval_staleness`, `eval_contradictions` |
 
 ### Document Pipeline Tools
@@ -166,6 +166,7 @@ Environment variables:
 - `AIKOQL_TCP_TOKEN_FILE` — file containing the token (env replaces flags).
 - `AIKOQL_DB`, `AIKOQL_LISTEN`, `AIKOQL_METRICS_ADDR` — override TOML settings.
 - `AIKOQL_PASSPHRASE` — KMS passphrase for encryption (if enabled).
+- `AIKOQL_AUDIT_SIGNING_KEY` — file holding a 32-byte Ed25519 seed as 64 hex characters (`openssl rand -hex 32 > audit.key`, keep it private). `evidence_pack` then signs its audit chain (`audit_signature`), checkable by anyone with the public key — `scripts/e2e-audit-verify.py` shows how. An unreadable or malformed key stops the server (exit 2).
 
 MCP calls are rate-limited by default (300 calls/min). A busy agent loop
 can hit that — raise it in config:

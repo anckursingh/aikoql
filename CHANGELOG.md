@@ -9,6 +9,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Signed audit evidence (AG-30)**: with `AIKOQL_AUDIT_SIGNING_KEY`
+  (a hex Ed25519 seed file) `evidence_pack` adds `audit_signature` — a
+  standard RFC 8032 signature of the audit chain, verifiable with the
+  public key alone (`scripts/e2e-audit-verify.py` checks it with Python
+  `cryptography`). An unusable key refuses to start.
 - **One memory store (AG-10)**: the `memory_*` tools keep each memory as
   a versioned `Memory` knowledge object (recall, trace and lineage apply)
   and still write the Markdown file view; `memory_search` answers from
@@ -27,6 +32,14 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   for the session (`notifications/tools/list_changed`). Listing only:
   any tool stays callable under the caller's roles. `full` remains the
   default.
+
+### Security
+
+- **The audit "Ed25519" was a placeholder** that was never wired up: its
+  signatures mixed bytes of the private seed into the output (one
+  signature leaked the key), verification needed the private key, and
+  keys were seeded from the clock. Nothing called it, so no signature was
+  ever produced. It is replaced by real Ed25519 (RFC 8032, via `ring`).
 
 ### Fixed
 

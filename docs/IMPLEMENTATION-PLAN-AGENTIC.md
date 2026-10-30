@@ -194,7 +194,7 @@ models never serves mixed-dimension results; migration survives a kill.
 
 ### Phase T — trust debt (the moat's own credibility)
 
-**AG-30 (P0) Real Ed25519 audit signatures** (ed25519-dalek, RFC 8032),
+**AG-30 (P0) Real Ed25519 audit signatures** — **DONE 2026-10-30** (`ring` Ed25519, RFC 8032 TEST 1-3; `evidence_pack` signs the audit chain under `AIKOQL_AUDIT_SIGNING_KEY`; verified by Python `cryptography` from the public key). The placeholder turned out never to have been called, so no chain migration was needed. Not yet: signing the journal per commit, CI wiring of the e2e script. (ed25519-dalek, RFC 8032),
 verifiable outside aikoql; migrate existing chains (re-sign with a marked
 algorithm switch, never rewrite history). *Gate:* RFC 8032 test vectors;
 an external verifier (Python `cryptography`) accepts an exported chain.
