@@ -1,0 +1,52 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/mcp_memory_scopes.rs (target/debug/deps/mcp_memory_scopes-0449ee8d33e0d5f8)
+
+running 5 tests
+test s02_a_shared_memory_is_readable_by_the_tenant_but_not_writable ... FAILED
+test s03_sharing_stops_at_the_tenant ... FAILED
+test s05_promotion_is_a_new_version ... FAILED
+test s04_a_session_memory_stays_in_its_session ... FAILED
+test s01_a_private_memory_reaches_no_one_else_by_any_read ... ok
+
+failures:
+
+---- s02_a_shared_memory_is_readable_by_the_tenant_but_not_writable stdout ----
+
+thread 's02_a_shared_memory_is_readable_by_the_tenant_but_not_writable' (3039088) panicked at crates/services/api/mcp/tests/mcp_memory_scopes.rs:197:5:
+assertion `left == right` failed: {"stored":true,"name":"wifi","file":"wifi.md","path":"/var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/memscope-shared-90395/memory/wifi.md","koid":"01a18de714210000000000000000a9c9","version":1}
+  left: Null
+ right: String("shared")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- s03_sharing_stops_at_the_tenant stdout ----
+
+thread 's03_sharing_stops_at_the_tenant' (3039089) panicked at crates/services/api/mcp/tests/mcp_memory_scopes.rs:246:5:
+assertion `left == right` failed
+  left: []
+ right: ["roadmap"]
+
+---- s05_promotion_is_a_new_version stdout ----
+
+thread 's05_promotion_is_a_new_version' (3039091) panicked at crates/services/api/mcp/tests/mcp_memory_scopes.rs:305:5:
+assertion `left == right` failed: {"updated":true,"name":"oncall","file":"oncall.md","path":"/var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/memscope-promote-90395/memory/oncall.md","koid":"01a18de714180000000000000000a9c9","version":1}
+  left: Number(1)
+ right: Number(2)
+
+---- s04_a_session_memory_stays_in_its_session stdout ----
+
+thread 's04_a_session_memory_stays_in_its_session' (3039090) panicked at crates/services/api/mcp/tests/mcp_memory_scopes.rs:261:5:
+assertion `left == right` failed: its own session
+  left: []
+ right: ["scratch"]
+
+
+failures:
+    s02_a_shared_memory_is_readable_by_the_tenant_but_not_writable
+    s03_sharing_stops_at_the_tenant
+    s04_a_session_memory_stays_in_its_session
+    s05_promotion_is_a_new_version
+
+test result: FAILED. 1 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.29s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_memory_scopes`
+EXIT=101

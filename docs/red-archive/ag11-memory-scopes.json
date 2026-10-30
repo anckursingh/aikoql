@@ -1,0 +1,8 @@
+{
+  "id": "ag11-memory-scopes",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_memory_scopes",
+  "captured_at": "2026-10-30T17:41:32Z",
+  "captured_head": "f455f1d0428b5c6a46ee1fa1dd0738aebc2eec26",
+  "exit_code": 101
+}
