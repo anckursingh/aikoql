@@ -135,7 +135,7 @@ fn ag01a_the_core_profile_is_small() {
         "session_init",
         "remember",
         "get",
-        "find_similar",
+        "recall",
         "forget",
         "aikoql",
         "tools_more",

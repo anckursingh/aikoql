@@ -13,7 +13,7 @@ pub(crate) const CORE_TOOLS: &[&str] = &[
     "session_init",
     "remember",
     "get",
-    "find_similar",
+    "recall",
     "relate",
     "traverse",
     "forget",
@@ -29,6 +29,7 @@ pub(crate) const CORE_TOOLS: &[&str] = &[
 pub(crate) const TOOL_GROUPS: &[(&str, &str, &[&str])] = &[
     ("knowledge", "more writes and reads: derive, observe, evolve, explain, provenance, batch, decide, idempotent get, conversation summaries", &[
         "summarize_conversation", "evolve", "derive", "observe", "get_by_idem", "explain", "provenance", "batch", "decide",
+        "find_similar",
     ]),
     ("epistemic", "authority, verification, contradiction, supersession, merge/split, invalidation, reasoning", &[
         "assert_knowledge", "verify_knowledge", "contradict", "supersede", "merge", "split_entity", "invalidate",
@@ -154,6 +155,7 @@ pub(crate) fn tools_list() -> J {
             {"name": "verify", "description": "Check whether a subject may perform an action on an object.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "action": {"type": "string"}}, "required": ["koid", "action"]}},
             {"name": "get", "description": "Fetch a knowledge object by KOID.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid}, "required": ["koid"]}},
             {"name": "get_by_idem", "description": "Fetch a knowledge object by its idempotency key (the O(1) external-id lookup — remember's exact-once replay path, read-only).", "inputSchema": {"type": "object", "properties": {"subject": subj, "key": {"type": "string", "description": "The idempotency key the object was remembered with"}}, "required": ["key"]}},
+            {"name": "recall", "description": "Recall what is known about a question, in one call: hybrid text + semantic search over current knowledge (superseded generations excluded). Each item carries its status, authority, a provenance one-liner (why) and the open conflicts touching it; the answer fits max_tokens.", "inputSchema": {"type": "object", "properties": {"subject": subj, "query": {"type": "string", "description": "What to recall, in natural language"}, "k": {"type": "integer", "description": "Most items to return (default 10, max 50)"}, "max_tokens": {"type": "integer", "description": "Answer budget in tokens (default 2000, estimated at ~4 bytes/token)"}, "wait_for_freshness_ms": {"type": "integer", "description": "Wait up to this long for just-written knowledge to be indexed (default 1000)"}, "fusion": {"type": "string", "enum": ["vector", "text", "rrf"], "description": "Default: vector when the query could be embedded, else text. rrf adds keyword matching — useful for exact identifiers"}}, "required": ["query"]}},
             {"name": "find_similar", "description": "Hybrid recall: vector + text + filters with RRF/weighted fusion.", "inputSchema": {"type": "object", "properties": {"subject": subj, "text": {"type": "string"}, "vector": {"type": "array"}, "embedding_model": {"type": "string", "description": "When set, only vectors from this embedding model are considered"}, "k": {"type": "integer"}, "fusion": {"type": "string"}, "type_name": {"type": "string"}, "wait_for_freshness_ms": {"type": "integer", "description": "Opt-in: wait up to this many ms for the index maintainer to drain before querying. Default 0 — query now; every hit reports index_lag_ms."}}}},
             {"name": "trace", "description": "Full lineage of a fact: versions + events.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid}, "required": ["koid"]}},
             {"name": "explain", "description": "Why is this believed: provenance, source, confidence, evidence.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "version": {"type": "integer"}}, "required": ["koid"]}},
@@ -440,6 +442,7 @@ pub(crate) fn call_tool(
         }
         "session_init" => tool_session_init(args, session),
         "tools_more" => tool_tools_more(args, session),
+        "recall" => tool_recall(k, args),
         "decide" => tool_decide(k, args),
         "constraint_diagnostics" => tool_constraint_diagnostics(k, args),
         "register_schema" => tool_register_schema(k, args),
