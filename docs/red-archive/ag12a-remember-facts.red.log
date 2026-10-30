@@ -1,0 +1,50 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/mcp_remember_facts.rs (target/debug/deps/mcp_remember_facts-7d5a5eea6d1bbd30)
+
+running 5 tests
+test f04_an_explicit_update_supersedes ... FAILED
+test f01_new_facts_land_with_provenance_and_are_recalled ... FAILED
+test f05_a_bad_fact_fails_alone ... FAILED
+test f02_a_repeated_fact_is_a_duplicate_not_a_second_object ... FAILED
+test f03_a_contradiction_becomes_a_conflict_never_an_overwrite ... FAILED
+
+failures:
+
+---- f04_an_explicit_update_supersedes stdout ----
+
+thread 'f04_an_explicit_update_supersedes' (3080530) panicked at crates/services/api/mcp/tests/mcp_remember_facts.rs:102:32:
+remember_facts: {"ok":false,"error":{"code":"INTERNAL","message":"unknown tool: remember_facts","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- f01_new_facts_land_with_provenance_and_are_recalled stdout ----
+
+thread 'f01_new_facts_land_with_provenance_and_are_recalled' (3080527) panicked at crates/services/api/mcp/tests/mcp_remember_facts.rs:102:32:
+remember_facts: {"ok":false,"error":{"code":"INTERNAL","message":"unknown tool: remember_facts","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+
+---- f05_a_bad_fact_fails_alone stdout ----
+
+thread 'f05_a_bad_fact_fails_alone' (3080531) panicked at crates/services/api/mcp/tests/mcp_remember_facts.rs:102:32:
+remember_facts: {"ok":false,"error":{"code":"INTERNAL","message":"unknown tool: remember_facts","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+
+---- f02_a_repeated_fact_is_a_duplicate_not_a_second_object stdout ----
+
+thread 'f02_a_repeated_fact_is_a_duplicate_not_a_second_object' (3080528) panicked at crates/services/api/mcp/tests/mcp_remember_facts.rs:102:32:
+remember_facts: {"ok":false,"error":{"code":"INTERNAL","message":"unknown tool: remember_facts","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+
+---- f03_a_contradiction_becomes_a_conflict_never_an_overwrite stdout ----
+
+thread 'f03_a_contradiction_becomes_a_conflict_never_an_overwrite' (3080529) panicked at crates/services/api/mcp/tests/mcp_remember_facts.rs:102:32:
+remember_facts: {"ok":false,"error":{"code":"INTERNAL","message":"unknown tool: remember_facts","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+
+
+failures:
+    f01_new_facts_land_with_provenance_and_are_recalled
+    f02_a_repeated_fact_is_a_duplicate_not_a_second_object
+    f03_a_contradiction_becomes_a_conflict_never_an_overwrite
+    f04_an_explicit_update_supersedes
+    f05_a_bad_fact_fails_alone
+
+test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.35s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_remember_facts`
+EXIT=101

@@ -1,0 +1,8 @@
+{
+  "id": "ag12a-remember-facts",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_remember_facts",
+  "captured_at": "2026-10-30T17:53:12Z",
+  "captured_head": "2cbc6df84b6db76f690bb0f8618deb72d4d1b456",
+  "exit_code": 101
+}
