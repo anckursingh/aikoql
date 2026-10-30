@@ -8,6 +8,129 @@ use crate::{error_codes, json, Kernel, J};
 
 use crate::protocol::*;
 
+/// AG-01: the core profile — the tools every agent sees first.
+pub(crate) const CORE_TOOLS: &[&str] = &[
+    "session_init",
+    "remember",
+    "get",
+    "find_similar",
+    "relate",
+    "traverse",
+    "forget",
+    "trace",
+    "find_conflicts",
+    "resolve_conflict",
+    "aikoql",
+    "health",
+];
+
+/// AG-01: the rest of the surface by group — `tools_more {group}` lists and
+/// enables one. Every tool outside CORE_TOOLS is in exactly one group.
+pub(crate) const TOOL_GROUPS: &[(&str, &str, &[&str])] = &[
+    ("knowledge", "more writes and reads: derive, observe, evolve, explain, provenance, batch, decide, idempotent get, conversation summaries", &[
+        "summarize_conversation", "evolve", "derive", "observe", "get_by_idem", "explain", "provenance", "batch", "decide",
+    ]),
+    ("epistemic", "authority, verification, contradiction, supersession, merge/split, invalidation, reasoning", &[
+        "assert_knowledge", "verify_knowledge", "contradict", "supersede", "merge", "split_entity", "invalidate",
+        "resolve_conflict_by_authority", "verify", "prove", "find_stale", "reason", "infer", "predict",
+    ]),
+    ("memory", "the agent memory directory, experiences, compiled context", &[
+        "memory_search", "memory_store", "memory_update", "memory_delete", "record_experience", "find_experiences",
+        "agent_memory", "compile_context",
+    ]),
+    ("ingestion", "documents, connectors, schema and ontology discovery, secret filtering", &[
+        "document_ingest", "document_list", "document_status", "document_compile", "reconcile", "connector_bridge",
+        "filter_secrets", "discover_schema", "discover_ontology",
+    ]),
+    ("engineering", "the engineering knowledge compiler: components, decisions, requirements, change validation", &[
+        "explain_component", "explain_decision", "trace_requirement", "validate_change", "propose_update",
+    ]),
+    ("eval", "recall, staleness and contradiction evaluation, benchmarks", &[
+        "eval_recall", "eval_staleness", "eval_contradictions", "deploy_benchmark", "list_benchmarks",
+    ]),
+    ("txn", "multi-operation knowledge transactions", &["txn_begin", "txn_stage", "txn_commit", "txn_rollback"]),
+    ("compliance", "audit, compliance and evidence-pack reports", &["audit_report", "compliance_report", "evidence_pack"]),
+    ("admin", "backups, storage, indexes, schemas, metrics, jobs", &[
+        "backup", "restore", "list_backups", "verify_backup", "storage_stats", "storage_compact", "storage_checkpoint",
+        "index_create", "constraint_diagnostics", "register_schema", "metrics", "job_status", "approve_job", "abi_version",
+    ]),
+    ("programs", "deployable programs, policies, workflows, triggers, agents, connectors, views, reports", &[
+        "deploy_program", "execute_program", "list_programs", "program_cache_stats", "deploy_policy",
+        "evaluate_policies", "deploy_workflow", "execute_workflow", "deploy_trigger", "check_triggers",
+        "add_dependency", "deploy_agent", "list_agents", "execute_agent", "deploy_connector", "list_connectors",
+        "deploy_view", "list_views", "deploy_report", "list_reports",
+    ]),
+];
+
+/// AG-01: set once at serve start from `--tool-profile` (unset = full).
+pub(crate) static CORE_PROFILE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+pub(crate) fn core_profile() -> bool {
+    CORE_PROFILE.get().copied().unwrap_or(false)
+}
+
+/// tools/list for this session: everything under the full profile; under
+/// core, CORE_TOOLS + the session's enabled groups + tools_more.
+pub(crate) fn tools_list_for(session: &McpSession) -> J {
+    let mut all = tools_list();
+    if !core_profile() {
+        return all;
+    }
+    let listed = |name: &str| {
+        CORE_TOOLS.contains(&name)
+            || TOOL_GROUPS
+                .iter()
+                .any(|(g, _, ts)| session.tool_groups.contains(g) && ts.contains(&name))
+    };
+    let mut tools: Vec<J> = std::mem::take(&mut all["tools"])
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| listed(t["name"].as_str().unwrap_or("")))
+        .cloned()
+        .collect();
+    tools.push(json!({
+        "name": "tools_more",
+        "description": "More aikoql tools, by group. Without group: the groups and their tools. With group: that group's tool definitions, enabled for this session (the tool list changes).",
+        "inputSchema": {"type": "object", "properties": {
+            "group": {"type": "string", "enum": TOOL_GROUPS.iter().map(|(g, _, _)| *g).collect::<Vec<_>>()}
+        }}
+    }));
+    json!({ "tools": tools })
+}
+
+/// `tools_more`: the group index, or one group's definitions (enabled for
+/// the session from then on).
+pub(crate) fn tool_tools_more(args: &J, session: &mut McpSession) -> Result<J, String> {
+    let Some(group) = args.get("group").and_then(J::as_str) else {
+        let groups: serde_json::Map<String, J> = TOOL_GROUPS
+            .iter()
+            .map(|(g, _, ts)| (g.to_string(), json!(ts)))
+            .collect();
+        let about: serde_json::Map<String, J> = TOOL_GROUPS
+            .iter()
+            .map(|(g, d, _)| (g.to_string(), json!(d)))
+            .collect();
+        return Ok(json!({ "groups": groups, "about": about }));
+    };
+    let Some((name, _, names)) = TOOL_GROUPS.iter().find(|(g, _, _)| *g == group) else {
+        let known: Vec<&str> = TOOL_GROUPS.iter().map(|(g, _, _)| *g).collect();
+        return Err(format!(
+            "unknown tool group {group:?} — groups: {}",
+            known.join(", ")
+        ));
+    };
+    session.tool_groups.insert(name);
+    let tools: Vec<J> = tools_list()["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| names.contains(&t["name"].as_str().unwrap_or("")))
+        .cloned()
+        .collect();
+    Ok(json!({ "group": name, "enabled": true, "tools": tools }))
+}
+
 pub(crate) fn tools_list() -> J {
     let subj = json!({"type": "string", "description": "calling principal (default: mcp-agent)"});
     let koid = json!({"type": "string", "description": "32-char hex KOID"});
@@ -316,6 +439,7 @@ pub(crate) fn call_tool(
             return txn_dispatch(k, name, args, db_path, session, txns);
         }
         "session_init" => tool_session_init(args, session),
+        "tools_more" => tool_tools_more(args, session),
         "decide" => tool_decide(k, args),
         "constraint_diagnostics" => tool_constraint_diagnostics(k, args),
         "register_schema" => tool_register_schema(k, args),

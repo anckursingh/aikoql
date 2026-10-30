@@ -257,6 +257,8 @@ fn main() {
     #[allow(unused_assignments, unused_variables)]
     let embedding_api_key = cfg.embedding_api_key;
     // PRR-3: local model store override (default ~/.aikoql/models).
+    // AG-01: once per process (serve runs once)
+    crate::tool_registry::CORE_PROFILE.get_or_init(|| cfg.tool_profile == "core");
     let model_dir_flag = cfg.model_dir;
     let model_auto_install = cfg.model_auto_install;
     MEMORY_DIR.set(memory_dir).ok();

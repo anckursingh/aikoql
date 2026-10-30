@@ -149,6 +149,7 @@ pub(crate) fn handle_tcp_client(
     // PRR-2: TCP identity comes exclusively from a verified --tcp-token.
     let mut session = McpSession {
         trust_mode: TrustMode::Tcp,
+        tool_groups: Default::default(),
         ..Default::default()
     };
     // P5-M11: connection-scoped transaction handles (sv011).
