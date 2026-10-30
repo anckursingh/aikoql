@@ -49,10 +49,23 @@ use std::time::Instant;
 struct Counting;
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 static ARMED: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    // the arming thread only: sibling tests run on other threads meanwhile
+    static ARMED_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn counted() -> bool {
+    ARMED.load(Ordering::Relaxed) == 1 && ARMED_HERE.try_with(|a| a.get()).unwrap_or(false)
+}
+
+fn arm(on: bool) {
+    ARMED_HERE.with(|a| a.set(on));
+    ARMED.store(usize::from(on), Ordering::Relaxed);
+}
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if ARMED.load(Ordering::Relaxed) == 1 {
+        if counted() {
             ALLOCS.fetch_add(1, Ordering::Relaxed);
         }
         System.alloc(layout)
@@ -61,7 +74,7 @@ unsafe impl GlobalAlloc for Counting {
         System.dealloc(ptr, layout)
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if ARMED.load(Ordering::Relaxed) == 1 {
+        if counted() {
             ALLOCS.fetch_add(1, Ordering::Relaxed);
         }
         System.realloc(ptr, layout, new_size)
@@ -109,10 +122,10 @@ fn restart_index_reparse_pin() {
     let reader = SegmentReader::open(&path).unwrap();
     let target = format!("k{:08}", 16);
     let measure = || {
-        ARMED.store(1, Ordering::Relaxed);
+        arm(true);
         ALLOCS.store(0, Ordering::Relaxed);
         let out = reader.get(target.as_bytes()).unwrap();
-        ARMED.store(0, Ordering::Relaxed);
+        arm(false);
         assert!(out.is_some(), "the corpus key resolves");
         ALLOCS.load(Ordering::Relaxed) as u64
     };
@@ -297,10 +310,10 @@ fn m44_restart_index_cells() {
     // the steady state the pin asserts (the pin's a2).
     reader.get(target.as_bytes()).unwrap();
     let measure = || {
-        ARMED.store(1, Ordering::Relaxed);
+        arm(true);
         ALLOCS.store(0, Ordering::Relaxed);
         let out = reader.get(target.as_bytes()).unwrap();
-        ARMED.store(0, Ordering::Relaxed);
+        arm(false);
         assert!(out.is_some());
         ALLOCS.load(Ordering::Relaxed) as u64
     };
