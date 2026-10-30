@@ -79,6 +79,9 @@ pub(crate) struct RuntimeConfig {
     pub embedding_api_key: Option<String>,
     /// None = default store (~/.aikoql/models).
     pub model_dir: Option<String>,
+    /// [embedding].auto_install / AIKOQL_MODEL_AUTO_INSTALL: serve downloads
+    /// a missing default model once (the opt-in exception to PRR-3)
+    pub model_auto_install: bool,
     pub log_level: String,
     pub log_format: String,
     /// [rate_limit] — enforced as a 60s window: per connection on MCP
@@ -327,6 +330,7 @@ pub(crate) fn load(
         embedding_model: String::new(),
         embedding_api_key: None,
         model_dir: None,
+        model_auto_install: false,
         log_level: "info".into(),
         log_format: "text".into(),
         rate_enabled: true,
@@ -1188,6 +1192,30 @@ employee = ["salary", "ssn"]
         assert_eq!(cfg.db_path, "/env/db"); // env > TOML (database)
         assert_eq!(cfg.embedding_provider.as_deref(), Some("openai")); // env > TOML (embedding)
         assert_eq!(cfg.metrics_addr.as_deref(), Some("127.0.0.1:2000")); // CLI > all (server)
+    }
+
+    #[test]
+    fn model_auto_install_from_toml_and_env() {
+        assert!(
+            !load_bare(&argv(&["aikoql-mcp"]))
+                .unwrap()
+                .model_auto_install
+        );
+        let p = tmp_toml("[embedding]\nauto_install = true\n");
+        let on = argv(&["aikoql-mcp", "--config", &p]);
+        assert!(load_t(&on, None, None).unwrap().model_auto_install);
+        let env = |v: &str, args: &[String]| {
+            load_with_env(|| {
+                std::env::set_var("AIKOQL_MODEL_AUTO_INSTALL", v);
+                let r = load(args, None, None);
+                std::env::remove_var("AIKOQL_MODEL_AUTO_INSTALL");
+                r
+            })
+            .unwrap()
+            .model_auto_install
+        };
+        assert!(!env("0", &on), "env > TOML");
+        assert!(env("true", &argv(&["aikoql-mcp"])));
     }
 
     #[test]
