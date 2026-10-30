@@ -694,7 +694,18 @@ jobs:
             fi
             ok=0
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
-              if cargo publish -p "${crate}"; then ok=1; break; fi
+              if cargo publish -p "${crate}" 2>&1 | tee publish.log; then ok=1; break; fi
+              # crates.io rate-limits NEW crates (a burst, then a trickle):
+              # its 429 names the time to retry — wait for it, not 60 s
+              when="$(sed -n 's/.*try again after \(.* GMT\).*/\1/p' publish.log | head -1)"
+              if [ -n "$when" ]; then
+                # unparsable → 0 → out of range → the 600 s fallback
+                wait=$(( $(date -d "$when" +%s 2>/dev/null || echo 0) - $(date +%s) + 10 ))
+                [ "$wait" -ge 10 ] && [ "$wait" -le 3600 ] || wait=600
+                echo "::warning::publish ${crate} rate-limited by crates.io (attempt ${attempt}) — waiting ${wait}s, until ${when}"
+                sleep "$wait"
+                continue
+              fi
               echo "::warning::publish ${crate} failed (attempt ${attempt}) — sparse-index lag, retrying in 60s"
               sleep 60
             done
