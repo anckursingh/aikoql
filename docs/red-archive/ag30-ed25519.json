@@ -1,0 +1,8 @@
+{
+  "id": "ag30-ed25519",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --lib signing",
+  "captured_at": "2026-10-30T16:45:07Z",
+  "captured_head": "6f177e595ffa4bca2e699e0371542e01abb5cf35",
+  "exit_code": 101
+}

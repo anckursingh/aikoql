@@ -1,0 +1,32 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/aikoql_kernel-921adab03cc9c007)
+
+running 3 tests
+test security::signing::tests::generated_keys_are_distinct ... ok
+test security::signing::tests::verification_needs_only_the_public_key_and_rejects_tampering ... FAILED
+test security::signing::tests::rfc8032_test_vectors ... FAILED
+
+failures:
+
+---- security::signing::tests::verification_needs_only_the_public_key_and_rejects_tampering stdout ----
+
+thread 'security::signing::tests::verification_needs_only_the_public_key_and_rejects_tampering' (2988767) panicked at crates/kernel/src/security/signing.rs:234:9:
+assertion failed: SigningKey::verify(&pk, &msg, &sig)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- security::signing::tests::rfc8032_test_vectors stdout ----
+
+thread 'security::signing::tests::rfc8032_test_vectors' (2988766) panicked at crates/kernel/src/security/signing.rs:207:13:
+assertion `left == right` failed: TEST 1 public key
+  left: [10, 132, 181, 106, 139, 160, 19, 233, 223, 235, 224, 145, 199, 92, 3, 184, 147, 101, 115, 138, 155, 123, 20, 148, 57, 168, 133, 49, 252, 188, 139, 2]
+ right: [215, 90, 152, 1, 130, 177, 10, 183, 213, 75, 254, 211, 201, 100, 7, 58, 14, 225, 114, 243, 218, 166, 35, 37, 175, 2, 26, 104, 247, 7, 81, 26]
+
+
+failures:
+    security::signing::tests::rfc8032_test_vectors
+    security::signing::tests::verification_needs_only_the_public_key_and_rejects_tampering
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-kernel --lib`
+EXIT=101
