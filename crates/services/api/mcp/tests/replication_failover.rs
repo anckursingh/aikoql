@@ -1793,3 +1793,268 @@ fn real_k8s_ha_failover_on_a_lease() {
     let obj: J = serde_json::from_slice(&obj.stdout).expect("the Lease object");
     assert_eq!(obj["spec"]["holderIdentity"], json!("b"), "{obj}");
 }
+
+/// One HTTP/1.1 request to `addr`: (status, body). The surface answers and closes.
+fn http_req(
+    addr: &str,
+    method: &str,
+    path: &str,
+    ctype: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> (u16, String) {
+    use std::io::Read as _;
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    let mut req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    for (k, v) in headers {
+        req.push_str(&format!("{k}: {v}\r\n"));
+    }
+    req.push_str("\r\n");
+    s.write_all(req.as_bytes()).unwrap();
+    s.write_all(body.as_bytes()).unwrap();
+    let mut raw = String::new();
+    let _ = s.read_to_string(&mut raw);
+    let status = raw
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let body = raw
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
+    (status, body)
+}
+
+fn form_enc(pairs: &[(&str, &str)]) -> String {
+    let enc = |s: &str| -> String {
+        s.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect()
+    };
+    pairs
+        .iter()
+        .map(|(k, v)| format!("{k}={}", enc(v)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// The OAuth flow against the HTTP surface at `addr`: (client, access, refresh).
+fn oauth_sign_in(addr: &str, password: &str) -> (String, String, String) {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let cb = "https://claude.ai/api/mcp/auth_callback";
+    let (st, reg) = http_req(
+        addr,
+        "POST",
+        "/oauth/register",
+        "application/json",
+        &[],
+        &json!({"redirect_uris": [cb]}).to_string(),
+    );
+    assert_eq!(st, 201, "register: {reg}");
+    let client = serde_json::from_str::<J>(&reg).unwrap()["client_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let verifier = "ha-failover-pkce-verifier-0123456789-abcdefghijklmnopqrstuvwxyz";
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(sha2::Sha256::digest(verifier.as_bytes()));
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    let body = form_enc(&[
+        ("response_type", "code"),
+        ("client_id", &client),
+        ("redirect_uri", cb),
+        ("code_challenge", &challenge),
+        ("code_challenge_method", "S256"),
+        ("username", "admin"),
+        ("password", password),
+        ("approve", "1"),
+    ]);
+    write!(
+        s,
+        "POST /oauth/authorize HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut raw = String::new();
+    let _ = std::io::Read::read_to_string(&mut s, &mut raw);
+    let location = raw
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("Location: ")
+                .or_else(|| l.strip_prefix("location: "))
+        })
+        .unwrap_or_else(|| panic!("no redirect for client {client} ({reg}): {raw}"));
+    let code = location
+        .split("code=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_string();
+    let (st, tok) = http_req(
+        addr,
+        "POST",
+        "/oauth/token",
+        "application/x-www-form-urlencoded",
+        &[],
+        &form_enc(&[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("client_id", &client),
+            ("redirect_uri", cb),
+            ("code_verifier", verifier),
+        ]),
+    );
+    assert_eq!(st, 200, "token: {tok}");
+    let t: J = serde_json::from_str(&tok).unwrap();
+    (
+        client,
+        t["access_token"].as_str().unwrap().into(),
+        t["refresh_token"].as_str().unwrap().into(),
+    )
+}
+
+/// `addr` accepting connections, or a panic after 20 s.
+fn wait_port(addr: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while std::net::TcpStream::connect(addr).is_err() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{addr} never listened"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn mcp_init_status(addr: &str, bearer: &str) -> u16 {
+    let auth = format!("Bearer {bearer}");
+    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}});
+    http_req(
+        addr,
+        "POST",
+        "/mcp",
+        "application/json",
+        &[("Authorization", &auth)],
+        &init.to_string(),
+    )
+    .0
+}
+
+/// An OAuth sign-in survives an HA failover: the grants live in the
+/// replicated store, so behind one public URL (AIKOQL_PUBLIC_URL — the load
+/// balancer's; tokens are bound to it) the promoted standby honours the
+/// access token and rotates the refresh token. Semi-sync: the token
+/// endpoint answers 200 only once the standby acked the grant (else 503).
+/// HTTP only: with --metrics-addr, serve reads no stdin (no stdio MCP, no
+/// "ready" line).
+#[test]
+fn ha_an_oauth_sign_in_survives_a_failover() {
+    let lease = tmp("ha-oauth-lease").join("lease.json");
+    let (adir, bdir) = (tmp("ha-oauth-a"), tmp("ha-oauth-b"));
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let (ha, hb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let env = vec![
+        (
+            "AIKOQL_PUBLIC_URL".to_string(),
+            "https://kb.example".to_string(),
+        ),
+        ("AIKOQL_ADMIN_PASSWORD".to_string(), "ha-pw".to_string()),
+    ];
+    let sync = ["--replicate-sync-ms".to_string(), "3000".to_string()];
+    let a_args = [
+        ha_args(&lease, "a", &ra),
+        sync.to_vec(),
+        vec!["--metrics-addr".into(), ha.clone()],
+    ]
+    .concat();
+    // B without semi-sync: once promoted it has no standby to ack its writes
+    let b_args = [
+        ha_args(&lease, "b", &rb),
+        vec!["--metrics-addr".into(), hb.clone()],
+    ]
+    .concat();
+    let mut a = Mcp::spawn_env(&adir, &strs(&a_args), false, &env);
+    wait_port(&ha); // the HTTP surface starts after the lease is won
+    assert!(
+        a.stderr_text().contains("won the lease"),
+        "A leads before B starts"
+    );
+    let mut b = Mcp::spawn_env(&bdir, &strs(&b_args), true, &env);
+    let mut blog = b.log.take().unwrap();
+    wait_line(&blog, "standby caught up");
+    wait_port(&hb);
+    let (st, body) = http_req(
+        &hb,
+        "POST",
+        "/oauth/register",
+        "application/json",
+        &[],
+        r#"{"redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]}"#,
+    );
+    assert_eq!(st, 503, "a standby cannot keep a registration: {body}");
+
+    let (client, access, refresh) = oauth_sign_in(&ha, "ha-pw");
+    assert_eq!(
+        mcp_init_status(&ha, &access),
+        200,
+        "the token works on the leader"
+    );
+
+    let _ = a.child.kill();
+    let _ = a.child.wait();
+    wait_line(&blog, "won the lease");
+    // as promoted(), minus its stdio "ready" line: the promoted process's
+    // HTTP surface (the standby's own went down with the re-exec)
+    if !cfg!(unix) {
+        assert_eq!(b.child.wait().unwrap().code(), Some(75), "promotion exit");
+        b = Mcp::spawn_env(&bdir, &strs(&b_args), true, &env);
+        blog = b.log.take().unwrap();
+    }
+    wait_line(&blog, "metrics HTTP server started");
+    wait_port(&hb);
+    assert_eq!(
+        mcp_init_status(&hb, &access),
+        200,
+        "the access token survives the failover"
+    );
+    let (st, body) = http_req(
+        &hb,
+        "POST",
+        "/oauth/token",
+        "application/x-www-form-urlencoded",
+        &[],
+        &form_enc(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", &refresh),
+            ("client_id", &client),
+        ]),
+    );
+    assert_eq!(
+        st, 200,
+        "the refresh token rotates on the new leader: {body}"
+    );
+    let fresh = serde_json::from_str::<J>(&body).unwrap()["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(mcp_init_status(&hb, &fresh), 200);
+}
