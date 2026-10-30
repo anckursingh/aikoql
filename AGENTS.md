@@ -22,6 +22,7 @@ the architect review.
 |---|---|
 | `docs/IMPLEMENTATION-PLAN-LAUNCH.md` | **the active plan** (branch `feature/aikoql-db-launch`) — launch factors + phases S (storage-V2-only consolidation), CI (three-workflow redesign), L (TDD-001..034 correctness matrices) |
 | `docs/TESTING-PLAN-LAUNCH.md` | the active test plan — RED→GREEN mechanics, standing rules, benchmark schema |
+| `docs/IMPLEMENTATION-PLAN-AGENTIC.md`, `docs/TESTING-PLAN-AGENTIC.md` | **the next plan** (2026-10-30, post-launch) — AG-01..62: agent surface (tool profiles, one `recall`), one memory store + scopes + sampling extraction, ANN/indexed filters at 1M, trust debt (Ed25519, KEK rotation), multi-agent, platform, ecosystem; each milestone with its evidence, RED and gate |
 | `docs/PR6-TDD-DISPOSITIONS.md` | the review-disposition state machine (R3-001..005, R2-008, follow-up milestones); CI gates pin its freshness |
 | `docs/ARCHITECT-REVIEW-2026-09.md` | project-level assessment vs the agentic-DB field (2026-09-20) |
 | `docs/VISION-AND-STRATEGY.md` | goals and strategy |
