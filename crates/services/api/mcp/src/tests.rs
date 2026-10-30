@@ -40,6 +40,22 @@ fn tmp_db(tag: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 #[test]
+fn model_install_reads_model_dir_with_or_without_a_model_id() {
+    use crate::cli::model_install_args;
+    let default = aikoql_semantic::provider::DEFAULT_MODEL_ID;
+    assert_eq!(
+        model_install_args(&["install", "--model-dir", "/m"]),
+        Ok((default, Some("/m")))
+    );
+    assert_eq!(
+        model_install_args(&["install", "org/model", "--model-dir", "/m"]),
+        Ok(("org/model", Some("/m")))
+    );
+    assert_eq!(model_install_args(&["install"]), Ok((default, None)));
+    assert!(model_install_args(&["install", "--model-dir"]).is_err());
+}
+
+#[test]
 fn model_store_dir_flag_wins() {
     let p = model_store_dir(Some("C:/tmp/models"));
     assert_eq!(p, std::path::PathBuf::from("C:/tmp/models"));

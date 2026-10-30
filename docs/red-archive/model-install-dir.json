@@ -1,0 +1,8 @@
+{
+  "id": "model-install-dir",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp model_install",
+  "captured_at": "2026-10-30T07:13:30Z",
+  "captured_head": "6794376364b5f8bcea61e294e28217e85833141a",
+  "exit_code": 101
+}

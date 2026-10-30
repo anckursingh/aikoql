@@ -322,26 +322,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             let tail_args: Vec<&str> = args.iter().skip(idx + 2).map(String::as_str).collect();
             match tail_args.first().copied() {
                 Some("install") => {
-                    let model_id = tail_args
-                        .get(1)
-                        .copied()
-                        .filter(|s| !s.starts_with("--"))
-                        .unwrap_or(aikoql_semantic::provider::DEFAULT_MODEL_ID);
-                    let mut model_dir: Option<String> = None;
-                    let mut ti = 2;
-                    while ti < tail_args.len() {
-                        if tail_args[ti] == "--model-dir" {
-                            model_dir = tail_args.get(ti + 1).map(|s| s.to_string());
-                            if model_dir.is_none() {
-                                eprintln!("--model-dir requires a value");
-                                std::process::exit(2);
-                            }
-                            ti += 2;
-                        } else {
-                            ti += 1;
+                    let (model_id, model_dir) = match model_install_args(&tail_args) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            eprintln!("{e}");
+                            std::process::exit(2);
                         }
-                    }
-                    run_model_install(model_id, model_dir.as_deref());
+                    };
+                    run_model_install(model_id, model_dir);
                 }
                 _ => {
                     eprintln!("Usage: aikoql-mcp model install [MODEL_ID] [--model-dir DIR]");
@@ -790,4 +778,30 @@ fn argon2_hash_password(password: &str) -> Result<String, String> {
         .hash_password(password.as_bytes(), &salt)
         .map(|h| h.to_string())
         .map_err(|e| e.to_string())
+}
+
+/// `model install [MODEL_ID] [--model-dir DIR]`, from the args after `model`.
+pub(crate) fn model_install_args<'a>(
+    tail_args: &[&'a str],
+) -> Result<(&'a str, Option<&'a str>), String> {
+    let model_id = tail_args
+        .get(1)
+        .copied()
+        .filter(|s| !s.starts_with("--"))
+        .unwrap_or(aikoql_semantic::provider::DEFAULT_MODEL_ID);
+    let mut model_dir = None;
+    let mut ti = 2;
+    while ti < tail_args.len() {
+        if tail_args[ti] == "--model-dir" {
+            model_dir = Some(
+                *tail_args
+                    .get(ti + 1)
+                    .ok_or("--model-dir requires a value")?,
+            );
+            ti += 2;
+        } else {
+            ti += 1;
+        }
+    }
+    Ok((model_id, model_dir))
 }

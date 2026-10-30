@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/main.rs (target/debug/deps/aikoql_mcp-1bd616def3f11511)
+
+running 1 test
+test tests::model_install_reads_model_dir_with_or_without_a_model_id ... FAILED
+
+failures:
+
+---- tests::model_install_reads_model_dir_with_or_without_a_model_id stdout ----
+
+thread 'tests::model_install_reads_model_dir_with_or_without_a_model_id' (2522411) panicked at crates/services/api/mcp/src/tests.rs:46:5:
+assertion `left == right` failed
+  left: Ok(("sentence-transformers/all-MiniLM-L6-v2", None))
+ right: Ok(("sentence-transformers/all-MiniLM-L6-v2", Some("/m")))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::model_install_reads_model_dir_with_or_without_a_model_id
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 135 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101
