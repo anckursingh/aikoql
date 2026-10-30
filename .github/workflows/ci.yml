@@ -270,6 +270,20 @@ jobs:
           [ -n "$KOID" ] || { echo "ingest-dir printed no KOID"; exit 1; }
           node scripts/e2e-dogfood.js bin/aikoql-mcp "$DB" "$KOID"
           node scripts/e2e-restart.js bin/aikoql-mcp "$DB"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # The independent-client legs: the official MCP Python SDK over
+      # Streamable HTTP and through the OAuth sign-in (incl. a restart that
+      # keeps the sign-in), and the audit chain's Ed25519 signature checked
+      # with Python cryptography from the public key alone.
+      - name: MCP over HTTP + OAuth (official SDK), signed audit evidence
+        run: |
+          set -euo pipefail
+          python -m pip install -q "mcp==2.3.0" "cryptography==50.0.2"
+          python scripts/e2e-mcp-http.py bin/aikoql-mcp
+          python scripts/e2e-mcp-oauth.py bin/aikoql-mcp
+          python scripts/e2e-audit-verify.py bin/aikoql-mcp
 
   # MVP-QA-001 GATE-04 (§9.3 decision: connectors ARE in MVP scope): the
   # connector certification suite runs against real databases as GitHub
