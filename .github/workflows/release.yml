@@ -727,7 +727,10 @@ jobs:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          # maven-gpg-plugin 3.2+ reads the passphrase from this variable
+          # (a settings <server id="gpg"> is ignored: gpg then prompts, and a
+          # runner has no pinentry)
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           VERSION: ${{ needs.validate-versions.outputs.version }}
         run: |
           set -euo pipefail
@@ -755,10 +758,6 @@ jobs:
             '      <id>central</id>' \
             "      <username>${MAVEN_CENTRAL_USERNAME}</username>" \
             "      <password>${MAVEN_CENTRAL_PASSWORD}</password>" \
-            '    </server>' \
-            '    <server>' \
-            '      <id>gpg</id>' \
-            "      <passphrase>${GPG_PASSPHRASE}</passphrase>" \
             '    </server>' \
             '  </servers>' \
             '</settings>' \
