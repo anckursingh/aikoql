@@ -1,0 +1,8 @@
+{
+  "id": "release-publish-2",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-30T16:24:17Z",
+  "captured_head": "2b8aa159817150aeea1bca3c5a8830550ed489cd",
+  "exit_code": 1
+}

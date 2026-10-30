@@ -688,13 +688,19 @@ jobs:
           CRATES="aikoql-native aikoql-kernel aikoql-storage-v2 aikoql-graph aikoql-vector aikoql-scheduler aikoql-semantic aikoql-compiler aikoql-runtime aikoql-sdk"
           for crate in $CRATES; do
             # crates.io API, not `cargo` — publish 0.2.0 twice is a hard error.
-            if curl -sf "https://crates.io/api/v1/crates/${crate}/${VERSION}" >/dev/null 2>&1; then
+            # crates.io refuses API requests that carry no User-Agent
+            if curl -sf -A "aikoql-release (github.com/anckursingh/aikoql)" "https://crates.io/api/v1/crates/${crate}/${VERSION}" >/dev/null 2>&1; then
               echo "::notice::${crate} ${VERSION} already published — skipping (rescue re-dispatch)"
               continue
             fi
             ok=0
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
               if cargo publish -p "${crate}" 2>&1 | tee publish.log; then ok=1; break; fi
+              # published meanwhile (or the probe missed it): done, not a failure
+              if grep -q 'already exists' publish.log; then
+                echo "::notice::${crate} ${VERSION} already exists on crates.io — skipping"
+                ok=1; break
+              fi
               # crates.io rate-limits NEW crates (a burst, then a trickle):
               # its 429 names the time to retry — wait for it, not 60 s
               when="$(sed -n 's/.*try again after \(.* GMT\).*/\1/p' publish.log | head -1)"
