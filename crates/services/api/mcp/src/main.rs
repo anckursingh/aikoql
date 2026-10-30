@@ -548,7 +548,27 @@ fn main() {
                     );
                     None
                 } else {
-                    match aikoql_semantic::provider::CandleEmbedding::from_local(&candle_dir) {
+                    use aikoql_semantic::provider::{CandleEmbedding, DEFAULT_MODEL_ID};
+                    // AIKOQL_MODEL_AUTO_INSTALL: the one opt-in exception to
+                    // PRR-3 — a missing default model is downloaded once, at start
+                    let auto_install = std::env::var("AIKOQL_MODEL_AUTO_INSTALL")
+                        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+                    let loaded = CandleEmbedding::from_local(&candle_dir).or_else(|e| {
+                        if !auto_install {
+                            return Err(format!(
+                                "{e} — run `aikoql model install` to install all-MiniLM-L6-v2 into {}, \
+                                 or set AIKOQL_MODEL_AUTO_INSTALL=1 to download it at start",
+                                candle_dir.display()
+                            ));
+                        }
+                        info!(model = DEFAULT_MODEL_ID, dir = %candle_dir.display(),
+                            "AIKOQL_MODEL_AUTO_INSTALL: installing the embedding model");
+                        let store = model_store_dir(model_dir_flag.as_deref());
+                        CandleEmbedding::install(DEFAULT_MODEL_ID, &store)
+                            .and_then(|_| CandleEmbedding::from_local(&candle_dir))
+                            .map_err(|e| format!("model auto-install failed: {e}"))
+                    });
+                    match loaded {
                         Ok(p) => {
                             // Test park hook (P5-M11 pattern): arm the Nth
                             // embed to hold the model lock — deterministic
@@ -566,14 +586,8 @@ fn main() {
                             );
                             Some(Arc::new(p))
                         }
-                        Err(e) => {
-                            set_semantic_status(
-                                "unavailable",
-                                format!(
-                                    "{e} — run `aikoql model install` to install all-MiniLM-L6-v2 into {}",
-                                    candle_dir.display()
-                                ),
-                            );
+                        Err(detail) => {
+                            set_semantic_status("unavailable", detail);
                             None
                         }
                     }
