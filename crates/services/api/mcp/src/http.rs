@@ -940,14 +940,18 @@ pub(crate) fn handle_http(
     admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
     mcp: Option<&crate::mcp_http::McpHttp>,
 ) {
-    // ponytail: 64 KB buffer fits all practical HTTP requests. Browsers send
-    // ~2-8 KB of headers; single read captures the full request.
+    // Headers can span reads (a slow client, or past one TCP segment): read
+    // until the blank line. shortcut: headers past 64 KB are cut, raise the
+    // buffer if a client ever needs more.
     let mut buf = [0u8; 65536];
-    let n = match stream.read(&mut buf) {
-        Ok(0) => return,
-        Ok(n) => n,
-        Err(_) => return,
-    };
+    let mut n = 0;
+    while n < buf.len() && !buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+        match stream.read(&mut buf[n..]) {
+            Ok(0) | Err(_) if n == 0 => return,
+            Ok(0) | Err(_) => break,
+            Ok(k) => n += k,
+        }
+    }
     // Read body remainder if Content-Length exceeds what we already got.
     let req = String::from_utf8_lossy(&buf[..n]);
     let first_line = req.lines().next().unwrap_or("");
