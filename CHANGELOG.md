@@ -9,6 +9,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **One memory store (AG-10)**: the `memory_*` tools keep each memory as
+  a versioned `Memory` knowledge object (recall, trace and lineage apply)
+  and still write the Markdown file view; `memory_search` answers from
+  the knowledge base in its old shape; an existing memory directory is
+  imported once at startup.
 - **`recall` (AG-02)**: one call for what is known about a question —
   semantic-led search over current knowledge (superseded generations
   excluded), each item with status, authority, a provenance line and its
@@ -22,6 +27,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   for the session (`notifications/tools/list_changed`). Listing only:
   any tool stays callable under the caller's roles. `full` remains the
   default.
+
+### Fixed
+
+- **`memory_update` with only a description** no longer wipes the
+  memory's body (it looked for the body after a delimiter that never
+  exists).
 
 ## [0.2.4] — 2026-10-30 (remote MCP: HTTP, OAuth, TLS)
 

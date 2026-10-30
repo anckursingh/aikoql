@@ -94,6 +94,13 @@ identity is server-assigned by the token — clients must not send an
 `agent_id`; on stdio, the session is trusted and you declare identity with
 `session_init`.
 
+**Memories are knowledge too**: `memory_store` / `memory_update` /
+`memory_delete` keep each memory as a `Memory` object in the knowledge
+base — versioned, traceable, found by `recall` — and still write the
+Markdown file and its `MEMORY.md` line, so tools that read the directory
+keep working. A memory directory that already exists is imported once at
+startup; an unchanged file adds nothing on later starts.
+
 **One call to recall**: `recall {"query": "what is our refund policy?"}`
 answers in one call with what is currently known — semantic search when
 the embedding model is installed (keyword search otherwise, and the

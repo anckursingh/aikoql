@@ -111,7 +111,7 @@ string error (architecture hygiene leg).
 
 ### Phase M — memory that manages itself
 
-**AG-10 (P0) One memory store.**
+**AG-10 (P0) One memory store.** — **DONE 2026-10-30** (Memory KOs as the source of truth, the Markdown files written as a view; `memory_search` served from the knowledge base; an idempotent import at start on writing nodes). Deviations: the files stay authoritative-looking rather than becoming an export-only format, for compatibility; memories are found by name with a scan of the Memory KOs (shortcut-marked).
 - *Problem:* `memory_*` tools write Markdown files outside the knowledge
   base — none of the moat applies to them.
 - *Design:* `memory_*` become views over KOs of type `Memory`
