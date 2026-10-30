@@ -136,6 +136,10 @@ class FaultMatrixTest {
     /** A real server + one fault-proxy instance (one fault mode) behind
      * the proxy address. The port-probe idiom races → 3 spawn attempts. */
     private String faultEnv(String mode, String... extra) throws Exception {
+        // the not-built skip must come before anything is spawned
+        if (MCP_BIN.isEmpty() || PROXY_BIN.isEmpty()) {
+            org.junit.jupiter.api.Assumptions.abort("aikoql-mcp/aikoql-fault-proxy not built — real-server fault matrix skipped");
+        }
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
                 int srvPort = freePort();

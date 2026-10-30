@@ -1041,6 +1041,10 @@ jobs:
           python-version: '3.12'
       - name: Build the release server
         run: cargo build --release -p aikoql-mcp
+      # the SDK fault matrices need the debug server + fault proxy (as in
+      # ci.yml's SDK jobs) — without them they skip, and certify nothing
+      - name: Build the fault-matrix binaries
+        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
       - name: Install syft for the SBOM leg
         run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
       - name: Certify every SDK
