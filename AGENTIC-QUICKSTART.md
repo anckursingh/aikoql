@@ -100,6 +100,12 @@ base — versioned, traceable, found by `recall` — and still write the
 Markdown file and its `MEMORY.md` line, so tools that read the directory
 keep working. A memory directory that already exists is imported once at
 startup; an unchanged file adds nothing on later starts.
+A memory's `scope` says who sees it: `private` (the default — only you),
+`shared` (everyone in your tenant can read it; only you can change it)
+or `session` (only you, in this session — `session_init {"run_id": …}`).
+`memory_update {"scope": "shared"}` shares an existing memory as a new
+version. Any object can be shared the same way with
+`remember {"visibility": "shared"}`.
 
 **One call to recall**: `recall {"query": "what is our refund policy?"}`
 answers in one call with what is currently known — semantic search when

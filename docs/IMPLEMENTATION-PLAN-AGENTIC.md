@@ -122,7 +122,7 @@ string error (architecture hygiene leg).
 - *Gate:* a memory written via `memory_store` is found by `recall`, has a
   `trace`, and an edit produces a new version with lineage.
 
-**AG-11 (P0) Memory scopes as a first-class concept.**
+**AG-11 (P0) Memory scopes as a first-class concept.** — **DONE 2026-10-30** (`private` / `shared` / `session`, enforced by the kernel's owner + ACL with a new tenant-confined `*` principal). Deviation: three scopes instead of the org → user → agent → session chain — aikoql has one identity per caller (an OAuth login is `oauth:<user>`; a token or stdio subject is the agent), so user and agent are the same principal; a separate user/agent split needs an identity model first.
 - *Design:* scope = `org / user / agent / session` (tenant stays the
   isolation boundary above it). Writes default to the session's scope;
   reads see the scope chain (session → agent → user → org) with

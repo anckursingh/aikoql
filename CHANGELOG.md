@@ -9,6 +9,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Memory scopes (AG-11)**: `memory_store`/`memory_update` take
+  `scope: private | shared | session` and `remember` takes `visibility:
+  private | shared`; sharing is a kernel ACL entry for every principal,
+  confined to the tenant, and only the owner writes. Session memories are
+  seen only from their own `run_id`. `memory_search` now waits briefly for
+  the index, so a just-stored memory is found.
 - **Signed audit evidence (AG-30)**: with `AIKOQL_AUDIT_SIGNING_KEY`
   (a hex Ed25519 seed file) `evidence_pack` adds `audit_signature` — a
   standard RFC 8032 signature of the audit chain, verifiable with the
