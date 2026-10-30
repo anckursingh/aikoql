@@ -773,3 +773,24 @@ fn h017_headers_split_across_reads_still_carry_the_body() {
         r.body
     );
 }
+
+/// h018 — a TLS handshake on the plain-HTTP port (the image's healthcheck
+/// tries https first, then http, within 3 s) is closed at once: reading on
+/// for the end of headers would hold it until the read timeout.
+#[test]
+fn h018_a_tls_hello_on_the_plain_port_is_closed_at_once() {
+    let srv = serve("018", &[]);
+    let mut s = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    // the first bytes of a TLS 1.2/1.3 ClientHello record
+    s.write_all(&[
+        0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc, 0x03, 0x03,
+    ])
+    .unwrap();
+    let mut raw = Vec::new();
+    let closed = s.read_to_end(&mut raw);
+    assert!(
+        closed.is_ok(),
+        "the server held the connection open: {closed:?}"
+    );
+}

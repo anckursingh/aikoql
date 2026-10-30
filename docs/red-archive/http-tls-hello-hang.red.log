@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/mcp_http.rs (target/debug/deps/mcp_http-13ac7a836db1d791)
+
+running 1 test
+test h018_a_tls_hello_on_the_plain_port_is_closed_at_once ... FAILED
+
+failures:
+
+---- h018_a_tls_hello_on_the_plain_port_is_closed_at_once stdout ----
+
+thread 'h018_a_tls_hello_on_the_plain_port_is_closed_at_once' (2601875) panicked at crates/services/api/mcp/tests/mcp_http.rs:792:5:
+the server held the connection open: Err(Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    h018_a_tls_hello_on_the_plain_port_is_closed_at_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 17 filtered out; finished in 7.43s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_http`
+EXIT=101
