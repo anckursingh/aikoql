@@ -173,6 +173,8 @@ struct TomlServer {
     // P3-M1 (auth004): the HTTP surface is loopback-only unless explicitly
     // armed — and arming it requires [auth] credentials (fail-closed).
     allow_remote_http: Option<bool>,
+    /// AG-01: "core" | "full"
+    tool_profile: Option<String>,
 }
 
 /// P3-M1 (§53): HTTP login credentials — argon2id hashes (see
@@ -226,6 +228,14 @@ struct TomlLogging {
 }
 
 const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+
+/// AG-01: the listed tool surface, validated at every layer.
+fn tool_profile(v: &str) -> Result<String, String> {
+    match v {
+        "core" | "full" => Ok(v.into()),
+        _ => Err(format!("tool_profile must be core or full, got {v:?}")),
+    }
+}
 
 fn env_opt(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -388,6 +398,10 @@ pub(crate) fn load(
             if let Some(v) = s.allow_remote_http {
                 cfg.allow_remote_http = v;
             }
+            if let Some(v) = s.tool_profile {
+                cfg.tool_profile =
+                    tool_profile(&v).map_err(|e| format!("config {path}: server.{e}"))?;
+            }
         }
         if let Some(a) = t.auth {
             if let Some(users) = a.users {
@@ -502,6 +516,9 @@ pub(crate) fn load(
     }
     if let Some(v) = env_opt("AIKOQL_MODEL_DIR") {
         cfg.model_dir = Some(v);
+    }
+    if let Some(v) = env_opt("AIKOQL_TOOL_PROFILE") {
+        cfg.tool_profile = tool_profile(&v).map_err(|e| format!("AIKOQL_TOOL_PROFILE: {e}"))?;
     }
     if let Some(v) = env_opt("AIKOQL_MODEL_AUTO_INSTALL") {
         cfg.model_auto_install = v == "1" || v.eq_ignore_ascii_case("true");
@@ -635,16 +652,12 @@ pub(crate) fn load(
                 Some(v) => return Err(format!("--ha-node requires a plain id, got {v:?}")),
                 None => return Err("--ha-node requires an id".into()),
             },
-            "--tool-profile" => match args.get(i + 1).map(String::as_str) {
-                Some(v @ ("core" | "full")) => {
-                    cfg.tool_profile = v.into();
+            "--tool-profile" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.tool_profile = tool_profile(v).map_err(|e| format!("--{e}"))?;
                     i += 2;
                 }
-                other => {
-                    return Err(format!(
-                        "--tool-profile requires core or full, got {other:?}"
-                    ))
-                }
+                None => return Err("--tool-profile requires core or full".into()),
             },
             "--ha-ttl-ms" => match args.get(i + 1) {
                 Some(v) => {
