@@ -78,7 +78,7 @@ to win head-to-head evaluations; **P2** = differentiation / polish.
 - *Gate:* core `tools/list` ≤ 8 KB; every `full` tool reachable through a
   group; existing clients unchanged under `full`.
 
-**AG-02 (P0) One `recall` tool — retrieval as a single good call.**
+**AG-02 (P0) One `recall` tool — retrieval as a single good call.** — **DONE 2026-10-30** (semantic-led by default: 6 no-shared-word questions, vector 5/6 top-1 vs rrf 3/6 and text 2/6). Deviations: graph expansion lists each item's `related` edges rather than re-ranking with them; the token budget is a ~4 bytes/token estimate, not a tokenizer count; the recall@10 gate waits for the agent eval set (AG-61).
 - *Problem:* an agent must choose among `find_similar`, `memory_search`,
   `traverse`, `aikoql`, `compile_context`, `agent_memory` — the choice is the
   failure mode.

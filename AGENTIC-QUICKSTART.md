@@ -94,6 +94,14 @@ identity is server-assigned by the token — clients must not send an
 `agent_id`; on stdio, the session is trusted and you declare identity with
 `session_init`.
 
+**One call to recall**: `recall {"query": "what is our refund policy?"}`
+answers in one call with what is currently known — semantic search when
+the embedding model is installed (keyword search otherwise, and the
+answer says so), superseded versions left out, and each item carrying its
+status, authority, a short provenance line (`why`) and any open conflict
+about it. `max_tokens` (default 2000) bounds the answer; `fusion: "rrf"`
+adds keyword matching for exact identifiers.
+
 **A smaller tool surface**: `serve --tool-profile core` lists 13 tools
 (session_init, remember, get, find_similar, relate, traverse, forget,
 trace, find_conflicts, resolve_conflict, aikoql, health, tools_more) in

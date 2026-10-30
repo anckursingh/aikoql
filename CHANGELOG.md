@@ -9,6 +9,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **`recall` (AG-02)**: one call for what is known about a question —
+  semantic-led search over current knowledge (superseded generations
+  excluded), each item with status, authority, a provenance line and its
+  open conflicts, within `max_tokens`. Replaces `find_similar` in the
+  `core` profile (`find_similar` stays, in the knowledge group).
 - **Tool profiles (AG-01)**: `--tool-profile core` (or `[server]
   tool_profile`, `AIKOQL_TOOL_PROFILE`) lists 13 tools in ~6 KB instead
   of all 103 in ~43 KB — the schema every agent carries before its first
