@@ -1,0 +1,51 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/mcp_recall.rs (target/debug/deps/mcp_recall-89dd11433a0b32b3)
+
+running 5 tests
+test r05_recall_replaces_find_similar_in_the_core_profile ... FAILED
+test r01_one_call_finds_by_text_with_status_and_provenance ... FAILED
+test r02_a_superseded_generation_stays_out ... FAILED
+test r03_a_contested_claim_carries_its_open_conflict ... FAILED
+test r04_the_answer_stays_inside_the_token_budget ... FAILED
+
+failures:
+
+---- r05_recall_replaces_find_similar_in_the_core_profile stdout ----
+
+thread 'r05_recall_replaces_find_similar_in_the_core_profile' (2903174) panicked at crates/services/api/mcp/tests/mcp_recall.rs:230:5:
+["remember", "forget", "resolve_conflict", "get", "find_similar", "trace", "relate", "traverse", "aikoql", "find_conflicts", "health", "session_init", "tools_more"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- r01_one_call_finds_by_text_with_status_and_provenance stdout ----
+
+thread 'r01_one_call_finds_by_text_with_status_and_provenance' (2903170) panicked at crates/services/api/mcp/tests/mcp_recall.rs:122:28:
+recall answered no items: {"ok":false,"error":{"code":"INTERNAL","message":"unknown tool: recall","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+
+---- r02_a_superseded_generation_stays_out stdout ----
+
+thread 'r02_a_superseded_generation_stays_out' (2903171) panicked at crates/services/api/mcp/tests/mcp_recall.rs:122:28:
+recall answered no items: {"ok":false,"error":{"code":"INTERNAL","message":"unknown tool: recall","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+
+---- r03_a_contested_claim_carries_its_open_conflict stdout ----
+
+thread 'r03_a_contested_claim_carries_its_open_conflict' (2903172) panicked at crates/services/api/mcp/tests/mcp_recall.rs:122:28:
+recall answered no items: {"ok":false,"error":{"code":"INTERNAL","message":"unknown tool: recall","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+
+---- r04_the_answer_stays_inside_the_token_budget stdout ----
+
+thread 'r04_the_answer_stays_inside_the_token_budget' (2903173) panicked at crates/services/api/mcp/tests/mcp_recall.rs:122:28:
+recall answered no items: {"ok":false,"error":{"code":"INTERNAL","message":"unknown tool: recall","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+
+
+failures:
+    r01_one_call_finds_by_text_with_status_and_provenance
+    r02_a_superseded_generation_stays_out
+    r03_a_contested_claim_carries_its_open_conflict
+    r04_the_answer_stays_inside_the_token_budget
+    r05_recall_replaces_find_similar_in_the_core_profile
+
+test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_recall`
+EXIT=101

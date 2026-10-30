@@ -1,0 +1,8 @@
+{
+  "id": "ag02-recall",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_recall --test mcp_tools_profile",
+  "captured_at": "2026-10-30T15:41:04Z",
+  "captured_head": "02c81539dacdb02dbc16a133f8a3f7d853427906",
+  "exit_code": 101
+}
