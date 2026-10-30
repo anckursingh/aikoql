@@ -408,9 +408,10 @@ pub(crate) fn tool_evidence_pack(k: &Kernel, args: &J) -> Result<J, String> {
     // Encryption compliance (existing report, same shape as its own tool).
     let encryption = tool_compliance_report(k)?;
 
-    Ok(json!({
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let mut pack = json!({
         "framework": framework,
-        "audit_chain": audit.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
+        "audit_chain": hex(&audit),
         "journal_seq": seq,
         "object_inventory": {
             "total": heads.len(),
@@ -433,7 +434,18 @@ pub(crate) fn tool_evidence_pack(k: &Kernel, args: &J) -> Result<J, String> {
             "purge_coverage": "expired objects are counted and purge-eligible; physical deletion is caller-side — the kernel has no purge op (MRFC-0020 Phase 4 honest row)",
         },
         "encryption": encryption,
-    }))
+    });
+    // AG-30: signed with the server's Ed25519 key — checkable with the public
+    // key alone (the message is the 32 audit-chain bytes)
+    if let Some(key) = crate::AUDIT_SIGNER.get() {
+        pack["audit_signature"] = json!({
+            "algorithm": "ed25519",
+            "public_key": hex(&key.public_key()),
+            "signature": hex(&key.sign(&audit)),
+            "signed": "audit_chain",
+        });
+    }
+    Ok(pack)
 }
 
 // ---------------------------------------------------------------------------
