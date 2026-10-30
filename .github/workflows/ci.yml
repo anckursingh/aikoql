@@ -743,6 +743,9 @@ jobs:
           # (docs/ARCHITECT-REVIEW-2026-09.md).
           echo "Checking red-archive artifacts..."
           bash scripts/check-red-archives.sh
+          # ...and the tooling itself: a quoted command still records valid
+          # JSON, and the checker rejects a manifest that is not JSON
+          bash scripts/check-red-archive-tooling.sh
           # PR6-F2 (P0-2): the gated-cell registry must be the only skip
           # source and every registered name must exist in the tree.
           echo "Checking gated-cell registry..."
