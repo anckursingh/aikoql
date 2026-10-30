@@ -546,6 +546,17 @@ pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
     }))
 }
 
+/// One canonical evidence record, as explain and provenance show it.
+fn evidence_record_json(e: &aikoql_kernel::knowledge::evidence::Evidence) -> J {
+    json!({
+        "source_artifact": e.source_artifact,
+        "method": e.method.as_str(),
+        "location": e.location,
+        "revision": e.revision,
+        "confidence": e.confidence,
+    })
+}
+
 pub(crate) fn tool_explain(k: &Kernel, args: &J) -> Result<J, String> {
     let ex = k
         .explain(
@@ -562,6 +573,7 @@ pub(crate) fn tool_explain(k: &Kernel, args: &J) -> Result<J, String> {
         "confidence": ex.confidence,
         "verified": ex.verified,
         "evidence": ex.evidence.iter().map(|(t, id)| json!({"rel_type": t, "target": id.to_hex()})).collect::<Vec<_>>(),
+        "evidence_records": ex.records.iter().map(evidence_record_json).collect::<Vec<_>>(),
         "event_refs": ex.event_refs.iter().map(|e| json!({"seq": e.seq, "commit_ts": commit_ts_millis(e.commit_ts)})).collect::<Vec<_>>()
     }))
 }
@@ -593,6 +605,25 @@ pub(crate) fn tool_provenance(k: &Kernel, args: &J) -> Result<J, String> {
                 i + 1,
                 rel_type,
                 target.to_hex()
+            ));
+        }
+        md.push('\n');
+    }
+
+    if !ex.records.is_empty() {
+        md.push_str("### Evidence Records\n\n");
+        for (i, e) in ex.records.iter().enumerate() {
+            let at = e
+                .location
+                .as_deref()
+                .map(|l| format!(", {l}"))
+                .unwrap_or_default();
+            md.push_str(&format!(
+                "{}. `{}` ({}{at}, confidence {:.2})\n",
+                i + 1,
+                e.source_artifact,
+                e.method.as_str(),
+                e.confidence
             ));
         }
         md.push('\n');

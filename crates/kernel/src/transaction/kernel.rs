@@ -619,7 +619,11 @@ pub struct Explanation {
     pub source: Option<String>,
     pub confidence: Option<f32>,
     pub verified: bool,
+    /// The object's edges (rel_type, target) — named before canonical
+    /// evidence existed; kept for its callers.
     pub evidence: Vec<(String, KOID)>,
+    /// The canonical evidence records (EXT_EVIDENCE) this version carries.
+    pub records: Vec<crate::knowledge::evidence::Evidence>,
     pub event_refs: Vec<EventRef>,
 }
 
@@ -3832,6 +3836,7 @@ impl Kernel {
                 .iter()
                 .map(|r| (r.rel_type.clone(), r.target))
                 .collect(),
+            records: ko.evidence(),
             event_refs: ko.event_refs.clone(),
         })
     }
