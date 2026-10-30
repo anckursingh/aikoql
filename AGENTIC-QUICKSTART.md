@@ -107,6 +107,15 @@ or `session` (only you, in this session — `session_init {"run_id": …}`).
 version. Any object can be shared the same way with
 `remember {"visibility": "shared"}`.
 
+**Remembering a conversation**: extract the facts yourself and pass them
+to `remember_facts {"conversation_id": "…", "facts": [{"statement": "The
+office moved to Lisbon", "key": "office.city", "value": "lisbon"}]}`. For
+each fact aikoql answers `created`, `duplicate` (already known),
+`conflict` (the same `key` holds another value — a Conflict is recorded,
+nothing is overwritten) or `superseded` (when you pass `supersedes: <koid>`
+for a deliberate update). Every stored fact records the conversation and
+message range it came from.
+
 **One call to recall**: `recall {"query": "what is our refund policy?"}`
 answers in one call with what is currently known — semantic search when
 the embedding model is installed (keyword search otherwise, and the

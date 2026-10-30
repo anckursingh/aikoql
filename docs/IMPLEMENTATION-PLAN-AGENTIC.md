@@ -131,7 +131,7 @@ string error (architecture hygiene leg).
 - *Gate:* isolation matrix (TESTING-PLAN §M): no read crosses users; the
   chain order is deterministic.
 
-**AG-12 (P0) LLM extraction through MCP sampling.**
+**AG-12 (P0) LLM extraction through MCP sampling.** — split 2026-10-30. **AG-12a DONE**: `remember_facts` — the calling agent extracts (it is the model, with the conversation in context) and the server judges each fact (created / duplicate / conflict → Conflict KO / superseded) with provenance. Why the split: Claude Code and Claude Desktop reportedly do not support MCP sampling, and sampling needs reply routing in all three transports. **AG-12b (open)**: sampling as an optional path for clients that support it, on the same judging code.
 - *Problem:* keyword extraction (`ops.rs:2181`) is where mem0/Zep win.
 - *Design:* when the client advertises `sampling`, `summarize_conversation`
   / `remember_conversation` asks the **client's** model (no API key in the

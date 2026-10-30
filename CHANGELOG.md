@@ -9,6 +9,10 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **`remember_facts` (AG-12a)**: agent-extracted facts, judged by the
+  server — duplicates are not stored twice, a different value for the same
+  key becomes a Conflict (never an overwrite), `supersedes` updates; each
+  fact records its conversation and message range.
 - **Memory scopes (AG-11)**: `memory_store`/`memory_update` take
   `scope: private | shared | session` and `remember` takes `visibility:
   private | shared`; sharing is a kernel ACL entry for every principal,
