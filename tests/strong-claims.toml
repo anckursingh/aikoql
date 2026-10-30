@@ -137,19 +137,19 @@ evidence = "t06_idempotent_retry_commits_exactly_once"
 
 [[claim]]
 file = "crates/kernel/tests/conformance.rs"
-line = 1165
+line = 1221
 text = "// regression) and every write must land exactly once."
 evidence = "t25b_concurrent_readers_and_writers_see_only_committed_state"
 
 [[claim]]
 file = "crates/kernel/tests/conformance.rs"
-line = 1221
+line = 1277
 text = "// Every write landed exactly once: 1 seed + WRITERS×UPDATES entries,"
 evidence = "t25b_concurrent_readers_and_writers_see_only_committed_state"
 
 [[claim]]
 file = "crates/kernel/tests/conformance.rs"
-line = 3778
+line = 3834
 text = "// Wait for completion (bounded poll — the wait itself never journals)."
 evidence = "t11_class_b_admission_is_audited_and_out_of_the_class_a_stream"
 
