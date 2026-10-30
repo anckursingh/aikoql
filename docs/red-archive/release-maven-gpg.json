@@ -1,0 +1,8 @@
+{
+  "id": "release-maven-gpg",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-30T12:30:41Z",
+  "captured_head": "d8e96ddc9ff85f7ce7a0e329a4882d0e23b43cfd",
+  "exit_code": 1
+}

@@ -1,0 +1,2 @@
+ARCH: the maven-central-publish job does not hand the GPG passphrase to maven-gpg-plugin (MAVEN_GPG_PASSPHRASE, D-18)
+EXIT=1

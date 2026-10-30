@@ -681,6 +681,15 @@ if grep -q '^  maven-central-publish:' "$REL" && \
   echo "ARCH: the maven-central-publish job is not gated on the github-release job (D-18)" >&2
   fail=1
 fi
+# test 22b — maven-gpg-plugin 3.2+ reads the signing passphrase from
+# MAVEN_GPG_PASSPHRASE (or a server id gpg.passphrase), never from a
+# settings server named `gpg`: without it gpg prompts and a runner has no
+# pinentry ("gpg: signing failed: No pinentry", v0.2.4 run 41051188037).
+if grep -q '^  maven-central-publish:' "$REL" && \
+   ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | has -E 'MAVEN_GPG_PASSPHRASE:[[:space:]]*\$\{\{[[:space:]]*secrets\.GPG_PASSPHRASE'; then
+  echo "ARCH: the maven-central-publish job does not hand the GPG passphrase to maven-gpg-plugin (MAVEN_GPG_PASSPHRASE, D-18)" >&2
+  fail=1
+fi
 
 # workflow test 23 — test_pypi_wheel_matrix (D-18, SDK plan §27):
 # the Python SDK ships abi3-py39 wheels — one wheel per platform covers
