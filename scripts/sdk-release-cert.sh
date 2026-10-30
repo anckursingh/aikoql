@@ -100,11 +100,8 @@ done_
 #    deferred at D-16; the release cert is where it finally runs).
 say "7/8 rust suite + fuzz smokes"
 cargo test -p aikoql-sdk
-cargo install cargo-fuzz --locked -q
-( cd crates/sdk/rust/fuzz
-  for t in fuzz_targets/*.rs; do
-    cargo fuzz run "$(basename "$t" .rs)" -- -max_total_time=5
-  done )
+# the libFuzzer engine is nightly-only: smoke.sh pins and installs it
+bash crates/sdk/rust/fuzz/smoke.sh
 done_
 
 # 8. Docs — every package ships a README (pkg.go.dev, PyPI, npm, crates.io
