@@ -1,0 +1,8 @@
+{
+  "id": "ag10-memory-store",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_memory_store",
+  "captured_at": "2026-10-30T16:17:57Z",
+  "captured_head": "7444caef3fbd7f73d986275a8358cfa5edd7fa83",
+  "exit_code": 101
+}

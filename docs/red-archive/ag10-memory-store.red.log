@@ -1,0 +1,54 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/mcp_memory_store.rs (target/debug/deps/mcp_memory_store-f5f599f3ce03d591)
+
+running 5 tests
+test m04_an_existing_directory_is_imported_once ... FAILED
+test m03_a_deleted_memory_is_gone_everywhere ... FAILED
+test m01_a_stored_memory_is_a_recallable_knowledge_object_and_still_a_file ... FAILED
+test m02_an_update_is_a_new_version_of_the_same_object ... FAILED
+test m05_memory_search_answers_from_the_knowledge_base_in_its_old_shape ... FAILED
+
+failures:
+
+---- m04_an_existing_directory_is_imported_once stdout ----
+
+thread 'm04_an_existing_directory_is_imported_once' (2935572) panicked at crates/services/api/mcp/tests/mcp_memory_store.rs:204:9:
+assertion `left == right` failed: the file is imported: []
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- m03_a_deleted_memory_is_gone_everywhere stdout ----
+
+thread 'm03_a_deleted_memory_is_gone_everywhere' (2935571) panicked at crates/services/api/mcp/tests/mcp_memory_store.rs:177:10:
+called `Option::unwrap()` on a `None` value
+
+---- m01_a_stored_memory_is_a_recallable_knowledge_object_and_still_a_file stdout ----
+
+thread 'm01_a_stored_memory_is_a_recallable_knowledge_object_and_still_a_file' (2935569) panicked at crates/services/api/mcp/tests/mcp_memory_store.rs:132:28:
+memory_store returns its KOID: {"stored":true,"name":"deploy-freeze","file":"deploy-freeze.md","path":"/var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/memstore-store-66200/memory/deploy-freeze.md"}
+
+---- m02_an_update_is_a_new_version_of_the_same_object stdout ----
+
+thread 'm02_an_update_is_a_new_version_of_the_same_object' (2935570) panicked at crates/services/api/mcp/tests/mcp_memory_store.rs:155:10:
+called `Option::unwrap()` on a `None` value
+
+---- m05_memory_search_answers_from_the_knowledge_base_in_its_old_shape stdout ----
+
+thread 'm05_memory_search_answers_from_the_knowledge_base_in_its_old_shape' (2935573) panicked at crates/services/api/mcp/tests/mcp_memory_store.rs:235:5:
+assertion `left == right` failed: {"results":[],"count":0,"query":"billing owner"}
+  left: Null
+ right: String("billing-owner")
+
+
+failures:
+    m01_a_stored_memory_is_a_recallable_knowledge_object_and_still_a_file
+    m02_an_update_is_a_new_version_of_the_same_object
+    m03_a_deleted_memory_is_gone_everywhere
+    m04_an_existing_directory_is_imported_once
+    m05_memory_search_answers_from_the_knowledge_base_in_its_old_shape
+
+test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.32s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_memory_store`
+EXIT=101
