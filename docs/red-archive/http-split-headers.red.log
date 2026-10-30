@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/mcp_http.rs (target/debug/deps/mcp_http-13ac7a836db1d791)
+
+running 1 test
+test h017_headers_split_across_reads_still_carry_the_body ... FAILED
+
+failures:
+
+---- h017_headers_split_across_reads_still_carry_the_body stdout ----
+
+thread 'h017_headers_split_across_reads_still_carry_the_body' (2517437) panicked at crates/services/api/mcp/tests/mcp_http.rs:769:5:
+assertion `left == right` failed: an Authorization: Bearer token is required
+  left: 401
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    h017_headers_split_across_reads_still_carry_the_body
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 4.74s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_http`
+EXIT=101

@@ -738,3 +738,38 @@ fn h016_last_event_id_resumes_the_stream() {
         "the event sent while away arrives: {ev2}"
     );
 }
+
+/// h017 — headers split across TCP reads (a slow client, or headers past
+/// one segment, e.g. a long bearer token): Content-Length is in the
+/// second piece, and the body must still be read whole.
+#[test]
+fn h017_headers_split_across_reads_still_carry_the_body() {
+    let srv = serve("017", &[]);
+    let body = rpc(
+        1,
+        "initialize",
+        json!({"protocolVersion": "2025-06-18", "capabilities": {},
+         "clientInfo": {"name": "http-test", "version": "0"}}),
+    );
+    let mut s = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+    s.set_nodelay(true).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    s.write_all(b"POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthor")
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let rest = format!(
+        "ization: Bearer http-tok\r\nAccept: application/json, text/event-stream\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    s.write_all(rest.as_bytes()).unwrap();
+    let mut raw = Vec::new();
+    let _ = s.read_to_end(&mut raw);
+    let r = parse(&raw);
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(
+        r.json()["result"]["protocolVersion"].is_string(),
+        "{}",
+        r.body
+    );
+}
