@@ -7,6 +7,15 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-10-30 (remote MCP: HTTP, OAuth, TLS)
+
+Upgrading from 0.2.3 (Docker): agent memory written by 0.2.3 lives inside
+the container (`/memory`), outside the volume — copy it into the volume
+before recreating: `docker exec aikoql sh -c 'mkdir -p /data/memory && cp -a
+/memory/. /data/memory/'`. The database directory is renamed on the first
+start of the new image; nothing else to do. Set
+`-e AIKOQL_MODEL_AUTO_INSTALL=1` to have semantic search install its model.
+
 ### Added
 
 - **TLS on every client-facing listener**: `--tls-cert/--tls-key` (or
@@ -84,6 +93,46 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   body. It now reads to the end of the headers.
 - **`aikoql model install --model-dir DIR`** without a model id ignored the
   directory and installed into `~/.aikoql/models`.
+
+## [0.2.3] — 2026-10-17 (training data + POC hardening)
+
+Recorded after the fact (2026-10-30) from the tag's history — 0.2.3 shipped
+without a changelog section.
+
+### Added
+
+- **Training-data pipeline** (PR #9, `training/`): canonical schema,
+  scenario generators (temporal, provenance, uncertainty, conflict,
+  authorization), grounded answers with claim-level grounding, dataset
+  validator and gates, synthetic multi-domain corpora with held-out
+  organizations, fine-tune run + per-capability scorecard, the chat
+  wrapper; `training-data.yml` workflow.
+- **Query**: `CHANGESET BETWEEN` (change detection over generation
+  windows), `AS_OF JOURNAL <n>`, `WHERE a OR b` returns the union, GROUP BY
+  count through MCP tools; AS_OF/HISTORICAL reconstruct retraction history.
+- **Studio** (POC-4 S-1..S-13): epistemic graph styling, provenance and
+  timeline panels, ontology hot-reload, clearer AIKOQL1030 hints.
+
+### Changed
+
+- **Tenant isolation is strict**: scoped reads deny tenantless rows,
+  unscoped reads are confined, empty tenants are rejected (ACCESS_DENIED);
+  idempotency keys are namespaced by tenant and op kind.
+- **Supersede**: atomic successor pairs at one HLC instant, successors
+  inherit tenant/scope/authority and honour `valid_from`; batch supersede.
+- `serve` with only `--metrics-addr` parks instead of exiting on stdin EOF.
+
+## [0.2.2] — 2026-10-03 (Java namespace)
+
+Recorded after the fact (2026-10-30) — 0.2.2 shipped without a changelog
+section.
+
+### Changed
+
+- **Breaking for Java**: the Maven groupId and package moved from
+  `io.aikoql` to `com.aikoql` (`com.aikoql:aikoql-client`,
+  `com.aikoql.client`) — the namespace must reverse to a domain the
+  project owns.
 
 ## [0.2.1] — 2026-10-03 (SDK wave + fuzz hardening)
 
