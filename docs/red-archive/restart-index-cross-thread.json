@@ -1,0 +1,8 @@
+{
+  "id": "restart-index-cross-thread",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-storage-v2 --test restart_index restart_index_reparse_pin",
+  "captured_at": "2026-10-30T11:10:19Z",
+  "captured_head": "bda1707d9db3268cf3d25ae8830c80980e47688b",
+  "exit_code": 101
+}

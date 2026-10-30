@@ -116,8 +116,20 @@ fn restart_index_reparse_pin() {
         assert!(out.is_some(), "the corpus key resolves");
         ALLOCS.load(Ordering::Relaxed) as u64
     };
-    let a1 = measure();
-    let a2 = measure();
+    // a sibling test allocating meanwhile (the suite runs tests in
+    // parallel threads): the pin counts this thread's lookup, not theirs
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let noise = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                std::hint::black_box(vec![0u8; 64]);
+            }
+        })
+    };
+    let (a1, a2) = (measure(), measure());
+    stop.store(true, Ordering::Relaxed);
+    noise.join().unwrap();
     assert!(
         a2 < a1,
         "restart index: warm re-lookup {a2} allocs >= first {a1} — the restart \

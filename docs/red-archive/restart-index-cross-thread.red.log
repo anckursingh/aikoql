@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/restart_index.rs (target/debug/deps/restart_index-09f7b4735f2db1f4)
+
+running 1 test
+test restart_index_reparse_pin ... FAILED
+
+failures:
+
+---- restart_index_reparse_pin stdout ----
+
+thread 'restart_index_reparse_pin' (2714014) panicked at crates/storage/aikoql-v2/tests/restart_index.rs:139:5:
+restart index: warm steady state 67 allocs — block re-read (2) + scratch extend (1) + key clone (1) = 4; anything more is per-lookup table work
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    restart_index_reparse_pin
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.08s
+
+error: test failed, to rerun pass `-p aikoql-storage-v2 --test restart_index`
+EXIT=101
