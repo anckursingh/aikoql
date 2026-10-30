@@ -1,0 +1,8 @@
+{
+  "id": "http-split-headers",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_http h017",
+  "captured_at": "2026-10-30T07:09:55Z",
+  "captured_head": "d82778b43c227906036a11b89696e151beacf12c",
+  "exit_code": 101
+}

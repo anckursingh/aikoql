@@ -1,0 +1,34 @@
+[ERROR] [ERROR] Some problems were encountered while processing the POMs:
+[ERROR] Unresolveable build extension: Plugin org.sonatype.central:central-publishing-maven-plugin:0.7.0 or one of its dependencies could not be resolved:
+	Cannot access central (https://repo.maven.apache.org/maven2) in offline mode and the artifact org.sonatype.central:central-publishing-maven-plugin:jar:0.7.0 has not been downloaded from it before.
+ @ 
+ @ 
+[ERROR] The build could not read 1 project -> [Help 1]
+[ERROR]   
+[ERROR]   The project com.aikoql:aikoql-client:0.2.4 (/Users/pukku/coding/aikoql/crates/sdk/java/pom.xml) has 1 error
+[ERROR]     Unresolveable build extension: Plugin org.sonatype.central:central-publishing-maven-plugin:0.7.0 or one of its dependencies could not be resolved:
+[ERROR]     	Cannot access central (https://repo.maven.apache.org/maven2) in offline mode and the artifact org.sonatype.central:central-publishing-maven-plugin:jar:0.7.0 has not been downloaded from it before.
+[ERROR]     -> [Help 2]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/ProjectBuildingException
+[ERROR] [Help 2] http://cwiki.apache.org/confluence/display/MAVEN/PluginManagerException
+[ERROR] COMPILATION ERROR : 
+[ERROR] /Users/pukku/coding/aikoql/crates/sdk/java/src/test/java/com/aikoql/client/LeaderHintTest.java:[68,29] cannot find symbol
+  symbol:   method getLeader()
+  location: variable e of type com.aikoql.client.AikoqlException
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:testCompile (default-testCompile) on project aikoql-client: Compilation failure
+[ERROR] /Users/pukku/coding/aikoql/crates/sdk/java/src/test/java/com/aikoql/client/LeaderHintTest.java:[68,29] cannot find symbol
+[ERROR]   symbol:   method getLeader()
+[ERROR]   location: variable e of type com.aikoql.client.AikoqlException
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+EXIT=1

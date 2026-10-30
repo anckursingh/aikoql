@@ -16,6 +16,10 @@ pub struct McpError {
     pub retryable: bool,
     #[serde(default)]
     pub suggestion: String,
+    /// The leader's client address on a NOT_LEADER refusal (MRFC-0080
+    /// R4d), when the server knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader: Option<String>,
 }
 
 impl McpError {
@@ -26,6 +30,7 @@ impl McpError {
             message: "no response within the deadline".into(),
             retryable: true,
             suggestion: "Retry with backoff; the request may have committed.".into(),
+            leader: None,
         }
     }
 
@@ -37,6 +42,7 @@ impl McpError {
             message: "the client is closed".into(),
             retryable: false,
             suggestion: "Connect again.".into(),
+            leader: None,
         }
     }
 
@@ -46,6 +52,7 @@ impl McpError {
             message: format!("response id {response_id} does not match request {request_id}"),
             retryable: false,
             suggestion: "Check SDK/server version pairing.".into(),
+            leader: None,
         }
     }
 
@@ -55,6 +62,7 @@ impl McpError {
             message: format!("server version {server:?} is older than the SDK minimum {MIN}"),
             retryable: false,
             suggestion: "Upgrade the aikoql-mcp server to a supported version".into(),
+            leader: None,
         }
     }
 
@@ -64,6 +72,7 @@ impl McpError {
             message,
             retryable: false,
             suggestion: String::new(),
+            leader: None,
         }
     }
 }

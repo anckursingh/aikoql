@@ -5,6 +5,7 @@ Talks to a aikoql-mcp server over TCP. No native dependencies.
 
 import json
 import socket
+import ssl
 import time
 import uuid
 from importlib import metadata as _importlib_metadata
@@ -13,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 # P5-M12 (ND-12) version contract: the oldest server this SDK will talk to.
 # Pinned by tests/test_version_contract.py to the workspace version — a
 # workspace bump turns that test RED until this constant follows.
-MIN_SERVER_VERSION = "0.2.2"
+MIN_SERVER_VERSION = "0.2.4"
 
 # §19: a malicious server cannot cause unbounded client memory — an
 # unterminated line past this cap is refused mid-accumulation
@@ -58,11 +59,14 @@ def _stream_notify(frame: dict, stream_id: str):
 class McpError(Exception):
     """Structured error from the MCP server (MRFC-0040 error codes)."""
 
-    def __init__(self, code: str, message: str, retryable: bool = False, suggestion: str = ""):
+    def __init__(self, code: str, message: str, retryable: bool = False, suggestion: str = "",
+                 leader: Optional[str] = None):
         self.code = code
         self.message = message
         self.retryable = retryable
         self.suggestion = suggestion
+        # MRFC-0080 R4d: the leader's client address on a NOT_LEADER refusal
+        self.leader = leader
         super().__init__(f"[{code}] {message}")
 
     @classmethod
@@ -72,6 +76,7 @@ class McpError(Exception):
             message=err.get("message", "unknown error"),
             retryable=err.get("retryable", False),
             suggestion=err.get("suggestion", ""),
+            leader=err.get("leader"),
         )
 
 
@@ -129,11 +134,20 @@ class Transaction:
 class McpClient:
     """JSON-RPC 2.0 client for aikoql-mcp over TCP."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9090, token: Optional[str] = None):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9090, token: Optional[str] = None,
+                 tls: Optional[ssl.SSLContext] = None):
         self.host = host
         self.port = port
         # P3-M1 servers require a --tcp-token: it rides initialize params.
         self.token = token
+        # A server started with --tls-cert/--tls-key: the context's trust
+        # anchors verify its certificate for `host` before the token is sent
+        # (ssl.create_default_context() for public CAs, cafile= for a private
+        # one). Kept for the NOT_LEADER re-dial. Its floor is raised to TLS 1.2
+        # (never lowered): Python 3.9's default context can still allow 1.0/1.1.
+        if tls is not None and tls.minimum_version < ssl.TLSVersion.TLSv1_2:
+            tls.minimum_version = ssl.TLSVersion.TLSv1_2
+        self.tls = tls
         self._sock: Optional[socket.socket] = None
         self._buf = b""
         # The transport died (EOF / over-cap frame / write failure): a
@@ -141,9 +155,20 @@ class McpClient:
         # socket (§7 principle 11). A fresh connect() clears it.
         self._dead = False
         self._next_id = 0
+        # replayed when a NOT_LEADER hint moves the client (MRFC-0080 R5b)
+        self._timeout = 5.0
+        self._init_args = ("aikoql-py", None)
 
     def connect(self, timeout: float = 5.0) -> "McpClient":
-        self._sock = socket.create_connection((self.host, self.port), timeout=timeout)
+        self._timeout = timeout
+        sock = socket.create_connection((self.host, self.port), timeout=timeout)
+        if self.tls is not None:
+            try:
+                sock = self.tls.wrap_socket(sock, server_hostname=self.host)
+            except BaseException:
+                sock.close()
+                raise
+        self._sock = sock
         self._sock.settimeout(timeout)
         self._dead = False
         return self
@@ -176,7 +201,12 @@ class McpClient:
                 text = line.decode("utf-8").strip()
                 if not text:
                     continue
-                return json.loads(text)
+                frame = json.loads(text)
+                if not isinstance(frame, dict):
+                    # valid JSON but not an object (a number, string, array,
+                    # null): malformed — never a response, never a notify
+                    continue
+                return frame
             chunk = self._sock.recv(4096)
             if not chunk:
                 # EOF: the server (or the fault proxy) closed — latch so a
@@ -284,6 +314,7 @@ class McpClient:
     # -- MCP protocol ---------------------------------------------------
 
     def initialize(self, client_name: str = "aikoql-py", client_version: Optional[str] = None):
+        self._init_args = (client_name, client_version)
         if client_version is None:
             client_version = _default_client_version()
         params = {
@@ -331,7 +362,29 @@ class McpClient:
         return self._rpc("session/init", params)
 
     def call_tool(self, name: str, arguments: Optional[dict] = None) -> dict:
-        """Call an MCP tool. Returns the parsed data payload."""
+        """Call an MCP tool. Returns the parsed data payload.
+
+        MRFC-0080 R5b: refused with NOT_LEADER and a leader hint, the client
+        reconnects to that leader, re-runs initialize and retries the call
+        once; it then stays on the leader. session_init identity is not
+        replayed.
+        """
+        try:
+            return self._call_tool_once(name, arguments)
+        except McpError as e:
+            if e.code != "NOT_LEADER" or not e.leader:
+                raise
+            self._follow(e.leader)
+            return self._call_tool_once(name, arguments)
+
+    def _follow(self, leader: str):
+        host, _, port = leader.rpartition(":")
+        self.close()
+        self.host, self.port = host.strip("[]"), int(port)
+        self.connect(self._timeout)
+        self.initialize(*self._init_args)
+
+    def _call_tool_once(self, name: str, arguments: Optional[dict] = None) -> dict:
         params: Dict[str, Any] = {"name": name}
         if arguments:
             params["arguments"] = arguments

@@ -1,0 +1,8 @@
+{
+  "id": "perf-compact-median",
+  "pre_fix_commit": "HEAD",
+  "command": "python3 scripts/test_perf_smoke_check.py",
+  "captured_at": "2026-10-29T19:57:26Z",
+  "captured_head": "df8b9583a60f06c90efea04b3f3df0bde8e11a63",
+  "exit_code": 1
+}

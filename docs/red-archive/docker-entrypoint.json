@@ -1,0 +1,8 @@
+{
+  "id": "docker-entrypoint",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-docker-entrypoint.sh",
+  "captured_at": "2026-10-28T18:22:45Z",
+  "captured_head": "2573871c982b317f6354dc7bcc4b683cd554a075",
+  "exit_code": 1
+}

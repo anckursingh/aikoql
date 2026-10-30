@@ -1,0 +1,56 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0599]: no variant, associated function, or constant named `NotLeader` found for enum `error_codes::ErrorCode` in the current scope
+   --> crates/services/api/mcp/src/error_codes.rs:134:57
+    |
+ 10 | pub enum ErrorCode {
+    | ------------------ variant, associated function, or constant `NotLeader` not found for this enum
+...
+134 |         assert_eq!(ErrorCode::classify(msg), ErrorCode::NotLeader);
+    |                                                         ^^^^^^^^^ variant, associated function, or constant not found in `error_codes::ErrorCode`
+
+error[E0425]: cannot find function `store_leader` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1128:9
+     |
+1128 |         store_leader(&sdir, "10.0.0.9:7070").unwrap(); // its term-2 leader
+     |         ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `load_leader` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1145:20
+     |
+1145 |         assert_eq!(load_leader(&l.dir).as_deref(), Some("10.0.0.9:7070"));
+     |                    ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `store_leader` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1170:9
+     |
+1170 |         store_leader(&l.dir, "10.0.0.1:7070").unwrap(); // its --advertise
+     |         ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `load_leader` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1183:20
+     |
+1183 |         assert_eq!(load_leader(&sdir).as_deref(), Some("10.0.0.1:7070"));
+     |                    ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `store_leader` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1249:9
+     |
+1249 |         store_leader(&a.dir, "10.0.0.1:7070").unwrap();
+     |         ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `load_leader` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1266:20
+     |
+1266 |         assert_eq!(load_leader(&bdir).as_deref(), Some("10.0.0.1:7070"));
+     |                    ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `load_leader` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1269:13
+     |
+1269 |             load_leader(&bdir),
+     |             ^^^^^^^^^^^ not found in this scope
+
+Some errors have detailed explanations: E0425, E0599.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 8 previous errors
+EXIT=101

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -405,5 +406,77 @@ func TestDialStdioDeadlineKillsServer(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("deadline not enforced (call took %v)", elapsed)
+	}
+}
+
+// notLeader is the envelope a fenced server answers a write with
+// (MRFC-0080 R4d); leader is the hint, "" for none.
+func notLeader(leader string) json.RawMessage {
+	e := map[string]any{"code": "NOT_LEADER", "message": "not leader", "retryable": true}
+	if leader != "" {
+		e["leader"] = leader
+	}
+	return toolResult(map[string]any{"ok": false, "error": e})
+}
+
+// MRFC-0080 R5b — a call refused with NOT_LEADER + leader is retried once
+// against the leader over a fresh, initialized connection, and the client
+// stays there.
+func TestNotLeaderFollowsTheLeaderHint(t *testing.T) {
+	var mu sync.Mutex
+	var leaderSaw []string
+	leader := fakeServer(t, func(t *testing.T, req rpcFrame) []rpcFrame {
+		mu.Lock()
+		leaderSaw = append(leaderSaw, req.Method)
+		mu.Unlock()
+		if req.Method == "initialize" {
+			return []rpcFrame{{JSONRPC: "2.0", ID: req.ID, Result: infoReply("aikoql-mcp")}}
+		}
+		return []rpcFrame{{JSONRPC: "2.0", ID: req.ID, Result: toolResult(map[string]any{"ok": true, "data": map[string]any{"koid": "ko-1"}})}}
+	})
+	fenced := fakeServer(t, func(t *testing.T, req rpcFrame) []rpcFrame {
+		if req.Method == "initialize" {
+			return []rpcFrame{{JSONRPC: "2.0", ID: req.ID, Result: infoReply("aikoql-mcp")}}
+		}
+		return []rpcFrame{{JSONRPC: "2.0", ID: req.ID, Result: notLeader(leader)}}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, fenced, WithToken("t"))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	if err := c.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	raw, err := c.CallTool(ctx, "remember", map[string]any{"type_name": "note"})
+	if err != nil || !strings.Contains(string(raw), "ko-1") {
+		t.Fatalf("the call was not retried on the leader: %s %v", raw, err)
+	}
+	if _, err := c.CallTool(ctx, "remember", map[string]any{"type_name": "note"}); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(leaderSaw, ",") != "initialize,tools/call,tools/call" {
+		t.Fatalf("the leader saw %v", leaderSaw)
+	}
+}
+
+func TestNotLeaderWithoutAHintIsReturned(t *testing.T) {
+	addr := fakeServer(t, func(t *testing.T, req rpcFrame) []rpcFrame {
+		return []rpcFrame{{JSONRPC: "2.0", ID: req.ID, Result: notLeader("")}}
+	})
+	ctx := context.Background()
+	c, err := Dial(ctx, addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	_, err = c.CallTool(ctx, "remember", nil)
+	var me *McpError
+	if !errors.As(err, &me) || me.Code != "NOT_LEADER" || !me.Retryable {
+		t.Fatalf("expected a retryable NOT_LEADER, got %v", err)
 	}
 }

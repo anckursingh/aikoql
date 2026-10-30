@@ -1,0 +1,8 @@
+{
+  "id": "r4a-term-fencing",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp replication",
+  "captured_at": "2026-10-28T07:54:56Z",
+  "captured_head": "0a5544d4e247e891b765841c4187902a0508278b",
+  "exit_code": 101
+}

@@ -71,13 +71,13 @@ aikoql ships as a single, self-contained binary. No dependencies, no installers.
 
 **Windows:**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp.exe
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.4/aikoql-mcp.exe
 .\aikoql-mcp.exe --help
 ```
 
 **Linux (static musl — any distro):**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp-linux-musl
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.4/aikoql-mcp-linux-musl
 chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql-mcp
 ```
 
@@ -86,34 +86,33 @@ A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dyn
 **macOS (Apple Silicon / Intel):**
 ```bash
 # Apple Silicon
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp-macos-arm64
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.4/aikoql-mcp-macos-arm64
 chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql-mcp
 
 # Intel
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.2/aikoql-mcp-macos
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.2.4/aikoql-mcp-macos
 chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql-mcp
 ```
 
 ### Docker (multi-arch: amd64 + arm64)
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.2.2
+docker pull ghcr.io/anckursingh/aikoql:0.2.4
 
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.2.2
+  ghcr.io/anckursingh/aikoql:0.2.4
 ```
 
 `AIKOQL_TCP_TOKEN` is required — TCP auth is fail-closed
 (`TOKEN[:TENANT[:ROLES]]`). State lives under the `/data` volume (the
-`aikoql-v2` database directory, models in `/data/models`); the memory
-directory defaults to `./memory` (`/memory` in the image). Tags: `0.2.2`
-(pin this), `0.2`, `latest`.
+`aikoql-v2` database directory, models in `/data/models`, agent memory in
+`/data/memory`). Tags: `0.2.4` (pin this), `0.2`, `latest`.
 
-The server binds loopback-only inside the container (plaintext bearer tokens
-never leave the host), so published ports don't reach it — probe and use it
-from inside:
+Without TLS the server binds loopback-only inside the container (plaintext
+bearer tokens never leave it), so published ports don't reach it — probe and
+use it from inside:
 
 ```bash
 docker exec aikoql curl -fsS http://127.0.0.1:9091/health
@@ -121,16 +120,40 @@ docker exec aikoql aikoql --version
 docker exec aikoql aikoql model install --model-dir /data/models   # optional: offline embeddings
 ```
 
-For MCP over TCP from another process, share the container's network
-namespace (`docker run --rm --network container:aikoql ...`); for MCP stdio
-from the host, use the npm binary instead. A compose file
+Or start the container with `-e AIKOQL_MODEL_AUTO_INSTALL=1` and it fetches
+the model into `/data/models` (the volume) on first start. Images up to
+0.2.3 ignore `--model-dir` in `model install` without a model id — there,
+use `aikoql model install sentence-transformers/all-MiniLM-L6-v2 --model-dir /data/models`.
+
+With a certificate the image publishes its MCP port like any database image —
+mount it and set `AIKOQL_TLS_CERT` / `AIKOQL_TLS_KEY`:
+
+```bash
+docker run -d --name aikoql -p 9090:9090 \
+  -v /path/to/certs:/certs:ro \
+  -e AIKOQL_TLS_CERT=/certs/server.pem -e AIKOQL_TLS_KEY=/certs/server.key \
+  -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
+  -v aikoql_data:/data \
+  ghcr.io/anckursingh/aikoql:0.2.4
+```
+
+Clients connect over TLS (Rust `Client::dial_tls`, Python `tls=`, Go
+`WithTLS`, TypeScript `{ tls }`, Java `dial(addr, sslContext)`); the
+certificate must name the host they dial. The HTTP port (9091 — login, query
+API, Studio, `/health`) serves HTTPS with the same certificate and is
+published only when armed too: `-p 9091:9091 -e AIKOQL_ALLOW_REMOTE_HTTP=1
+-e AIKOQL_ADMIN_PASSWORD=…`.
+
+Without TLS, for MCP over TCP from another process, share the container's
+network namespace (`docker run --rm --network container:aikoql ...`); for MCP
+stdio from the host, use the npm binary instead. A compose file
 (`docker-compose.release.yml`) exists for production deploys.
 
 ### Verify
 
 ```bash
 aikoql-mcp --version
-# aikoql-mcp 0.2.2
+# aikoql-mcp 0.2.4
 ```
 
 ## 5-Second Start
@@ -230,14 +253,19 @@ aikoql> .help
 ## Embeddings (Optional)
 
 Semantic search (`MATCH ... USING EMBEDDING`) runs fully offline — the server
-never downloads models at runtime. Install the bundled model once:
+never downloads models at runtime unless you ask it to. Install the bundled
+model once:
 
 ```bash
 aikoql-mcp model install
 ```
 
+or let `serve` fetch it on its first start with `AIKOQL_MODEL_AUTO_INSTALL=1`
+(a missing default model is downloaded once; later starts load it locally).
+Downloads honour `HF_ENDPOINT` (a mirror) and `HF_HOME` (the cache).
 Without an installed model, `serve` still starts and `/health` reports
-`semantic: {"state": "unavailable"}` together with the install command.
+`semantic: {"state": "unavailable"}` together with the install command (or,
+with the flag, why the download failed).
 Point `--embedding-provider http` + `--embedding-base-url` at an
 Ollama/OpenAI-compatible endpoint to use a remote model instead
 (`ollama` is an alias of `http`; providers are `candle` | `http` | `ollama`).

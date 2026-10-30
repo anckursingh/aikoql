@@ -1,0 +1,8 @@
+{
+  "id": "login-backoff",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp -- back",
+  "captured_at": "2026-10-30T07:14:58Z",
+  "captured_head": "a36d70cc4bcc2b7d83aa6c18a359f717015e4ec6",
+  "exit_code": 101
+}

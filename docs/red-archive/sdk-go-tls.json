@@ -1,0 +1,8 @@
+{
+  "id": "sdk-go-tls",
+  "pre_fix_commit": "HEAD",
+  "command": "env AIKOQL_MCP_BIN=/Users/pukku/coding/aikoql/target/debug/aikoql-mcp sh -c cd crates/sdk/go && go test -run TestTLS ./",
+  "captured_at": "2026-10-29T13:23:56Z",
+  "captured_head": "e94526a3da7a55ec210b84785f8dc50320004acd",
+  "exit_code": 1
+}

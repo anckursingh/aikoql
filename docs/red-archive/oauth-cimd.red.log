@@ -1,0 +1,51 @@
+warning: field `metadata` is never read
+   --> crates/services/api/mcp/src/oauth.rs:116:5
+    |
+104 | pub(crate) struct OAuth {
+    |                   ----- field in this struct
+...
+116 |     metadata: Mutex<HashMap<String, (Instant, Option<Client>)>>,
+    |     ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/main.rs (target/debug/deps/aikoql_mcp-1bd616def3f11511)
+
+running 4 tests
+test oauth::tests::metadata_urls ... FAILED
+test oauth::tests::metadata_fetches_reach_public_addresses_only ... FAILED
+test oauth::tests::a_metadata_document_client_signs_in ... FAILED
+test oauth::tests::a_metadata_document_must_name_itself_and_be_a_public_client ... ok
+
+failures:
+
+---- oauth::tests::metadata_urls stdout ----
+
+thread 'oauth::tests::metadata_urls' (2528959) panicked at crates/services/api/mcp/src/oauth.rs:1047:9:
+assertion failed: metadata_url_ok(CLAUDE_CODE)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- oauth::tests::metadata_fetches_reach_public_addresses_only stdout ----
+
+thread 'oauth::tests::metadata_fetches_reach_public_addresses_only' (2528958) panicked at crates/services/api/mcp/src/oauth.rs:1086:13:
+127.0.0.1
+
+---- oauth::tests::a_metadata_document_client_signs_in stdout ----
+
+thread 'oauth::tests::a_metadata_document_client_signs_in' (2528956) panicked at crates/services/api/mcp/src/oauth.rs:1101:9:
+assertion `left == right` failed: <!doctype html><meta charset="utf-8"><title>Unknown client</title><h1>Unknown client</h1><p>This client is not registered.</p>
+  left: "400 Bad Request"
+ right: "200 OK"
+
+
+failures:
+    oauth::tests::a_metadata_document_client_signs_in
+    oauth::tests::metadata_fetches_reach_public_addresses_only
+    oauth::tests::metadata_urls
+
+test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 139 filtered out; finished in 0.45s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

@@ -54,8 +54,8 @@ static A: Counting = Counting;
 
 /// Two flushed segments of n keys each, then the merge under the alloc
 /// arm — the P5-M36 one_merge shape at smoke scale.
-fn one_merge(n: usize, r: usize) -> (u64, u64) {
-    let mut cfg = Config::new(dir("compact-smoke"));
+fn one_merge(n: usize, r: usize, run: usize) -> (u64, u64) {
+    let mut cfg = Config::new(dir(&format!("compact-smoke-{run}")));
     cfg.durability = DurabilityMode::Async; // fsync per batch would dominate the cell
     cfg.memtable_bytes = usize::MAX; // no auto-flush: two explicit flushes
     cfg.l0_compact_trigger = 0; // manual compaction only (the PERF-3 shape)
@@ -88,18 +88,26 @@ fn compact_smoke_cell() {
     if std::env::var_os("STORAGE_PERF_SMOKE").is_none() {
         return; // env-gated — the smoke script arms it
     }
-    let (wall_ms, allocs) = one_merge(25_000, 4);
+    // five merges, each on a fresh store: the checker gates the median wall
+    // so one stalled merge (the runner, not the code — c2af329's 361 ms vs
+    // 49-102 ms) cannot fail the cell; the allocations are the first run's
+    let runs: Vec<(u64, u64)> = (0..5).map(|run| one_merge(25_000, 4, run)).collect();
+    let samples: Vec<u64> = runs.iter().map(|&(wall, _)| wall).collect();
+    let mut sorted = samples.clone();
+    sorted.sort_unstable();
+    let wall_ms = sorted[sorted.len() / 2];
+    let allocs = runs[0].1;
     assert!(wall_ms > 0, "the merge wall is recorded");
     assert!(allocs > 0, "the allocation count is recorded");
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../artifacts/storage-engine-v2/compact-smoke.json");
     let json = format!(
-        "{{\n \"environment\": {{\"git_sha\": \"{}\"}},\n \"cells\": {{\"compact_wall_ms\": {wall_ms}, \"compact_allocs\": {allocs}}}\n}}\n",
+        "{{\n \"environment\": {{\"git_sha\": \"{}\"}},\n \"cells\": {{\"compact_wall_ms\": {wall_ms}, \"compact_wall_samples\": {samples:?}, \"compact_allocs\": {allocs}}}\n}}\n",
         git_sha()
     );
     std::fs::write(&out, json).unwrap();
     eprintln!(
-        "[compact smoke] wall {wall_ms} ms · allocs {allocs} → {}",
+        "[compact smoke] wall {wall_ms} ms (median of {samples:?}) · allocs {allocs} → {}",
         out.display()
     );
 }

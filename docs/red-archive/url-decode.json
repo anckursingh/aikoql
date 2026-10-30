@@ -1,0 +1,8 @@
+{
+  "id": "url-decode",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -q -p aikoql-mcp --bin aikoql-mcp url_decode_handles",
+  "captured_at": "2026-10-29T20:50:45Z",
+  "captured_head": "8a1cb7e3a9c0ebcd91ca084ffd479d8e8fe39128",
+  "exit_code": 101
+}

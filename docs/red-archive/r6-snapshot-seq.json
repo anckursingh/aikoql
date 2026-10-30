@@ -1,0 +1,8 @@
+{
+  "id": "r6-snapshot-seq",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-storage-v2 --test replication_bootstrap",
+  "captured_at": "2026-10-28T10:17:11Z",
+  "captured_head": "bde036ea07e4376e342e3e935aacb3b51aa7293d",
+  "exit_code": 101
+}

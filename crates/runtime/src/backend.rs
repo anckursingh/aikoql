@@ -26,6 +26,11 @@ pub type Opened = (Arc<dyn StorageEngine>, Option<Arc<dyn StorageAdminApi>>);
 
 /// Open the engine at `path` — the ONE opener.
 pub fn open_engine(path: &Path) -> KResult<Opened> {
+    open_engine_with(path, false)
+}
+
+/// `open_engine`, with MRFC-0080 log retention on for a replication leader.
+pub fn open_engine_with(path: &Path, retain_log: bool) -> KResult<Opened> {
     if path.is_dir() && !path.join("CURRENT").is_file() {
         return Err(KError::Store(format!(
             "{} is a directory but not an aikoql-v2 database (no CURRENT)",
@@ -43,9 +48,9 @@ pub fn open_engine(path: &Path) -> KResult<Opened> {
     }
     // P3-M2 (design §22): extract the admin capability from the CONCRETE
     // engine before the StorageEngine coercion.
-    let e = Arc::new(AikoqlStorageEngineV2::open(
-        path.to_string_lossy().as_ref(),
-    )?);
+    let mut config = aikoql_storage_v2::db::Config::new(path.to_path_buf());
+    config.retain_log = retain_log;
+    let e = Arc::new(AikoqlStorageEngineV2::open_with_config(config)?);
     let admin: Arc<dyn StorageAdminApi> = e.clone();
     Ok((e, Some(admin)))
 }

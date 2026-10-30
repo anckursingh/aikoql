@@ -14,7 +14,7 @@
 //
 // DialStdio spawns the server instead and speaks MCP over its
 // stdin/stdout — the docker-container contract (`docker run -i --rm
-// image serve /data/aikoql.redb`), token-free because stdio trusts the
+// image serve /data/aikoql`), token-free because stdio trusts the
 // process boundary.
 //
 // A Client serializes its calls over one connection (the mutex is
@@ -30,6 +30,7 @@ package aikoql
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,11 +47,11 @@ import (
 // MIN_SERVER_VERSION is the oldest aikoql-mcp server this SDK will talk
 // to (the ND-12 version contract, mirrored from the Python SDK; pinned
 // against the workspace version by the go-sdk CI job).
-const MIN_SERVER_VERSION = "0.2.2"
+const MIN_SERVER_VERSION = "0.2.4"
 
 // Version is the SDK's own version, advertised as the client identity by
 // default. Distributors pin it at build time: -ldflags
-// "-X github.com/anckursingh/aikoql/sdk/go.Version=<version>". The default
+// "-X github.com/anckursingh/aikoql/crates/sdk/go.Version=<version>". The default
 // is the honest marker — a library cannot know its own module version at
 // runtime (debug.ReadBuildInfo reports the MAIN module's).
 var Version = "dev"
@@ -63,6 +64,9 @@ type McpError struct {
 	Message    string `json:"message"`
 	Retryable  bool   `json:"retryable"`
 	Suggestion string `json:"suggestion"`
+	// Leader is the leader's client address on a NOT_LEADER refusal
+	// (MRFC-0080 R4d), when the server knows it.
+	Leader string `json:"leader,omitempty"`
 }
 
 func (e *McpError) Error() string {
@@ -75,6 +79,7 @@ type clientConfig struct {
 	name        string
 	version     string
 	dialTimeout time.Duration
+	tls         *tls.Config
 }
 
 // Option tunes Dial.
@@ -84,6 +89,14 @@ type Option func(*clientConfig)
 // (required by every TCP server since P3-M1).
 func WithToken(token string) Option {
 	return func(c *clientConfig) { c.token = token }
+}
+
+// WithTLS dials over TLS, for a server started with --tls-cert/--tls-key:
+// the server's certificate is verified with cfg (nil RootCAs: the system
+// roots) for the host in the address — ServerName is inferred from it when
+// unset — before the token is ever sent. A NOT_LEADER re-dial uses it too.
+func WithTLS(cfg *tls.Config) Option {
+	return func(c *clientConfig) { c.tls = cfg }
 }
 
 // WithClientInfo sets the MCP client identity advertised at initialize.
@@ -107,6 +120,9 @@ type Client struct {
 	nextID int64
 	closed bool
 	cfg    clientConfig
+	// addr is the TCP address dialed ("" over stdio) — moved by a
+	// NOT_LEADER leader hint.
+	addr string
 }
 
 // Dial opens a TCP connection to addr ("host:port"). The handshake is
@@ -117,17 +133,26 @@ func Dial(ctx context.Context, addr string, opts ...Option) (*Client, error) {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	d := net.Dialer{Timeout: cfg.dialTimeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	conn, err := dialConn(ctx, addr, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("aikoql: dial %s: %w", addr, err)
 	}
-	return &Client{tr: conn, r: bufio.NewReader(conn), cfg: cfg}, nil
+	return &Client{tr: conn, r: bufio.NewReader(conn), cfg: cfg, addr: addr}, nil
+}
+
+// dialConn opens the TCP connection, with the TLS handshake when configured.
+func dialConn(ctx context.Context, addr string, cfg clientConfig) (net.Conn, error) {
+	d := net.Dialer{Timeout: cfg.dialTimeout}
+	if cfg.tls == nil {
+		return d.DialContext(ctx, "tcp", addr)
+	}
+	td := tls.Dialer{NetDialer: &d, Config: cfg.tls}
+	return td.DialContext(ctx, "tcp", addr)
 }
 
 // DialStdio spawns bin with args and speaks MCP over its stdin/stdout.
 // This is the docker-container contract — `docker run -i --rm image serve
-// /data/aikoql.redb` runs the same binary over the same stdio (the repo's
+// /data/aikoql` runs the same binary over the same stdio (the repo's
 // e2e-volume-restart.js proves the container side). No token: stdio trusts
 // the process boundary and the server's stdio mode needs no --tcp-token.
 // The server's stderr is inherited so its logs stay visible. ctx bounds
@@ -576,7 +601,39 @@ func (c *Client) SessionInit(ctx context.Context, p SessionParams) error {
 
 // CallTool calls any registered MCP tool by name and returns its data
 // payload — the escape hatch for tools without a typed wrapper here.
+//
+// MRFC-0080 R5b: a TCP client refused with NOT_LEADER and a leader hint
+// reconnects to that leader, re-runs Initialize and retries the call
+// once; the Client then stays on the leader. Session identity set with
+// SessionInit is not replayed.
 func (c *Client) CallTool(ctx context.Context, name string, arguments any) (json.RawMessage, error) {
+	raw, err := c.callTool(ctx, name, arguments)
+	var me *McpError
+	if errors.As(err, &me) && me.Code == "NOT_LEADER" && me.Leader != "" && c.addr != "" {
+		if ferr := c.follow(ctx, me.Leader); ferr != nil {
+			return nil, errors.Join(err, ferr)
+		}
+		return c.callTool(ctx, name, arguments)
+	}
+	return raw, err
+}
+
+// follow replaces the connection with one to the leader at addr and
+// re-runs the handshake.
+func (c *Client) follow(ctx context.Context, addr string) error {
+	conn, err := dialConn(ctx, addr, c.cfg)
+	if err != nil {
+		return fmt.Errorf("aikoql: follow the leader hint %s: %w", addr, err)
+	}
+	c.mu.Lock()
+	old := c.tr
+	c.tr, c.r, c.addr = conn, bufio.NewReader(conn), addr
+	c.mu.Unlock()
+	_ = old.Close()
+	return c.Initialize(ctx)
+}
+
+func (c *Client) callTool(ctx context.Context, name string, arguments any) (json.RawMessage, error) {
 	params := map[string]any{"name": name}
 	if arguments != nil {
 		params["arguments"] = arguments

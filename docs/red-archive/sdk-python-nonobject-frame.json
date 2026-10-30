@@ -1,0 +1,8 @@
+{
+  "id": "sdk-python-nonobject-frame",
+  "pre_fix_commit": "HEAD",
+  "command": "/private/tmp/claude-501/-Users-pukku-coding-aikoql/4365fec5-c293-40c6-ae92-d401a7bd8c96/scratchpad/venv/bin/python -m pytest crates/sdk/python/tests/test_fuzz_estate.py -q -p no:cacheprovider -k frame_cap",
+  "captured_at": "2026-10-29T14:45:52Z",
+  "captured_head": "d368a64a7537e7bf795955c96c9ab1e079adde64",
+  "exit_code": 1
+}

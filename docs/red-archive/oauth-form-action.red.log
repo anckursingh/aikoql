@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/main.rs (target/debug/deps/aikoql_mcp-1bd616def3f11511)
+
+running 1 test
+test oauth::tests::the_sign_in_page_lets_the_form_redirect_to_the_client ... FAILED
+
+failures:
+
+---- oauth::tests::the_sign_in_page_lets_the_form_redirect_to_the_client stdout ----
+
+thread 'oauth::tests::the_sign_in_page_lets_the_form_redirect_to_the_client' (2479987) panicked at crates/services/api/mcp/src/oauth.rs:910:13:
+the page: frame-ancestors 'none'; form-action 'self'
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    oauth::tests::the_sign_in_page_lets_the_form_redirect_to_the_client
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 134 filtered out; finished in 0.22s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

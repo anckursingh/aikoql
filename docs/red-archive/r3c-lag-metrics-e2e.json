@@ -1,0 +1,8 @@
+{
+  "id": "r3c-lag-metrics-e2e",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test replication_failover lag",
+  "captured_at": "2026-10-28T09:56:43Z",
+  "captured_head": "404917c25f58ae863663561dfad1d12bf2584fff",
+  "exit_code": 101
+}

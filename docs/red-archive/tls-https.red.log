@@ -1,0 +1,29 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/tls_listen.rs (target/debug/deps/tls_listen-efd88f49761f8d51)
+
+running 2 tests
+test tls008_https_surface_on_any_interface ... FAILED
+test tls009_remote_plaintext_http_refused ... FAILED
+
+failures:
+
+---- tls008_https_surface_on_any_interface stdout ----
+
+thread 'tls008_https_surface_on_any_interface' (1679722) panicked at crates/services/api/mcp/tests/tls_listen.rs:332:33:
+called `Result::unwrap()` on an `Err` value: Custom { kind: InvalidData, error: InvalidMessage(InvalidContentType) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tls009_remote_plaintext_http_refused stdout ----
+
+thread 'tls009_remote_plaintext_http_refused' (1679723) panicked at crates/services/api/mcp/tests/tls_listen.rs:411:13:
+remote plaintext HTTP was served (no refusal within 15 s)
+
+
+failures:
+    tls008_https_surface_on_any_interface
+    tls009_remote_plaintext_http_refused
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 7 filtered out; finished in 15.06s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test tls_listen`
+EXIT=101

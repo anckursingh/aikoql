@@ -13,7 +13,7 @@ import json
 import socket
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
     RuleBasedStateMachine,
@@ -154,6 +154,10 @@ def test_envelope_garbage_property(text):
 
 @settings(max_examples=100, deadline=None)
 @given(st.binary(max_size=MAX_FRAME + 4096))
+# a found counterexample, pinned: a line that is valid JSON but not an
+# object (here the number 0) must be skipped as malformed, never .get()-ed
+@example(b"0\n")
+@example(b"[1]\n\"s\"\nnull\n")
 def test_frame_cap_property(junk):
     """The §19 bound: FRAME_TOO_LARGE exactly when the junk runs past the
     cap, the client latches, and the next call fails UNAVAILABLE."""

@@ -1,6 +1,6 @@
 {
   "name": "aikoql",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "description": "The Agent-First Knowledge Database. MCP tools for knowledge CRUD, aikoql queries, graph traversal, hybrid search, context compilation, document ingestion, constraint validation, and more. Embedded single binary, zero runtime deps.",
   "author": {
     "name": "Anckur Singh",
@@ -25,14 +25,14 @@
     "KB_PATH": {
       "type": "directory",
       "title": "Knowledge base directory",
-      "description": "Where aikoql stores your knowledge base. A fresh path auto-creates an aikoql-v2 database directory; existing redb files, v1 WALs and snapshots still auto-detect.",
+      "description": "Where aikoql stores your knowledge base. A fresh path auto-creates an aikoql-v2 database directory; an existing aikoql-v2 directory is reopened.",
       "default": "./aikoql-kb"
     }
   },
   "mcpServers": {
     "aikoql": {
       "command": "npx",
-      "args": ["-y", "aikoql-mcp@0.2.2", "serve", "${user_config.KB_PATH}", "--metrics-addr", "127.0.0.1:9091"]
+      "args": ["-y", "aikoql-mcp@0.2.4", "serve", "${user_config.KB_PATH}", "--metrics-addr", "127.0.0.1:9091"]
     }
   }
 }

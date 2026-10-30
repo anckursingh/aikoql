@@ -28,6 +28,9 @@ struct ActiveSub {
 pub struct EventManager {
     active: HashMap<String, ActiveSub>,
     persisted: HashMap<String, SubscriptionRecord>,
+    /// MRFC-0080 standby reads: subscriptions live in memory only — a
+    /// standby's store belongs to the replication stream.
+    pub(crate) ephemeral: bool,
 }
 
 impl EventManager {
@@ -35,6 +38,7 @@ impl EventManager {
         Ok(EventManager {
             active: HashMap::new(),
             persisted: repo.scan_subscriptions()?.into_iter().collect(),
+            ephemeral: false,
         })
     }
 
@@ -44,6 +48,9 @@ impl EventManager {
         id: &str,
         rec: &SubscriptionRecord,
     ) -> KResult<()> {
+        if self.ephemeral {
+            return Ok(());
+        }
         let mut batch = WriteBatch::new();
         repo.put_subscription(&mut batch, id, rec);
         repo.write_batch(&batch)
@@ -73,6 +80,9 @@ impl EventManager {
     pub fn unsubscribe(&mut self, repo: &KnowledgeRepository, id: &str) -> KResult<()> {
         self.active.remove(id);
         self.persisted.remove(id);
+        if self.ephemeral {
+            return Ok(());
+        }
         let mut batch = WriteBatch::new();
         repo.delete_subscription(&mut batch, id);
         repo.write_batch(&batch)

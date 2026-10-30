@@ -52,6 +52,18 @@ pub fn ensure(k: &Kernel) -> KResult<()> {
     Ok(())
 }
 
+/// The standby's `ensure`: never bootstrap or migrate (the leader does,
+/// and replication carries it) — only refuse a version this build cannot
+/// read.
+pub(crate) fn check(k: &Kernel) -> KResult<()> {
+    match k.version_rows()?.into_iter().max() {
+        Some(v) if v > SUPPORTED_VERSION => Err(KError::Store(format!(
+            "catalog version {v} unsupported: this build supports up to {SUPPORTED_VERSION}"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// Deterministic vN→vN+1 dispatch, then stamp the version row in place.
 /// The loop is the seam; the first real step ships when a v2 schema change
 /// lands. Stamping keeps ensure convergent: a DB stamped below the current
@@ -524,11 +536,15 @@ fn parse_index_decl(name: &str, props: &PropertyMap) -> KResult<IndexDecl> {
 /// (declared, building, or a pre-M22 row with no state) is registered,
 /// rebuilt from the committed heads and stamped READY on the row, so the
 /// crashed declaration answers without any maintainer replay (idx4-001).
-pub fn load_property_indexes(k: &Kernel) -> KResult<()> {
+/// `standby`: build the declared indexes in memory and record nothing —
+/// dropping and state changes are the leader's, and arrive by replication.
+pub(crate) fn load_property_indexes_with(k: &Kernel, standby: bool) -> KResult<()> {
     let mut indexes: Vec<Arc<dyn Index>> = Vec::new();
     for decl in k.catalog_list_indexes()? {
         if decl.state == IndexState::Dropping {
-            k.catalog_drop_entry("index", &decl.name)?;
+            if !standby {
+                k.catalog_drop_entry("index", &decl.name)?;
+            }
             continue;
         }
         let props: Vec<&str> = decl.properties.iter().map(|p| p.as_str()).collect();
@@ -540,7 +556,9 @@ pub fn load_property_indexes(k: &Kernel) -> KResult<()> {
             idx.set_state(IndexState::Building);
             idx.rebuild(k)?;
             idx.set_state(IndexState::Ready);
-            k.set_index_state(&decl.name, IndexState::Ready)?;
+            if !standby {
+                k.set_index_state(&decl.name, IndexState::Ready)?;
+            }
         } else {
             idx.set_state(IndexState::Ready);
         }

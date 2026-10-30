@@ -1,0 +1,20 @@
+   Compiling aikoql-storage-v2 v0.2.4 (/Users/pukku/coding/aikoql/crates/storage/aikoql-v2)
+error[E0609]: no field `last_seq` on type `SnapshotInfo`
+  --> crates/storage/aikoql-v2/tests/replication_bootstrap.rs:52:21
+   |
+52 |     assert_eq!(info.last_seq, leader.last_seq());
+   |                     ^^^^^^^^ unknown field
+   |
+   = note: available fields are: `generation`, `file_count`, `bytes_copied`
+
+error[E0609]: no field `last_seq` on type `SnapshotInfo`
+  --> crates/storage/aikoql-v2/tests/replication_bootstrap.rs:58:42
+   |
+58 |     assert_eq!(follower.last_seq(), info.last_seq);
+   |                                          ^^^^^^^^ unknown field
+   |
+   = note: available fields are: `generation`, `file_count`, `bytes_copied`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `aikoql-storage-v2` (test "replication_bootstrap") due to 2 previous errors
+EXIT=101

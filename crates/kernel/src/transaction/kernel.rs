@@ -131,6 +131,12 @@ impl Hlc {
     fn current(&self) -> u64 {
         *self.last.lock().unwrap()
     }
+    /// Never behind `ts` — a standby's reads snapshot at its clock, so it
+    /// must cover every replicated commit it caught up to.
+    fn observe(&self, ts: u64) {
+        let mut last = self.last.lock().unwrap();
+        *last = (*last).max(ts);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -695,6 +701,19 @@ pub struct Kernel {
     pub(crate) statistics_cache: Arc<RwLock<HashMap<String, Statistics>>>,
 }
 
+/// REC-002: the persisted schemas. Fail closed — a corrupt schema row
+/// must not silently drop constraints.
+fn load_schemas(repo: &KnowledgeRepository) -> KResult<SchemaRegistry> {
+    let mut schemas = SchemaRegistry::new();
+    for (type_name, bytes) in repo.schema_rows()? {
+        let schema = crate::knowledge::codec::decode_schema(&bytes).map_err(|e| {
+            KError::Store(format!("persisted schema '{}' corrupt: {}", type_name, e))
+        })?;
+        schemas.register(schema);
+    }
+    Ok(schemas)
+}
+
 impl Kernel {
     /// Open (or create) a kernel over `store`. Recovers the journal head so a
     /// restarted kernel continues the hash chain and sequence numbers.
@@ -705,10 +724,31 @@ impl Kernel {
         clock: Arc<dyn Clock>,
         id_seed: u64,
     ) -> KResult<Self> {
+        Self::open_with(store, clock, id_seed, false)
+    }
+
+    /// MRFC-0080 standby reads — open over a store the replication stream
+    /// writes: no backfill, no job recovery writes, no catalog bootstrap,
+    /// in-memory subscriptions only. Not a single row is written; follow
+    /// the stream with `catch_up`. Promotion opens a regular kernel.
+    pub fn open_standby(
+        store: Arc<dyn StorageEngine>,
+        clock: Arc<dyn Clock>,
+        id_seed: u64,
+    ) -> KResult<Self> {
+        Self::open_with(store, clock, id_seed, true)
+    }
+
+    fn open_with(
+        store: Arc<dyn StorageEngine>,
+        clock: Arc<dyn Clock>,
+        id_seed: u64,
+        standby: bool,
+    ) -> KResult<Self> {
         let repo = Arc::new(KnowledgeRepository::new(store.clone()));
         // R9: one-time backfill of the type index for databases created before
         // it existed. Marker makes it a no-op on every subsequent open.
-        if !repo.type_index_marker()? {
+        if !standby && !repo.type_index_marker()? {
             let mut batch = WriteBatch::new();
             let mut indexed = 0usize;
             for (koid, _version, ts, state) in repo.scan_heads()? {
@@ -730,31 +770,34 @@ impl Kernel {
             Some((s, a, t)) => (s, a, t),
             None => (0, [0u8; 32], 0),
         };
-        let events = EventManager::load(&repo)?;
+        let mut events = EventManager::load(&repo)?;
+        events.ephemeral = standby;
         let auth = AuthManager::load(&repo)?;
         let relationships = Arc::new(RelationshipManager::new(repo.clone()));
         let objects = Arc::new(ObjectManager::new(repo.clone()));
         let constraint_caps = repo.constraint_capabilities();
         // REC-002: reload persisted schemas. Fail closed — a corrupt schema row
         // must not silently drop constraints.
-        let schemas = Arc::new(RwLock::new(SchemaRegistry::new()));
-        for (type_name, bytes) in repo.schema_rows()? {
-            let schema = crate::knowledge::codec::decode_schema(&bytes).map_err(|e| {
-                KError::Store(format!("persisted schema '{}' corrupt: {}", type_name, e))
-            })?;
-            schemas.write().unwrap().register(schema);
-        }
-        // P3-M7 — Class-B job scheduler (recover marks interrupted jobs).
-        let jobs = Arc::new(JobScheduler::recover(
+        let schemas = Arc::new(RwLock::new(load_schemas(&repo)?));
+        // P3-M7 — Class-B job scheduler (recover marks interrupted jobs; a
+        // standby only reads them).
+        let jobs = Arc::new(JobScheduler::recover_with(
             store.clone(),
             DEFAULT_MAX_RUNNING_JOBS,
+            !standby,
         )?);
         let kernel = Kernel {
             repo,
             store,
             clock,
             hlc: Arc::new(Hlc::starting_at(last_ts)),
-            idgen: Arc::new(Mutex::new(IdGen::new(id_seed))),
+            idgen: Arc::new(Mutex::new({
+                let mut idgen = IdGen::new(id_seed);
+                if last_ts > 0 {
+                    idgen.skip_past(last_ts >> 16); // the HLC packs ms << 16
+                }
+                idgen
+            })),
             pipe: Arc::new(Mutex::new(Pipeline {
                 seq,
                 audit,
@@ -783,11 +826,49 @@ impl Kernel {
         };
         // P5-M7 — database catalog: bootstrap/migrate the catalog rows, or
         // fail the open closed on a corrupt/unsupported catalog version.
-        crate::catalog::ensure(&kernel)?;
+        if standby {
+            crate::catalog::check(&kernel)?;
+        } else {
+            crate::catalog::ensure(&kernel)?;
+        }
         // P5-M8 — index declarations into the live registry; a corrupt index
         // row fails the open closed (idx2-010).
-        crate::catalog::load_property_indexes(&kernel)?;
+        crate::catalog::load_property_indexes_with(&kernel, standby)?;
         Ok(kernel)
+    }
+
+    /// MRFC-0080 standby reads — the replication stream writes this
+    /// kernel's store underneath it. Reload what `open` caches (the journal
+    /// head, auth, schemas) and broadcast the events committed since, once,
+    /// so subscribers (the index maintainer) follow as if they were local.
+    /// Returns the journal head. Index declarations are not reloaded (a
+    /// replica sees a new one at restart).
+    pub fn catch_up(&self) -> KResult<u64> {
+        let Some((head, audit, last_ts)) = self.repo.journal_head()? else {
+            return Ok(0);
+        };
+        // justified: Mutex poison is unrecoverable
+        let from = self.pipe.lock().unwrap().seq;
+        if head <= from {
+            return Ok(from);
+        }
+        let events = self.repo.scan_events_after(from)?;
+        let auth = AuthManager::load(&self.repo)?;
+        let schemas = load_schemas(&self.repo)?;
+        // justified: lock poison is unrecoverable
+        *self.auth.write().unwrap() = auth;
+        *self.schemas.write().unwrap() = schemas;
+        {
+            let mut pipe = self.pipe.lock().unwrap();
+            pipe.seq = head;
+            pipe.audit = audit;
+        }
+        self.hlc.observe(last_ts);
+        let mut subscribers = self.events.lock().unwrap();
+        for ke in events.iter().filter(|ke| ke.seq <= head) {
+            subscribers.broadcast(ke);
+        }
+        Ok(head)
     }
 
     /// Enable at-rest HMAC-SHA256 version signatures. Idempotent and safe to
@@ -805,6 +886,15 @@ impl Kernel {
             repo.with_cache(capacity);
         }
         self
+    }
+
+    /// The store under the repository — the encrypted one when encryption is
+    /// on — for a server's own reserved `sys/` keys outside the repository
+    /// (aikoql-mcp's OAuth grants under `sys/oauth/`): written through it
+    /// they are encrypted at rest, replicated, backed up and durable like
+    /// the knowledge itself. The repository never reads them.
+    pub fn system_store(&self) -> Arc<dyn StorageEngine> {
+        self.store.clone()
     }
 
     /// Enable field-level encryption (MRFC-0020 Phase 3).

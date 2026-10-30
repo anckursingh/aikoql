@@ -1,0 +1,8 @@
+{
+  "id": "r5b-sdk-hint-java",
+  "pre_fix_commit": "HEAD",
+  "command": "bash -c cd crates/sdk/java && mvn -q -o test -Dtest=LeaderHintTest 2>&1 || mvn -q test -Dtest=LeaderHintTest",
+  "captured_at": "2026-10-28T14:35:16Z",
+  "captured_head": "44c834c78d65ec5041f01d52b8d273779ceb9265",
+  "exit_code": 1
+}

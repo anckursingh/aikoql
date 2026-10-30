@@ -1,0 +1,47 @@
+   Compiling aikoql-sdk v0.2.4 (/Users/pukku/coding/aikoql/crates/sdk/rust)
+error[E0432]: unresolved import `aikoql_sdk::Tls`
+ --> crates/sdk/rust/tests/tls.rs:8:26
+  |
+8 | use aikoql_sdk::{Client, Tls};
+  |                          ^^^ no `Tls` in the root
+
+error[E0599]: no associated function or constant named `dial_tls` found for struct `Client` in the current scope
+   --> crates/sdk/rust/tests/tls.rs:111:21
+    |
+111 |     let c = Client::dial_tls(&addr, &tls)
+    |                     ^^^^^^^^ associated function or constant not found in `Client`
+    |
+help: there is an associated function `dial` with a similar name
+   --> crates/sdk/rust/src/client.rs:77:5
+    |
+ 77 |     pub async fn dial(addr: &str) -> Result<Client, Error> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `connect_native_tls` found for struct `Client` in the current scope
+   --> crates/sdk/rust/tests/tls.rs:125:21
+    |
+125 |     let c = Client::connect_native_tls(&addr, &tls)
+    |                     ^^^^^^^^^^^^^^^^^^ associated function or constant not found in `Client`
+    |
+help: there is an associated function `connect_native` with a similar name
+   --> crates/sdk/rust/src/client.rs:103:5
+    |
+103 |     pub async fn connect_native(addr: &str) -> Result<Client, Error> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `dial_tls` found for struct `Client` in the current scope
+   --> crates/sdk/rust/tests/tls.rs:142:17
+    |
+142 |         Client::dial_tls(&addr, &other).await.is_err(),
+    |                 ^^^^^^^^ associated function or constant not found in `Client`
+    |
+help: there is an associated function `dial` with a similar name
+   --> crates/sdk/rust/src/client.rs:77:5
+    |
+ 77 |     pub async fn dial(addr: &str) -> Result<Client, Error> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `aikoql-sdk` (test "tls") due to 4 previous errors
+EXIT=101

@@ -113,9 +113,6 @@ impl HnswVectorIndex {
             .as_u64()
             .ok_or_else(|| KError::Store("hnsw meta capacity".into()))?
             as usize;
-        let index =
-            hnsw::labeled::LabeledIndex::load(dir.join("index.hnsw"), hnsw::distance::Cosine)
-                .map_err(|e| KError::Store(format!("hnsw load: {}", e)))?;
         let tombstones: BTreeSet<KOID> = meta["tombstones"]
             .as_array()
             .ok_or_else(|| KError::Store("hnsw meta tombstones".into()))?
@@ -141,6 +138,14 @@ impl HnswVectorIndex {
             }
         }
         let physical = meta["physical"].as_u64().unwrap_or(model_map.len() as u64);
+        // MRFC-0080 R3b: fast-hnsw cannot load a zero-point file — an index
+        // that never held a vector (no embedding model) starts fresh.
+        let index = if physical == 0 {
+            build_index(capacity)
+        } else {
+            hnsw::labeled::LabeledIndex::load(dir.join("index.hnsw"), hnsw::distance::Cosine)
+                .map_err(|e| KError::Store(format!("hnsw load: {}", e)))?
+        };
         Ok(HnswVectorIndex {
             dim: AtomicUsize::new(dim),
             capacity,
@@ -1031,6 +1036,22 @@ mod tests {
                 .is_empty(),
             "the empty checkpoint answers no documents"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MRFC-0080 R3b — a node with no embedding model checkpoints an empty
+    /// HNSW; fast-hnsw cannot load a zero-point file, so every restart and
+    /// every promotion fell back to a full journal replay.
+    #[test]
+    fn vec_empty_checkpoint_loads() {
+        // justified: test-thread names contain `::` (invalid on Windows paths)
+        let dir = std::env::temp_dir().join(format!("aikoql-vec-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        HnswVectorIndex::new(0, 100).checkpoint(&dir).unwrap();
+        let loaded = HnswVectorIndex::load(&dir).unwrap();
+        assert_eq!(loaded.len(), 0);
+        loaded.upsert(kid(1), "m", &[1.0, 0.0, 0.5]); // the loaded index still grows
+        assert_eq!(loaded.search(&[1.0, 0.0, 0.5], 5, None).len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

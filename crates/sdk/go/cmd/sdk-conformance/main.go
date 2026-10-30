@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	aikoql "github.com/anckursingh/aikoql/sdk/go"
+	aikoql "github.com/anckursingh/aikoql/crates/sdk/go"
 )
 
 type vectorFile struct {

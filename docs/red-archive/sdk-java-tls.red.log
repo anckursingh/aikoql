@@ -1,0 +1,26 @@
+[ERROR] COMPILATION ERROR : 
+[ERROR] /Users/pukku/coding/aikoql/crates/sdk/java/src/test/java/com/aikoql/client/TlsTest.java:[88,44] method dial in class com.aikoql.client.AikoqlClient cannot be applied to given types;
+  required: java.lang.String
+  found:    java.lang.String,javax.net.ssl.SSLContext
+  reason: actual and formal argument lists differ in length
+[ERROR] /Users/pukku/coding/aikoql/crates/sdk/java/src/test/java/com/aikoql/client/TlsTest.java:[102,67] method dial in class com.aikoql.client.AikoqlClient cannot be applied to given types;
+  required: java.lang.String
+  found:    java.lang.String,javax.net.ssl.SSLContext
+  reason: actual and formal argument lists differ in length
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:testCompile (default-testCompile) on project aikoql-client: Compilation failure: Compilation failure: 
+[ERROR] /Users/pukku/coding/aikoql/crates/sdk/java/src/test/java/com/aikoql/client/TlsTest.java:[88,44] method dial in class com.aikoql.client.AikoqlClient cannot be applied to given types;
+[ERROR]   required: java.lang.String
+[ERROR]   found:    java.lang.String,javax.net.ssl.SSLContext
+[ERROR]   reason: actual and formal argument lists differ in length
+[ERROR] /Users/pukku/coding/aikoql/crates/sdk/java/src/test/java/com/aikoql/client/TlsTest.java:[102,67] method dial in class com.aikoql.client.AikoqlClient cannot be applied to given types;
+[ERROR]   required: java.lang.String
+[ERROR]   found:    java.lang.String,javax.net.ssl.SSLContext
+[ERROR]   reason: actual and formal argument lists differ in length
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+EXIT=1

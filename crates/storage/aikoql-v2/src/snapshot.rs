@@ -216,6 +216,10 @@ pub struct SnapshotInfo {
     pub generation: u64,
     pub file_count: u32,
     pub bytes_copied: u64,
+    /// MRFC-0080 R6 — the newest seq the snapshot holds (read inside the
+    /// capture hold, where no write can commit): a point-in-time restore
+    /// replays the log from here.
+    pub last_seq: u64,
 }
 
 /// One engine-native restore: how many rows the live db ended up with.
@@ -481,8 +485,9 @@ impl Db {
         // SAME hold as the generation read: a flush between the two would
         // strand its rows in neither the ≤ G file set nor the captured
         // prefix.
-        let (generation, mut files, wal_size, wal_checksum) = {
+        let (generation, mut files, wal_size, wal_checksum, last_seq) = {
             let mut state = self.state.write().expect("state write lock");
+            let last_seq = state.next_seq - 1;
             let current = crate::format::Current::read(&self.config.dir.join("CURRENT"))?;
             let generation = current.manifest_generation;
             let files = pinned_files(&self.config.dir, generation)?;
@@ -496,7 +501,7 @@ impl Db {
             for f in &files {
                 state.snapshot_pins.insert(f.name.clone());
             }
-            (generation, files, wal_size, wal_checksum)
+            (generation, files, wal_size, wal_checksum, last_seq)
         };
         // Disarm on every exit path from here on — success or error (the
         // protocol doc: a leaked pin is a slow disk leak). Poison-
@@ -577,6 +582,7 @@ impl Db {
             generation,
             file_count: marker.files.len() as u32,
             bytes_copied,
+            last_seq,
         })
     }
 

@@ -1,0 +1,35 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.24s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-362f50df98664b36)
+
+running 5 tests
+test replicate_listen_rejects_a_non_loopback_bind ... ok
+test replicate_listen_without_a_token_refuses_to_serve ... ok
+test a_fenced_node_refuses_writes_after_a_restart ... FAILED
+test leader_dies_standby_is_promoted_with_every_object ... FAILED
+test promotion_resumes_indexes_from_the_shipped_checkpoint ... ok
+
+failures:
+
+---- a_fenced_node_refuses_writes_after_a_restart stdout ----
+
+thread 'a_fenced_node_refuses_writes_after_a_restart' (446718) panicked at crates/services/api/mcp/tests/replication_failover.rs:342:5:
+assertion `left == right` failed: a fenced node took a write: {"content":[{"type":"text","text":"{\"koid\":\"01a1818168450000000100000000a9c9\",\"version\":1,\"commit_ts\":1793174104140,\"journal_seq\":3}"}],"isError":false}
+  left: Bool(false)
+ right: Bool(true)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- leader_dies_standby_is_promoted_with_every_object stdout ----
+
+thread 'leader_dies_standby_is_promoted_with_every_object' (446719) panicked at crates/services/api/mcp/tests/replication_failover.rs:227:57:
+called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+
+
+failures:
+    a_fenced_node_refuses_writes_after_a_restart
+    leader_dies_standby_is_promoted_with_every_object
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.44s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+EXIT=101

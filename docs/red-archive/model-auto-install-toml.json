@@ -1,0 +1,8 @@
+{
+  "id": "model-auto-install-toml",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp model_auto_install",
+  "captured_at": "2026-10-30T07:54:33Z",
+  "captured_head": "031b0b8acc3b699c148a108f57a4efaa12344881",
+  "exit_code": 101
+}

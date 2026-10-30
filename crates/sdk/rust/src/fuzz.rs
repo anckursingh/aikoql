@@ -71,6 +71,7 @@ pub fn map_rpc_error(code: &Value, message: &str) -> McpError {
         message: message.to_string(),
         retryable: false,
         suggestion: String::new(),
+        leader: None,
     }
 }
 
@@ -147,6 +148,7 @@ pub fn map_native_error(payload: &[u8]) -> McpError {
         message,
         retryable: false,
         suggestion: String::new(),
+        leader: None,
     }
 }
 

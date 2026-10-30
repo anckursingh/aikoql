@@ -3,7 +3,7 @@ name: rust-coding
 description: Rust coding rules for this repo — error classification, correctness-first optimization, scalability patterns, and the trap ledger of things that have actually bitten this codebase. Use when writing or reviewing any Rust under crates/ or benchmarks/.
 ---
 
-# Rust coding — Mnemosyne/AikoQL
+# Rust coding — AikoQL
 
 What makes agent-written Rust effective here: match the patterns this
 codebase has already proven, and never repeat a trap on the ledger below.
@@ -101,7 +101,7 @@ atomic or absent.
 
 ## Before declaring done
 
-1. `cargo fmt --check` and `cargo clippy --workspace -- -D warnings`.
+1. `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`.
 2. The targeted test suite (`cargo test -p <crate>`), then the full
    workspace only if the change is cross-crate — a workspace run is
    ~50 min; it rides CI when possible.

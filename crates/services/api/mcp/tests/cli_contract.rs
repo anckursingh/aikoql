@@ -271,7 +271,7 @@ fn cl01b_error_code_source_completeness() {
     }
     assert_eq!(
         envelope.len(),
-        10,
+        11,
         "envelope extraction drifted: {envelope:?}"
     );
     for code in &envelope {

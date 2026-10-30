@@ -14,6 +14,49 @@ pub(crate) struct RuntimeConfig {
     /// loopback-only + token rules as the MCP TCP listener; CLI-only for
     /// now (add a [server] TOML key when someone asks).
     pub native_port: Option<String>,
+    /// MRFC-0080 R3a: the replication stream listener (`--replicate-listen`).
+    /// Same loopback-only + token rules as `--listen`; standbys need an
+    /// `admin` token. Turns on log retention. CLI-only.
+    pub replicate_listen: Option<String>,
+    /// MRFC-0080 R4d: this node's client-facing address (`--advertise`),
+    /// handed to standbys — and by them to a deposed leader — as the
+    /// NOT_LEADER hint. CLI-only.
+    pub advertise: Option<String>,
+    /// MRFC-0080 R5a: automatic failover — the lease location
+    /// (`--ha-lease`), this node's id in it (`--ha-node`) and its TTL
+    /// (`--ha-ttl-ms`, default 10 s). CLI-only.
+    pub ha_lease: Option<String>,
+    /// MRFC-0080 R6: the continuous archive (`--archive DIR|s3://BUCKET[/PREFIX]`),
+    /// its log-batch period (`--archive-log-ms`, default 5000 — the
+    /// archive's RPO) and snapshot period (`--archive-snapshot-secs`,
+    /// default 3600 — bounds restore replay). CLI-only.
+    pub archive: Option<String>,
+    /// MRFC-0080 standby reads: serve as a read replica of the leader's
+    /// replication address (`--follow HOST:PORT`). CLI-only.
+    pub follow: Option<String>,
+    pub archive_log_ms: u64,
+    pub archive_snapshot_secs: u64,
+    /// MRFC-0080 R6 retention: keep the newest N snapshots
+    /// (`--archive-keep`, pruned after each snapshot); unset keeps all.
+    pub archive_keep: Option<usize>,
+    /// MRFC-0080 R3c: TLS on the replication stream — the leader's
+    /// certificate chain and key (`--replicate-tls-cert/-key`, both or
+    /// neither; with them the listener may bind any interface), the CA a
+    /// standby trusts (`--replicate-tls-ca`), and the replication address
+    /// recorded in the HA lease (`--replicate-advertise`, default the
+    /// listen address). CLI-only.
+    pub replicate_tls_cert: Option<String>,
+    pub replicate_tls_key: Option<String>,
+    pub replicate_tls_ca: Option<String>,
+    /// TLS on the client listeners (`--listen`, `--native-port`) and the HTTP
+    /// surface: the certificate chain and key (`--tls-cert/--tls-key` or
+    /// AIKOQL_TLS_CERT / AIKOQL_TLS_KEY, both or neither). With them the
+    /// bearer token travels encrypted, so the listeners may bind any interface.
+    pub tls_cert: Option<String>,
+    pub tls_key: Option<String>,
+    pub replicate_advertise: Option<String>,
+    pub ha_node: Option<String>,
+    pub ha_ttl_ms: u64,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -36,6 +79,9 @@ pub(crate) struct RuntimeConfig {
     pub embedding_api_key: Option<String>,
     /// None = default store (~/.aikoql/models).
     pub model_dir: Option<String>,
+    /// [embedding].auto_install / AIKOQL_MODEL_AUTO_INSTALL: serve downloads
+    /// a missing default model once (the opt-in exception to PRR-3)
+    pub model_auto_install: bool,
     pub log_level: String,
     pub log_format: String,
     /// [rate_limit] — enforced as a 60s window: per connection on MCP
@@ -51,6 +97,13 @@ pub(crate) struct RuntimeConfig {
     /// P5-M11 (ND-11): concurrent TCP connection cap — the accept loop
     /// rejects the overflow with -32000.
     pub max_connections: u64,
+    /// MRFC-0080 R3b: with `--replicate-listen`, the leader checkpoints its
+    /// indexes this often and ships each checkpoint to its standbys, so a
+    /// promotion replays only the journal tail since the last one.
+    pub index_checkpoint_secs: u64,
+    /// MRFC-0080 R4b: with `--replicate-listen`, a client write is acked
+    /// only once a standby holds it, or fails after this many ms.
+    pub replicate_sync_ms: Option<u64>,
     /// The TOML path that took effect (for diagnostics).
     pub config_path: Option<String>,
 }
@@ -159,6 +212,7 @@ struct TomlEmbedding {
     base_url: Option<String>,
     model: Option<String>,
     api_key: Option<String>,
+    auto_install: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -249,6 +303,22 @@ pub(crate) fn load(
         db_path: DEFAULT_DB_PATH.into(),
         listen_addr: None,
         native_port: None,
+        replicate_listen: None,
+        advertise: None,
+        ha_lease: None,
+        archive: None,
+        follow: None,
+        archive_log_ms: 5_000,
+        archive_snapshot_secs: 3_600,
+        archive_keep: None,
+        replicate_tls_cert: None,
+        replicate_tls_key: None,
+        replicate_tls_ca: None,
+        tls_cert: None,
+        tls_key: None,
+        replicate_advertise: None,
+        ha_node: None,
+        ha_ttl_ms: 10_000,
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -261,6 +331,7 @@ pub(crate) fn load(
         embedding_model: String::new(),
         embedding_api_key: None,
         model_dir: None,
+        model_auto_install: false,
         log_level: "info".into(),
         log_format: "text".into(),
         rate_enabled: true,
@@ -275,6 +346,8 @@ pub(crate) fn load(
         },
         request_timeout_secs: 30,
         max_connections: 64,
+        index_checkpoint_secs: 30,
+        replicate_sync_ms: None,
         config_path: None,
     };
 
@@ -348,6 +421,9 @@ pub(crate) fn load(
                 cfg.embedding_model = v;
             }
             cfg.embedding_api_key = e.api_key;
+            if let Some(v) = e.auto_install {
+                cfg.model_auto_install = v;
+            }
         }
         if let Some(l) = t.logging {
             if let Some(v) = l.level {
@@ -378,6 +454,12 @@ pub(crate) fn load(
     }
     if let Some(v) = env_opt("AIKOQL_METRICS_ADDR") {
         cfg.metrics_addr = Some(v);
+    }
+    if let Some(v) = env_opt("AIKOQL_TLS_CERT") {
+        cfg.tls_cert = Some(v);
+    }
+    if let Some(v) = env_opt("AIKOQL_TLS_KEY") {
+        cfg.tls_key = Some(v);
     }
     // R2 (review round 3): an env credential REPLACES the TOML list (one
     // token per env var — role lists use commas, so multi-token env strings
@@ -416,6 +498,9 @@ pub(crate) fn load(
     }
     if let Some(v) = env_opt("AIKOQL_MODEL_DIR") {
         cfg.model_dir = Some(v);
+    }
+    if let Some(v) = env_opt("AIKOQL_MODEL_AUTO_INSTALL") {
+        cfg.model_auto_install = v == "1" || v.eq_ignore_ascii_case("true");
     }
     if let Some(v) = env_opt("AIKOQL_PASSPHRASE") {
         cfg.encryption.passphrase = Some(v);
@@ -460,6 +545,118 @@ pub(crate) fn load(
                 );
                 i += 2;
             }
+            flag @ ("--tls-cert" | "--tls-key") => {
+                let Some(v) = args.get(i + 1) else {
+                    return Err(format!("{flag} requires a path"));
+                };
+                if flag == "--tls-cert" {
+                    cfg.tls_cert = Some(v.clone());
+                } else {
+                    cfg.tls_key = Some(v.clone());
+                }
+                i += 2;
+            }
+            flag @ ("--replicate-tls-cert" | "--replicate-tls-key" | "--replicate-tls-ca") => {
+                let Some(v) = args.get(i + 1) else {
+                    return Err(format!("{flag} requires a path"));
+                };
+                let slot = match flag {
+                    "--replicate-tls-cert" => &mut cfg.replicate_tls_cert,
+                    "--replicate-tls-key" => &mut cfg.replicate_tls_key,
+                    _ => &mut cfg.replicate_tls_ca,
+                };
+                *slot = Some(v.clone());
+                i += 2;
+            }
+            "--replicate-advertise" => match args.get(i + 1) {
+                Some(v) if crate::replication::valid_addr(v) => {
+                    cfg.replicate_advertise = Some(v.clone());
+                    i += 2;
+                }
+                Some(v) => {
+                    return Err(format!(
+                        "--replicate-advertise requires HOST:PORT, got {v:?}"
+                    ))
+                }
+                None => return Err("--replicate-advertise requires an address".into()),
+            },
+            "--follow" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.follow = Some(v.clone());
+                    i += 2;
+                }
+                None => return Err("--follow requires the leader's replication address".into()),
+            },
+            "--archive" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.archive = Some(v.clone());
+                    i += 2;
+                }
+                None => return Err("--archive requires a directory or s3:// URL".into()),
+            },
+            "--archive-keep" => {
+                let n = args
+                    .get(i + 1)
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|n| *n > 0)
+                    .ok_or("--archive-keep requires a positive number of snapshots")?;
+                cfg.archive_keep = Some(n);
+                i += 2;
+            }
+            flag @ ("--archive-log-ms" | "--archive-snapshot-secs") => {
+                let n = args
+                    .get(i + 1)
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| format!("{flag} requires a positive number"))?;
+                if flag == "--archive-log-ms" {
+                    cfg.archive_log_ms = n;
+                } else {
+                    cfg.archive_snapshot_secs = n;
+                }
+                i += 2;
+            }
+            "--ha-lease" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.ha_lease = Some(v.clone());
+                    i += 2;
+                }
+                None => return Err("--ha-lease requires a path".into()),
+            },
+            "--ha-node" => match args.get(i + 1) {
+                Some(v) if crate::replication::valid_addr(v) => {
+                    cfg.ha_node = Some(v.clone());
+                    i += 2;
+                }
+                Some(v) => return Err(format!("--ha-node requires a plain id, got {v:?}")),
+                None => return Err("--ha-node requires an id".into()),
+            },
+            "--ha-ttl-ms" => match args.get(i + 1) {
+                Some(v) => {
+                    // below ~300 ms the renew period (TTL/3) is lost in
+                    // scheduling noise and every node flaps
+                    cfg.ha_ttl_ms = v.parse().ok().filter(|n| *n >= 300).ok_or_else(|| {
+                        format!("--ha-ttl-ms requires a number >= 300, got {v:?}")
+                    })?;
+                    i += 2;
+                }
+                None => return Err("--ha-ttl-ms requires a value".into()),
+            },
+            "--advertise" => match args.get(i + 1) {
+                Some(v) if crate::replication::valid_addr(v) => {
+                    cfg.advertise = Some(v.clone());
+                    i += 2;
+                }
+                Some(v) => return Err(format!("--advertise requires HOST:PORT, got {v:?}")),
+                None => return Err("--advertise requires an address".into()),
+            },
+            "--replicate-listen" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.replicate_listen = Some(v.clone());
+                    i += 2;
+                }
+                None => return Err("--replicate-listen requires an address".into()),
+            },
             "--tcp-token" => match args.get(i + 1) {
                 Some(v) => {
                     cli_tcp_tokens.push(v.clone());
@@ -529,6 +726,26 @@ pub(crate) fn load(
                     i += 2;
                 }
                 None => return Err("--request-timeout-secs requires a value".into()),
+            },
+            "--index-checkpoint-secs" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.index_checkpoint_secs =
+                        v.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+                            format!("--index-checkpoint-secs requires a positive number, got {v:?}")
+                        })?;
+                    i += 2;
+                }
+                None => return Err("--index-checkpoint-secs requires a value".into()),
+            },
+            "--replicate-sync-ms" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.replicate_sync_ms =
+                        Some(v.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+                            format!("--replicate-sync-ms requires a positive number, got {v:?}")
+                        })?);
+                    i += 2;
+                }
+                None => return Err("--replicate-sync-ms requires a value".into()),
             },
             "--max-connections" => match args.get(i + 1) {
                 Some(v) => {
@@ -982,6 +1199,30 @@ employee = ["salary", "ssn"]
         assert_eq!(cfg.db_path, "/env/db"); // env > TOML (database)
         assert_eq!(cfg.embedding_provider.as_deref(), Some("openai")); // env > TOML (embedding)
         assert_eq!(cfg.metrics_addr.as_deref(), Some("127.0.0.1:2000")); // CLI > all (server)
+    }
+
+    #[test]
+    fn model_auto_install_from_toml_and_env() {
+        assert!(
+            !load_bare(&argv(&["aikoql-mcp"]))
+                .unwrap()
+                .model_auto_install
+        );
+        let p = tmp_toml("[embedding]\nauto_install = true\n");
+        let on = argv(&["aikoql-mcp", "--config", &p]);
+        assert!(load_t(&on, None, None).unwrap().model_auto_install);
+        let env = |v: &str, args: &[String]| {
+            load_with_env(|| {
+                std::env::set_var("AIKOQL_MODEL_AUTO_INSTALL", v);
+                let r = load(args, None, None);
+                std::env::remove_var("AIKOQL_MODEL_AUTO_INSTALL");
+                r
+            })
+            .unwrap()
+            .model_auto_install
+        };
+        assert!(!env("0", &on), "env > TOML");
+        assert!(env("true", &argv(&["aikoql-mcp"])));
     }
 
     #[test]

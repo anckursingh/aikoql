@@ -1,0 +1,8 @@
+{
+  "id": "r1-replication-log",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-storage-v2 --test replication_log",
+  "captured_at": "2026-10-27T20:48:31Z",
+  "captured_head": "96acfa8e35ac58a62ab51164e8af9c904f4bfa10",
+  "exit_code": 101
+}

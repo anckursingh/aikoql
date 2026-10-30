@@ -1,0 +1,41 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0425]: cannot find function `begin` in this scope
+   --> crates/services/api/mcp/src/ha.rs:952:13
+    |
+952 |             begin(ha_cfg(store.clone(), dir)).unwrap(),
+    |             ^^^^^ not found in this scope
+
+error[E0425]: cannot find function `begin` in this scope
+   --> crates/services/api/mcp/src/ha.rs:974:13
+    |
+974 |             begin(ha_cfg(store.clone(), dir.clone())).unwrap(),
+    |             ^^^^^ not found in this scope
+
+error[E0425]: cannot find function `begin` in this scope
+   --> crates/services/api/mcp/src/ha.rs:991:26
+    |
+991 |         assert!(matches!(begin(ha_cfg(store, dir)).unwrap(), Begun::Standby));
+    |                          ^^^^^ not found in this scope
+
+error[E0433]: cannot find type `Begun` in this scope
+   --> crates/services/api/mcp/src/ha.rs:953:13
+    |
+953 |             Begun::Lead(_)
+    |             ^^^^^ use of undeclared type `Begun`
+
+error[E0433]: cannot find type `Begun` in this scope
+   --> crates/services/api/mcp/src/ha.rs:975:13
+    |
+975 |             Begun::Lead(_)
+    |             ^^^^^ use of undeclared type `Begun`
+
+error[E0433]: cannot find type `Begun` in this scope
+   --> crates/services/api/mcp/src/ha.rs:991:62
+    |
+991 |         assert!(matches!(begin(ha_cfg(store, dir)).unwrap(), Begun::Standby));
+    |                                                              ^^^^^ use of undeclared type `Begun`
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 6 previous errors
+EXIT=101

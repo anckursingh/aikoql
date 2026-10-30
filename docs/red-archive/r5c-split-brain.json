@@ -1,0 +1,8 @@
+{
+  "id": "r5c-split-brain",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test replication_failover split_brain",
+  "captured_at": "2026-10-28T09:19:29Z",
+  "captured_head": "0059a2f0f39976aeb8a80681345a48fd0bfb3cef",
+  "exit_code": 101
+}

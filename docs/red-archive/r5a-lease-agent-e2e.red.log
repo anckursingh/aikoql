@@ -1,0 +1,30 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.36s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-362f50df98664b36)
+
+running 2 tests
+test ha_leader_fences_itself_when_its_lease_is_taken ... FAILED
+test ha_standby_takes_over_when_the_leader_dies ... FAILED
+
+failures:
+
+---- ha_leader_fences_itself_when_its_lease_is_taken stdout ----
+
+thread 'ha_leader_fences_itself_when_its_lease_is_taken' (574419) panicked at crates/services/api/mcp/tests/replication_failover.rs:104:13:
+server exited
+
+---- ha_standby_takes_over_when_the_leader_dies stdout ----
+
+thread 'ha_standby_takes_over_when_the_leader_dies' (574420) panicked at crates/services/api/mcp/tests/replication_failover.rs:104:13:
+server exited
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ha_leader_fences_itself_when_its_lease_is_taken
+    ha_standby_takes_over_when_the_leader_dies
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 8 filtered out; finished in 4.17s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+EXIT=101

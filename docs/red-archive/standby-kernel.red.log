@@ -1,0 +1,47 @@
+   Compiling num-traits v0.2.19
+   Compiling zerocopy-derive v0.8.56
+   Compiling tokio v1.53.1
+   Compiling itertools v0.10.5
+   Compiling tinytemplate v1.2.1
+   Compiling criterion-plot v0.5.0
+   Compiling zerocopy v0.8.56
+   Compiling ordered-float v5.3.0
+   Compiling plotters v0.3.7
+   Compiling tantivy-query-grammar v0.26.0
+   Compiling tantivy v0.26.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling half v2.7.1
+   Compiling rand_chacha v0.3.1
+   Compiling rand_chacha v0.9.0
+   Compiling ciborium-ll v0.2.2
+   Compiling rand v0.8.7
+   Compiling proptest v1.11.0
+   Compiling ciborium v0.2.2
+   Compiling criterion v0.5.1
+   Compiling aikoql-kernel v0.2.4 (/Users/pukku/coding/aikoql/crates/kernel)
+   Compiling fast-hnsw v1.0.1
+   Compiling aikoql-storage-v2 v0.2.4 (/Users/pukku/coding/aikoql/crates/storage/aikoql-v2)
+   Compiling aikoql-compiler v0.2.4 (/Users/pukku/coding/aikoql/crates/compiler)
+   Compiling aikoql-graph v0.2.4 (/Users/pukku/coding/aikoql/crates/engines/graph)
+   Compiling aikoql-runtime v0.2.4 (/Users/pukku/coding/aikoql/crates/runtime)
+   Compiling aikoql-vector v0.2.4 (/Users/pukku/coding/aikoql/crates/engines/vector)
+   Compiling aikoql-scheduler v0.2.4 (/Users/pukku/coding/aikoql/crates/engines/scheduler)
+error[E0599]: no associated function or constant named `open_standby` found for struct `aikoql_kernel::Kernel` in the current scope
+   --> crates/kernel/tests/standby.rs:54:27
+    |
+ 54 |     let standby = Kernel::open_standby(ro.clone(), Arc::new(SystemClock), 2).unwrap();
+    |                           ^^^^^^^^^^^^ associated function or constant not found in `aikoql_kernel::Kernel`
+    |
+note: if you're trying to build a new `aikoql_kernel::Kernel`, consider using `aikoql_kernel::Kernel::open` which returns `Result<aikoql_kernel::Kernel, aikoql_kernel::KError>`
+   --> crates/kernel/src/transaction/kernel.rs:703:5
+    |
+703 | /     pub fn open(
+704 | |         store: Arc<dyn StorageEngine>,
+705 | |         clock: Arc<dyn Clock>,
+706 | |         id_seed: u64,
+707 | |     ) -> KResult<Self> {
+    | |______________________^
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `aikoql-kernel` (test "standby") due to 1 previous error
+EXIT=101

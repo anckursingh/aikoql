@@ -1,0 +1,8 @@
+{
+  "id": "r4d-not-leader",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp -- replication error_codes",
+  "captured_at": "2026-10-28T08:22:02Z",
+  "captured_head": "29572f03b099671b2a404efa8432b69fd2f33b73",
+  "exit_code": 101
+}

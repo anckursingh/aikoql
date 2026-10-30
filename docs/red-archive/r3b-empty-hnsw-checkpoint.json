@@ -1,0 +1,8 @@
+{
+  "id": "r3b-empty-hnsw-checkpoint",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-vector vec_empty_checkpoint_loads",
+  "captured_at": "2026-10-27T21:49:34Z",
+  "captured_head": "7d67a031c9459cc271528a97fad20eab1ca1f074",
+  "exit_code": 101
+}

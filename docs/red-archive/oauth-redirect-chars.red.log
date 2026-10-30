@@ -1,0 +1,23 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
+     Running unittests src/main.rs (target/debug/deps/aikoql_mcp-1bd616def3f11511)
+
+running 1 test
+test oauth::tests::redirects ... FAILED
+
+failures:
+
+---- oauth::tests::redirects stdout ----
+
+thread 'oauth::tests::redirects' (2482384) panicked at crates/services/api/mcp/src/oauth.rs:955:9:
+assertion failed: !redirect_allowed("https://a.example/cb\r\nSet-Cookie: x=1")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    oauth::tests::redirects
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 134 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

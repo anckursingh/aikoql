@@ -1,0 +1,55 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-a0f0414a7eb71cd6)
+
+running 1 test
+test the_leader_scrape_carries_replication_lag ... FAILED
+
+failures:
+
+---- the_leader_scrape_carries_replication_lag stdout ----
+
+thread 'the_leader_scrape_carries_replication_lag' (780135) panicked at crates/services/api/mcp/tests/replication_failover.rs:1035:9:
+no replication lag series:
+HTTP/1.0 200 OK
+Content-Type: text/plain; version=0.0.4
+Content-Length: 1059
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Authorization
+
+# HELP aikoql_journal_seq Monotonically increasing journal sequence number.
+# TYPE aikoql_journal_seq counter
+aikoql_journal_seq 1
+# HELP aikoql_objects_total Total committed head objects.
+# TYPE aikoql_objects_total gauge
+aikoql_objects_total 1
+# HELP aikoql_objects_active Active (non-deleted) head objects.
+# TYPE aikoql_objects_active gauge
+aikoql_objects_active 1
+# HELP aikoql_uptime_seconds Server uptime in seconds.
+# TYPE aikoql_uptime_seconds gauge
+aikoql_uptime_seconds 21.2
+# HELP aikoql_metrics_error 1 if a store read failed during scrape.
+# TYPE aikoql_metrics_error gauge
+aikoql_metrics_error 0
+# HELP aikoql_storage_wal_bytes WAL bytes appended by the storage engine.
+# TYPE aikoql_storage_wal_bytes counter
+aikoql_storage_wal_bytes 879
+# HELP aikoql_storage_segment_bytes Bytes in live segments.
+# TYPE aikoql_storage_segment_bytes gauge
+aikoql_storage_segment_bytes 0
+# HELP aikoql_storage_compaction_backlog_bytes L0 bytes awaiting compaction.
+# TYPE aikoql_storage_compaction_backlog_bytes gauge
+aikoql_storage_compaction_backlog_bytes 0
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_leader_scrape_carries_replication_lag
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 22.48s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+EXIT=101

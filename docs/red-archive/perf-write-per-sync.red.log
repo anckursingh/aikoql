@@ -1,0 +1,30 @@
+EEE
+======================================================================
+ERROR: test_a_missing_machine_reference_fails_by_name (__main__.WriteCellTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/pukku/coding/aikoql/scripts/test_perf_smoke_check.py", line 49, in test_a_missing_machine_reference_fails_by_name
+    with self.assertRaises(psc.PerfFail) as e:
+AttributeError: module 'perf_smoke_check' has no attribute 'PerfFail'
+
+======================================================================
+ERROR: test_a_slow_machine_passes (__main__.WriteCellTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/pukku/coding/aikoql/scripts/test_perf_smoke_check.py", line 39, in test_a_slow_machine_passes
+    ratio = psc.check_write(rows(7_218_326, 6_000_000), CELLS)
+AttributeError: module 'perf_smoke_check' has no attribute 'check_write'
+
+======================================================================
+ERROR: test_an_extra_sync_per_commit_fails (__main__.WriteCellTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/pukku/coding/aikoql/scripts/test_perf_smoke_check.py", line 44, in test_an_extra_sync_per_commit_fails
+    with self.assertRaises(psc.PerfFail) as e:
+AttributeError: module 'perf_smoke_check' has no attribute 'PerfFail'
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.000s
+
+FAILED (errors=3)
+EXIT=1

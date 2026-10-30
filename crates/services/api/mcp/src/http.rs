@@ -104,6 +104,8 @@ pub(crate) fn serve_metrics(
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
     auth: Arc<AuthResolver>,
     admin: Option<Arc<dyn aikoql_storage_v2::engine::StorageAdminApi>>,
+    tls: Option<Arc<rustls::ServerConfig>>,
+    mcp: Option<Arc<crate::mcp_http::McpHttp>>,
 ) {
     let listener = match TcpListener::bind(addr) {
         Ok(l) => l,
@@ -123,8 +125,38 @@ pub(crate) fn serve_metrics(
                 let rl = rate_limit.clone();
                 let auth = auth.clone();
                 let admin = admin.clone();
-                std::thread::spawn(move || {
-                    handle_http(&mut s, &k, &sess, &db, &ont, &rl, &auth, admin.as_deref())
+                let tls = tls.clone();
+                let mcp = mcp.clone();
+                std::thread::spawn(move || match tls {
+                    None => handle_http(
+                        &mut s,
+                        &k,
+                        &sess,
+                        &db,
+                        &ont,
+                        &rl,
+                        &auth,
+                        admin.as_deref(),
+                        mcp.as_deref(),
+                    ),
+                    Some(cfg) => {
+                        let Some(mut t) = https_accept(s, cfg) else {
+                            return;
+                        };
+                        handle_http(
+                            &mut t,
+                            &k,
+                            &sess,
+                            &db,
+                            &ont,
+                            &rl,
+                            &auth,
+                            admin.as_deref(),
+                            mcp.as_deref(),
+                        );
+                        t.conn.send_close_notify();
+                        let _ = t.flush();
+                    }
                 });
             }
             Err(e) => {
@@ -135,6 +167,27 @@ pub(crate) fn serve_metrics(
             }
         }
     }
+}
+
+/// The TLS handshake for one HTTPS connection, bounded so a silent peer
+/// cannot hold the thread; `None` (logged in debug) when it fails.
+fn https_accept(
+    s: TcpStream,
+    cfg: Arc<rustls::ServerConfig>,
+) -> Option<rustls::StreamOwned<rustls::ServerConnection, TcpStream>> {
+    let mut conn = rustls::ServerConnection::new(cfg).ok()?;
+    let mut s = s;
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    while conn.is_handshaking() {
+        if let Err(e) = conn.complete_io(&mut s) {
+            if cfg!(debug_assertions) {
+                eprintln!("https handshake: {e}");
+            }
+            return None;
+        }
+    }
+    let _ = s.set_read_timeout(None);
+    Some(rustls::StreamOwned::new(conn, s))
 }
 
 /// Build graph JSON: { nodes: [...], edges: [...] }.
@@ -497,7 +550,14 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
 pub(crate) struct AuthResolver {
     users: Vec<crate::config::AuthUser>,
     ttl_secs: u64,
+    /// per configured login: (consecutive failures, locked until)
+    fails: Mutex<HashMap<String, (u32, Instant)>>,
 }
+
+/// Wrong passwords a login gets before the backoff starts.
+const FREE_FAILS: u32 = 5;
+/// The longest backoff, in seconds.
+const MAX_BACKOFF_SECS: u64 = 900;
 
 impl AuthResolver {
     pub(crate) fn new(
@@ -522,7 +582,11 @@ impl AuthResolver {
                 }
             }
         }
-        AuthResolver { users, ttl_secs }
+        AuthResolver {
+            users,
+            ttl_secs,
+            fails: Mutex::new(HashMap::new()),
+        }
     }
 
     pub(crate) fn is_configured(&self) -> bool {
@@ -535,22 +599,55 @@ impl AuthResolver {
 
     /// argon2id-verify `password` against the configured hash for
     /// `username`; the user's roles on match.
+    /// A configured login's current roles (None: no such login) — what an
+    /// OAuth grant carries at each check, so removing a login revokes it.
+    pub(crate) fn roles_of(&self, username: &str) -> Option<Vec<String>> {
+        self.users
+            .iter()
+            .find(|u| u.username == username)
+            .map(|u| u.roles.clone())
+    }
+
+    /// Seconds `username` must wait before its next sign-in attempt.
+    pub(crate) fn locked_for(&self, username: &str) -> Option<u64> {
+        // justified: Mutex poison is unrecoverable
+        let fails = self.fails.lock().unwrap();
+        let left = fails
+            .get(username)?
+            .1
+            .checked_duration_since(Instant::now())?;
+        Some(left.as_secs() + u64::from(left.subsec_nanos() > 0))
+    }
+
+    /// Refused while `username` is backing off (locked_for); a wrong
+    /// password extends the backoff, a right one clears it.
     pub(crate) fn verify(&self, username: &str, password: &str) -> Option<Vec<String>> {
         use argon2::password_hash::PasswordVerifier;
-        for u in &self.users {
-            if u.username != username {
-                continue;
-            }
-            let Ok(parsed) = argon2::PasswordHash::new(&u.hash) else {
-                return None; // malformed configured hash never matches
-            };
-            if argon2::Argon2::default()
+        let u = self.users.iter().find(|u| u.username == username)?;
+        if self.locked_for(username).is_some() {
+            return None;
+        }
+        let ok = argon2::PasswordHash::new(&u.hash).is_ok_and(|parsed| {
+            argon2::Argon2::default()
                 .verify_password(password.as_bytes(), &parsed)
                 .is_ok()
-            {
-                return Some(u.roles.clone());
-            }
-            return None;
+        });
+        // justified: Mutex poison is unrecoverable
+        let mut fails = self.fails.lock().unwrap();
+        if ok {
+            fails.remove(username);
+            return Some(u.roles.clone());
+        }
+        let (n, until) = fails
+            .entry(username.to_string())
+            .or_insert((0, Instant::now()));
+        *n += 1;
+        if *n >= FREE_FAILS {
+            let wait = 1u64
+                .checked_shl(*n - FREE_FAILS)
+                .unwrap_or(u64::MAX)
+                .min(MAX_BACKOFF_SECS);
+            *until = Instant::now() + std::time::Duration::from_secs(wait);
         }
         None
     }
@@ -560,18 +657,26 @@ pub(crate) fn handle_login(
     body: &str,
     sessions: &Mutex<HashMap<String, HttpSession>>,
     auth: &AuthResolver,
-) -> Result<String, String> {
-    let creds: J = serde_json::from_str(body).map_err(|e| format!("bad JSON: {}", e))?;
+) -> Result<String, (&'static str, String)> {
+    let unauthorized = |e: String| ("401 Unauthorized", e);
+    let creds: J =
+        serde_json::from_str(body).map_err(|e| unauthorized(format!("bad JSON: {}", e)))?;
     let username = creds.get("username").and_then(|v| v.as_str()).unwrap_or("");
     let password = creds.get("password").and_then(|v| v.as_str()).unwrap_or("");
 
+    if let Some(wait) = auth.locked_for(username) {
+        return Err((
+            "429 Too Many Requests",
+            format!("too many failed sign-ins; retry in {wait} s"),
+        ));
+    }
     let roles = auth
         .verify(username, password)
-        .ok_or("invalid credentials")?;
+        .ok_or_else(|| unauthorized("invalid credentials".into()))?;
     // P3-M1 (auth002): 256-bit CSPRNG session token (64 hex chars). The old
     // time+pid token was predictable; sessions are bearer credentials now.
     let mut raw = [0u8; 32];
-    getrandom::getrandom(&mut raw).map_err(|e| format!("session token: {e}"))?;
+    getrandom::getrandom(&mut raw).map_err(|e| unauthorized(format!("session token: {e}")))?;
     let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     // justified: Mutex poison is unrecoverable
     sessions.lock().unwrap().insert(
@@ -761,26 +866,33 @@ pub(crate) fn parse_query_param(path: &str, key: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Percent-decoding over bytes ('+' is a space), then UTF-8 (lossy):
+/// a multi-byte character decodes whole, an escape at the very end
+/// decodes, and an invalid escape is kept as written. The hex digits are
+/// read as bytes — a str slice there could split a character and panic.
 pub(crate) fn url_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
-    let bytes = s.as_bytes();
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(hex) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(hex as char);
-                i += 3;
-                continue;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => {
+                let hex = |c: u8| (c as char).to_digit(16);
+                match (hex(b[i + 1]), hex(b[i + 2])) {
+                    (Some(h), Some(l)) => {
+                        out.push((h * 16 + l) as u8);
+                        i += 3;
+                        continue;
+                    }
+                    _ => out.push(b'%'),
+                }
             }
-        }
-        if bytes[i] == b'+' {
-            out.push(' ');
-        } else {
-            out.push(bytes[i] as char);
+            c => out.push(c),
         }
         i += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -861,7 +973,7 @@ pub(crate) fn explain_endpoint(query: &str, k: &Kernel) -> Result<String, String
 }
 
 pub(crate) fn handle_http(
-    stream: &mut TcpStream,
+    stream: &mut (impl Read + Write),
     k: &Kernel,
     sessions: &Mutex<HashMap<String, HttpSession>>,
     db_path: &Arc<String>,
@@ -869,15 +981,25 @@ pub(crate) fn handle_http(
     rate_limit: &Mutex<crate::rate_limiter::RateLimiter>,
     auth: &AuthResolver,
     admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+    mcp: Option<&crate::mcp_http::McpHttp>,
 ) {
-    // ponytail: 64 KB buffer fits all practical HTTP requests. Browsers send
-    // ~2-8 KB of headers; single read captures the full request.
+    // Headers can span reads (a slow client, or past one TCP segment): read
+    // until the blank line. shortcut: headers past 64 KB are cut, raise the
+    // buffer if a client ever needs more.
     let mut buf = [0u8; 65536];
-    let n = match stream.read(&mut buf) {
-        Ok(0) => return,
-        Ok(n) => n,
-        Err(_) => return,
-    };
+    let mut n = 0;
+    while n < buf.len() && !buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+        match stream.read(&mut buf[n..]) {
+            Ok(0) | Err(_) if n == 0 => return,
+            Ok(0) | Err(_) => break,
+            Ok(k) => n += k,
+        }
+        // not a request line (e.g. a TLS hello on this plain port): stop
+        // here, the parse below drops it, instead of waiting for headers
+        if !buf[0].is_ascii_uppercase() {
+            break;
+        }
+    }
     // Read body remainder if Content-Length exceeds what we already got.
     let req = String::from_utf8_lossy(&buf[..n]);
     let first_line = req.lines().next().unwrap_or("");
@@ -897,6 +1019,25 @@ pub(crate) fn handle_http(
             content_len = line.split(':').nth(1).and_then(|s| s.trim().parse().ok());
         }
     }
+    // MCP over Streamable HTTP and its OAuth endpoints: bodies are capped
+    // before they are read
+    if (route == "/mcp" || route.starts_with("/oauth/"))
+        && content_len.is_some_and(|cl| cl > crate::mcp_http::MAX_BODY)
+    {
+        crate::mcp_http::write_reply(
+            stream,
+            (
+                "413 Payload Too Large",
+                vec![],
+                "text/plain; charset=utf-8",
+                format!(
+                    "an MCP request is at most {} bytes",
+                    crate::mcp_http::MAX_BODY
+                ),
+            ),
+        );
+        return;
+    }
     if let Some(cl) = content_len {
         while body_str.len() < cl {
             let needed = cl - body_str.len();
@@ -908,6 +1049,32 @@ pub(crate) fn handle_http(
                 Err(_) => break,
             }
         }
+    }
+
+    // the OAuth authorization server (discovery, registration, sign-in, tokens)
+    if let Some(o) = mcp.and_then(|m| m.oauth()) {
+        if let Some(reply) = o.route(method, route, path, hdr_part, &body_str) {
+            crate::mcp_http::write_reply(stream, reply);
+            return;
+        }
+    }
+
+    if route == "/mcp" {
+        if let (Some(m), "GET") = (mcp, method) {
+            m.stream(hdr_part, stream); // the session's event stream, held open
+            return;
+        }
+        let reply = match mcp {
+            Some(m) => m.handle(method, hdr_part, &body_str, k, db_path, rate_limit, admin),
+            None => (
+                "401 Unauthorized",
+                vec![("WWW-Authenticate", "Bearer".to_string())],
+                "text/plain; charset=utf-8",
+                "MCP over HTTP needs --tcp-token or [auth] logins (OAuth)".to_string(),
+            ),
+        };
+        crate::mcp_http::write_reply(stream, reply);
+        return;
     }
 
     // Extract token from query string or Authorization header.
@@ -995,11 +1162,7 @@ pub(crate) fn handle_http(
                 "application/json",
                 json!({"token": token}).to_string(),
             ),
-            Err(e) => (
-                "401 Unauthorized",
-                "application/json",
-                json!({"error": e}).to_string(),
-            ),
+            Err((status, e)) => (status, "application/json", json!({"error": e}).to_string()),
         },
         // P3-M1 (auth005/auth006): the pre-v1 route aliases are part of the
         // same surface — session required, and graph runs as the session's
@@ -1155,6 +1318,11 @@ pub(crate) fn prometheus_metrics(
         }
     }
 
+    // MRFC-0080 R3c-2: a serving leader's replication lag rides the scrape
+    if let (Some(acked), Some(admin)) = (crate::replication::LEADER.get(), admin) {
+        storage_metrics.push_str(&crate::replication::metrics(acked, admin.last_seq()));
+    }
+
     format!(
         "# HELP aikoql_journal_seq Monotonically increasing journal sequence number.\n\
          # TYPE aikoql_journal_seq counter\n\
@@ -1194,9 +1362,13 @@ pub(crate) fn spawn_metrics(
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
     auth: Arc<AuthResolver>,
     admin: Option<Arc<dyn aikoql_storage_v2::engine::StorageAdminApi>>,
+    tls: Option<Arc<rustls::ServerConfig>>,
+    mcp: Option<Arc<crate::mcp_http::McpHttp>>,
 ) {
-    info!(addr = %addr, "metrics HTTP server started");
+    info!(addr = %addr, https = tls.is_some(), mcp_http = mcp.is_some(), "metrics HTTP server started");
     thread::spawn(move || {
-        serve_metrics(kernel, ontology, &addr, &db_path, rate_limit, auth, admin)
+        serve_metrics(
+            kernel, ontology, &addr, &db_path, rate_limit, auth, admin, tls, mcp,
+        )
     });
 }

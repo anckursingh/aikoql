@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/main.rs (target/debug/deps/aikoql_mcp-1bd616def3f11511)
+
+running 1 test
+test config::tests::model_auto_install_from_toml_and_env ... FAILED
+
+failures:
+
+---- config::tests::model_auto_install_from_toml_and_env stdout ----
+
+thread 'config::tests::model_auto_install_from_toml_and_env' (2580007) panicked at crates/services/api/mcp/src/config.rs:1206:41:
+called `Result::unwrap()` on an `Err` value: "config /var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/aikoql-config-test-3688-0.toml: TOML parse error at line 2, column 1\n  |\n2 | auto_install = true\n  | ^^^^^^^^^^^^\nunknown field `auto_install`, expected one of `provider`, `base_url`, `model`, `api_key`\n"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    config::tests::model_auto_install_from_toml_and_env
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 143 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

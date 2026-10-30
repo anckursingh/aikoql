@@ -1,0 +1,77 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0422]: cannot find struct, variant or union type `Creds` in this scope
+   --> crates/services/api/mcp/src/ha.rs:410:13
+    |
+410 |             Creds {
+    |             ^^^^^ not found in this scope
+
+error[E0425]: cannot find value `EMPTY_SHA256` in this scope
+   --> crates/services/api/mcp/src/ha.rs:437:38
+    |
+437 |             ("x-amz-content-sha256", EMPTY_SHA256),
+    |                                      ^^^^^^^^^^^^ not found in this scope
+
+error[E0422]: cannot find struct, variant or union type `Creds` in this scope
+   --> crates/services/api/mcp/src/ha.rs:441:14
+    |
+441 |             &Creds {
+    |              ^^^^^ not found in this scope
+
+error[E0425]: cannot find value `EMPTY_SHA256` in this scope
+   --> crates/services/api/mcp/src/ha.rs:450:13
+    |
+450 |             EMPTY_SHA256,
+    |             ^^^^^^^^^^^^ not found in this scope
+
+error[E0433]: cannot find type `S3Lease` in this scope
+   --> crates/services/api/mcp/src/ha.rs:405:21
+    |
+405 |         let store = S3Lease::new(
+    |                     ^^^^^^^ use of undeclared type `S3Lease`
+    |
+help: a struct with a similar name exists
+    |
+405 -         let store = S3Lease::new(
+405 +         let store = Lease::new(
+    |
+
+error[E0425]: cannot find function `authorization` in this scope
+   --> crates/services/api/mcp/src/ha.rs:440:20
+    |
+440 |         let auth = authorization(
+    |                    ^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `amz_date` in this scope
+   --> crates/services/api/mcp/src/ha.rs:462:20
+    |
+462 |         assert_eq!(amz_date(1_369_353_600), "20130524T000000Z");
+    |                    ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `amz_date` in this scope
+   --> crates/services/api/mcp/src/ha.rs:463:20
+    |
+463 |         assert_eq!(amz_date(951_782_400 + 3_661), "20000229T010101Z"); // leap day
+    |                    ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `parse_s3_url` in this scope
+   --> crates/services/api/mcp/src/ha.rs:469:13
+    |
+469 |             parse_s3_url("s3://bucket/path/to/lease.json"),
+    |             ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `parse_s3_url` in this scope
+   --> crates/services/api/mcp/src/ha.rs:472:20
+    |
+472 |         assert_eq!(parse_s3_url("s3://bucket"), None);
+    |                    ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `parse_s3_url` in this scope
+   --> crates/services/api/mcp/src/ha.rs:473:20
+    |
+473 |         assert_eq!(parse_s3_url("/var/lease.json"), None);
+    |                    ^^^^^^^^^^^^ not found in this scope
+
+Some errors have detailed explanations: E0422, E0425, E0433.
+For more information about an error, try `rustc --explain E0422`.
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 11 previous errors
+EXIT=101

@@ -1,0 +1,29 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/model_auto_install.rs (target/debug/deps/model_auto_install-dc534faddd3f88f3)
+
+running 2 tests
+test ma002_with_the_flag_a_failed_download_still_serves_and_says_so ... FAILED
+test ma001_without_the_flag_nothing_is_downloaded_and_the_hint_names_it ... FAILED
+
+failures:
+
+---- ma002_with_the_flag_a_failed_download_still_serves_and_says_so stdout ----
+
+thread 'ma002_with_the_flag_a_failed_download_still_serves_and_says_so' (2561553) panicked at crates/services/api/mcp/tests/model_auto_install.rs:92:5:
+STORE: model at /var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/model-auto-on-98379/models/all-MiniLM-L6-v2 has no readable manifest.json (No such file or directory (os error 2)) — reinstall with `aikoql model install` — run `aikoql model install` to install all-MiniLM-L6-v2 into /var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/model-auto-on-98379/models/all-MiniLM-L6-v2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- ma001_without_the_flag_nothing_is_downloaded_and_the_hint_names_it stdout ----
+
+thread 'ma001_without_the_flag_nothing_is_downloaded_and_the_hint_names_it' (2561552) panicked at crates/services/api/mcp/tests/model_auto_install.rs:84:5:
+STORE: model at /var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/model-auto-off-98379/models/all-MiniLM-L6-v2 has no readable manifest.json (No such file or directory (os error 2)) — reinstall with `aikoql model install` — run `aikoql model install` to install all-MiniLM-L6-v2 into /var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/model-auto-off-98379/models/all-MiniLM-L6-v2
+
+
+failures:
+    ma001_without_the_flag_nothing_is_downloaded_and_the_hint_names_it
+    ma002_with_the_flag_a_failed_download_still_serves_and_says_so
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.30s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test model_auto_install`
+EXIT=101

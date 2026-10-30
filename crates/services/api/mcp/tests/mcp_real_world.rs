@@ -35,10 +35,22 @@ impl Drop for TempSweeper {
 }
 
 fn tmp_db(suffix: &str) -> String {
-    let p = std::env::temp_dir().join(format!("mcp-{suffix}-{}", std::process::id()));
+    // a per-call counter: tests run in parallel threads of one process, and
+    // a shared path is swept by whichever test's thread exits first
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let p = std::env::temp_dir().join(format!("mcp-{suffix}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
     p.to_string_lossy().into_owned()
+}
+
+/// tmp_db hands every call its own path. A shared one (the per-server
+/// "ctx-model" store every Mcp::start asked for) was deleted under a
+/// running server whenever another test's thread exited and swept it.
+#[test]
+fn tmp_db_paths_are_unique_per_call() {
+    assert_ne!(tmp_db("unique-pin"), tmp_db("unique-pin"));
 }
 
 /// The local model store for F13's end-to-end pin: `AIKOQL_TEST_MODEL_DIR`

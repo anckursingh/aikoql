@@ -1,0 +1,98 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0425]: cannot find type `Acked` in this scope
+   --> crates/services/api/mcp/src/replication.rs:716:20
+    |
+716 |         acked: Arc<Acked>,
+    |                    ^^^^^ not found in this scope
+    |
+help: you might be missing a type parameter
+    |
+711 |     struct Leader<Acked> {
+    |                  +++++++
+
+error[E0433]: cannot find type `Acked` in this scope
+   --> crates/services/api/mcp/src/replication.rs:734:30
+    |
+734 |         let acked = Arc::new(Acked::default());
+    |                              ^^^^^ use of undeclared type `Acked`
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+   --> crates/services/api/mcp/src/replication.rs:736:36
+    |
+736 |         std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d, a));
+    |                                    ^^^^^^^^^^^^^^^^^                                     - unexpected argument #7
+    |
+note: function defined here
+   --> crates/services/api/mcp/src/replication.rs:128:15
+    |
+128 | pub(crate) fn serve_replication(
+    |               ^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+736 -         std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d, a));
+736 +         std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d));
+    |
+
+error[E0433]: cannot find type `Acked` in this scope
+   --> crates/services/api/mcp/src/replication.rs:843:26
+    |
+843 |                 Arc::new(Acked::default()),
+    |                          ^^^^^ use of undeclared type `Acked`
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+   --> crates/services/api/mcp/src/replication.rs:836:13
+    |
+836 |             serve_replication(
+    |             ^^^^^^^^^^^^^^^^^
+...
+843 |                 Arc::new(Acked::default()),
+    |                 -------------------------- unexpected argument #7
+    |
+note: function defined here
+   --> crates/services/api/mcp/src/replication.rs:128:15
+    |
+128 | pub(crate) fn serve_replication(
+    |               ^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+842 -                 gap_dir,
+843 -                 Arc::new(Acked::default()),
+842 +                 gap_dir,
+    |
+
+error[E0599]: no method named `set_commit_gate` found for reference `&Db` in the current scope
+   --> crates/services/api/mcp/src/replication.rs:925:14
+    |
+923 | /         l.engine
+924 | |             .db()
+925 | |             .set_commit_gate(sync_gate(l.acked.clone(), Duration::from_secs(10)));
+    | |             -^^^^^^^^^^^^^^^ method not found in `&Db`
+    | |_____________|
+    |
+
+error[E0425]: cannot find function `sync_gate` in this scope
+   --> crates/services/api/mcp/src/replication.rs:925:30
+    |
+925 |             .set_commit_gate(sync_gate(l.acked.clone(), Duration::from_secs(10)));
+    |                              ^^^^^^^^^ not found in this scope
+
+error[E0599]: no method named `set_commit_gate` found for reference `&Db` in the current scope
+   --> crates/services/api/mcp/src/replication.rs:952:14
+    |
+950 | /         l.engine
+951 | |             .db()
+952 | |             .set_commit_gate(sync_gate(l.acked.clone(), Duration::from_millis(200)));
+    | |             -^^^^^^^^^^^^^^^ method not found in `&Db`
+    | |_____________|
+    |
+
+error[E0425]: cannot find function `sync_gate` in this scope
+   --> crates/services/api/mcp/src/replication.rs:952:30
+    |
+952 |             .set_commit_gate(sync_gate(l.acked.clone(), Duration::from_millis(200)));
+    |                              ^^^^^^^^^ not found in this scope
+
+Some errors have detailed explanations: E0061, E0425, E0433, E0599.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 9 previous errors
+EXIT=101

@@ -1,0 +1,8 @@
+{
+  "id": "sdk-python-tls",
+  "pre_fix_commit": "HEAD",
+  "command": "/private/tmp/claude-501/-Users-pukku-coding-aikoql/4365fec5-c293-40c6-ae92-d401a7bd8c96/scratchpad/venv/bin/python -m pytest crates/sdk/python/tests/test_tls.py -q",
+  "captured_at": "2026-10-29T13:21:26Z",
+  "captured_head": "77004f3e1a0009bcc14cb3ba5bd4c8cbf38c31f7",
+  "exit_code": 1
+}

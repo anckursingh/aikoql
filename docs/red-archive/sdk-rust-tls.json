@@ -1,0 +1,8 @@
+{
+  "id": "sdk-rust-tls",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-sdk --test tls",
+  "captured_at": "2026-10-29T13:16:29Z",
+  "captured_head": "e8bfe8112f744a937973f41a8869a4178a05b16f",
+  "exit_code": 101
+}

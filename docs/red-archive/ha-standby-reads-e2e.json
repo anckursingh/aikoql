@@ -1,0 +1,8 @@
+{
+  "id": "ha-standby-reads-e2e",
+  "pre_fix_commit": "HEAD",
+  "command": "perl -e alarm 90; exec @ARGV cargo test -p aikoql-mcp --test replication_failover ha_standby_takes_over",
+  "captured_at": "2026-10-28T13:03:30Z",
+  "captured_head": "2fb4daa0fecb944a58c7a7ea7de21d30bd1edc3f",
+  "exit_code": 142
+}

@@ -18,6 +18,8 @@ pub enum ErrorCode {
     Internal,
     NotAProgram,
     CompileError,
+    /// MRFC-0080 R4d — a deposed (fenced) node refused a write.
+    NotLeader,
 }
 
 impl ErrorCode {
@@ -33,6 +35,7 @@ impl ErrorCode {
             ErrorCode::Internal => "INTERNAL",
             ErrorCode::NotAProgram => "NOT_A_PROGRAM",
             ErrorCode::CompileError => "COMPILE_ERROR",
+            ErrorCode::NotLeader => "NOT_LEADER",
         }
     }
 
@@ -43,6 +46,7 @@ impl ErrorCode {
                 | ErrorCode::RateLimited
                 | ErrorCode::VersionConflict
                 | ErrorCode::Retryable
+                | ErrorCode::NotLeader
         )
     }
 
@@ -58,13 +62,16 @@ impl ErrorCode {
             ErrorCode::Internal => "An unexpected error occurred. Report this if it persists",
             ErrorCode::NotAProgram => "The KOID references an object that is not a program. Use list_programs to find valid programs",
             ErrorCode::CompileError => "The aikoql query has a syntax error. Check the query and retry",
+            ErrorCode::NotLeader => "This node no longer accepts writes. Retry the write against the leader (`leader`, when known)",
         }
     }
 
     /// Classify an error message string into an error code.
     pub fn classify(msg: &str) -> Self {
         let lower = msg.to_lowercase();
-        if lower.contains("access denied")
+        if lower.contains("not leader") {
+            ErrorCode::NotLeader
+        } else if lower.contains("access denied")
             || lower.contains("access_denied")
             || lower.contains("unauthorized")
             || lower.contains("login required")
@@ -109,7 +116,7 @@ pub fn wrap_result(result: Result<J, String>) -> J {
         Ok(payload) => json!({"ok": true, "data": payload}),
         Err(msg) => {
             let code = ErrorCode::classify(&msg);
-            json!({
+            let mut out = json!({
                 "ok": false,
                 "error": {
                     "code": code.as_str(),
@@ -117,7 +124,33 @@ pub fn wrap_result(result: Result<J, String>) -> J {
                     "retryable": code.retryable(),
                     "suggestion": code.suggestion(),
                 }
-            })
+            });
+            // R4d: the fence reason carries "(leader=ADDR)" when known
+            let hint = msg.split("leader=").nth(1).map(|t| t.trim_end_matches(')'));
+            if let (ErrorCode::NotLeader, Some(addr)) = (code, hint) {
+                out["error"]["leader"] = json!(addr);
+            }
+            out
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MRFC-0080 R4d — a fenced node's write refusal is NOT_LEADER,
+    /// retryable against the leader whose client address it carries.
+    #[test]
+    fn a_fenced_write_is_not_leader_with_the_leader_hint() {
+        let msg = "store: aikoql-v2: stale: not leader: deposed by replication term 2 (leader=10.0.0.9:7070)";
+        assert_eq!(ErrorCode::classify(msg), ErrorCode::NotLeader);
+        let w = wrap_result(Err(msg.to_string()));
+        assert_eq!(w["error"]["code"], "NOT_LEADER");
+        assert_eq!(w["error"]["retryable"], true);
+        assert_eq!(w["error"]["leader"], "10.0.0.9:7070");
+        let w = wrap_result(Err("stale: not leader: fenced at replication term 4".into()));
+        assert_eq!(w["error"]["code"], "NOT_LEADER");
+        assert!(w["error"].get("leader").is_none(), "no hint, no field: {w}");
     }
 }

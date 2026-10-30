@@ -1,0 +1,40 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0599]: no method named `target` found for struct `s3::S3` in the current scope
+   --> crates/services/api/mcp/src/s3.rs:263:37
+    |
+ 16 | pub(crate) struct S3 {
+    | -------------------- method `target` not found for this struct
+...
+263 |         let (url, path, query) = s3.target("ha/lease json.json", &[]);
+    |                                     ^^^^^^ method not found in `s3::S3`
+
+error[E0599]: no method named `target` found for struct `s3::S3` in the current scope
+   --> crates/services/api/mcp/src/s3.rs:272:37
+    |
+ 16 | pub(crate) struct S3 {
+    | -------------------- method `target` not found for this struct
+...
+272 |         let (url, path, query) = s3.target("", &[("prefix", "a/b"), ("list-type", "2")]);
+    |                                     ^^^^^^ method not found in `s3::S3`
+
+error[E0599]: no method named `target` found for struct `s3::S3` in the current scope
+   --> crates/services/api/mcp/src/s3.rs:294:33
+    |
+ 16 | pub(crate) struct S3 {
+    | -------------------- method `target` not found for this struct
+...
+294 |         let (url, path, _) = s3.target("k", &[]);
+    |                                 ^^^^^^ method not found in `s3::S3`
+
+error[E0599]: no method named `target` found for struct `s3::S3` in the current scope
+   --> crates/services/api/mcp/src/s3.rs:299:33
+    |
+ 16 | pub(crate) struct S3 {
+    | -------------------- method `target` not found for this struct
+...
+299 |         let (url, path, _) = s3.target("", &[("list-type", "2")]);
+    |                                 ^^^^^^ method not found in `s3::S3`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 4 previous errors
+EXIT=101

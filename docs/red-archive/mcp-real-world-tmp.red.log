@@ -1,0 +1,22 @@
+
+running 1 test
+tmp_db_paths_are_unique_per_call --- FAILED
+
+failures:
+
+---- tmp_db_paths_are_unique_per_call stdout ----
+
+thread 'tmp_db_paths_are_unique_per_call' (2014694) panicked at crates/services/api/mcp/tests/mcp_real_world.rs:49:5:
+assertion `left != right` failed
+  left: "/var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/mcp-unique-pin-16022"
+ right: "/var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/mcp-unique-pin-16022"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tmp_db_paths_are_unique_per_call
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

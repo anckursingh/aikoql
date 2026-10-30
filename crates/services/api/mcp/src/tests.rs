@@ -40,6 +40,22 @@ fn tmp_db(tag: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 #[test]
+fn model_install_reads_model_dir_with_or_without_a_model_id() {
+    use crate::cli::model_install_args;
+    let default = aikoql_semantic::provider::DEFAULT_MODEL_ID;
+    assert_eq!(
+        model_install_args(&["install", "--model-dir", "/m"]),
+        Ok((default, Some("/m")))
+    );
+    assert_eq!(
+        model_install_args(&["install", "org/model", "--model-dir", "/m"]),
+        Ok(("org/model", Some("/m")))
+    );
+    assert_eq!(model_install_args(&["install"]), Ok((default, None)));
+    assert!(model_install_args(&["install", "--model-dir"]).is_err());
+}
+
+#[test]
 fn model_store_dir_flag_wins() {
     let p = model_store_dir(Some("C:/tmp/models"));
     assert_eq!(p, std::path::PathBuf::from("C:/tmp/models"));
@@ -470,6 +486,50 @@ fn auth008_rate_limiter_keys_per_principal() {
     );
 }
 
+/// Sign-in backoff: five wrong passwords are free, then each failure
+/// doubles the wait (1 s, 2 s, ...), during which even the right password
+/// is refused (429 on /api/login).
+#[test]
+fn logins_back_off_after_five_failures() {
+    let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86400);
+    for _ in 0..4 {
+        assert!(auth.verify("admin", "wrong").is_none());
+    }
+    assert_eq!(auth.locked_for("admin"), None, "four failures are free");
+    assert!(auth.verify("admin", "wrong").is_none());
+    assert_eq!(
+        auth.locked_for("admin"),
+        Some(1),
+        "the fifth starts the backoff"
+    );
+    assert!(
+        auth.verify("admin", "pw").is_none(),
+        "locked: even the right password"
+    );
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let ok = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
+    let err = crate::http::handle_login(&ok, &sessions, &auth).unwrap_err();
+    assert!(err.0.starts_with("429"), "{err:?}");
+    // a name that is not a login is never tracked (the map stays bounded)
+    for _ in 0..10 {
+        assert!(auth.verify("ghost", "x").is_none());
+    }
+    assert_eq!(auth.locked_for("ghost"), None);
+}
+
+#[test]
+fn a_successful_sign_in_resets_the_backoff() {
+    let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86400);
+    for _ in 0..4 {
+        assert!(auth.verify("admin", "wrong").is_none());
+    }
+    assert!(auth.verify("admin", "pw").is_some());
+    for _ in 0..4 {
+        assert!(auth.verify("admin", "wrong").is_none());
+    }
+    assert_eq!(auth.locked_for("admin"), None);
+}
+
 /// auth001 RED: login verifies CONFIGURED credentials (argon2id) — no
 /// hardcoded admin/admin. The resolver here bootstraps admin from the
 /// AIKOQL_ADMIN_PASSWORD path; the second half pins [auth].users hashes.
@@ -540,11 +600,14 @@ fn auth004_remote_http_refused_without_auth() {
     assert!(crate::remote_http_requires_auth(true, false).is_err());
     assert!(crate::remote_http_requires_auth(true, true).is_ok());
     assert!(crate::remote_http_requires_auth(false, false).is_ok());
-    assert!(crate::validate_http_listen("0.0.0.0:9091", false).is_err());
-    assert!(crate::validate_http_listen("0.0.0.0:9091", true).is_ok());
-    assert!(crate::validate_http_listen("127.0.0.1:9091", false).is_ok());
-    assert!(crate::validate_http_listen(":9091", false).is_ok());
-    assert!(crate::validate_http_listen("nonsense", false).is_err());
+    assert!(crate::validate_http_listen("0.0.0.0:9091", false, false).is_err());
+    assert!(crate::validate_http_listen("0.0.0.0:9091", false, true).is_err());
+    // armed remote HTTP also needs TLS: logins must not cross in plaintext
+    assert!(crate::validate_http_listen("0.0.0.0:9091", true, false).is_err());
+    assert!(crate::validate_http_listen("0.0.0.0:9091", true, true).is_ok());
+    assert!(crate::validate_http_listen("127.0.0.1:9091", false, false).is_ok());
+    assert!(crate::validate_http_listen(":9091", false, false).is_ok());
+    assert!(crate::validate_http_listen("nonsense", false, false).is_err());
 }
 
 /// auth006 RED: graph_api executes as the CALLER's subject — a
@@ -1114,4 +1177,22 @@ fn s07_rest_query_aligns_with_mcp_for_stored_unregistered_types() {
     drop(k);
     let _ = std::fs::remove_dir_all(&db);
     let _ = std::fs::remove_file(format!("{db}.audit.log"));
+}
+
+/// The HTTP surface's query/form decoding: percent-escapes are bytes, the
+/// result is UTF-8 — a multi-byte character decodes whole, an escape at
+/// the very end decodes, and a '%' followed by a multi-byte character is
+/// kept literally (a str slice there used to panic the handler thread).
+#[test]
+fn url_decode_handles_utf8_a_trailing_escape_and_never_panics() {
+    assert_eq!(crate::http::url_decode("caf%C3%A9"), "café");
+    assert_eq!(crate::http::url_decode("pw%21"), "pw!");
+    assert_eq!(crate::http::url_decode("x+y"), "x y");
+    assert_eq!(crate::http::url_decode("100%"), "100%");
+    let r = std::panic::catch_unwind(|| crate::http::url_decode("%é1"));
+    assert_eq!(
+        r.ok().as_deref(),
+        Some("%é1"),
+        "no panic on '%' before a multi-byte character"
+    );
 }

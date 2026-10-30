@@ -20,7 +20,7 @@ use crate::compaction::CompactStats;
 use crate::db::{CheckpointInfo, Config, Db};
 use crate::snapshot::{RestoreInfo, SnapshotInfo};
 use crate::stats::{DbStats, ReadPathStats};
-use crate::wal::Op;
+use crate::wal::{Op, WalFrame};
 use aikoql_kernel::knowledge::kom::{KError, KResult};
 use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
 use std::path::Path;
@@ -41,6 +41,19 @@ pub trait StorageAdminApi: Send + Sync {
     fn storage_checkpoint(&self) -> KResult<CheckpointInfo>;
     fn snapshot_to(&self, dir: &Path) -> KResult<SnapshotInfo>;
     fn restore_from(&self, dir: &Path) -> KResult<RestoreInfo>;
+    /// MRFC-0080 R3a — the leader side of the replication stream (see
+    /// `Db::log_since` / `release_log` / `last_seq`).
+    fn log_since(&self, after: u64, max: usize) -> KResult<Vec<WalFrame>>;
+    fn release_log(&self, upto: u64) -> KResult<()>;
+    fn last_seq(&self) -> u64;
+    /// MRFC-0080 R4 — refuse client writes from now on (a later call
+    /// replaces the reason).
+    fn fence(&self, why: String);
+    /// MRFC-0080 standby reads — apply one leader frame (a read replica
+    /// replicates into its open engine).
+    fn apply_replicated(&self, seq: u64, ops: &[Op]) -> KResult<u64>;
+    /// MRFC-0080 R4b — arm the synchronous-replication wait.
+    fn set_commit_gate(&self, gate: crate::db::CommitGate);
 }
 
 /// AIKOQL v2 engine: WAL → memtable → immutable segments, served
@@ -62,6 +75,12 @@ impl AikoqlStorageEngineV2 {
     pub fn open_with_config(config: Config) -> KResult<Self> {
         let db = Db::open(config).map_err(se)?;
         Ok(AikoqlStorageEngineV2 { db })
+    }
+
+    /// MRFC-0080 R2 — the Db under the kernel: a leader serves
+    /// `log_since` / `release_log` from it while the kernel writes.
+    pub fn db(&self) -> &Db {
+        &self.db
     }
 
     /// SE2-M21 — the Db's cumulative read-path counters, reachable through
@@ -95,6 +114,30 @@ impl StorageAdminApi for AikoqlStorageEngineV2 {
 
     fn snapshot_to(&self, dir: &Path) -> KResult<SnapshotInfo> {
         self.db.snapshot_to(dir).map_err(se)
+    }
+
+    fn log_since(&self, after: u64, max: usize) -> KResult<Vec<WalFrame>> {
+        self.db.log_since(after, max).map_err(se)
+    }
+
+    fn release_log(&self, upto: u64) -> KResult<()> {
+        self.db.release_log(upto).map_err(se)
+    }
+
+    fn last_seq(&self) -> u64 {
+        self.db.last_seq()
+    }
+
+    fn fence(&self, why: String) {
+        self.db.fence(why)
+    }
+
+    fn apply_replicated(&self, seq: u64, ops: &[Op]) -> KResult<u64> {
+        self.db.apply_replicated(seq, ops).map_err(se)
+    }
+
+    fn set_commit_gate(&self, gate: crate::db::CommitGate) {
+        self.db.set_commit_gate(gate)
     }
 
     fn restore_from(&self, dir: &Path) -> KResult<RestoreInfo> {

@@ -1,0 +1,232 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0433]: cannot find `tls` in the crate root
+    --> crates/services/api/mcp/src/replication.rs:1419:25
+     |
+1419 |             Some(crate::tls::server_config(CERT, KEY).unwrap()),
+     |                         ^^^ could not find `tls` in the crate root
+
+error[E0433]: cannot find `tls` in the crate root
+    --> crates/services/api/mcp/src/replication.rs:1422:29
+     |
+1422 |         let client = crate::tls::client_config(CA).unwrap();
+     |                             ^^^ could not find `tls` in the crate root
+
+error[E0433]: cannot find `tls` in the crate root
+    --> crates/services/api/mcp/src/replication.rs:1451:25
+     |
+1451 |             Some(crate::tls::server_config(CERT, KEY).unwrap()),
+     |                         ^^^ could not find `tls` in the crate root
+
+error[E0433]: cannot find `tls` in the crate root
+    --> crates/services/api/mcp/src/replication.rs:1456:28
+     |
+1456 |         let other = crate::tls::client_config(OTHER_CA).unwrap();
+     |                            ^^^ could not find `tls` in the crate root
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1039:44
+     |
+1039 |                 std::thread::spawn(move || follow(&addr, &token, &db, &d, None, &st, None))
+     |                                            ^^^^^^                                    ---- unexpected argument #7 of type `std::option::Option<_>`
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:761:15
+     |
+ 761 | pub(crate) fn follow(
+     |               ^^^^^^
+help: remove the extra argument
+     |
+1039 -                 std::thread::spawn(move || follow(&addr, &token, &db, &d, None, &st, None))
+1039 +                 std::thread::spawn(move || follow(&addr, &token, &db, &d, None, &st))
+     |
+
+error[E0061]: this function takes 7 arguments but 8 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1102:36
+     |
+1102 |         std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d, a, tls));
+     |                                    ^^^^^^^^^^^^^^^^^                                        --- unexpected argument #8 of type `std::option::Option<std::sync::Arc<ServerConfig>>`
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:308:15
+     |
+ 308 | pub(crate) fn serve_replication(
+     |               ^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+     |
+1102 -         std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d, a, tls));
+1102 +         std::thread::spawn(move || serve_replication(listener, source, auth, s, None, d, a));
+     |
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1138:40
+     |
+1138 |             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &stop, None))
+     |                                        ^^^^^^                                            ---- unexpected argument #7 of type `std::option::Option<_>`
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:761:15
+     |
+ 761 | pub(crate) fn follow(
+     |               ^^^^^^
+help: remove the extra argument
+     |
+1138 -             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &stop, None))
+1138 +             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &stop))
+     |
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1172:23
+     |
+1172 |             let err = follow(&l.addr, tok, &standby, &sdir, None, &stop, None).unwrap_err();
+     |                       ^^^^^^                                             ---- unexpected argument #7 of type `std::option::Option<_>`
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:761:15
+     |
+ 761 | pub(crate) fn follow(
+     |               ^^^^^^
+help: remove the extra argument
+     |
+1172 -             let err = follow(&l.addr, tok, &standby, &sdir, None, &stop, None).unwrap_err();
+1172 +             let err = follow(&l.addr, tok, &standby, &sdir, None, &stop).unwrap_err();
+     |
+
+error[E0061]: this function takes 7 arguments but 8 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1202:13
+     |
+1202 |             serve_replication(
+     |             ^^^^^^^^^^^^^^^^^
+...
+1210 |                 None,
+     |                 ---- unexpected argument #8 of type `std::option::Option<_>`
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:308:15
+     |
+ 308 | pub(crate) fn serve_replication(
+     |               ^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+     |
+1209 -                 Arc::new(Acked::default()),
+1210 -                 None,
+1209 +                 Arc::new(Acked::default()),
+     |
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1233:19
+     |
+1233 |         let err = follow(
+     |                   ^^^^^^
+...
+1240 |             None,
+     |             ---- unexpected argument #7 of type `std::option::Option<_>`
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:761:15
+     |
+ 761 | pub(crate) fn follow(
+     |               ^^^^^^
+help: remove the extra argument
+     |
+1239 -             &AtomicBool::new(false),
+1240 -             None,
+1239 +             &AtomicBool::new(false),
+     |
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1257:19
+     |
+1257 |         let err = follow(
+     |                   ^^^^^^
+...
+1264 |             None,
+     |             ---- unexpected argument #7 of type `std::option::Option<_>`
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:761:15
+     |
+ 761 | pub(crate) fn follow(
+     |               ^^^^^^
+help: remove the extra argument
+     |
+1263 -             &AtomicBool::new(false),
+1264 -             None,
+1263 +             &AtomicBool::new(false),
+     |
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1283:40
+     |
+1283 |             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st, None))
+     |                                        ^^^^^^                                          ---- unexpected argument #7 of type `std::option::Option<_>`
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:761:15
+     |
+ 761 | pub(crate) fn follow(
+     |               ^^^^^^
+help: remove the extra argument
+     |
+1283 -             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st, None))
+1283 +             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st))
+     |
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1307:40
+     |
+1307 |             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st, None))
+     |                                        ^^^^^^                                          ---- unexpected argument #7 of type `std::option::Option<_>`
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:761:15
+     |
+ 761 | pub(crate) fn follow(
+     |               ^^^^^^
+help: remove the extra argument
+     |
+1307 -             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st, None))
+1307 +             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st))
+     |
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1434:40
+     |
+1434 |             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st, Some(&c)))
+     |                                        ^^^^^^                                          -------- unexpected argument #7
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:761:15
+     |
+ 761 | pub(crate) fn follow(
+     |               ^^^^^^
+help: remove the extra argument
+     |
+1434 -             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st, Some(&c)))
+1434 +             std::thread::spawn(move || follow(&addr, "leader-tok", &sb, &d, None, &st))
+     |
+
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+    --> crates/services/api/mcp/src/replication.rs:1457:19
+     |
+1457 |         let err = follow(
+     |                   ^^^^^^
+...
+1464 |             Some(&other),
+     |             ------------ unexpected argument #7
+     |
+note: function defined here
+    --> crates/services/api/mcp/src/replication.rs:761:15
+     |
+ 761 | pub(crate) fn follow(
+     |               ^^^^^^
+help: remove the extra argument
+     |
+1463 -             &AtomicBool::new(false),
+1464 -             Some(&other),
+1463 +             &AtomicBool::new(false),
+     |
+
+Some errors have detailed explanations: E0061, E0433.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 15 previous errors
+EXIT=101

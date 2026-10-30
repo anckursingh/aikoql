@@ -40,7 +40,7 @@ language uses its standard MCP client.
 ```bash
 npm i -g aikoql-mcp            # npm launcher (downloads the right binary)
 # or grab the binary from https://github.com/anckursingh/aikoql/releases
-# or Docker: ghcr.io/anckursingh/aikoql:0.2.2  (state under /data volume)
+# or Docker: ghcr.io/anckursingh/aikoql:0.2.4  (state under /data volume)
 ```
 
 A fresh path creates an **aikoql-v2** directory (the only engine: WAL +
@@ -52,7 +52,7 @@ they are no longer readable.
 **Claude Code:**
 
 ```bash
-claude mcp add aikoql -- npx -y aikoql-mcp@0.2.2 serve ./kb
+claude mcp add aikoql -- npx -y aikoql-mcp@0.2.4 serve ./kb
 ```
 
 (A packaged aikoql plugin also exists for Claude Code — it runs this same
@@ -61,7 +61,7 @@ server, with the knowledge-base path pinned via `userConfig.KB_PATH`.)
 **Codex:**
 
 ```bash
-codex mcp add aikoql -- npx -y aikoql-mcp@0.2.2 serve ./kb
+codex mcp add aikoql -- npx -y aikoql-mcp@0.2.4 serve ./kb
 ```
 
 **Anything else** (Cursor, Windsurf, VS Code, custom harnesses) — the
@@ -72,7 +72,7 @@ portable MCP config block, e.g. `.vscode/mcp.json` / `.cursor/mcp.json`:
   "mcpServers": {
     "aikoql": {
       "command": "npx",
-      "args": ["-y", "aikoql-mcp@0.2.2", "serve", "./kb"]
+      "args": ["-y", "aikoql-mcp@0.2.4", "serve", "./kb"]
     }
   }
 }
@@ -84,13 +84,62 @@ portable MCP config block, e.g. `.vscode/mcp.json` / `.cursor/mcp.json`:
 aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token s3cret:team:admin /data/kb
 ```
 
-The TCP listener is loopback-only — binding a non-loopback address exits 2.
+Plaintext TCP is loopback-only — binding a non-loopback address exits 2;
+with `--tls-cert/--tls-key` (or `AIKOQL_TLS_CERT` / `AIKOQL_TLS_KEY`) the
+listener serves TLS and may bind any interface.
 TCP auth is fail-closed: the token is `TOKEN[:TENANT[:ROLE1,ROLE2]]` and a
 bare `TOKEN` (no roles) **exits 2**. In production use `AIKOQL_TCP_TOKEN`
 or `AIKOQL_TCP_TOKEN_FILE` (CLI flags leak into the process list). On TCP,
 identity is server-assigned by the token — clients must not send an
 `agent_id`; on stdio, the session is trusted and you declare identity with
 `session_init`.
+
+**Remote MCP over HTTP** (Streamable HTTP — what remote MCP clients speak):
+the HTTP surface serves `POST /mcp`, authenticated with the same tokens.
+
+```bash
+aikoql-mcp serve --metrics-addr 127.0.0.1:9091 --tcp-token s3cret:team:admin /data/kb
+claude mcp add --transport http aikoql http://127.0.0.1:9091/mcp \
+  --header "Authorization: Bearer s3cret"
+```
+
+Every request carries `Authorization: Bearer <token>`; `initialize` opens a
+session (`Mcp-Session-Id`) that only that token can use. Off the host it
+follows the HTTP surface's rule — HTTPS (`--tls-cert/--tls-key`) plus
+`allow_remote_http` and a login — so the URL becomes `https://…/mcp`.
+Browser `Origin`s other than loopback are refused unless listed in
+`AIKOQL_MCP_ALLOWED_ORIGINS`. `GET /mcp` opens the session's event stream:
+subscription events and a streamed query's later chunks arrive there (a
+newer GET takes the session over; `Last-Event-ID` resumes after a drop).
+**As a claude.ai connector** (claude.ai, Desktop, mobile — the OAuth sign-in):
+with `[auth]` logins configured (`AIKOQL_ADMIN_PASSWORD`, or `[auth].users`
+with `aikoql hash-password`), the server is its own OAuth 2.1 authorization
+server. Serve it on a public HTTPS URL (`--tls-cert/--tls-key`,
+`allow_remote_http = true`; behind a proxy set `AIKOQL_PUBLIC_URL`), then in
+Claude add a custom connector with the URL `https://your-host/mcp`. Claude
+registers itself (dynamic client registration), sends you to aikoql's sign-in
+page, and connects as that login (its roles). Claude Code can use the same
+flow (`claude mcp add --transport http aikoql https://your-host/mcp`), or a
+static token as above. Sign-ins persist in the knowledge base itself
+(hashed, under reserved keys): they survive restarts and HA failovers, and
+are encrypted and backed up with the data; removing a login revokes its
+sign-ins. Clients that identify by a client ID metadata document (CIMD —
+Claude Code's client ID is an https URL) need no registration: aikoql
+fetches the document from public addresses only. After five wrong
+passwords a login backs off (1 s, doubling, up to 15 min; 429 with
+`Retry-After`).
+
+To try the connector from a laptop, a Cloudflare quick tunnel gives the
+loopback server a public HTTPS URL (no inbound ports, no account):
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:9091      # prints https://<random>.trycloudflare.com
+AIKOQL_ADMIN_PASSWORD=… AIKOQL_PUBLIC_URL=https://<random>.trycloudflare.com \
+  aikoql-mcp serve --metrics-addr 127.0.0.1:9091 /tmp/kb
+```
+
+then add the custom connector `https://<random>.trycloudflare.com/mcp` in
+claude.ai. The URL changes whenever `cloudflared` restarts.
 
 ## First 10 minutes (validated flow)
 

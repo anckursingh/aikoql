@@ -1,0 +1,24 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.03s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-a0f0414a7eb71cd6)
+
+running 1 test
+test a_read_replica_serves_converging_reads_and_refuses_writes ... FAILED
+
+failures:
+
+---- a_read_replica_serves_converging_reads_and_refuses_writes stdout ----
+
+thread 'a_read_replica_serves_converging_reads_and_refuses_writes' (914886) panicked at crates/services/api/mcp/tests/replication_failover.rs:131:17:
+server exited; stderr tail:
+Unknown option: --follow (run `aikoql-mcp help`)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_read_replica_serves_converging_reads_and_refuses_writes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 1.52s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+EXIT=101

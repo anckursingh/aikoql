@@ -20,6 +20,10 @@ path = "./aikoql-v2"
 
 [server]
 # TCP listen address. Comment out for stdio mode (single client).
+# Plaintext is loopback-only (the bearer token must not cross a network
+# unencrypted); with --tls-cert/--tls-key (or AIKOQL_TLS_CERT /
+# AIKOQL_TLS_KEY) the listener — and --native-port, and the HTTP surface
+# below as HTTPS — may bind any interface.
 # listen = "127.0.0.1:9090"
 
 # Prometheus metrics + health check HTTP endpoint. Comment out to disable.
@@ -73,6 +77,10 @@ base_url = "http://localhost:11434"
 model = "all-MiniLM-L6-v2"
 # API key for remote services (omit for Ollama — no auth needed).
 # api_key = "sk-..."
+# Candle: download all-MiniLM-L6-v2 at serve start when it is not installed
+# (once; later starts load it locally). Off by default — the server never
+# downloads unasked. Env: AIKOQL_MODEL_AUTO_INSTALL=1 (overrides this).
+# auto_install = true
 
 [logging]
 # Log level: trace, debug, info, warn, error

@@ -31,6 +31,10 @@ pub(crate) fn print_usage() {
         "  report [PATH]          Print knowledge report for directory\n",
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
+        "  pitr --archive URL --to DIR [--until-seq N | --until-ms MS]  Restore from the archive\n",
+        "  archive-prune --archive URL --keep N  Keep the newest N archived snapshots\n",
+        "  follow DIR --leader ADDR [--token T] [--tls-ca CA.pem]  Stream a leader's log into a standby DIR\n",
+        "                         (token: an admin --tcp-token of the leader, or AIKOQL_REPLICATION_TOKEN)\n",
         "\n",
         "Server options (serve mode):\n",
         "  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090; empty host = loopback)\n",
@@ -39,6 +43,15 @@ pub(crate) fn print_usage() {
         "                         (dev-only: tokens hit the process list — set AIKOQL_TCP_TOKEN or\n",
         "                         AIKOQL_TCP_TOKEN_FILE in production instead; env replaces flags)\n",
         "  --metrics-addr ADDR    HTTP metrics + health endpoint (e.g., 127.0.0.1:9091)\n",
+        "  --replicate-listen ADDR  Replication stream for standbys (admin --tcp-token; loopback-only without TLS)\n",
+        "  --replicate-tls-cert PEM --replicate-tls-key PEM  TLS for the replication stream (any interface)\n",
+        "  --replicate-tls-ca PEM   Trust for the leader's replication cert (HA standbys)\n",
+        "  --replicate-advertise HOST:PORT  The replication address recorded in the HA lease\n",
+        "  --replicate-sync-ms MS   Ack a write only once a standby holds it; fail after MS\n",
+        "  --advertise HOST:PORT    This node's client address, the NOT_LEADER hint standbys pass on\n",
+        "  --follow HOST:PORT       Serve as a read replica of that leader (writes answer NOT_LEADER)\n",
+        "  --archive DIR|s3://BUCKET[/PREFIX] [--archive-log-ms MS] [--archive-snapshot-secs S] [--archive-keep N]  Continuous archive (PITR)\n",
+        "  --ha-lease PATH|s3://BUCKET/KEY|k8s://NS/NAME --ha-node ID [--ha-ttl-ms MS]  Automatic failover on a shared lease\n",
         "  --embedding-provider P  Embedding provider: \"candle\" (default), \"http\", or \"ollama\"\n",
         "  --embedding-base-url U  OpenAI-compatible base URL (default: http://localhost:11434)\n",
         "  --embedding-model M     Model name (default: nomic-embed-text)\n",
@@ -117,6 +130,135 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             crate::shell::run_shell(db, tenant);
             true
         }
+        Some("follow") => {
+            // MRFC-0080 R3a: aikoql-mcp follow <STANDBY_DIR> --leader ADDR
+            // [--token TOKEN] — the token falls back to
+            // AIKOQL_REPLICATION_TOKEN (keeps it out of the process list).
+            let tail: Vec<&str> = subcmd_idx
+                .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
+                .unwrap_or_default();
+            let (mut dir, mut leader, mut token, mut ca) = (None, None, None, None);
+            let mut it = tail.iter();
+            while let Some(a) = it.next() {
+                match *a {
+                    "--leader" => leader = it.next().map(|s| s.to_string()),
+                    "--token" => token = it.next().map(|s| s.to_string()),
+                    // R3c: the CA that signed the leader's replication cert
+                    "--tls-ca" => ca = it.next().map(|s| s.to_string()),
+                    _ => dir = Some(a.to_string()),
+                }
+            }
+            let token = token.or_else(|| std::env::var("AIKOQL_REPLICATION_TOKEN").ok());
+            let (Some(dir), Some(leader), Some(token)) = (dir, leader, token) else {
+                eprintln!(
+                    "Usage: aikoql-mcp follow <STANDBY_DIR> --leader HOST:PORT [--token TOKEN] [--tls-ca CA.pem]\n  (or set AIKOQL_REPLICATION_TOKEN)"
+                );
+                std::process::exit(2);
+            };
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            // R3b: shipped index checkpoints land where `serve` resumes them
+            let ckpt = std::path::PathBuf::from(format!("{dir}.ckpt"));
+            let path = std::path::Path::new(&dir);
+            let trust = match ca
+                .as_deref()
+                .map(|p| crate::tls::read(p).and_then(|b| crate::tls::client_config(&b)))
+            {
+                Some(Ok(t)) => Some(t),
+                Some(Err(e)) => {
+                    eprintln!("--tls-ca: {e}");
+                    std::process::exit(2);
+                }
+                None => None,
+            };
+            if let Err(e) =
+                crate::replication::follow_loop(path, &leader, &token, &ckpt, &stop, trust.as_ref())
+            {
+                eprintln!("follow stopped: {e}");
+                std::process::exit(1);
+            }
+            true
+        }
+        Some("archive-prune") => {
+            // MRFC-0080 R6 retention: aikoql-mcp archive-prune --archive URL --keep N
+            let tail: Vec<&str> = subcmd_idx
+                .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
+                .unwrap_or_default();
+            let (mut url, mut keep) = (None, None);
+            let mut it = tail.iter();
+            while let Some(a) = it.next() {
+                match *a {
+                    "--archive" => url = it.next().map(|s| s.to_string()),
+                    "--keep" => keep = it.next().and_then(|v| v.parse::<usize>().ok()),
+                    _ => keep = None,
+                }
+            }
+            let (Some(url), Some(keep)) = (url, keep.filter(|k| *k > 0)) else {
+                eprintln!(
+                    "Usage: aikoql-mcp archive-prune --archive DIR|s3://BUCKET[/PREFIX] --keep N"
+                );
+                std::process::exit(2);
+            };
+            let pruned = crate::archive::open_store(&url, std::time::Duration::from_secs(60))
+                .and_then(|store| crate::archive::prune(&*store, keep));
+            match pruned {
+                Ok(n) => eprintln!("pruned {n} objects (keeping the newest {keep} snapshots)"),
+                Err(e) => {
+                    eprintln!("archive-prune: {e}");
+                    std::process::exit(1);
+                }
+            }
+            true
+        }
+        Some("pitr") => {
+            // MRFC-0080 R6: aikoql-mcp pitr --archive URL --to DIR
+            // [--until-seq N | --until-ms UNIX_MS]
+            let tail: Vec<&str> = subcmd_idx
+                .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
+                .unwrap_or_default();
+            let (mut url, mut to, mut until) = (None, None, crate::archive::Until::Latest);
+            let mut it = tail.iter();
+            fn usage() -> ! {
+                eprintln!("Usage: aikoql-mcp pitr --archive DIR|s3://BUCKET[/PREFIX] --to DIR [--until-seq N | --until-ms UNIX_MS]");
+                std::process::exit(2);
+            }
+            while let Some(a) = it.next() {
+                let mut num = || {
+                    it.next()
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or_else(|| usage())
+                };
+                match *a {
+                    "--archive" => url = it.next().map(|s| s.to_string()),
+                    "--to" => to = it.next().map(|s| s.to_string()),
+                    "--until-seq" => until = crate::archive::Until::Seq(num()),
+                    "--until-ms" => until = crate::archive::Until::Ms(num()),
+                    _ => usage(),
+                }
+            }
+            let (Some(url), Some(to)) = (url, to) else {
+                usage()
+            };
+            let restored = crate::archive::open_store(&url, std::time::Duration::from_secs(60))
+                .and_then(|store| {
+                    let scratch = std::path::PathBuf::from(format!("{to}.pitr-tmp"));
+                    let r = crate::archive::restore(
+                        &*store,
+                        std::path::Path::new(&to),
+                        until,
+                        &scratch,
+                    );
+                    let _ = std::fs::remove_dir_all(&scratch);
+                    r
+                });
+            match restored {
+                Ok((seq, term)) => eprintln!("restored {to} to seq {seq} (term {term})"),
+                Err(e) => {
+                    eprintln!("pitr: {e}");
+                    std::process::exit(1);
+                }
+            }
+            true
+        }
         Some("backup") => {
             run_backup(arg_after.unwrap_or(DEFAULT_DB_PATH));
             true
@@ -180,26 +322,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             let tail_args: Vec<&str> = args.iter().skip(idx + 2).map(String::as_str).collect();
             match tail_args.first().copied() {
                 Some("install") => {
-                    let model_id = tail_args
-                        .get(1)
-                        .copied()
-                        .filter(|s| !s.starts_with("--"))
-                        .unwrap_or(aikoql_semantic::provider::DEFAULT_MODEL_ID);
-                    let mut model_dir: Option<String> = None;
-                    let mut ti = 2;
-                    while ti < tail_args.len() {
-                        if tail_args[ti] == "--model-dir" {
-                            model_dir = tail_args.get(ti + 1).map(|s| s.to_string());
-                            if model_dir.is_none() {
-                                eprintln!("--model-dir requires a value");
-                                std::process::exit(2);
-                            }
-                            ti += 2;
-                        } else {
-                            ti += 1;
+                    let (model_id, model_dir) = match model_install_args(&tail_args) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            eprintln!("{e}");
+                            std::process::exit(2);
                         }
-                    }
-                    run_model_install(model_id, model_dir.as_deref());
+                    };
+                    run_model_install(model_id, model_dir);
                 }
                 _ => {
                     eprintln!("Usage: aikoql-mcp model install [MODEL_ID] [--model-dir DIR]");
@@ -648,4 +778,31 @@ fn argon2_hash_password(password: &str) -> Result<String, String> {
         .hash_password(password.as_bytes(), &salt)
         .map(|h| h.to_string())
         .map_err(|e| e.to_string())
+}
+
+/// `model install [MODEL_ID] [--model-dir DIR]`, from the args after `model`.
+pub(crate) fn model_install_args<'a>(
+    tail_args: &[&'a str],
+) -> Result<(&'a str, Option<&'a str>), String> {
+    let model_id = tail_args
+        .get(1)
+        .copied()
+        .filter(|s| !s.starts_with("--"))
+        .unwrap_or(aikoql_semantic::provider::DEFAULT_MODEL_ID);
+    let mut model_dir = None;
+    // from 1: MODEL_ID is optional, so a flag may sit in its slot
+    let mut ti = 1;
+    while ti < tail_args.len() {
+        if tail_args[ti] == "--model-dir" {
+            model_dir = Some(
+                *tail_args
+                    .get(ti + 1)
+                    .ok_or("--model-dir requires a value")?,
+            );
+            ti += 2;
+        } else {
+            ti += 1;
+        }
+    }
+    Ok((model_id, model_dir))
 }

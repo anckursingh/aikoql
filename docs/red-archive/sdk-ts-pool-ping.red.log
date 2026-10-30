@@ -1,0 +1,30 @@
+✖ a zero health-check interval pings every borrow (3.511042ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 124.342208
+
+✖ failing tests:
+
+test at tests/pool.test.ts:72:1
+✖ a zero health-check interval pings every borrow (3.511042ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 19
+  
+      at TestContext.<anonymous> (file:///Users/pukku/coding/aikoql/crates/sdk/typescript/tests/pool.test.ts:84:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 19,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+EXIT=1

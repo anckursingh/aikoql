@@ -10,6 +10,7 @@
 // transport changes).
 
 import { randomBytes } from "node:crypto";
+import type { ConnectionOptions } from "node:tls";
 import { readFileSync } from "node:fs";
 import { McpError } from "./error.ts";
 import { TcpTransport, type Transport } from "./tcp.ts";
@@ -28,7 +29,7 @@ import { Tx } from "./tx.ts";
  * The oldest aikoql-mcp server this SDK will talk to (the ND-12 version
  * contract, mirrored from the Go, Python and Rust SDKs).
  */
-export const MIN_SERVER_VERSION = "0.2.2";
+export const MIN_SERVER_VERSION = "0.2.4";
 
 /** The SDK's own package version, advertised as the client identity:
  * read from package.json so the manifest, not a literal, owns it. */
@@ -98,6 +99,19 @@ export function streamNotify(frame: Record<string, unknown>, streamId: string): 
   return p;
 }
 
+/** One wire line as a JSON object, or undefined for noise: not JSON, or
+ * JSON that is not an object (null, a number, a string, an array) — never
+ * a response, never a notify. */
+function parseFrame(line: string): Record<string, unknown> | undefined {
+  let v: unknown;
+  try {
+    v = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+}
+
 /**
  * One MCP JSON-RPC connection to an aikoql-mcp server. One in-flight call
  * per connection (a stream holds the connection for its whole life); calls
@@ -113,17 +127,26 @@ export class Client {
   // The open stream's release (null when none): close() cancels a
   // mid-stream close through it (§17).
   private streamGate: (() => void) | null = null;
+  // The TCP address dialed (undefined for other transports) — moved by a
+  // NOT_LEADER leader hint (MRFC-0080 R5b).
+  private addr: string | undefined;
+  // The TLS options a leader hint is re-dialed with too (none: plaintext).
+  private tls: ConnectionOptions | undefined;
 
-  private constructor(transport: Transport) {
+  private constructor(transport: Transport, addr?: string, tlsOptions?: ConnectionOptions) {
     this.transport = transport;
+    this.addr = addr;
+    this.tls = tlsOptions;
   }
 
   /** Opens a TCP connection ("host:port"). The handshake is separate
    * (initialize) so a pooled client can dial first and authenticate later;
-   * every aikoql-mcp TCP server requires the token. */
-  static async dial(addr: string): Promise<Client> {
-    const transport = await TcpTransport.connect(addr, DIAL_TIMEOUT_MS);
-    return new Client(transport);
+   * every aikoql-mcp TCP server requires the token. `opts.tls` (Node's
+   * tls.ConnectionOptions — e.g. `{ ca }` for a private CA; `{}` for the
+   * system roots) dials a server started with --tls-cert/--tls-key. */
+  static async dial(addr: string, opts: { tls?: ConnectionOptions } = {}): Promise<Client> {
+    const transport = await TcpTransport.connect(addr, DIAL_TIMEOUT_MS, opts.tls);
+    return new Client(transport, addr, opts.tls);
   }
 
   /** Sends the --tcp-token credential in the initialize handshake
@@ -192,12 +215,8 @@ export class Client {
           this.closed = true;
           throw McpError.io("connection closed by the server");
         }
-        let resp: Record<string, unknown>;
-        try {
-          resp = JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          continue; // tolerate non-JSON noise frames
-        }
+        const resp = parseFrame(line);
+        if (resp === undefined) continue; // non-JSON or non-object noise
         const rid = resp["id"] ?? 0;
         if (typeof rid !== "number") continue; // not our numeric correlation
         switch (classifyID(id, rid)) {
@@ -243,8 +262,39 @@ export class Client {
   }
 
   /** Calls any registered MCP tool by name and returns its data payload —
-   * the escape hatch for tools without a typed wrapper here. */
+   * the escape hatch for tools without a typed wrapper here.
+   *
+   * MRFC-0080 R5b: refused with NOT_LEADER and a leader hint, a TCP
+   * client reconnects to that leader, re-runs initialize and retries the
+   * call once; it then stays on the leader. sessionInit identity is not
+   * replayed. */
   async callTool(
+    name: string,
+    args?: unknown,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<unknown> {
+    try {
+      return await this.callToolOnce(name, args, opts);
+    } catch (e) {
+      if (!(e instanceof McpError) || e.code !== "NOT_LEADER" || !e.leader || this.addr === undefined) throw e;
+      await this.follow(e.leader, opts.signal);
+      return this.callToolOnce(name, args, opts);
+    }
+  }
+
+  /** Replaces the connection with one to the leader at `addr` and
+   * re-runs the handshake. */
+  private async follow(addr: string, signal?: AbortSignal): Promise<void> {
+    const next = await TcpTransport.connect(addr, DIAL_TIMEOUT_MS, this.tls);
+    await this.withLock(async () => {
+      this.transport.close();
+      this.transport = next;
+      this.addr = addr;
+    });
+    await this.initialize({ signal });
+  }
+
+  private async callToolOnce(
     name: string,
     args?: unknown,
     opts: { signal?: AbortSignal } = {},
@@ -270,12 +320,14 @@ export class Client {
           message?: string;
           retryable?: boolean;
           suggestion?: string;
+          leader?: string;
         };
         throw new McpError(
           e.code ?? "INTERNAL",
           e.message ?? "",
           e.retryable ?? false,
           e.suggestion ?? "",
+          e.leader,
         );
       }
       throw new McpError(
@@ -336,12 +388,8 @@ export class Client {
           this.closed = true;
           throw McpError.io("connection closed by the server");
         }
-        let resp: Record<string, unknown>;
-        try {
-          resp = JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          continue;
-        }
+        const resp = parseFrame(line);
+        if (resp === undefined) continue; // non-JSON or non-object noise
         const rid = resp["id"] ?? 0;
         if (typeof rid === "number" && rid === id) {
           if (resp["error"] !== undefined) {

@@ -41,13 +41,13 @@ evidence = "run001_overload_queue_wait_is_measured_and_bounded"
 
 [[claim]]
 file = "crates/kernel/src/catalog.rs"
-line = 537
+line = 553
 text = "// ponytail: the open-time convergence is O(committed heads) per"
 evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
 
 [[claim]]
 file = "crates/kernel/src/catalog.rs"
-line = 538
+line = 554
 text = "// crashed declaration — bounded by the crash itself, not the"
 evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
 
@@ -131,7 +131,7 @@ evidence = "predecessor_boundary_cases"
 
 [[claim]]
 file = "crates/kernel/src/transaction/kernel.rs"
-line = 338
+line = 344
 text = "/// Retried calls with the same key commit exactly once (MRFC-0011 req 10)."
 evidence = "t06_idempotent_retry_commits_exactly_once"
 
@@ -269,103 +269,103 @@ evidence = "group_commit_coalesces_batches_into_one_fsync"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 167
+line = 170
 text = "/// amplification drops from quadratic to ~O(n log n)."
 evidence = "tiered_trigger_skips_small_l0"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 184
+line = 187
 text = "/// (one manifest record each) so compaction memory is bounded by the"
 evidence = "merge_chunks_respect_chunk_cap"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 238
+line = 246
 text = "/// compaction; the write trigger reads these in O(1) instead of"
 evidence = "lba001_write_trigger_never_rescans_l0"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 431
+line = 449
 text = "/// P4-M5 — bounded, sampled per-request read trace. `record` assigns the"
 evidence = "rd003_trace_records_per_request_enabled_zero_when_disabled"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 828
+line = 850
 text = "// over the manifest (O(segments) once per open, never per write)."
 evidence = "lba002_authoritative_counters_match_scan_l0_after_every_change"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 1187
+line = 1345
 text = "/// 4th — write amplification ~O(n log n) instead of quadratic."
 evidence = "tiered_trigger_skips_small_l0"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 1195
+line = 1353
 text = "// at open/flush/compaction): an O(1) read replaces the M35"
 evidence = "lba001_write_trigger_never_rescans_l0"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 1419
+line = 1577
 text = "/// rid-filtered bounded probe, newest-first; the object's own tombstone"
 evidence = "pd001_tail_replica_decodes_bounded"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 1431
+line = 1589
 text = "// its anchor decodes O(RESTART_INTERVAL) entries instead of"
 evidence = "pd001_tail_replica_decodes_bounded"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 1642
+line = 1800
 text = "// per-resolution O(B) retain (O(B²) worst case per segment pass)"
 evidence = "m42_batch_sweep_cells"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 1643
+line = 1801
 text = "// becomes one O(B) compaction at the end of each pass."
 evidence = "m42_batch_sweep_cells"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 1723
+line = 1881
 text = "// R4-P1-03 — one O(B) compaction per segment pass; the counter"
 evidence = "m42_batch_sweep_cells"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 2114
+line = 2272
 text = "// authoritative backlog (O(flushed), never O(all segments))."
 evidence = "lba002_authoritative_counters_match_scan_l0_after_every_change"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 2715
+line = 2887
 text = "// P5-M40 — recompute the authoritative backlog (O(segments) once per"
 evidence = "lba002_authoritative_counters_match_scan_l0_after_every_change"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 2778
+line = 2950
 text = "/// write trigger reads the authoritative State counters in O(1) — this"
 evidence = "lba001_write_trigger_never_rescans_l0"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 3121
+line = 3293
 text = "/// The committer: drain the queue into groups bounded by the caps and"
 evidence = "group_commit_coalesces_batches_into_one_fsync"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 3141
+line = 3313
 text = "// O(g²) fold (P1-02), the seqs buffer is cleared and reused (P1-03)."
 evidence = "per_group_allocations_drop_with_the_hoisted_seqs_buffer"
 
@@ -419,13 +419,13 @@ evidence = "pd001_tail_replica_decodes_bounded"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/snapshot.rs"
-line = 303
+line = 307
 text = "/// Validate the WAL (bounded memory) and copy the torn-safe prefix to"
 evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/snapshot.rs"
-line = 492
+line = 497
 text = "// — bounded memory, PR6-R3-003. The marker records that"
 evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
 
@@ -557,7 +557,7 @@ evidence = "m42_batch_sweep_cells"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/batch_sweep.rs"
-line = 181
+line = 191
 text = "// R4-P2-02 — allocations scale no worse than O(B) (the regression"
 evidence = "m42_batch_sweep_cells"
 
@@ -665,13 +665,13 @@ evidence = "reopen_replays_only_the_active_wal"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs"
-line = 1280
+line = 1323
 text = "// every answer byte-exact from the bounded-memory engine"
 evidence = "v2_gate2_3_dataset_larger_than_ram"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs"
-line = 2712
+line = 2755
 text = "// folded in), and the two backlog gauges inside maybe_compact's O(1)"
 evidence = "v2_p3m2_write_stats_overhead"
 
@@ -755,7 +755,7 @@ evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/snapshot_restore.rs"
-line = 715
+line = 716
 text = "/// 100K-key db must be O(disk) file copies — measured, never asserted — and"
 evidence = "p3m3_snapshot_copy_time_cell"
 

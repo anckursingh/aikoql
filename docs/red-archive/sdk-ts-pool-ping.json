@@ -1,0 +1,8 @@
+{
+  "id": "sdk-ts-pool-ping",
+  "pre_fix_commit": "HEAD",
+  "command": "sh -c cd crates/sdk/typescript && node --test --test-name-pattern="zero health-check interval" tests/pool.test.ts",
+  "captured_at": "2026-10-29T13:33:14Z",
+  "captured_head": "2a298a2696a28dea45d6f85f444ee07a6cfcc198",
+  "exit_code": 1
+}

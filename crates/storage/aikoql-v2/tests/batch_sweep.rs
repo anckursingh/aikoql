@@ -64,6 +64,7 @@ fn build_db(tag: &str, n: usize, segments: usize) -> (Db, Vec<Vec<u8>>, Vec<Vec<
     let mut cfg = Config::new(dir(&format!("m42-{tag}")));
     cfg.durability = DurabilityMode::Async; // fsync per batch would dominate
     cfg.memtable_bytes = usize::MAX; // no auto-flush: explicit flushes
+    cfg.l0_compact_trigger = 0; // no auto-merge: the layout is the one built
     let db = Db::open(cfg).unwrap();
     let mut keys = Vec::with_capacity(n);
     let mut vals = Vec::with_capacity(n);
@@ -141,6 +142,15 @@ fn m42_batch_sweep_cells() {
         let layout = if segments == 1 { "one" } else { "spread" };
         let tag = format!("{layout}-{n}");
         let (db, keys, vals) = build_db(&tag, n, segments);
+        // the layout the sweep claims, at measurement time: a background
+        // merge of the spread segments makes the scan count timing-dependent
+        // (CI c2af329's coverage run: spread-128 read 366 scans where an
+        // unmerged layout reads ~1120, and the 128-point bound tripped)
+        assert_eq!(
+            db.stats().segments.count,
+            segments as u64,
+            "{tag}: the layout must hold its {segments} segments when measured"
+        );
         let (wall_ms, allocs, scans) = one_batch(&db, &keys, &vals, layout);
         cells.push_str(&format!(
             "\"{tag}_wall_ms\":{wall_ms},\"{tag}_allocs\":{allocs},\"{tag}_retain_scans\":{scans},"

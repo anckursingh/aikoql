@@ -33,7 +33,7 @@ jobs:
       - name: Install
         run: |
           python -m venv .venv
-          .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+          .venv/bin/pip install -q "maturin==1.14.1" pytest hypothesis pyyaml
           .venv/bin/pip install -q -e training
           cd crates/sdk/python
           "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
@@ -54,7 +54,7 @@ jobs:
       - name: Install
         run: |
           python -m venv .venv
-          .venv/bin/pip install -q pytest hypothesis maturin
+          .venv/bin/pip install -q pytest hypothesis "maturin==1.14.1"
           .venv/bin/pip install -q -e training
           cd crates/sdk/python
           "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
@@ -80,7 +80,7 @@ jobs:
       - name: Install
         run: |
           python -m venv .venv
-          .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+          .venv/bin/pip install -q "maturin==1.14.1" pytest hypothesis pyyaml
           .venv/bin/pip install -q -e training
           cd crates/sdk/python
           "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
@@ -120,7 +120,7 @@ jobs:
       - name: Install
         run: |
           python -m venv .venv
-          .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+          .venv/bin/pip install -q "maturin==1.14.1" pytest hypothesis pyyaml
           .venv/bin/pip install -q -e training
           cd crates/sdk/python
           "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
@@ -147,7 +147,7 @@ jobs:
       - name: Install
         run: |
           python -m venv .venv
-          .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+          .venv/bin/pip install -q "maturin==1.14.1" pytest hypothesis pyyaml
           .venv/bin/pip install -q -e training
           cd crates/sdk/python
           "$GITHUB_WORKSPACE/.venv/bin/maturin" develop

@@ -1,0 +1,38 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.28s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-362f50df98664b36)
+
+running 8 tests
+test a_leader_records_its_advertised_address ... FAILED
+test replicate_listen_rejects_a_non_loopback_bind ... ok
+test replicate_listen_without_a_token_refuses_to_serve ... ok
+test a_fenced_node_refuses_writes_after_a_restart ... FAILED
+test a_sync_leader_acks_writes_only_once_a_standby_holds_them ... ok
+test a_diverged_old_leader_rejoins_the_promoted_standby_by_itself ... ok
+test leader_dies_standby_is_promoted_with_every_object ... ok
+test promotion_resumes_indexes_from_the_shipped_checkpoint ... ok
+
+failures:
+
+---- a_leader_records_its_advertised_address stdout ----
+
+thread 'a_leader_records_its_advertised_address' (552428) panicked at crates/services/api/mcp/tests/replication_failover.rs:94:13:
+server exited
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- a_fenced_node_refuses_writes_after_a_restart stdout ----
+
+thread 'a_fenced_node_refuses_writes_after_a_restart' (552427) panicked at crates/services/api/mcp/tests/replication_failover.rs:350:5:
+assertion `left == right` failed: {"ok":false,"error":{"code":"INTERNAL","message":"STORE: aikoql-v2: stale: not leader: fenced at replication term 4","retryable":false,"suggestion":"An unexpected error occurred. Report this if it persists"}}
+  left: String("INTERNAL")
+ right: String("NOT_LEADER")
+
+
+failures:
+    a_fenced_node_refuses_writes_after_a_restart
+    a_leader_records_its_advertised_address
+
+test result: FAILED. 6 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.54s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+EXIT=101

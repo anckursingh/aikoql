@@ -1,0 +1,8 @@
+{
+  "id": "standby-reads-e2e",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test replication_failover read_replica",
+  "captured_at": "2026-10-28T12:27:25Z",
+  "captured_head": "ebc1a8e09c9b3c67a6ca1b874085632d0c4857ad",
+  "exit_code": 101
+}

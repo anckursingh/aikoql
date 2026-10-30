@@ -1,0 +1,8 @@
+{
+  "id": "oauth-cimd",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp -- metadata",
+  "captured_at": "2026-10-30T07:17:55Z",
+  "captured_head": "3ad733f1853271669801445372ac760079129f20",
+  "exit_code": 101
+}

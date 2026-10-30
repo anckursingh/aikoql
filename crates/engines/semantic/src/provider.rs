@@ -183,8 +183,10 @@ fn hf_download(
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| KError::Store(format!("tokio-runtime: {e}")))?;
     rt.block_on(async {
-        let api =
-            hf_hub::api::tokio::Api::new().map_err(|e| KError::Store(format!("hf-api: {e}")))?;
+        // from_env: HF_HOME (cache) and HF_ENDPOINT (a mirror) are honoured
+        let api = hf_hub::api::tokio::ApiBuilder::from_env()
+            .build()
+            .map_err(|e| KError::Store(format!("hf-api: {e}")))?;
         let repo = api.model(model_id.into());
         Ok::<_, KError>((
             repo.get("config.json")

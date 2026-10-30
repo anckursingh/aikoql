@@ -1,0 +1,30 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/main.rs (target/debug/deps/aikoql_mcp-1bd616def3f11511)
+
+running 1 test
+test ha::tests::real_k8s_lease_is_a_compare_and_swap ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 123 filtered out; finished in 0.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-a0f0414a7eb71cd6)
+
+running 1 test
+
+thread 'real_k8s_ha_failover_on_a_lease' (1267886) panicked at crates/services/api/mcp/tests/replication_failover.rs:92:13:
+server exited before initialize (attempt 1); stderr:
+--ha-lease: /var/run/secrets/kubernetes.io/serviceaccount/token: No such file or directory (os error 2)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test real_k8s_ha_failover_on_a_lease ... FAILED
+
+failures:
+
+failures:
+    real_k8s_ha_failover_on_a_lease
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out; finished in 1.16s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+scripts/k8s-it.sh: line 23: 87038 Killed: 9               "$bin/etcd" --data-dir "$work/etcd" --listen-client-urls "http://127.0.0.1:$etcd_port" --advertise-client-urls "http://127.0.0.1:$etcd_port" --listen-peer-urls "http://127.0.0.1:$peer_port" --initial-advertise-peer-urls "http://127.0.0.1:$peer_port" --initial-cluster "default=http://127.0.0.1:$peer_port" > "$work/etcd.log" 2>&1
+EXIT=101

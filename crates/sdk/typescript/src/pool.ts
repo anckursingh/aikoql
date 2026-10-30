@@ -56,6 +56,9 @@ export class PooledConn {
   private p: Pool;
   private c: Client;
   private tx: Tx | null = null;
+  // performance.now() milliseconds (monotonic, sub-ms): a borrow in the same
+  // millisecond as the release still sees time pass, so healthCheckIntervalMs
+  // 0 pings every borrow
   createdAt: number;
   lastUsed: number;
   broken = false;
@@ -144,7 +147,7 @@ export class Pool {
           await pc.client().close().catch(() => {});
           continue;
         }
-        const now = Date.now();
+        const now = performance.now();
         if (now - pc.lastUsed > this.cfg.healthCheckIntervalMs) {
           // Ping: a dead connection is dropped and replaced by a fresh
           // dial (the reconnect leg of §21).
@@ -170,7 +173,7 @@ export class Pool {
           this.total--;
           throw e;
         }
-        const now = Date.now();
+        const now = performance.now();
         return new PooledConn(this, c, now);
       }
       // Exhausted: wait for a return or the acquire timeout.
@@ -200,7 +203,7 @@ export class Pool {
    * reconnect leg: a dead server keeps the borrow pending and succeeds
    * once the server returns. */
   private async dialRetry(): Promise<Client> {
-    const deadline = Date.now() + this.cfg.acquireTimeoutMs;
+    const deadline = performance.now() + this.cfg.acquireTimeoutMs;
     let lastErr: unknown;
     for (;;) {
       try {
@@ -208,7 +211,7 @@ export class Pool {
       } catch (e) {
         lastErr = e;
       }
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         throw new McpError(
           "UNAVAILABLE",
           `could not connect to the server: ${String(lastErr)}`,
@@ -223,7 +226,7 @@ export class Pool {
   /** Whether an idle connection was reaped by the idle or lifetime
    * timeout. */
   private expired(pc: PooledConn): boolean {
-    const now = Date.now();
+    const now = performance.now();
     return (
       now - pc.lastUsed > this.cfg.idleTimeoutMs ||
       now - pc.createdAt > this.cfg.maxLifetimeMs
@@ -235,7 +238,7 @@ export class Pool {
    * dropped instead. Public only for PooledConn — the stand-in for Go's
    * same-package access. */
   put(pc: PooledConn): void {
-    const now = Date.now();
+    const now = performance.now();
     pc.lastUsed = now;
     const drop =
       this.closedFlag || pc.broken || now - pc.createdAt > this.cfg.maxLifetimeMs;
@@ -270,7 +273,7 @@ export class Pool {
         this.total--;
         throw e;
       }
-      this.put(new PooledConn(this, c, Date.now()));
+      this.put(new PooledConn(this, c, performance.now()));
     }
   }
 

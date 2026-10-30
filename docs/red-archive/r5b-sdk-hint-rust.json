@@ -1,0 +1,8 @@
+{
+  "id": "r5b-sdk-hint-rust",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-sdk --lib not_leader",
+  "captured_at": "2026-10-28T08:50:54Z",
+  "captured_head": "09703b55d286a6635c457837ee4f35c9ea133a40",
+  "exit_code": 101
+}

@@ -1,0 +1,230 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0433]: cannot find `s3` in the crate root
+  --> crates/services/api/mcp/src/archive.rs:73:25
+   |
+73 |         let s3 = crate::s3::S3::new(
+   |                         ^^ could not find `s3` in the crate root
+
+error[E0433]: cannot find `s3` in the crate root
+  --> crates/services/api/mcp/src/archive.rs:77:20
+   |
+77 |             crate::s3::Creds {
+   |                    ^^ could not find `s3` in the crate root
+
+error[E0405]: cannot find trait `ObjectStore` in this scope
+  --> crates/services/api/mcp/src/archive.rs:51:31
+   |
+51 |     fn store_contract(s: &dyn ObjectStore) {
+   |                               ^^^^^^^^^^^ not found in this scope
+
+error[E0405]: cannot find trait `ObjectStore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:112:28
+    |
+112 |         let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("rt-store")));
+    |                            ^^^^^^^^^^^ not found in this scope
+
+error[E0405]: cannot find trait `ObjectStore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:140:28
+    |
+140 |         let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("ms-store")));
+    |                            ^^^^^^^^^^^ not found in this scope
+
+error[E0405]: cannot find trait `ObjectStore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:170:28
+    |
+170 |         let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("tl-store")));
+    |                            ^^^^^^^^^^^ not found in this scope
+
+error[E0405]: cannot find trait `ObjectStore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:218:28
+    |
+218 |         let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("hold-store")));
+    |                            ^^^^^^^^^^^ not found in this scope
+
+warning: unused import: `super::*`
+ --> crates/services/api/mcp/src/archive.rs:5:9
+  |
+5 |     use super::*;
+  |         ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0433]: cannot find type `DirStore` in this scope
+  --> crates/services/api/mcp/src/archive.rs:67:25
+   |
+67 |         store_contract(&DirStore::new(tmp("dirstore")));
+   |                         ^^^^^^^^ use of undeclared type `DirStore`
+
+error[E0433]: cannot find type `S3Store` in this scope
+  --> crates/services/api/mcp/src/archive.rs:84:25
+   |
+84 |         store_contract(&S3Store::new(s3, "cluster-1".into()));
+   |                         ^^^^^^^ use of undeclared type `S3Store`
+
+error[E0433]: cannot find type `DirStore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:112:52
+    |
+112 |         let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("rt-store")));
+    |                                                    ^^^^^^^^ use of undeclared type `DirStore`
+
+error[E0433]: cannot find type `Archiver` in this scope
+   --> crates/services/api/mcp/src/archive.rs:117:13
+    |
+117 |             Archiver::start(store.clone(), source, acked.clone(), 1, tmp("rt-scratch")).unwrap();
+    |             ^^^^^^^^ use of undeclared type `Archiver`
+
+error[E0433]: cannot find type `Until` in this scope
+   --> crates/services/api/mcp/src/archive.rs:125:53
+    |
+125 |         let (seq, term) = restore(&*store, &latest, Until::Latest, &tmp("rt-s1")).unwrap();
+    |                                                     ^^^^^ use of undeclared type `Until`
+
+error[E0433]: cannot find type `Until` in this scope
+   --> crates/services/api/mcp/src/archive.rs:130:50
+    |
+130 |         let (seq, _) = restore(&*store, &at_mid, Until::Seq(mid), &tmp("rt-s2")).unwrap();
+    |                                                  ^^^^^ use of undeclared type `Until`
+
+error[E0433]: cannot find type `DirStore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:140:52
+    |
+140 |         let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("ms-store")));
+    |                                                    ^^^^^^^^ use of undeclared type `DirStore`
+
+error[E0433]: cannot find type `Archiver` in this scope
+   --> crates/services/api/mcp/src/archive.rs:142:21
+    |
+142 |         let mut a = Archiver::start(
+    |                     ^^^^^^^^ use of undeclared type `Archiver`
+
+error[E0433]: cannot find type `Until` in this scope
+   --> crates/services/api/mcp/src/archive.rs:159:47
+    |
+159 |         let (seq, _) = restore(&*store, &out, Until::Ms(boundary), &tmp("ms-s")).unwrap();
+    |                                               ^^^^^ use of undeclared type `Until`
+
+error[E0433]: cannot find type `DirStore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:170:52
+    |
+170 |         let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("tl-store")));
+    |                                                    ^^^^^^^^ use of undeclared type `DirStore`
+
+error[E0433]: cannot find type `Archiver` in this scope
+   --> crates/services/api/mcp/src/archive.rs:172:22
+    |
+172 |         let mut t1 = Archiver::start(
+    |                      ^^^^^^^^ use of undeclared type `Archiver`
+
+error[E0433]: cannot find type `Archiver` in this scope
+   --> crates/services/api/mcp/src/archive.rs:184:22
+    |
+184 |         let mut t2 = Archiver::start(
+    |                      ^^^^^^^^ use of undeclared type `Archiver`
+
+error[E0433]: cannot find type `Until` in this scope
+   --> crates/services/api/mcp/src/archive.rs:204:63
+    |
+204 |         let (seq, term) = restore(&*store, &tmp("tl-latest"), Until::Latest, &tmp("tl-x")).unwrap();
+    |                                                               ^^^^^ use of undeclared type `Until`
+
+error[E0433]: cannot find type `Until` in this scope
+   --> crates/services/api/mcp/src/archive.rs:207:50
+    |
+207 |         let (seq, term) = restore(&*store, &out, Until::Seq(early), &tmp("tl-y")).unwrap();
+    |                                                  ^^^^^ use of undeclared type `Until`
+
+error[E0433]: cannot find type `DirStore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:218:52
+    |
+218 |         let store: Arc<dyn ObjectStore> = Arc::new(DirStore::new(tmp("hold-store")));
+    |                                                    ^^^^^^^^ use of undeclared type `DirStore`
+
+error[E0433]: cannot find type `Archiver` in this scope
+   --> crates/services/api/mcp/src/archive.rs:221:21
+    |
+221 |         let mut a = Archiver::start(store.clone(), source, acked, 1, tmp("hold-s")).unwrap();
+    |                     ^^^^^^^^ use of undeclared type `Archiver`
+
+error[E0425]: cannot find function `parse_list` in this scope
+  --> crates/services/api/mcp/src/archive.rs:96:13
+   |
+96 |             parse_list(xml),
+   |             ^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `parse_list` in this scope
+   --> crates/services/api/mcp/src/archive.rs:103:20
+    |
+103 |         assert_eq!(parse_list(last), (vec![], None));
+    |                    ^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `restore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:125:27
+    |
+125 |         let (seq, term) = restore(&*store, &latest, Until::Latest, &tmp("rt-s1")).unwrap();
+    |                           ^^^^^^^
+    |
+help: a local variable with a similar name exists
+    |
+125 -         let (seq, term) = restore(&*store, &latest, Until::Latest, &tmp("rt-s1")).unwrap();
+125 +         let (seq, term) = store(&*store, &latest, Until::Latest, &tmp("rt-s1")).unwrap();
+    |
+
+error[E0425]: cannot find function `restore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:130:24
+    |
+130 |         let (seq, _) = restore(&*store, &at_mid, Until::Seq(mid), &tmp("rt-s2")).unwrap();
+    |                        ^^^^^^^
+    |
+help: a local variable with a similar name exists
+    |
+130 -         let (seq, _) = restore(&*store, &at_mid, Until::Seq(mid), &tmp("rt-s2")).unwrap();
+130 +         let (seq, _) = store(&*store, &at_mid, Until::Seq(mid), &tmp("rt-s2")).unwrap();
+    |
+
+error[E0425]: cannot find function `now_ms` in this scope
+   --> crates/services/api/mcp/src/archive.rs:154:24
+    |
+154 |         let boundary = now_ms();
+    |                        ^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `restore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:159:24
+    |
+159 |         let (seq, _) = restore(&*store, &out, Until::Ms(boundary), &tmp("ms-s")).unwrap();
+    |                        ^^^^^^^
+    |
+help: a local variable with a similar name exists
+    |
+159 -         let (seq, _) = restore(&*store, &out, Until::Ms(boundary), &tmp("ms-s")).unwrap();
+159 +         let (seq, _) = store(&*store, &out, Until::Ms(boundary), &tmp("ms-s")).unwrap();
+    |
+
+error[E0425]: cannot find function `restore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:204:27
+    |
+204 |         let (seq, term) = restore(&*store, &tmp("tl-latest"), Until::Latest, &tmp("tl-x")).unwrap();
+    |                           ^^^^^^^
+    |
+help: a local variable with a similar name exists
+    |
+204 -         let (seq, term) = restore(&*store, &tmp("tl-latest"), Until::Latest, &tmp("tl-x")).unwrap();
+204 +         let (seq, term) = store(&*store, &tmp("tl-latest"), Until::Latest, &tmp("tl-x")).unwrap();
+    |
+
+error[E0425]: cannot find function `restore` in this scope
+   --> crates/services/api/mcp/src/archive.rs:207:27
+    |
+207 |         let (seq, term) = restore(&*store, &out, Until::Seq(early), &tmp("tl-y")).unwrap();
+    |                           ^^^^^^^
+    |
+help: a local variable with a similar name exists
+    |
+207 -         let (seq, term) = restore(&*store, &out, Until::Seq(early), &tmp("tl-y")).unwrap();
+207 +         let (seq, term) = store(&*store, &out, Until::Seq(early), &tmp("tl-y")).unwrap();
+    |
+
+Some errors have detailed explanations: E0405, E0425, E0433.
+For more information about an error, try `rustc --explain E0405`.
+warning: `aikoql-mcp` (bin "aikoql-mcp" test) generated 1 warning
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 31 previous errors; 1 warning emitted
+EXIT=101

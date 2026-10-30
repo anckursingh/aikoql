@@ -1,0 +1,30 @@
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.23s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-362f50df98664b36)
+
+running 7 tests
+test replicate_listen_without_a_token_refuses_to_serve ... ok
+test replicate_listen_rejects_a_non_loopback_bind ... ok
+test a_fenced_node_refuses_writes_after_a_restart ... ok
+test a_sync_leader_acks_writes_only_once_a_standby_holds_them ... ok
+test leader_dies_standby_is_promoted_with_every_object ... ok
+test promotion_resumes_indexes_from_the_shipped_checkpoint ... ok
+test a_diverged_old_leader_rejoins_the_promoted_standby_by_itself has been running for over 60 seconds
+test a_diverged_old_leader_rejoins_the_promoted_standby_by_itself ... FAILED
+
+failures:
+
+---- a_diverged_old_leader_rejoins_the_promoted_standby_by_itself stdout ----
+
+thread 'a_diverged_old_leader_rejoins_the_promoted_standby_by_itself' (525926) panicked at crates/services/api/mcp/tests/replication_failover.rs:161:33:
+no log line containing "re-bootstrapped"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_diverged_old_leader_rejoins_the_promoted_standby_by_itself
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 62.94s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+EXIT=101

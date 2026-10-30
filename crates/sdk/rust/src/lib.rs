@@ -15,7 +15,7 @@ pub mod fuzz;
 pub mod tools;
 pub mod tx;
 
-pub use client::{Client, SessionParams, MIN_SERVER_VERSION};
+pub use client::{Client, SessionParams, Tls, MIN_SERVER_VERSION};
 pub use embedded::Embedded;
 pub use error::{Error, McpError};
 pub use tools::{

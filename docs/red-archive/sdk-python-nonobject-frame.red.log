@@ -1,0 +1,68 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________________________ test_frame_cap_property ____________________________
+
+    @settings(max_examples=100, deadline=None)
+>   @given(st.binary(max_size=MAX_FRAME + 4096))
+                   ^^^
+
+crates/sdk/python/tests/test_fuzz_estate.py:156: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/private/tmp/claude-501/-Users-pukku-coding-aikoql/4365fec5-c293-40c6-ae92-d401a7bd8c96/scratchpad/venv/lib/python3.12/site-packages/hypothesis/core.py:1726: in _raise_to_user
+    raise the_error_hypothesis_found
+crates/sdk/python/tests/test_fuzz_estate.py:167: in test_frame_cap_property
+    c.call_tool("probe", {})
+crates/sdk/python/python/aikoql/mcp_client.py:368: in call_tool
+    return self._call_tool_once(name, arguments)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+crates/sdk/python/python/aikoql/mcp_client.py:386: in _call_tool_once
+    result = self._rpc("tools/call", params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+crates/sdk/python/python/aikoql/mcp_client.py:243: in _rpc
+    resp = self._recv_response(self._next_id, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <aikoql.mcp_client.McpClient object at 0x108fb1ca0>, expected_id = 1
+timeout = None
+
+    def _recv_response(self, expected_id: int,
+                       timeout: Optional[float] = None) -> dict:
+        """Read frames until the response for expected_id arrives.
+    
+        Serialized-but-ID-based (§3.3): a notification or id-less frame is
+        never a response, a stale id (duplicate or late, < expected) is
+        skipped, an impossible response (id > expected, or non-numeric) is
+        a protocol violation, and a malformed frame is never misread as
+        the response. A missing response is TIMEOUT (retryable).
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise self._deadline_error(expected_id, timeout)
+            try:
+                frame = self._recv()
+            except socket.timeout:
+                if deadline is None:
+                    raise
+                continue  # bounded by the deadline check above
+            except ValueError:
+                continue  # malformed frame — never a response
+            if deadline is not None and time.monotonic() >= deadline:
+                # The frame arrived after the deadline: as good as missing
+                # — the frozen TIMEOUT, never a late delivery (the socket
+                # timeout is not per-call, so the check rides the frame).
+                raise self._deadline_error(expected_id, timeout)
+>           rid = frame.get("id")
+                  ^^^^^^^^^
+E           AttributeError: 'int' object has no attribute 'get'
+E           (note: 1 other explicit example also failed with this error; use Verbosity.verbose to view)
+E           Failing explicit example: test_frame_cap_property(
+E               junk=b'0\n',
+E           )
+
+crates/sdk/python/python/aikoql/mcp_client.py:289: AttributeError
+=========================== short test summary info ============================
+FAILED crates/sdk/python/tests/test_fuzz_estate.py::test_frame_cap_property
+1 failed, 5 deselected in 0.13s
+EXIT=1

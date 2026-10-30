@@ -6,7 +6,9 @@ The first-party Java client for the [aikoql](https://github.com/anckursingh/aiko
 import com.aikoql.client.AikoqlClient;
 import com.aikoql.client.Connection;
 
-Connection conn = AikoqlClient.dial("127.0.0.1:9090", "s3cret");
+Connection conn = AikoqlClient.dial("127.0.0.1:9090").withToken("s3cret");
+// a server started with --tls-cert/--tls-key (SSLContext.getDefault() for a public CA):
+// AikoqlClient.dial("db.internal:9090", sslContextTrustingYourCa).withToken("s3cret");
 ResultSet rows = conn.query("MATCH person RETURN *");
 ```
 
@@ -14,7 +16,7 @@ ResultSet rows = conn.query("MATCH person RETURN *");
 <dependency>
   <groupId>com.aikoql</groupId>
   <artifactId>aikoql-client</artifactId>
-  <version>0.2.2</version>
+  <version>0.2.4</version>
 </dependency>
 ```
 

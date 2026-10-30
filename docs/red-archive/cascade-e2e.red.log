@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/replication_failover.rs (target/debug/deps/replication_failover-a0f0414a7eb71cd6)
+
+running 1 test
+test a_replica_can_feed_another_replica ... FAILED
+
+failures:
+
+---- a_replica_can_feed_another_replica stdout ----
+
+thread 'a_replica_can_feed_another_replica' (1056280) panicked at crates/services/api/mcp/tests/replication_failover.rs:131:17:
+server exited; stderr tail:
+--follow (a read replica) does not combine with --ha-lease, --replicate-listen or --archive
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_replica_can_feed_another_replica
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 17 filtered out; finished in 1.36s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test replication_failover`
+EXIT=101

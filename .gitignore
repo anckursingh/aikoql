@@ -40,6 +40,8 @@ build/
 
 # Aikoql runtime artifacts
 *.key
+# a throwaway test-only TLS key (its README), not a runtime artifact
+!crates/services/api/mcp/tests/fixtures/tls/server.key
 *.backup.*/
 /aikoql/
 .mnemosyne/
@@ -69,6 +71,8 @@ test-*.db
 /kb/
 # P1-8: the dogfood loop's per-run extract residue (regenerates each full).
 /kb.artifacts/
+# V-05: the dogfood server's shutdown checkpoint of ./kb.
+/kb.ckpt/
 # P1-8: dogfood machine state (KOIDs are kb-specific, not portable) — the
 # committable artifact is the compiled section inside the doc itself.
 docs/PR6-TDD-DISPOSITIONS.state.json
@@ -84,3 +88,5 @@ npm-publish/memory/
 
 # local commit-message scratch file
 .commit-msg.txt
+# maturin develop builds the native module in place
+/crates/sdk/python/python/aikoql/_aikoql*.so

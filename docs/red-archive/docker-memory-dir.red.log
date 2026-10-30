@@ -1,0 +1,7 @@
+[aikoql-vol-a] [2m2026-10-28T18:34:48.233726Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m configuration loaded [3mconfig[0m[2m=[0m/etc/aikoql/aikoql.toml
+[aikoql-vol-a] [2m2026-10-28T18:34:48.237902Z[0m [32m INFO[0m [2maikoql_mcp::http[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-28T18:34:48.237912Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0m/data/aikoql [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-28T18:34:48.237981Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+e2e-volume-restart: FAIL memory must be stored under /data, got {"stored":true,"name":"dep003-memory","file":"dep003-memory.md","path":"./memory/dep003-memory.md"}
+EXIT=1

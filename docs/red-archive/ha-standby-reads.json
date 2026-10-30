@@ -1,0 +1,8 @@
+{
+  "id": "ha-standby-reads",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp ha::",
+  "captured_at": "2026-10-28T13:03:19Z",
+  "captured_head": "2fb4daa0fecb944a58c7a7ea7de21d30bd1edc3f",
+  "exit_code": 101
+}

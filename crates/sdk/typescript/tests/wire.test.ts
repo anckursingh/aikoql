@@ -189,3 +189,19 @@ test("a late response after a timeout is skipped (self-healing)", async (t) => {
   // (id 1 < id 2); the real answer for id 2 lands.
   await c.initialize();
 });
+
+// A line that is valid JSON but not an object (null, a number, a string, an
+// array) is a malformed frame: skipped, never read as the response — the
+// Python SDK's crash on `0` (fuzz estate) checked across the SDKs; here a
+// `null` line threw a TypeError at resp["id"].
+test("a frame that is JSON but not an object is skipped", async (t) => {
+  const addr = await scripted(t, (req) => [
+    ["null", 0],
+    ["0", 0],
+    ['"s"', 0],
+    ["[1]", 0],
+    [toolResult(req["id"], { ok: true }), 0],
+  ]);
+  const c = await dial(t, addr);
+  assert.deepEqual(await c.callTool("probe", {}), { ok: true });
+});

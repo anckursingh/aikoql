@@ -12,6 +12,7 @@
 
 mod admin;
 mod api_rest;
+mod archive;
 mod audit;
 mod authz;
 mod cli;
@@ -20,18 +21,24 @@ mod dispatcher;
 mod engine;
 mod error_codes;
 mod graph_ui;
+mod ha;
 mod helpers;
 mod http;
 mod imports;
 mod ingest;
 mod knowledge_runtime;
+mod mcp_http;
 mod model;
 mod native;
+mod oauth;
 mod protocol;
 mod rate_limiter;
+mod replication;
+mod s3;
 mod session;
 mod shell;
 mod studio;
+mod tls;
 mod tool_registry;
 mod tools;
 mod transport;
@@ -138,7 +145,20 @@ pub(crate) fn model_store_dir(flag: Option<&str>) -> std::path::PathBuf {
     }
 }
 
-pub(crate) const PROTOCOL_VERSION: &str = "2024-11-05";
+/// The MCP versions this server speaks, oldest → newest: initialize echoes
+/// a supported requested version and answers anything else with the newest
+/// (the MCP negotiation rule).
+pub(crate) const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] =
+    ["2024-11-05", "2025-03-26", "2025-06-18"];
+pub(crate) const PROTOCOL_VERSION: &str = SUPPORTED_PROTOCOL_VERSIONS[2];
+
+/// The version initialize answers for a client that `requested` one.
+pub(crate) fn negotiate_protocol(requested: Option<&str>) -> &'static str {
+    requested
+        .and_then(|r| SUPPORTED_PROTOCOL_VERSIONS.iter().find(|v| **v == r))
+        .copied()
+        .unwrap_or(PROTOCOL_VERSION)
+}
 
 // main() is the orchestrator: CLI dispatch + server bootstrap. Everything
 // else lives in the modules above (R7).
@@ -210,6 +230,7 @@ fn main() {
     }
     let listen_addr = cfg.listen_addr;
     let native_addr = cfg.native_port;
+    let replicate_listen = cfg.replicate_listen;
     let metrics_addr = cfg.metrics_addr;
     let tcp_tokens = cfg.tcp_tokens;
     let db_path = cfg.db_path;
@@ -237,6 +258,7 @@ fn main() {
     let embedding_api_key = cfg.embedding_api_key;
     // PRR-3: local model store override (default ~/.aikoql/models).
     let model_dir_flag = cfg.model_dir;
+    let model_auto_install = cfg.model_auto_install;
     MEMORY_DIR.set(memory_dir).ok();
 
     // P3-M1 (§53–54): build the HTTP login resolver once — argon2id hashes
@@ -252,8 +274,27 @@ fn main() {
         eprintln!("{msg}");
         std::process::exit(2);
     }
+    // TLS on the client listeners and the HTTP surface (--tls-cert/--tls-key)
+    let client_tls = match (&cfg.tls_cert, &cfg.tls_key) {
+        (Some(c), Some(k)) => {
+            match tls::read(c).and_then(|c| tls::read(k).and_then(|k| tls::server_config(&c, &k))) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    eprintln!("--tls-cert/--tls-key: {e}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        (None, None) => None,
+        _ => {
+            eprintln!(
+                "--tls-cert and --tls-key go together (or AIKOQL_TLS_CERT and AIKOQL_TLS_KEY)"
+            );
+            std::process::exit(2);
+        }
+    };
     let metrics_addr = match metrics_addr {
-        Some(a) => match validate_http_listen(&a, cfg.allow_remote_http) {
+        Some(a) => match validate_http_listen(&a, cfg.allow_remote_http, client_tls.is_some()) {
             Ok(v) => Some(v),
             Err(e) => {
                 eprintln!("{e}");
@@ -263,13 +304,194 @@ fn main() {
         None => None,
     };
 
-    let (kernel, admin) = match engine::open_kernel(&db_path, &cfg.encryption) {
-        Ok((k, admin)) => (k, admin),
+    // MRFC-0080 R4: serving a standby promotes it to the next term (R4c:
+    // before the kernel opens, so its open-time writes are the new term's);
+    // a node deposed by a newer term keeps serving reads, never writes.
+    // MRFC-0080 R5a: with a lease, block as a standby of its holder until
+    // this node wins it (or resumes its own), then serve as the leader.
+    // MRFC-0080 R3c: TLS for the replication stream. With a certificate
+    // the stream is encrypted and the listener may bind any interface;
+    // without one it stays loopback-only.
+    let repl_tls = match (&cfg.replicate_tls_cert, &cfg.replicate_tls_key) {
+        (Some(c), Some(k)) => {
+            match tls::read(c).and_then(|c| tls::read(k).and_then(|k| tls::server_config(&c, &k))) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    eprintln!("--replicate-tls-cert/--replicate-tls-key: {e}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        (None, None) => None,
+        _ => {
+            eprintln!("--replicate-tls-cert and --replicate-tls-key go together");
+            std::process::exit(2);
+        }
+    };
+    // with TLS the token is encrypted, so a client listener may bind any
+    // interface; without it the R1 loopback-only rule holds
+    let client_listen_addr = |a: &str| {
+        if client_tls.is_some() {
+            Ok(a.to_string())
+        } else {
+            validate_listen(a)
+        }
+    };
+    let repl_trust = cfg.replicate_tls_ca.as_deref().map(|ca| {
+        match tls::read(ca).and_then(|p| tls::client_config(&p)) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("--replicate-tls-ca: {e}");
+                std::process::exit(2);
+            }
+        }
+    });
+    let repl_listen_addr = |a: &str| {
+        if repl_tls.is_some() {
+            Ok(a.to_string())
+        } else {
+            validate_listen(a)
+        }
+    };
+    // MRFC-0080 standby reads: `--follow LEADER` serves a read replica —
+    // never promoted by `serve`, finishing a re-bootstrap it recorded.
+    if cfg.follow.is_some() && (cfg.ha_lease.is_some() || cfg.archive.is_some()) {
+        eprintln!("--follow (a read replica) does not combine with --ha-lease or --archive");
+        std::process::exit(2);
+    }
+    // a serving standby (read replica, HA standby) that exited for a
+    // re-bootstrap finishes it before anything opens the directory
+    if cfg.follow.is_some() || cfg.ha_lease.is_some() {
+        if let Err(e) = replication::finish_rebootstrap(std::path::Path::new(&db_path)) {
+            eprintln!("standby: {e}");
+            std::process::exit(1);
+        }
+    }
+    let begun = cfg.ha_lease.as_ref().map(|lease| {
+        let (Some(repl), Some(node)) = (replicate_listen.as_deref(), cfg.ha_node.clone()) else {
+            eprintln!("--ha-lease needs --ha-node and --replicate-listen");
+            std::process::exit(2);
+        };
+        let repl = match repl_listen_addr(repl) {
+            // the address standbys dial: the advertised one across hosts
+            Ok(a) => cfg.replicate_advertise.clone().unwrap_or(a),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        };
+        let Some(token) = replication_token(&tcp_tokens) else {
+            eprintln!("--ha-lease needs an admin --tcp-token (or AIKOQL_REPLICATION_TOKEN) to follow with");
+            std::process::exit(2);
+        };
+        let ttl = std::time::Duration::from_millis(cfg.ha_ttl_ms);
+        let store: Arc<dyn ha::LeaseStore> = if lease.starts_with("s3://") {
+            match ha::S3Lease::from_env(lease, ttl / 3) {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    eprintln!("--ha-lease: {e}");
+                    std::process::exit(2);
+                }
+            }
+        } else if lease.starts_with("k8s://") {
+            match ha::K8sLease::in_cluster(lease, ttl / 3) {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    eprintln!("--ha-lease: {e}");
+                    std::process::exit(2);
+                }
+            }
+        } else {
+            Arc::new(ha::FileLease::new(lease.into()))
+        };
+        let ha = ha::HaConfig {
+            store,
+            node,
+            ttl,
+            repl,
+            client: cfg.advertise.clone(),
+            token,
+            tls: repl_trust.clone(),
+            dir: std::path::PathBuf::from(&db_path),
+        };
+        match ha::begin(ha) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("ha: {e}");
+                std::process::exit(1);
+            }
+        }
+    });
+    // standby reads: an HA standby serves reads until it wins the lease
+    let (ha_slot, ha_standby) = match begun {
+        Some(ha::Begun::Lead(slot)) => (Some(slot), None),
+        Some(ha::Begun::Standby(c)) => (None, Some(c)),
+        None => (None, None),
+    };
+    let serving_standby = cfg.follow.is_some() || ha_standby.is_some();
+    // cascading replicas: a leader serves the stream, and so may a
+    // `--follow` replica (downstream replicas follow it); an HA standby
+    // does not — the lease names only the leader
+    let serves_stream = replicate_listen.is_some() && ha_standby.is_none();
+    let claimed = if serving_standby {
+        replication::load_term(std::path::Path::new(&db_path))
+    } else {
+        replication::claim_leadership(std::path::Path::new(&db_path))
+    };
+    let (term, role) = match claimed {
+        Ok(t) => t,
         Err(e) => {
-            eprintln!("open kernel: {}", e);
+            eprintln!("replication term: {e}");
             std::process::exit(1);
         }
     };
+    let (kernel, admin) =
+        // the log is retained for standbys and for the archive (R6)
+        match engine::open_kernel(
+            &db_path,
+            &cfg.encryption,
+            serves_stream || (cfg.archive.is_some() && !serving_standby),
+            serving_standby.then(|| {
+                format!(
+                    "this node is a standby{}",
+                    replication::leader_hint(std::path::Path::new(&db_path))
+                )
+            }),
+        ) {
+            Ok((k, admin)) => (k, admin),
+            Err(e) => {
+                eprintln!("open kernel: {}", e);
+                std::process::exit(1);
+            }
+        };
+    if let (Some(slot), Some(a)) = (&ha_slot, &admin) {
+        let _ = slot.set(a.clone()); // the renewer can now fence writes
+    }
+    // R4d: after the kernel created the directory (a fresh one must be
+    // empty when it opens)
+    if let (replication::Role::Leader, Some(addr), false) =
+        (role, cfg.advertise.as_deref(), serving_standby)
+    {
+        let dir = std::path::Path::new(&db_path);
+        if let Err(e) = replication::store_leader(dir, addr) {
+            eprintln!("record --advertise: {e}");
+            std::process::exit(1);
+        }
+    }
+    if role == replication::Role::Fenced && !serving_standby {
+        let Some(a) = admin.as_ref() else {
+            eprintln!("a fenced node needs the storage admin surface to refuse writes");
+            std::process::exit(2);
+        };
+        a.fence(format!(
+            "fenced at replication term {term}{}",
+            replication::leader_hint(std::path::Path::new(&db_path))
+        ));
+        warn!(
+            term,
+            "deposed by a newer replication term: reads only — rejoin with `follow`"
+        );
+    }
 
     #[cfg(feature = "embedding-openai")]
     let url = if embedding_base_url.is_empty() {
@@ -327,7 +549,27 @@ fn main() {
                     );
                     None
                 } else {
-                    match aikoql_semantic::provider::CandleEmbedding::from_local(&candle_dir) {
+                    use aikoql_semantic::provider::{CandleEmbedding, DEFAULT_MODEL_ID};
+                    // the one opt-in exception to PRR-3 ([embedding].auto_install /
+                    // AIKOQL_MODEL_AUTO_INSTALL): a missing default model is
+                    // downloaded once, at start
+                    let auto_install = model_auto_install;
+                    let loaded = CandleEmbedding::from_local(&candle_dir).or_else(|e| {
+                        if !auto_install {
+                            return Err(format!(
+                                "{e} — run `aikoql model install` to install all-MiniLM-L6-v2 into {}, \
+                                 or set AIKOQL_MODEL_AUTO_INSTALL=1 to download it at start",
+                                candle_dir.display()
+                            ));
+                        }
+                        info!(model = DEFAULT_MODEL_ID, dir = %candle_dir.display(),
+                            "AIKOQL_MODEL_AUTO_INSTALL: installing the embedding model");
+                        let store = model_store_dir(model_dir_flag.as_deref());
+                        CandleEmbedding::install(DEFAULT_MODEL_ID, &store)
+                            .and_then(|_| CandleEmbedding::from_local(&candle_dir))
+                            .map_err(|e| format!("model auto-install failed: {e}"))
+                    });
+                    match loaded {
                         Ok(p) => {
                             // Test park hook (P5-M11 pattern): arm the Nth
                             // embed to hold the model lock — deterministic
@@ -345,14 +587,8 @@ fn main() {
                             );
                             Some(Arc::new(p))
                         }
-                        Err(e) => {
-                            set_semantic_status(
-                                "unavailable",
-                                format!(
-                                    "{e} — run `aikoql model install` to install all-MiniLM-L6-v2 into {}",
-                                    candle_dir.display()
-                                ),
-                            );
+                        Err(detail) => {
+                            set_semantic_status("unavailable", detail);
                             None
                         }
                     }
@@ -375,6 +611,41 @@ fn main() {
         kernel
     };
     let kernel = Arc::new(kernel);
+    if let Some(ha) = ha_standby {
+        let Some(a) = admin.clone() else {
+            eprintln!("--ha-lease needs the storage admin surface");
+            std::process::exit(2);
+        };
+        info!("serving as an HA standby — reads only until this node wins the lease");
+        replication::catch_up_loop(
+            kernel.clone(),
+            a.clone(),
+            std::path::PathBuf::from(db_path.as_str()),
+            "this node is an HA standby",
+        );
+        thread::spawn(move || ha::stand_by(ha, a));
+    }
+    if let Some(leader) = cfg.follow.clone() {
+        let Some(token) = replication_token(&tcp_tokens) else {
+            eprintln!(
+                "--follow needs AIKOQL_REPLICATION_TOKEN (or an admin --tcp-token) to follow with"
+            );
+            std::process::exit(2);
+        };
+        let Some(a) = admin.clone() else {
+            eprintln!("--follow needs the storage admin surface");
+            std::process::exit(2);
+        };
+        info!(%leader, "serving as a read replica");
+        replication::serve_replica(
+            kernel.clone(),
+            a,
+            leader,
+            token,
+            repl_trust.clone(),
+            std::path::PathBuf::from(db_path.as_str()),
+        );
+    }
 
     // PRR-3: enrichment runs on a worker thread — serve comes up immediately
     // and /health reports semantic readiness while the scan runs.
@@ -419,6 +690,9 @@ fn main() {
         },
     });
     let ckpt_dir = std::path::PathBuf::from(format!("{db_path}.ckpt"));
+    // MRFC-0080 R3b: a checkpoint swaps the directory (remove + rename), so
+    // the replication sender reads it only under this lock.
+    let ckpt_lock = Arc::new(Mutex::new(()));
     {
         let kernel_work = kernel.clone();
         let server_work = server_ctx.clone();
@@ -459,7 +733,157 @@ fn main() {
             rest_rate_limit.clone(),
             http_auth.clone(),
             admin.clone(),
+            client_tls.clone(),
+            // MCP over Streamable HTTP on the same surface: bearer = a
+            // --tcp-token, or an OAuth access token when [auth] logins exist
+            {
+                let oauth = http_auth.is_configured().then(|| {
+                    Arc::new(oauth::OAuth::new(
+                        http_auth.clone(),
+                        client_tls.is_some(),
+                        kernel.system_store(),
+                    ))
+                });
+                TcpAuthTable::parse(&tcp_tokens)
+                    .ok()
+                    .filter(|_| !tcp_tokens.is_empty() || oauth.is_some())
+                    .map(|t| {
+                        Arc::new(mcp_http::McpHttp::new(
+                            Arc::new(t),
+                            oauth,
+                            cfg.request_timeout_secs,
+                        ))
+                    })
+            },
         );
+    }
+
+    if cfg.replicate_sync_ms.is_some() && replicate_listen.is_none() {
+        eprintln!("--replicate-sync-ms needs --replicate-listen");
+        std::process::exit(2);
+    }
+    // MRFC-0080 R3c-2/R6: one ack table for the standbys and the archive
+    // (the slowest bounds log release); the lag series reads it.
+    let acked = Arc::new(replication::Acked::default());
+    let _ = replication::LEADER.set(acked.clone());
+    if let Some(url) = cfg.archive.as_deref().filter(|_| !serving_standby) {
+        // R6: only a writing node archives; a fenced one serves reads
+        if role == replication::Role::Fenced {
+            warn!("--archive: this node is fenced — not archiving");
+        } else {
+            let Some(source) = admin.clone() else {
+                eprintln!("--archive needs the storage admin surface");
+                std::process::exit(2);
+            };
+            let started =
+                archive::open_store(url, std::time::Duration::from_secs(60)).and_then(|store| {
+                    archive::Archiver::start(
+                        store,
+                        source,
+                        acked.clone(),
+                        term,
+                        std::path::PathBuf::from(format!("{db_path}.archive-tmp")),
+                    )
+                });
+            match started {
+                Ok(a) => {
+                    info!(%url, term, "continuous archive started");
+                    let (log_every, snap_every) = (
+                        std::time::Duration::from_millis(cfg.archive_log_ms),
+                        std::time::Duration::from_secs(cfg.archive_snapshot_secs),
+                    );
+                    let a = a.keeping(cfg.archive_keep);
+                    thread::spawn(move || a.run(log_every, snap_every));
+                }
+                Err(e) => {
+                    eprintln!("--archive: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+    // an HA standby serves no stream (its promoted, re-executed process
+    // does); a `--follow` replica may — downstream replicas cascade off it
+    if let Some(addr) = replicate_listen.filter(|_| serves_stream) {
+        // MRFC-0080 R3a: the replication stream rides beside any serve mode
+        // (stdio included) under the TCP gates — tokens required, loopback
+        // bind only (the stream is the whole database, in plaintext).
+        if tcp_tokens.is_empty() {
+            eprintln!("--replicate-listen requires a --tcp-token with the admin role for standbys");
+            std::process::exit(2);
+        }
+        let auth = match TcpAuthTable::parse(&tcp_tokens) {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                eprintln!("invalid --tcp-token: {e}");
+                std::process::exit(2);
+            }
+        };
+        let addr = match repl_listen_addr(&addr) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        };
+        let listener = match TcpListener::bind(&addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("bind replication listener {}: {}", addr, e);
+                std::process::exit(1);
+            }
+        };
+        let Some(source) = admin.clone() else {
+            eprintln!("--replicate-listen needs the storage admin surface");
+            std::process::exit(2);
+        };
+        let bound = listener
+            .local_addr()
+            .map_or(addr.clone(), |a| a.to_string());
+        info!(addr = %bound, tls = repl_tls.is_some(), "replication stream listening");
+        let shipped = replication::ShippedCheckpoint {
+            dir: ckpt_dir.clone(),
+            lock: ckpt_lock.clone(),
+        };
+        let repl_dir = std::path::PathBuf::from(db_path.as_str());
+        if let Some(ms) = cfg.replicate_sync_ms {
+            source.set_commit_gate(replication::sync_gate(
+                acked.clone(),
+                std::time::Duration::from_millis(ms),
+            ));
+        }
+        thread::spawn(move || {
+            replication::serve_replication(
+                listener,
+                source,
+                auth,
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                Some(shipped),
+                repl_dir,
+                acked,
+                repl_tls,
+            )
+        });
+        // R3b: a leader that crashes leaves no shutdown checkpoint — take
+        // one on a timer so standbys always hold a recent one.
+        let (k, ctx, dir, lock) = (
+            kernel.clone(),
+            server_ctx.clone(),
+            ckpt_dir.clone(),
+            ckpt_lock.clone(),
+        );
+        let every = std::time::Duration::from_secs(cfg.index_checkpoint_secs);
+        thread::spawn(move || loop {
+            thread::sleep(every);
+            // justified: Mutex poison is unrecoverable
+            let m = ctx.db.maintainer.lock().unwrap().clone();
+            if let Some(m) = m {
+                let _g = lock.lock().unwrap();
+                if let Err(e) = m.checkpoint(&k, &dir) {
+                    warn!("periodic index checkpoint: {e}");
+                }
+            }
+        });
     }
 
     if listen_addr.is_some() || native_addr.is_some() {
@@ -480,11 +904,10 @@ fn main() {
             }
         };
         if let Some(addr) = listen_addr {
-            // R1 (review round 3): loopback-only plaintext TCP — a non-loopback
-            // bind would put the bearer token on the wire unencrypted, so it is
-            // rejected fail-closed. TLS arrives post-MVP (terminate TLS at a
-            // reverse proxy in front of the loopback listener).
-            let addr = match validate_listen(&addr) {
+            // R1 (review round 3): plaintext TCP is loopback-only — a
+            // non-loopback bind would put the bearer token on the wire
+            // unencrypted, so it is rejected fail-closed unless TLS is on.
+            let addr = match client_listen_addr(&addr) {
                 Ok(a) => a,
                 Err(e) => {
                     eprintln!("{e}");
@@ -503,12 +926,13 @@ fn main() {
             // main thread reaches the native loop below; otherwise it blocks
             // main as before. The clones keep the originals for that loop.
             let has_native = native_addr.is_some();
-            let (k, a, d, rl, adm) = (
+            let (k, a, d, rl, adm, t) = (
                 kernel.clone(),
                 auth.clone(),
                 db_path.clone(),
                 mcp_rate_limit.clone(),
                 admin.clone(),
+                client_tls.clone(),
             );
             let serve = move || {
                 run_tcp_listener(
@@ -520,6 +944,7 @@ fn main() {
                     adm,
                     cfg.request_timeout_secs,
                     cfg.max_connections,
+                    t,
                 )
             };
             if has_native {
@@ -529,9 +954,9 @@ fn main() {
             }
         }
         if let Some(addr) = native_addr {
-            // D-15: the same R1 loopback-only rule — the framed protocol
-            // carries the same bearer token in plaintext.
-            let addr = match validate_listen(&addr) {
+            // D-15: the same R1 rule — the framed protocol carries the same
+            // bearer token, so plaintext stays loopback-only.
+            let addr = match client_listen_addr(&addr) {
                 Ok(a) => a,
                 Err(e) => {
                     eprintln!("{e}");
@@ -554,6 +979,7 @@ fn main() {
                 admin,
                 cfg.request_timeout_secs,
                 cfg.max_connections,
+                client_tls,
             );
         }
     } else if metrics_addr.is_some() {
@@ -598,6 +1024,8 @@ fn main() {
         };
         if let Some(m) = maintainer {
             let t0 = std::time::Instant::now();
+            // justified: Mutex poison is unrecoverable
+            let _g = ckpt_lock.lock().unwrap();
             if let Err(e) = m.checkpoint(&kernel, &ckpt_dir) {
                 warn!("maintainer checkpoint failed: {e}");
             }
@@ -618,31 +1046,48 @@ fn resume_or_start_maintainer(
     ckpt_dir: &std::path::Path,
 ) -> KResult<Arc<aikoql_scheduler::IndexMaintainer>> {
     if let Some(water) = aikoql_scheduler::IndexMaintainer::checkpoint_water(ckpt_dir)? {
-        let vectors = HnswVectorIndex::load(&ckpt_dir.join("vectors"));
-        let text = TantivyTextIndex::load(&ckpt_dir.join("text"));
-        if let (Ok(v), Ok(t)) = (vectors, text) {
-            let vectors: Arc<dyn VectorIndex> = Arc::new(v);
-            let text: Arc<dyn TextIndex> = Arc::new(t);
-            if let Ok(m) = aikoql_scheduler::IndexMaintainer::start_at(
-                kernel,
-                vectors,
-                text,
-                Some(water),
-                Some(ckpt_dir),
-            ) {
+        // the reason rides the warning — an operator must see WHY a
+        // promotion fell back to a full replay
+        let resumed = HnswVectorIndex::load(&ckpt_dir.join("vectors"))
+            .map_err(|e| format!("vectors: {e}"))
+            .and_then(|v| {
+                let t = TantivyTextIndex::load(&ckpt_dir.join("text"))
+                    .map_err(|e| format!("text: {e}"))?;
+                let vectors: Arc<dyn VectorIndex> = Arc::new(v);
+                let text: Arc<dyn TextIndex> = Arc::new(t);
+                aikoql_scheduler::IndexMaintainer::start_at(
+                    kernel,
+                    vectors,
+                    text,
+                    Some(water),
+                    Some(ckpt_dir),
+                )
+                .map_err(|e| format!("resume: {e}"))
+            });
+        match resumed {
+            Ok(m) => {
+                let (head, _) = kernel.journal_head()?;
+                info!(
+                    water,
+                    replayed = head.saturating_sub(water),
+                    "index maintainer resumed from checkpoint"
+                );
                 return Ok(m);
             }
+            Err(why) => warn!(
+                "checkpoint at {} unusable ({why}) — starting fresh with a full replay",
+                ckpt_dir.display()
+            ),
         }
-        warn!(
-            "checkpoint at {} unusable — starting fresh with a full replay",
-            ckpt_dir.display()
-        );
     }
-    aikoql_scheduler::IndexMaintainer::start(
+    let m = aikoql_scheduler::IndexMaintainer::start(
         kernel,
         Arc::new(HnswVectorIndex::new(0, 10_000)),
         Arc::new(TantivyTextIndex::new()?),
-    )
+    )?;
+    let (head, _) = kernel.journal_head()?;
+    info!(replayed = head, "index maintainer full replay");
+    Ok(m)
 }
 
 /// PRR-2 + R1 (review round 3): `--listen :9090` (empty host) binds
@@ -650,6 +1095,21 @@ fn resume_or_start_maintainer(
 /// the bearer token would travel in plaintext, so plaintext TCP is
 /// loopback-only in MVP. Hostnames resolve; every resolved address must be
 /// loopback.
+/// The token a standby presents to its leader: the operator's
+/// AIKOQL_REPLICATION_TOKEN, else this node's first admin --tcp-token.
+fn replication_token(tcp_tokens: &[String]) -> Option<String> {
+    std::env::var("AIKOQL_REPLICATION_TOKEN").ok().or_else(|| {
+        tcp_tokens
+            .iter()
+            .find(|t| {
+                t.split(':')
+                    .nth(2)
+                    .is_some_and(|r| r.split(',').any(|r| r == "admin"))
+            })
+            .and_then(|t| t.split(':').next().map(str::to_string))
+    })
+}
+
 fn validate_listen(addr: &str) -> Result<String, String> {
     let expanded = match addr.rsplit_once(':') {
         Some(("", port)) => format!("127.0.0.1:{port}"),
@@ -678,7 +1138,7 @@ fn validate_listen(addr: &str) -> Result<String, String> {
 /// API — loopback-only unless allow_remote_http is armed (same fail-closed
 /// reasoning as validate_listen; arming itself is gated on credentials by
 /// remote_http_requires_auth).
-fn validate_http_listen(addr: &str, allow_remote: bool) -> Result<String, String> {
+fn validate_http_listen(addr: &str, allow_remote: bool, tls: bool) -> Result<String, String> {
     let expanded = match addr.rsplit_once(':') {
         Some(("", port)) => format!("127.0.0.1:{port}"),
         _ => addr.to_string(),
@@ -692,11 +1152,22 @@ fn validate_http_listen(addr: &str, allow_remote: bool) -> Result<String, String
             "--metrics-addr {expanded} did not resolve to any address"
         ));
     }
-    if !allow_remote && !resolved.iter().all(|a| a.ip().is_loopback()) {
+    if resolved.iter().all(|a| a.ip().is_loopback()) {
+        return Ok(expanded);
+    }
+    if !allow_remote {
         return Err(format!(
             "--metrics-addr {expanded} would serve the HTTP surface (login + knowledge API) \
              on a non-loopback interface; bind 127.0.0.1 (or ::1), or set \
-             allow_remote_http = true together with [auth] credentials"
+             allow_remote_http = true together with [auth] credentials and --tls-cert/--tls-key"
+        ));
+    }
+    // logins and session tokens must not cross the network in plaintext
+    if !tls {
+        return Err(format!(
+            "--metrics-addr {expanded} would serve logins and session tokens over plaintext \
+             HTTP on a non-loopback interface; add --tls-cert/--tls-key (or AIKOQL_TLS_CERT/_KEY) \
+             to serve HTTPS, or bind 127.0.0.1"
         ));
     }
     Ok(expanded)

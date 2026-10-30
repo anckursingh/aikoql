@@ -1,0 +1,8 @@
+{
+  "id": "r3c-tls",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp replication",
+  "captured_at": "2026-10-28T09:27:33Z",
+  "captured_head": "64710d2678419d58333b5efe6a99eaed19f99b11",
+  "exit_code": 101
+}

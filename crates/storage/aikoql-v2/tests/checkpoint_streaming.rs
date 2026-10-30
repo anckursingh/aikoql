@@ -8,15 +8,16 @@
 
 mod common;
 
-use aikoql_storage_v2::checkpoint::{
-    checkpoint_generation, checkpoint_path, test_support, DirectoryCheckpoint,
-};
+#[cfg(windows)]
+use aikoql_storage_v2::checkpoint::checkpoint_path;
+use aikoql_storage_v2::checkpoint::{checkpoint_generation, test_support, DirectoryCheckpoint};
 use aikoql_storage_v2::db::{Config, Db};
 use aikoql_storage_v2::identity::{LogicalId, ObjectId, ReplicaId};
 use aikoql_storage_v2::placement::directory::{PhysicalLocation, Placement};
 use aikoql_storage_v2::placement::{BlockId, SegmentId};
 use common::dir;
 use std::collections::HashMap;
+#[cfg(windows)]
 use std::io::BufRead as _;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -220,15 +221,13 @@ fn self_peak_over(pid: u32, ms: u32) -> u64 {
 
 #[test]
 fn cps003_peak_rss_streamed_not_above_materialized() {
-    if std::env::var_os("CPS_NIGHTLY").is_none() {
-        return; // strict opt-in: builds a 1M-object directory state
-    }
-    #[cfg(not(windows))]
-    {
-        return; // WorkingSet64 polling is Windows-only (the mem001 precedent)
-    }
+    // WorkingSet64 polling is Windows-only (the mem001 precedent): elsewhere
+    // the test is empty.
     #[cfg(windows)]
     {
+        if std::env::var_os("CPS_NIGHTLY").is_none() {
+            return; // strict opt-in: builds a 1M-object directory state
+        }
         let d = dir("cps003");
         let n: u64 = 1_000_000;
         let mut identity = HashMap::new();

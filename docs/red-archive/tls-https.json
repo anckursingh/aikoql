@@ -1,0 +1,8 @@
+{
+  "id": "tls-https",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test tls_listen -- tls008 tls009",
+  "captured_at": "2026-10-28T19:45:24Z",
+  "captured_head": "f4d4e33aebf56fecd7d4a929e24b5269e8b6a3d9",
+  "exit_code": 101
+}

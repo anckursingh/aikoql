@@ -1,0 +1,62 @@
+   Compiling aikoql-storage-v2 v0.2.4 (/Users/pukku/coding/aikoql/crates/storage/aikoql-v2)
+   Compiling aikoql-scheduler v0.2.4 (/Users/pukku/coding/aikoql/crates/engines/scheduler)
+   Compiling aikoql-runtime v0.2.4 (/Users/pukku/coding/aikoql/crates/runtime)
+   Compiling aikoql-semantic v0.2.4 (/Users/pukku/coding/aikoql/crates/engines/semantic)
+   Compiling aikoql-mcp v0.2.4 (/Users/pukku/coding/aikoql/crates/services/api/mcp)
+error[E0425]: cannot find function `rebootstrap` in this scope
+   --> crates/services/api/mcp/src/replication.rs:796:21
+    |
+796 |                     rebootstrap(sdir, term, &history).unwrap();
+    |                     ^^^^^^^^^^^
+    |
+help: a local variable with a similar name exists
+    |
+796 |                     rebootstrapped(sdir, term, &history).unwrap();
+    |                                +++
+
+error[E0425]: cannot find function `diverged` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1070:18
+     |
+1070 |         assert!(!diverged(&ours, &[(0, 1)], 50), "a prefix of term 0");
+     |                  ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `diverged` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1071:17
+     |
+1071 |         assert!(diverged(&ours, &[(0, 1)], 60), "term-0 frames past 50");
+     |                 ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `diverged` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1072:18
+     |
+1072 |         assert!(!diverged(&ours, &[(0, 1), (1, 51)], 60), "our own timeline");
+     |                  ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `diverged` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1074:13
+     |
+1074 |             diverged(&ours, &[(0, 1), (2, 40)], 45),
+     |             ^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `diverged` in this scope
+    --> crates/services/api/mcp/src/replication.rs:1077:18
+     |
+1077 |         assert!(!diverged(&[(0, 1)], &[], 0), "an empty standby");
+     |                  ^^^^^^^^ not found in this scope
+
+error[E0433]: cannot find type `Followed` in this scope
+   --> crates/services/api/mcp/src/replication.rs:793:17
+    |
+793 |                 Followed::Stopped => return rebootstrapped,
+    |                 ^^^^^^^^ use of undeclared type `Followed`
+
+error[E0433]: cannot find type `Followed` in this scope
+   --> crates/services/api/mcp/src/replication.rs:794:17
+    |
+794 |                 Followed::Rebootstrap { term, history } => {
+    |                 ^^^^^^^^ use of undeclared type `Followed`
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `aikoql-mcp` (bin "aikoql-mcp" test) due to 8 previous errors
+EXIT=101

@@ -1,0 +1,27 @@
+...F                                                                     [100%]
+=================================== FAILURES ===================================
+__________________ test_the_client_never_offers_below_tls_1_2 __________________
+
+    def test_the_client_never_offers_below_tls_1_2():
+        """A caller's context that still allows TLS 1.0/1.1 (Python 3.9's
+        create_default_context can, per the system OpenSSL) is raised to a
+        TLS 1.2 floor — the SDK never offers a broken protocol. A stricter
+        floor is left as it is."""
+        import warnings
+    
+        weak = ssl.create_default_context(cafile=str(FX / "ca.pem"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)  # TLSv1 is deprecated
+            weak.minimum_version = ssl.TLSVersion.TLSv1
+        McpClient("127.0.0.1", 1, tls=weak)
+>       assert weak.minimum_version == ssl.TLSVersion.TLSv1_2
+E       AssertionError: assert <TLSVersion.TLSv1: 769> == <TLSVersion.TLSv1_2: 771>
+E        +  where <TLSVersion.TLSv1: 769> = <ssl.SSLContext object at 0x10ba39a50>.minimum_version
+E        +  and   <TLSVersion.TLSv1_2: 771> = <enum 'TLSVersion'>.TLSv1_2
+E        +    where <enum 'TLSVersion'> = ssl.TLSVersion
+
+crates/sdk/python/tests/test_tls.py:89: AssertionError
+=========================== short test summary info ============================
+FAILED crates/sdk/python/tests/test_tls.py::test_the_client_never_offers_below_tls_1_2
+1 failed, 3 passed in 0.51s
+EXIT=1

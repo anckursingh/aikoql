@@ -1,0 +1,8 @@
+{
+  "id": "s3-aws-targets",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp s3::tests",
+  "captured_at": "2026-10-28T15:08:07Z",
+  "captured_head": "a17772589d7240e338969bffc94a083e16c19375",
+  "exit_code": 101
+}

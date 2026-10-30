@@ -103,7 +103,7 @@ case "$LANGUAGE" in
     [[ "$TRANSPORT" == "native" ]] && NATIVE_ARGS=(--native)
     exec cargo run --quiet --bin sdk-conformance -- \
       --bin "$RBIN" --vectors "$VECTORS_R" --protocol "$PROTOCOL_R" --token "$TOKEN" \
-      "${NATIVE_ARGS[@]}" ;;
+      ${NATIVE_ARGS[@]+"${NATIVE_ARGS[@]}"} ;; # bash 3.2 (macOS): an empty array is unbound under set -u
   typescript)
     cd "$ROOT/crates/sdk/typescript"
     TBIN="$BIN"

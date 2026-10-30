@@ -4,6 +4,7 @@
 // D-15 native protocol replacement likewise swaps only the Transport.
 
 import net from "node:net";
+import tls from "node:tls";
 import { McpError } from "./error.ts";
 
 /** §19: a malicious server cannot cause unbounded client memory — an
@@ -69,16 +70,27 @@ export class TcpTransport implements Transport {
     socket.on("error", () => {});
   }
 
-  /** Connects, bounding the dial by the frozen TIMEOUT (the Go/Rust shape). */
-  static connect(addr: string, timeoutMs: number): Promise<TcpTransport> {
+  /** Connects, bounding the dial by the frozen TIMEOUT (the Go/Rust shape).
+   * With `tlsOptions` (a server started with --tls-cert/--tls-key) the
+   * handshake verifies the certificate for `host` — an IP against the SAN,
+   * a DNS name also sent as SNI — before resolving, so the token is never
+   * sent to an unverified peer. */
+  static connect(addr: string, timeoutMs: number, tlsOptions?: tls.ConnectionOptions): Promise<TcpTransport> {
     return new Promise((resolve, reject) => {
       const [host, port] = addr.split(":");
-      const socket = net.connect(Number(port), host!);
+      const socket = tlsOptions
+        ? tls.connect({
+            host,
+            port: Number(port),
+            ...(net.isIP(host!) ? {} : { servername: host }),
+            ...tlsOptions,
+          })
+        : net.connect(Number(port), host!);
       const timer = setTimeout(() => {
         socket.destroy();
         reject(McpError.deadline());
       }, timeoutMs);
-      socket.once("connect", () => {
+      socket.once(tlsOptions ? "secureConnect" : "connect", () => {
         clearTimeout(timer);
         resolve(new TcpTransport(socket));
       });

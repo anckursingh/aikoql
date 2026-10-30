@@ -1,0 +1,8 @@
+{
+  "id": "http-tls-hello-hang",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_http h018",
+  "captured_at": "2026-10-30T08:08:11Z",
+  "captured_head": "a3ed785701023c0b9b53c418cae1bf67e9c1e146",
+  "exit_code": 101
+}
