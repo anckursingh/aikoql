@@ -7,6 +7,17 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Added
+
+- **Tool profiles (AG-01)**: `--tool-profile core` (or `[server]
+  tool_profile`, `AIKOQL_TOOL_PROFILE`) lists 13 tools in ~6 KB instead
+  of all 103 in ~43 KB — the schema every agent carries before its first
+  call. The rest sit in ten groups behind the `tools_more` tool, which
+  names the groups and, for one, returns its definitions and enables it
+  for the session (`notifications/tools/list_changed`). Listing only:
+  any tool stays callable under the caller's roles. `full` remains the
+  default.
+
 ## [0.2.4] — 2026-10-30 (remote MCP: HTTP, OAuth, TLS)
 
 Upgrading from 0.2.3 (Docker): agent memory written by 0.2.3 lives inside

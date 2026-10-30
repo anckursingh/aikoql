@@ -94,6 +94,15 @@ identity is server-assigned by the token — clients must not send an
 `agent_id`; on stdio, the session is trusted and you declare identity with
 `session_init`.
 
+**A smaller tool surface**: `serve --tool-profile core` lists 13 tools
+(session_init, remember, get, find_similar, relate, traverse, forget,
+trace, find_conflicts, resolve_conflict, aikoql, health, tools_more) in
+about 6 KB instead of the full 103 (~43 KB in every agent context). Call
+`tools_more` to see the other groups (knowledge, epistemic, memory,
+ingestion, engineering, eval, txn, compliance, admin, programs) and
+`tools_more {"group": "txn"}` to add one — clients that honour
+`list_changed` reload the list. Any tool can still be called by name.
+
 **Remote MCP over HTTP** (Streamable HTTP — what remote MCP clients speak):
 the HTTP surface serves `POST /mcp`, authenticated with the same tokens.
 

@@ -29,6 +29,12 @@ path = "./aikoql-v2"
 # Prometheus metrics + health check HTTP endpoint. Comment out to disable.
 # metrics_addr = "127.0.0.1:9091"
 
+# The MCP tools agents see in tools/list: "full" (all ~100, ~43 KB of
+# schema in every agent context) or "core" (13 tools, ~6 KB; the rest by
+# group through the tools_more tool). Listing only — roles still decide
+# what may be called. Env: AIKOQL_TOOL_PROFILE; CLI: --tool-profile.
+# tool_profile = "core"
+
 # TCP auth tokens (TOKEN[:TENANT[:ROLE1,ROLE2]]). Required with listen.
 # Repeatable; alternatively one token via the AIKOQL_TCP_TOKEN env var or
 # repeated --tcp-token flags.

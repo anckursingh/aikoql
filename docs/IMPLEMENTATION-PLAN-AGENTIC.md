@@ -63,7 +63,7 @@ to win head-to-head evaluations; **P2** = differentiation / polish.
 
 ### Phase A — the agent surface (what an agent sees first)
 
-**AG-01 (P0) Tool profiles — a small default surface.**
+**AG-01 (P0) Tool profiles — a small default surface.** — **DONE 2026-10-30** (`--tool-profile core`: 13 tools / 6 169 bytes vs 103 / 43 284; ten groups via `tools_more`; config `[server] tool_profile`, `AIKOQL_TOOL_PROFILE`). Deviation: the default stays `full` — flipping it changes every existing agent's surface, so it is a separate decision.
 - *Problem:* 103 tools / 45 KB of schema in context. Tool-selection accuracy
   degrades with tool count and every token of schema is paid on every turn.
 - *Design:* `--tool-profile core|full|<custom>` (config
