@@ -451,7 +451,17 @@ impl OAuth {
         } else {
             "401 Unauthorized"
         };
-        (status, page_headers(), "text/html; charset=utf-8", body)
+        // the redirect is registered (check_request); its origin, no path
+        let origin = redirect
+            .split_once("://")
+            .map(|(scheme, _)| format!(" {scheme}://{host}"))
+            .unwrap_or_default();
+        (
+            status,
+            page_headers(&origin),
+            "text/html; charset=utf-8",
+            body,
+        )
     }
 
     /// POST /oauth/authorize: the login; a code back to the client.
@@ -711,12 +721,14 @@ fn no_store() -> Vec<(&'static str, String)> {
     ]
 }
 
-fn page_headers() -> Vec<(&'static str, String)> {
+/// `allow` is an extra form-action origin: Chrome applies form-action to
+/// the redirect after the POST, so the sign-in form must allow the client's.
+fn page_headers(allow: &str) -> Vec<(&'static str, String)> {
     let mut h = no_store();
     h.push(("X-Frame-Options", "DENY".into()));
     h.push((
         "Content-Security-Policy",
-        "frame-ancestors 'none'; form-action 'self'".into(),
+        format!("frame-ancestors 'none'; form-action 'self'{allow}"),
     ));
     h
 }
@@ -724,7 +736,7 @@ fn page_headers() -> Vec<(&'static str, String)> {
 fn page(status: &'static str, title: &str, msg: &str) -> Reply {
     (
         status,
-        page_headers(),
+        page_headers(""),
         "text/html; charset=utf-8",
         format!(
             "<!doctype html><meta charset=\"utf-8\"><title>{t}</title><h1>{t}</h1><p>{}</p>",
