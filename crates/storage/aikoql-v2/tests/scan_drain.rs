@@ -78,9 +78,36 @@ fn write_round(db: &Db, n: usize, round: usize) {
     }
 }
 
+/// Stops and joins the noise thread when the test ends, pass or fail.
+struct StopOnDrop(
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    Option<std::thread::JoinHandle<()>>,
+);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+        if let Some(h) = self.1.take() {
+            let _ = h.join();
+        }
+    }
+}
+
 #[test]
 fn scan_drain_allocs_scale_with_entries_not_groups() {
     const N: usize = 1000;
+    // a sibling test allocating meanwhile (tests run on parallel threads):
+    // the pin counts this thread's scans, not theirs
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let noise = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                std::hint::black_box(vec![0u8; 64]);
+            }
+        })
+    };
+    let _stop_noise = StopOnDrop(stop, Some(noise));
 
     // W1: every key once, one (active) stream.
     let db_w1 = open_db("m43-w1");

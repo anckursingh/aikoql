@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/scan_drain.rs (target/debug/deps/scan_drain-22810645e13f4f99)
+
+running 1 test
+test scan_drain_allocs_scale_with_entries_not_groups ... FAILED
+
+failures:
+
+---- scan_drain_allocs_scale_with_entries_not_groups stdout ----
+[m43 drain] W1 9418 allocs, W8 98220 allocs — delta 88802 (decode floor 14N = 14000, bound 16N = 16000)
+
+thread 'scan_drain_allocs_scale_with_entries_not_groups' (3134098) panicked at crates/storage/aikoql-v2/tests/scan_drain.rs:152:5:
+scan drain: W8 98220 vs W1 9418 — delta 88802 over the 14N decode floor; the per-group Vec + candidate clones are still allocating (bound 16000)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    scan_drain_allocs_scale_with_entries_not_groups
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `-p aikoql-storage-v2 --test scan_drain`
+EXIT=101

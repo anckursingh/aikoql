@@ -1,0 +1,8 @@
+{
+  "id": "scan-drain-cross-thread",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-storage-v2 --test scan_drain scan_drain_allocs",
+  "captured_at": "2026-10-30T18:06:42Z",
+  "captured_head": "ce5c24b68e78cabb1f771f0bb0f17695451a5ac7",
+  "exit_code": 101
+}
