@@ -201,7 +201,7 @@ pub(crate) fn compiler_expr_to_value(e: &aikoql_compiler::parser::ast::Expr) -> 
 
 /// Wait up to `ms` for the index maintainer to drain (a broken index is
 /// skipped: answers still come, and lag is surfaced per hit).
-fn wait_fresh(k: &Kernel, ms: u64) {
+pub(crate) fn wait_fresh(k: &Kernel, ms: u64) {
     if let Some(m) = k.index_maintainer() {
         let healthy = m
             .status(k)
@@ -409,6 +409,7 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
         let status = ko.epistemic_status();
         // a zero score is filler from the fused list, not a match
         if hit.score <= 0.0
+            || !crate::tools::memory::in_this_session(ko, args)
             || ko.metadata.type_name.starts_with("aikoql:")
             || matches!(status, crate::EpistemicStatus::Superseded)
         {

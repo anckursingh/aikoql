@@ -241,14 +241,47 @@ fn search_memory_files(args: &J) -> Result<J, String> {
 /// AG-10: the KO type a memory is stored as.
 const MEMORY_TYPE: &str = "Memory";
 
-/// The current Memory KO named `name` (type scans skip deleted objects).
+/// The caller's own current Memory KO named `name` (type scans skip
+/// deleted objects; another principal's shared memory is readable, never
+/// the caller's to write).
 // shortcut: a scan of the Memory KOs per call, add a name index when a store
 // holds tens of thousands of memories
 fn memory_ko(k: &Kernel, args: &J, name: &str) -> Result<Option<crate::KnowledgeObject>, String> {
-    Ok(k.scan_by_type(&subject_of(args), MEMORY_TYPE)
+    let subject = subject_of(args);
+    Ok(k.scan_by_type(&subject, MEMORY_TYPE)
         .map_err(|e| e.to_string())?
         .into_iter()
-        .find(|ko| matches!(ko.properties.get("name"), Some(Value::Text(n)) if n == name)))
+        .find(|ko| ko.security.owner == subject.name && text_prop(ko, "name") == name))
+}
+
+/// Whether `name` is a memory the caller can read but does not own (a shared
+/// one) — the caller may not edit it, not even through its file.
+fn someone_elses(k: &Kernel, args: &J, name: &str) -> Result<bool, String> {
+    let subject = subject_of(args);
+    Ok(k.scan_by_type(&subject, MEMORY_TYPE)
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|ko| ko.security.owner != subject.name && text_prop(ko, "name") == name))
+}
+
+/// AG-11: a session-scoped memory is seen only from its own session
+/// (run_id); every other object passes.
+pub(crate) fn in_this_session(ko: &crate::KnowledgeObject, args: &J) -> bool {
+    if ko.metadata.type_name != MEMORY_TYPE || text_prop(ko, "scope") != "session" {
+        return true;
+    }
+    args.get("run_id").and_then(|r| r.as_str()) == Some(text_prop(ko, "session").as_str())
+}
+
+/// AG-11: the memory scope, validated.
+fn scope_arg(args: &J) -> Result<Option<&str>, String> {
+    match args.get("scope").and_then(|v| v.as_str()) {
+        None => Ok(None),
+        Some(s @ ("private" | "shared" | "session")) => Ok(Some(s)),
+        Some(other) => Err(format!(
+            "scope must be private, shared or session, got {other:?}"
+        )),
+    }
 }
 
 fn text_prop(ko: &crate::KnowledgeObject, key: &str) -> String {
@@ -267,7 +300,9 @@ fn memory_body(raw: &str) -> String {
 }
 
 /// Upsert the memory into the knowledge base: a new KO, a new version when
-/// something changed, nothing when it did not. Returns {koid, version}.
+/// something changed, nothing when it did not. A new memory is private
+/// unless a scope is given; an existing one keeps its scope. Returns
+/// {koid, version, scope}.
 fn mirror(
     k: &Kernel,
     args: &J,
@@ -275,16 +310,35 @@ fn mirror(
     description: &str,
     content: &str,
     mtype: &str,
+    scope: Option<&str>,
 ) -> Result<J, String> {
-    let props =
-        json!({"name": name, "description": description, "content": content, "memory_type": mtype});
+    let existing = memory_ko(k, args, name)?;
+    let scope = scope
+        .map(String::from)
+        .or_else(|| {
+            existing
+                .as_ref()
+                .map(|ko| text_prop(ko, "scope"))
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| "private".into());
+    let session = if scope == "session" {
+        args.get("run_id")
+            .and_then(|r| r.as_str())
+            .ok_or("scope session needs a session: call session_init with a run_id first")?
+            .to_string()
+    } else {
+        String::new()
+    };
+    let props = json!({"name": name, "description": description, "content": content,
+        "memory_type": mtype, "scope": scope, "session": session});
     let mut req = args.clone();
-    if let Some(ko) = memory_ko(k, args, name)? {
-        let same = ["description", "content", "memory_type"]
+    if let Some(ko) = &existing {
+        let same = ["description", "content", "memory_type", "scope", "session"]
             .iter()
-            .all(|key| text_prop(&ko, key) == props[*key].as_str().unwrap_or(""));
+            .all(|key| text_prop(ko, key) == props[*key].as_str().unwrap_or(""));
         if same {
-            return Ok(json!({"koid": ko.koid.to_hex(), "version": ko.version}));
+            return Ok(json!({"koid": ko.koid.to_hex(), "version": ko.version, "scope": scope}));
         }
         req["koid"] = json!(ko.koid.to_hex());
         req["expected_version"] = json!(ko.version);
@@ -292,8 +346,13 @@ fn mirror(
     req["type_name"] = json!(MEMORY_TYPE);
     req["properties"] = props;
     req["embed"] = json!(true);
+    req["visibility"] = json!(if scope == "shared" {
+        "shared"
+    } else {
+        "private"
+    });
     let r = crate::tools::tool_remember(k, &req)?;
-    Ok(json!({"koid": r["koid"], "version": r["version"]}))
+    Ok(json!({"koid": r["koid"], "version": r["version"], "scope": scope}))
 }
 
 /// Write the memory's file view and its MEMORY.md index line.
@@ -368,6 +427,13 @@ pub(crate) fn tool_memory_search(k: &Kernel, args: &J) -> Result<J, String> {
         .get("max_results")
         .and_then(|v| v.as_u64())
         .unwrap_or(10) as usize;
+    // a memory is searched right after it is stored: wait briefly for the index
+    crate::tools::query::wait_fresh(
+        k,
+        args.get("wait_for_freshness_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1000),
+    );
     let (vector, _) = crate::tools::query::embed_query(k, query);
     let semantic = vector.is_some();
     let hits = k
@@ -387,7 +453,9 @@ pub(crate) fn tool_memory_search(k: &Kernel, args: &J) -> Result<J, String> {
         .map_err(|e| e.to_string())?;
     let results: Vec<J> = hits
         .iter()
-        .filter(|h| h.score > 0.0 && h.ko.metadata.type_name == MEMORY_TYPE)
+        .filter(|h| {
+            h.score > 0.0 && h.ko.metadata.type_name == MEMORY_TYPE && in_this_session(&h.ko, args)
+        })
         .take(max_results)
         .map(|h| {
             let name = text_prop(&h.ko, "name");
@@ -399,6 +467,8 @@ pub(crate) fn tool_memory_search(k: &Kernel, args: &J) -> Result<J, String> {
                 "snippet": content.chars().take(200).collect::<String>(),
                 "score": h.score,
                 "koid": h.ko.koid.to_hex(),
+                "scope": text_prop(&h.ko, "scope"),
+                "owner": h.ko.security.owner,
             })
         })
         .collect();
@@ -420,7 +490,7 @@ pub(crate) fn tool_memory_store(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|v| v.as_str())
         .unwrap_or("project");
     // the knowledge base first: a file never claims a memory it does not hold
-    let ko = mirror(k, args, name, description, content, mtype)?;
+    let ko = mirror(k, args, name, description, content, mtype, scope_arg(args)?)?;
     let filepath = write_memory_file(&resolve_memory_dir(args), name, description, mtype, content)?;
     Ok(json!({
         "stored": true,
@@ -429,6 +499,7 @@ pub(crate) fn tool_memory_store(k: &Kernel, args: &J) -> Result<J, String> {
         "path": filepath.to_string_lossy(),
         "koid": ko["koid"],
         "version": ko["version"],
+        "scope": ko["scope"],
     }))
 }
 
@@ -444,13 +515,13 @@ pub(crate) fn tool_memory_update(k: &Kernel, args: &J) -> Result<J, String> {
             text_prop(&ko, "content"),
             text_prop(&ko, "memory_type"),
         ),
-        None if filepath.exists() => {
+        None if filepath.exists() && !someone_elses(k, args, name)? => {
             let raw = std::fs::read_to_string(&filepath)
                 .map_err(|e| format!("cannot read '{}': {}", filepath.display(), e))?;
             let (_, desc, mtype) = parse_memory_frontmatter(&raw).unwrap_or_default();
             (desc, memory_body(&raw), mtype)
         }
-        None => return Err(format!("memory '{}' not found", name)),
+        None => return Err(format!("memory '{}' not found among your memories", name)),
     };
     let pick = |key: &str, cur: String| {
         args.get(key)
@@ -467,7 +538,7 @@ pub(crate) fn tool_memory_update(k: &Kernel, args: &J) -> Result<J, String> {
             cur_type
         },
     );
-    let ko = mirror(k, args, name, &desc, &content, &mtype)?;
+    let ko = mirror(k, args, name, &desc, &content, &mtype, scope_arg(args)?)?;
     write_memory_file(&dir, name, &desc, &mtype, &content)?;
     Ok(json!({
         "updated": true,
@@ -476,6 +547,7 @@ pub(crate) fn tool_memory_update(k: &Kernel, args: &J) -> Result<J, String> {
         "path": filepath.to_string_lossy(),
         "koid": ko["koid"],
         "version": ko["version"],
+        "scope": ko["scope"],
     }))
 }
 
@@ -558,7 +630,7 @@ pub(crate) fn import_memory_dir(k: &Kernel, dir: &str) -> Result<usize, String> 
             mtype
         };
         let before = memory_ko(k, &args, &name)?.map(|ko| ko.version);
-        let after = mirror(k, &args, &name, &desc, &memory_body(&raw), &mtype)?;
+        let after = mirror(k, &args, &name, &desc, &memory_body(&raw), &mtype, None)?;
         if before != after["version"].as_u64() {
             changed += 1;
         }

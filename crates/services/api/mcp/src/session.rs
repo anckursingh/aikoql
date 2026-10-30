@@ -206,6 +206,13 @@ fn fill_identity(a: &mut J, session: &McpSession, forced: bool) {
             a["tenant"] = json!(session.tenant);
         }
     }
+    // AG-11: the session's run_id scopes session memories (client input in
+    // both modes — it narrows what the caller sees, never widens it)
+    if let Some(run) = &session.run_id {
+        if a.get("run_id").is_none() {
+            a["run_id"] = json!(run);
+        }
+    }
     if let Some(ops) = a.get_mut("operations").and_then(|o| o.as_array_mut()) {
         for op in ops {
             fill_identity(op, session, forced);

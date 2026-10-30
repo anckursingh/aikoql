@@ -684,6 +684,62 @@ fn t12_acl_allow_deny_precedence_and_admin_role() {
     assert!(k.verify(&root, &id, Action::Delete).is_ok());
 }
 
+/// AG-11: "*" in an ACL entry names every principal — inside tenant
+/// confinement, which runs first: a shared object never reaches another
+/// tenant, and "*" never grants a write the entry does not name.
+#[test]
+fn t12b_acl_wildcard_is_everyone_in_the_tenant() {
+    let (k, _c) = mk();
+    let in_acme = |name: &str| Subject {
+        name: name.into(),
+        roles: vec![],
+        tenant: Some("acme".into()),
+    };
+    let wildcard = |effect| SecurityDescriptor {
+        owner: "alice".into(),
+        acl: vec![AclEntry {
+            principal: "*".into(),
+            action: Action::Read,
+            effect,
+        }],
+        classification: None,
+    };
+    let mut m = meta("fact");
+    m.tenant = Some("acme".into());
+    let mut req = RememberRequest::create(in_acme("alice"), m.clone());
+    req.security = Some(wildcard(Effect::Allow));
+    let shared = k.remember(req).unwrap().koid;
+    assert!(
+        k.get(in_acme("bob"), &shared).is_ok(),
+        "anyone in the tenant reads"
+    );
+    let globex = Subject {
+        name: "carol".into(),
+        roles: vec![],
+        tenant: Some("globex".into()),
+    };
+    assert!(
+        k.get(globex.clone(), &shared).is_err(),
+        "never another tenant"
+    );
+    assert!(
+        matches!(
+            k.remember(RememberRequest::update(in_acme("bob"), shared, m.clone()))
+                .unwrap_err(),
+            KError::AccessDenied { .. }
+        ),
+        "a read grant is not a write"
+    );
+    let mut req = RememberRequest::create(in_acme("alice"), m);
+    req.security = Some(wildcard(Effect::Deny));
+    let denied = k.remember(req).unwrap().koid;
+    assert!(
+        k.get(in_acme("bob"), &denied).is_err(),
+        "a wildcard deny refuses everyone"
+    );
+    assert!(k.get(in_acme("alice"), &denied).is_ok(), "except the owner");
+}
+
 // ---------------------------------------------------------------------------
 // MVCC snapshot isolation (MRFC-0001 §8)
 // ---------------------------------------------------------------------------

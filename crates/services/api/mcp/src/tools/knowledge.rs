@@ -182,6 +182,38 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
             }
         }
     }
+    // AG-11: visibility — private (owner only) or shared (every principal in
+    // the tenant may read; only the owner writes). Absent: the kernel's
+    // default on create, the current descriptor on update.
+    if let Some(v) = args.get("visibility").and_then(|v| v.as_str()) {
+        let acl = match v {
+            "private" => vec![],
+            "shared" => vec![aikoql_kernel::AclEntry {
+                principal: "*".into(),
+                action: aikoql_kernel::knowledge::kom::Action::Read,
+                effect: aikoql_kernel::knowledge::kom::Effect::Allow,
+            }],
+            other => {
+                return Err(format!(
+                    "visibility must be private or shared, got {other:?}"
+                ))
+            }
+        };
+        let (owner, classification) = match req.koid {
+            Some(id) => {
+                let head = k
+                    .get(req.context.subject.clone(), &id)
+                    .map_err(|e| e.to_string())?;
+                (head.security.owner, head.security.classification)
+            }
+            None => (req.context.subject.name.clone(), None),
+        };
+        req.security = Some(aikoql_kernel::knowledge::kom::SecurityDescriptor {
+            owner,
+            acl,
+            classification,
+        });
+    }
     req.origin = parse_origin(args);
     req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
     req.expected_version = args.get("expected_version").and_then(|v| v.as_u64());

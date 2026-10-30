@@ -223,7 +223,9 @@ impl AuthManager {
     ) -> Option<bool> {
         let mut allowed = false;
         for e in entries {
-            if !principals.contains(&e.principal) {
+            // "*" names every principal — tenant confinement has already run
+            // (authorize_parts), so it never reaches across tenants
+            if e.principal != "*" && !principals.contains(&e.principal) {
                 continue;
             }
             if e.action != action && e.action != Action::Admin {
