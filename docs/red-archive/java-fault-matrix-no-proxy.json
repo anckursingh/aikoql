@@ -1,0 +1,8 @@
+{
+  "id": "java-fault-matrix-no-proxy",
+  "pre_fix_commit": "HEAD",
+  "command": "bash -c r=$(git rev-parse --show-toplevel); a=$(mktemp); mv $r/target/debug/aikoql-fault-proxy $a; (cd $r/crates/sdk/java && AIKOQL_MCP_BIN=$r/target/debug/aikoql-mcp mvn -B -q -Dgpg.skip=true -Dtest=FaultMatrixTest test); s=$?; mv $a $r/target/debug/aikoql-fault-proxy; exit $s",
+  "captured_at": "2026-10-30T12:40:31Z",
+  "captured_head": "dfc0810622d8567ac7038d76381cba11bb7992fb",
+  "exit_code": 1
+}

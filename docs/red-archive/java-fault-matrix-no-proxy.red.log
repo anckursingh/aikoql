@@ -1,0 +1,249 @@
+[ERROR] Tests run: 13, Failures: 0, Errors: 13, Skipped: 0, Time elapsed: 128.6 s <<< FAILURE! -- in com.aikoql.client.FaultMatrixTest
+[ERROR] com.aikoql.client.FaultMatrixTest.closeAfter -- Time elapsed: 9.881 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.closeAfter(FaultMatrixTest.java:297)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.duplicateResponse -- Time elapsed: 9.686 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.duplicateResponse(FaultMatrixTest.java:249)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.delayResponse -- Time elapsed: 9.799 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.delayResponse(FaultMatrixTest.java:238)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.halfCloseAfter -- Time elapsed: 9.816 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.halfCloseAfter(FaultMatrixTest.java:305)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.injectNotification -- Time elapsed: 9.909 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.injectNotification(FaultMatrixTest.java:281)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.injectStaleResponse -- Time elapsed: 9.811 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.injectStaleResponse(FaultMatrixTest.java:289)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.dropResponse -- Time elapsed: 9.839 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.dropResponse(FaultMatrixTest.java:230)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.dropRequest -- Time elapsed: 10.00 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.dropRequest(FaultMatrixTest.java:222)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.corruptResponse -- Time elapsed: 9.897 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.corruptResponse(FaultMatrixTest.java:273)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.truncateResponse -- Time elapsed: 9.915 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.truncateResponse(FaultMatrixTest.java:265)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.oversizedResponse -- Time elapsed: 9.925 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.oversizedResponse(FaultMatrixTest.java:320)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.reorderResponse -- Time elapsed: 10.04 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.reorderResponse(FaultMatrixTest.java:257)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] com.aikoql.client.FaultMatrixTest.slowServer -- Time elapsed: 10.04 s <<< ERROR!
+java.io.IOException: Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1118)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1052)
+	at com.aikoql.client.FaultMatrixTest.spawn(FaultMatrixTest.java:110)
+	at com.aikoql.client.FaultMatrixTest.faultEnv(FaultMatrixTest.java:158)
+	at com.aikoql.client.FaultMatrixTest.slowServer(FaultMatrixTest.java:313)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:583)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:285)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:217)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1084)
+	... 7 more
+
+[ERROR] Errors: 
+[ERROR]   FaultMatrixTest.closeAfter:297->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.corruptResponse:273->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.delayResponse:238->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.dropRequest:222->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.dropResponse:230->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.duplicateResponse:249->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.halfCloseAfter:305->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.injectNotification:281->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.injectStaleResponse:289->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.oversizedResponse:320->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.reorderResponse:257->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.slowServer:313->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR]   FaultMatrixTest.truncateResponse:265->faultEnv:158->spawn:110 » IO Cannot run program "": Exec failed, error: 2 (No such file or directory) 
+[ERROR] Tests run: 13, Failures: 0, Errors: 13, Skipped: 0
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.2:test (default-test) on project aikoql-client: 
+[ERROR] 
+[ERROR] See /Users/pukku/coding/aikoql/crates/sdk/java/target/surefire-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+EXIT=1
