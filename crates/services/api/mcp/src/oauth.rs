@@ -477,6 +477,12 @@ impl OAuth {
             return redirect_to(&redirect, &[("error", "access_denied")], state);
         }
         let user = get("username");
+        if let Some(wait) = self.logins.locked_for(user) {
+            let msg = format!("Too many failed sign-ins. Try again in {wait} s.");
+            let (_, mut h, ctype, body) = self.authorize_page(f, headers, Some(&msg));
+            h.push(("Retry-After", wait.to_string()));
+            return ("429 Too Many Requests", h, ctype, body);
+        }
         if self.logins.verify(user, get("password")).is_none() {
             return self.authorize_page(f, headers, Some("The username or password is wrong."));
         }

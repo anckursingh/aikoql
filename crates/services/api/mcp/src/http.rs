@@ -550,7 +550,14 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
 pub(crate) struct AuthResolver {
     users: Vec<crate::config::AuthUser>,
     ttl_secs: u64,
+    /// per configured login: (consecutive failures, locked until)
+    fails: Mutex<HashMap<String, (u32, Instant)>>,
 }
+
+/// Wrong passwords a login gets before the backoff starts.
+const FREE_FAILS: u32 = 5;
+/// The longest backoff, in seconds.
+const MAX_BACKOFF_SECS: u64 = 900;
 
 impl AuthResolver {
     pub(crate) fn new(
@@ -575,7 +582,11 @@ impl AuthResolver {
                 }
             }
         }
-        AuthResolver { users, ttl_secs }
+        AuthResolver {
+            users,
+            ttl_secs,
+            fails: Mutex::new(HashMap::new()),
+        }
     }
 
     pub(crate) fn is_configured(&self) -> bool {
@@ -598,26 +609,45 @@ impl AuthResolver {
     }
 
     /// Seconds `username` must wait before its next sign-in attempt.
-    pub(crate) fn locked_for(&self, _username: &str) -> Option<u64> {
-        None
+    pub(crate) fn locked_for(&self, username: &str) -> Option<u64> {
+        // justified: Mutex poison is unrecoverable
+        let fails = self.fails.lock().unwrap();
+        let left = fails
+            .get(username)?
+            .1
+            .checked_duration_since(Instant::now())?;
+        Some(left.as_secs() + u64::from(left.subsec_nanos() > 0))
     }
 
+    /// Refused while `username` is backing off (locked_for); a wrong
+    /// password extends the backoff, a right one clears it.
     pub(crate) fn verify(&self, username: &str, password: &str) -> Option<Vec<String>> {
         use argon2::password_hash::PasswordVerifier;
-        for u in &self.users {
-            if u.username != username {
-                continue;
-            }
-            let Ok(parsed) = argon2::PasswordHash::new(&u.hash) else {
-                return None; // malformed configured hash never matches
-            };
-            if argon2::Argon2::default()
+        let u = self.users.iter().find(|u| u.username == username)?;
+        if self.locked_for(username).is_some() {
+            return None;
+        }
+        let ok = argon2::PasswordHash::new(&u.hash).is_ok_and(|parsed| {
+            argon2::Argon2::default()
                 .verify_password(password.as_bytes(), &parsed)
                 .is_ok()
-            {
-                return Some(u.roles.clone());
-            }
-            return None;
+        });
+        // justified: Mutex poison is unrecoverable
+        let mut fails = self.fails.lock().unwrap();
+        if ok {
+            fails.remove(username);
+            return Some(u.roles.clone());
+        }
+        let (n, until) = fails
+            .entry(username.to_string())
+            .or_insert((0, Instant::now()));
+        *n += 1;
+        if *n >= FREE_FAILS {
+            let wait = 1u64
+                .checked_shl(*n - FREE_FAILS)
+                .unwrap_or(u64::MAX)
+                .min(MAX_BACKOFF_SECS);
+            *until = Instant::now() + std::time::Duration::from_secs(wait);
         }
         None
     }
@@ -634,6 +664,12 @@ pub(crate) fn handle_login(
     let username = creds.get("username").and_then(|v| v.as_str()).unwrap_or("");
     let password = creds.get("password").and_then(|v| v.as_str()).unwrap_or("");
 
+    if let Some(wait) = auth.locked_for(username) {
+        return Err((
+            "429 Too Many Requests",
+            format!("too many failed sign-ins; retry in {wait} s"),
+        ));
+    }
     let roles = auth
         .verify(username, password)
         .ok_or_else(|| unauthorized("invalid credentials".into()))?;
