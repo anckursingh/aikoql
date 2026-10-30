@@ -1217,6 +1217,39 @@ employee = ["salary", "ssn"]
     }
 
     #[test]
+    fn tool_profile_from_toml_env_and_cli() {
+        assert_eq!(
+            load_bare(&argv(&["aikoql-mcp"])).unwrap().tool_profile,
+            "full"
+        );
+        let p = tmp_toml("[server]\ntool_profile = \"core\"\n");
+        let file = argv(&["aikoql-mcp", "--config", &p]);
+        assert_eq!(load_t(&file, None, None).unwrap().tool_profile, "core");
+        let bad = tmp_toml("[server]\ntool_profile = \"tiny\"\n");
+        assert!(load_t(&argv(&["aikoql-mcp", "--config", &bad]), None, None).is_err());
+        let env = |v: &str, args: &[String]| {
+            load_with_env(|| {
+                std::env::set_var("AIKOQL_TOOL_PROFILE", v);
+                let r = load(args, None, None);
+                std::env::remove_var("AIKOQL_TOOL_PROFILE");
+                r
+            })
+        };
+        assert_eq!(
+            env("full", &file).unwrap().tool_profile,
+            "full",
+            "env > TOML"
+        );
+        assert!(env("tiny", &argv(&["aikoql-mcp"])).is_err());
+        let cli = argv(&["aikoql-mcp", "--config", &p, "--tool-profile", "full"]);
+        assert_eq!(
+            load_t(&cli, None, None).unwrap().tool_profile,
+            "full",
+            "CLI > all"
+        );
+    }
+
+    #[test]
     fn model_auto_install_from_toml_and_env() {
         assert!(
             !load_bare(&argv(&["aikoql-mcp"]))

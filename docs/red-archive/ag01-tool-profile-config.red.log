@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/main.rs (target/debug/deps/aikoql_mcp-1bd616def3f11511)
+
+running 1 test
+test config::tests::tool_profile_from_toml_env_and_cli ... FAILED
+
+failures:
+
+---- config::tests::tool_profile_from_toml_env_and_cli stdout ----
+
+thread 'config::tests::tool_profile_from_toml_env_and_cli' (2884068) panicked at crates/services/api/mcp/src/config.rs:1227:46:
+called `Result::unwrap()` on an `Err` value: "config /var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/aikoql-config-test-55408-0.toml: TOML parse error at line 2, column 1\n  |\n2 | tool_profile = \"core\"\n  | ^^^^^^^^^^^^\nunknown field `tool_profile`, expected one of `listen`, `metrics_addr`, `tcp_tokens`, `allow_remote_http`\n"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    config::tests::tool_profile_from_toml_env_and_cli
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

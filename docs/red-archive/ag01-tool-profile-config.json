@@ -1,0 +1,8 @@
+{
+  "id": "ag01-tool-profile-config",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp tool_profile_from",
+  "captured_at": "2026-10-30T15:29:12Z",
+  "captured_head": "84a8f381cf1ba1a9804a9a481e1d3eb6f1953751",
+  "exit_code": 101
+}
