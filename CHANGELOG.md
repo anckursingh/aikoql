@@ -35,6 +35,19 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Security
 
+- **Dependency advisories fixed** (25 RustSec advisories in the workspace
+  lockfile, 5 in the SDK fuzz crate's): `zip` 0.6 → 9.1 (critical parser
+  differential; extraction outside the destination), `lopdf` 0.36 → 0.46
+  (stack overflow on nested PDF objects), `rustls` → 0.23.46+ (Debug
+  output exposed TLS secrets, cross-level handshake messages),
+  `rustls-webpki`, `webpki-roots` (distrusted intermediates), `h2`,
+  `quinn-proto`, `hickory-*`, `ctutils`, `tantivy` 0.26 → 0.27 (its `zstd`
+  chain). An index written by the previous `tantivy` opens unchanged.
+  Left, with the reason in `.cargo/audit.toml`: candle's `zip` 7.2.0
+  extraction advisories — candle never extracts, and aikoql loads models
+  only from safetensors.
+- **A RustSec gate in CI** (`scripts/check-advisories.sh`, `cargo audit`
+  over both lockfiles): a new advisory fails the change that brings it.
 - **The audit "Ed25519" was a placeholder** that was never wired up: its
   signatures mixed bytes of the private seed into the output (one
   signature leaked the key), verification needed the private key, and
