@@ -38,10 +38,23 @@ use std::time::Instant;
 struct Counting;
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 static ARMED: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    // the arming thread only: sibling tests run on other threads meanwhile
+    static ARMED_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn counted() -> bool {
+    ARMED.load(Ordering::Relaxed) == 1 && ARMED_HERE.try_with(|a| a.get()).unwrap_or(false)
+}
+
+fn arm(on: bool) {
+    ARMED_HERE.with(|a| a.set(on));
+    ARMED.store(usize::from(on), Ordering::Relaxed);
+}
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if ARMED.load(Ordering::Relaxed) == 1 {
+        if counted() {
             ALLOCS.fetch_add(1, Ordering::Relaxed);
         }
         System.alloc(layout)
@@ -50,7 +63,7 @@ unsafe impl GlobalAlloc for Counting {
         System.dealloc(ptr, layout)
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if ARMED.load(Ordering::Relaxed) == 1 {
+        if counted() {
             ALLOCS.fetch_add(1, Ordering::Relaxed);
         }
         System.realloc(ptr, layout, new_size)
@@ -113,10 +126,10 @@ fn scan_drain_allocs_scale_with_entries_not_groups() {
     let db_w1 = open_db("m43-w1");
     write_round(&db_w1, N, 0);
     let w1 = {
-        ARMED.store(1, Ordering::Relaxed);
+        arm(true);
         ALLOCS.store(0, Ordering::Relaxed);
         let rows = db_w1.scan(b"k").unwrap();
-        ARMED.store(0, Ordering::Relaxed);
+        arm(false);
         assert_eq!(rows.len(), N);
         ALLOCS.load(Ordering::Relaxed) as u64
     };
@@ -129,10 +142,10 @@ fn scan_drain_allocs_scale_with_entries_not_groups() {
         db_w8.rotate();
     }
     let w8 = {
-        ARMED.store(1, Ordering::Relaxed);
+        arm(true);
         ALLOCS.store(0, Ordering::Relaxed);
         let rows = db_w8.scan(b"k").unwrap();
-        ARMED.store(0, Ordering::Relaxed);
+        arm(false);
         assert_eq!(rows.len(), N);
         ALLOCS.load(Ordering::Relaxed) as u64
     };
@@ -282,12 +295,12 @@ fn m43_scan_cells() {
         // round-3 active stays in the memtable.
         db.flush().unwrap();
         let before = db.read_path_stats();
-        ARMED.store(1, Ordering::Relaxed);
+        arm(true);
         ALLOCS.store(0, Ordering::Relaxed);
         let t = Instant::now();
         let rows = db.scan(b"k").unwrap();
         let wall_ns = t.elapsed().as_nanos();
-        ARMED.store(0, Ordering::Relaxed);
+        arm(false);
         let delta = stats_delta(db.read_path_stats(), before);
         assert_eq!(rows.len(), n, "{tag}: one row per key");
         let wall_ms = (wall_ns / 1_000_000) as u64;
