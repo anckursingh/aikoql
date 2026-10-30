@@ -123,8 +123,23 @@ flow (`claude mcp add --transport http aikoql https://your-host/mcp`), or a
 static token as above. Sign-ins persist in the knowledge base itself
 (hashed, under reserved keys): they survive restarts and HA failovers, and
 are encrypted and backed up with the data; removing a login revokes its
-sign-ins. Limit: client ID metadata documents (CIMD) are not offered, so
-Claude uses registration.
+sign-ins. Clients that identify by a client ID metadata document (CIMD —
+Claude Code's client ID is an https URL) need no registration: aikoql
+fetches the document from public addresses only. After five wrong
+passwords a login backs off (1 s, doubling, up to 15 min; 429 with
+`Retry-After`).
+
+To try the connector from a laptop, a Cloudflare quick tunnel gives the
+loopback server a public HTTPS URL (no inbound ports, no account):
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:9091      # prints https://<random>.trycloudflare.com
+AIKOQL_ADMIN_PASSWORD=… AIKOQL_PUBLIC_URL=https://<random>.trycloudflare.com \
+  aikoql-mcp serve --metrics-addr 127.0.0.1:9091 /tmp/kb
+```
+
+then add the custom connector `https://<random>.trycloudflare.com/mcp` in
+claude.ai. The URL changes whenever `cloudflared` restarts.
 
 ## First 10 minutes (validated flow)
 

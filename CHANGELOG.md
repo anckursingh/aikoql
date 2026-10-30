@@ -33,7 +33,17 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   refresh tokens, audience-bound opaque tokens). Sign-ins persist in the
   database (SHA-256-keyed under reserved `sys/oauth/` keys: restarts,
   failovers, encryption and backups included; a removed login is revoked);
-  `AIKOQL_PUBLIC_URL` sets the advertised URL behind a proxy.
+  `AIKOQL_PUBLIC_URL` sets the advertised URL behind a proxy. Verified
+  against claude.ai itself (sign-in, remember/get, semantic search).
+- **Client ID metadata documents (CIMD)**: an https `client_id` (Claude
+  Code's) is resolved by fetching its document — public addresses only
+  (checked in the resolver the connection uses), no redirects, short
+  timeouts, 64 KB, cached 5 min; the document must name itself and be a
+  public client. Advertised as `client_id_metadata_document_supported`.
+- **Sign-in backoff**: after five wrong passwords a login waits 1 s, then
+  each failure doubles it (up to 15 min) — even the right password is
+  refused meanwhile: 429 on `/api/login`, 429 + `Retry-After` on the OAuth
+  sign-in page. A success resets it; unknown names are not tracked.
 - **MCP protocol version negotiation**: `initialize` answers the client's
   requested version when supported (2024-11-05, 2025-03-26, 2025-06-18),
   else the newest; it used to answer 2024-11-05 to everyone. Over HTTP an
@@ -54,6 +64,21 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   in place, on first start) and agent memory at `/data/memory`
   (`AIKOQL_MEMORY_DIR`; it used to live outside the volume and was lost on
   recreate).
+
+### Fixed
+
+- **The OAuth sign-in stayed on its page in Chrome**: the page's
+  `form-action 'self'` blocked the redirect back to the client after a
+  correct login; it now allows the (registered) redirect's origin.
+- **Redirect URIs are screened**: a line break, space, `;` or a bad port in
+  a registered redirect URI is refused (it is written into the `Location`
+  header).
+- **Headers split across reads**: the HTTP surface took its headers from
+  one read, so a request whose headers arrived in two pieces (a slow
+  client, or headers past one TCP segment) lost `Content-Length` and its
+  body. It now reads to the end of the headers.
+- **`aikoql model install --model-dir DIR`** without a model id ignored the
+  directory and installed into `~/.aikoql/models`.
 
 ## [0.2.1] — 2026-10-03 (SDK wave + fuzz hardening)
 
