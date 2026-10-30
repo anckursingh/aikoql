@@ -1,0 +1,6 @@
+ARCH: the Java SDK publishes with central-publishing-maven-plugin 0.7.x (bundles local-repo metadata, D-18)
+ARCH: the Java SDK's Central publishing must use <autoPublish>true</autoPublish> (publishingType is ignored, D-18)
+ARCH: the crates-io-publish probe sends no User-Agent (crates.io refuses it, D-18)
+ARCH: the crates-io-publish loop must treat cargo's 'already exists' as published (D-18)
+ARCH: sdk-release-cert.sh must run the Rust fuzz smokes via crates/sdk/rust/fuzz/smoke.sh (pinned nightly)
+EXIT=1

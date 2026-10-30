@@ -681,6 +681,44 @@ if grep -q '^  maven-central-publish:' "$REL" && \
   echo "ARCH: the maven-central-publish job is not gated on the github-release job (D-18)" >&2
   fail=1
 fi
+# test 22d — central-publishing-maven-plugin 0.7.0 staged the LOCAL repo's
+# maven-metadata-local.xml + _remote.repositories into the bundle, and
+# Central rejected it ("content that does NOT have a .pom file:
+# com/aikoql/aikoql-client", v0.2.4 run 41079954289); it also ignored
+# <publishingType> (not a parameter) — the switch is <autoPublish>.
+JPOM=crates/sdk/java/pom.xml
+if grep -A1 '<artifactId>central-publishing-maven-plugin</artifactId>' "$JPOM" | has '<version>0\.7\.'; then
+  echo "ARCH: the Java SDK publishes with central-publishing-maven-plugin 0.7.x (bundles local-repo metadata, D-18)" >&2
+  fail=1
+fi
+if has '<publishingType>' "$JPOM" || ! has '<autoPublish>true</autoPublish>' "$JPOM"; then
+  echo "ARCH: the Java SDK's Central publishing must use <autoPublish>true</autoPublish> (publishingType is ignored, D-18)" >&2
+  fail=1
+fi
+# test 22e — crates.io refuses API requests without a User-Agent, so the
+# already-published probe always failed and cargo then answered "already
+# exists" ten times (v0.2.4 run 41079954289 on aikoql-native).
+if grep -q '^  crates-io-publish:' "$REL"; then
+  _crates=$(sed -n '/^  crates-io-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL")
+  if ! printf '%s\n' "$_crates" | grep 'crates.io/api/v1/crates' | has -E '(-A|--user-agent|User-Agent)'; then
+    echo "ARCH: the crates-io-publish probe sends no User-Agent (crates.io refuses it, D-18)" >&2
+    fail=1
+  fi
+  if ! printf '%s\n' "$_crates" | has 'already exists'; then
+    echo "ARCH: the crates-io-publish loop must treat cargo's 'already exists' as published (D-18)" >&2
+    fail=1
+  fi
+fi
+# test 22f — the release cert's Rust fuzz smokes need the libFuzzer engine,
+# which is nightly-only: run them through fuzz/smoke.sh (it pins and
+# installs the nightly), never a bare \`cargo fuzz run\` on stable
+# (v0.2.4 run 41079954289: "the option Z is only accepted on the nightly
+# compiler").
+if has -E '^[[:space:]]*cargo fuzz run' scripts/sdk-release-cert.sh || \
+   ! has 'crates/sdk/rust/fuzz/smoke.sh' scripts/sdk-release-cert.sh; then
+  echo "ARCH: sdk-release-cert.sh must run the Rust fuzz smokes via crates/sdk/rust/fuzz/smoke.sh (pinned nightly)" >&2
+  fail=1
+fi
 # test 22c — crates.io rate-limits NEW crates (a burst, then a trickle) with
 # 429 "try again after <time>": the publish loop must wait for that time,
 # not spend its fixed 60 s retries (v0.2.4 run 41051188037: 7 of 10 crates
