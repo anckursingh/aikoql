@@ -1,7 +1,7 @@
 {
   "id": "sdk-ts-nonobject-frame",
   "pre_fix_commit": "HEAD",
-  "command": "sh -c cd crates/sdk/typescript && node --test --test-name-pattern="JSON but not an object" tests/wire.test.ts",
+  "command": "sh -c cd crates/sdk/typescript && node --test --test-name-pattern=\"JSON but not an object\" tests/wire.test.ts",
   "captured_at": "2026-10-29T15:09:41Z",
   "captured_head": "02717cd52d85669565b871e45605b5251268cd62",
   "exit_code": 1

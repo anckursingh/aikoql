@@ -1,7 +1,7 @@
 {
   "id": "v05-pypi-partial-wheels",
   "pre_fix_commit": "9039b03",
-  "command": "bash -c git show 9039b03:.github/workflows/release.yml | sed -n '/^  pypi-publish:/,/^  [a-z][a-z0-9_-]*:$/p' | grep -q "needs.pypi-wheel-matrix.result == 'success'"",
+  "command": "bash -c git show 9039b03:.github/workflows/release.yml | sed -n '/^  pypi-publish:/,/^  [a-z][a-z0-9_-]*:$/p' | grep -q \"needs.pypi-wheel-matrix.result == 'success'\"",
   "captured_at": "2026-10-27T20:34:16Z",
   "captured_head": "9039b0316c1fbe69f82178d0e5c0a9ac823a2968",
   "exit_code": 1

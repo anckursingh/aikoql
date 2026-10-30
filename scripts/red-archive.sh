@@ -48,11 +48,20 @@ if [ "$code" -eq 0 ]; then
   echo "archive $id: command exited 0 — not a RED" >&2
   exit 1
 fi
+# JSON string escaping for the recorded command (quotes, backslashes, tabs,
+# newlines) — an unescaped "$*" made invalid manifests
+esc() {
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"; s="${s//$'\n'/\\n}"; s="${s//$'\r'/\\r}"
+  printf '%s' "$s"
+}
+cmd="$(esc "$*")"
 cat > "$man" <<EOF
 {
   "id": "$id",
   "pre_fix_commit": "$commit",
-  "command": "$*",
+  "command": "$cmd",
   "captured_at": "$start",
   "captured_head": "$head",
   "exit_code": $code

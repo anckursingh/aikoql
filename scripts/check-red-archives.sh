@@ -5,7 +5,7 @@
 # design (they capture the estate gate's own RED output), so the SDK/proxy
 # reference grep in ci.yml excludes this directory.
 set -euo pipefail
-dir="$(dirname "$0")/../docs/red-archive"
+dir="${RED_ARCHIVE_DIR:-$(dirname "$0")/../docs/red-archive}"
 if [ ! -d "$dir" ]; then
   echo "RED ARCHIVES: missing $dir — the P0-1 archive directory must exist" >&2
   exit 1
@@ -22,6 +22,11 @@ for m in "${mans[@]}"; do
   log="$dir/$id.red.log"
   if [ ! -f "$log" ]; then
     echo "RED ARCHIVES: $id missing $id.red.log" >&2
+    fail=1
+    continue
+  fi
+  if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$m" 2>/dev/null; then
+    echo "RED ARCHIVES: $id manifest is not valid JSON" >&2
     fail=1
     continue
   fi
