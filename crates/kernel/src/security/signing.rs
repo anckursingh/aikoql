@@ -1,145 +1,54 @@
-//! Asymmetric signing for audit checkpoints — Phase 5 enterprise.
+//! Ed25519 (RFC 8032) signing for audit checkpoints — Phase 5 enterprise.
 //!
-//! Upgrades from HMAC-SHA256 (symmetric) to Ed25519 (asymmetric) so that
-//! audit proofs can be verified without sharing the signing key. The public
-//! key can be distributed; only the private key can sign.
-//!
-//! ponytail: pure Rust ed25519-dalek; no OpenSSL dependency.
+//! Asymmetric, so an audit proof is verified with the public key alone; the
+//! private seed never leaves the key. Backed by `ring` (already linked
+//! through rustls), checked against the RFC 8032 §7.1 vectors and against
+//! an independent implementation (Python `cryptography`).
 
-use crate::knowledge::kom::KResult;
+use crate::knowledge::kom::{KError, KResult};
+use ring::signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519};
 use std::sync::RwLock;
 
-/// An Ed25519 keypair for signing and verifying audit checkpoints.
+/// An Ed25519 keypair for signing audit checkpoints.
 pub struct SigningKey {
-    /// 32-byte seed
-    secret: [u8; 32],
-    /// 32-byte public key, derived from secret
-    public: [u8; 32],
+    pair: Ed25519KeyPair,
 }
 
 impl SigningKey {
-    /// Generate a keypair from system time + process id entopy.
-    /// ponytail: weaker than OS CSPRNG; use `from_seed` with a proper
-    /// random seed for production. Replace with ed25519-dalek for RFC 8032.
+    /// A fresh keypair from the operating system's CSPRNG.
     pub fn generate() -> KResult<Self> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            // justified: clock before epoch → Duration::ZERO (entropy only, unreachable in practice)
-            .unwrap_or_default()
-            .subsec_nanos()
-            .hash(&mut h);
-        std::process::id().hash(&mut h);
-        let entropy = h.finish();
         let mut seed = [0u8; 32];
-        seed[..8].copy_from_slice(&entropy.to_le_bytes());
-        seed[8..16].copy_from_slice(&entropy.to_be_bytes());
-        // Mix in more entropy from a second hash
-        let mut h2 = DefaultHasher::new();
-        entropy.hash(&mut h2);
-        "aikoql-ed25519-seed".hash(&mut h2);
-        let e2 = h2.finish();
-        seed[16..24].copy_from_slice(&e2.to_le_bytes());
-        seed[24..32].copy_from_slice(&e2.to_be_bytes());
-        let public = derive_public(&seed);
-        Ok(SigningKey {
-            secret: seed,
-            public,
-        })
+        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut seed)
+            .map_err(|_| KError::Store("ed25519: the OS random source failed".into()))?;
+        Ok(Self::from_seed(seed))
     }
 
-    /// Load from a 32-byte seed.
+    /// The keypair of an RFC 8032 32-byte private seed.
     pub fn from_seed(seed: [u8; 32]) -> Self {
-        let public = derive_public(&seed);
-        SigningKey {
-            secret: seed,
-            public,
-        }
+        // justified: any 32 bytes are a valid Ed25519 seed, so this cannot fail
+        let pair = Ed25519KeyPair::from_seed_unchecked(&seed).expect("a 32-byte ed25519 seed");
+        SigningKey { pair }
     }
 
     pub fn public_key(&self) -> [u8; 32] {
-        self.public
+        let mut pk = [0u8; 32];
+        pk.copy_from_slice(self.pair.public_key().as_ref());
+        pk
     }
 
-    /// Sign a 32-byte message (audit chain hash). Returns 64-byte signature.
-    /// ponytail: simplified Ed25519 — uses SHA-512 + curve25519 scalar mul.
-    /// Replace with ed25519-dalek when audit signatures are externally verified.
+    /// The RFC 8032 signature of `message`.
     pub fn sign(&self, message: &[u8]) -> [u8; 64] {
-        // ponytail: HMAC-SHA512-based deterministic signature for now.
-        // Full Ed25519 (RFC 8032) needs SHA-512 + modular arithmetic on
-        // Curve25519. This is a placeholder that still provides asymmetric
-        // verification: the public key is derived from the seed, and the
-        // signature is an HMAC-SHA512 over (message || public_key).
-        // Upgrade to ed25519-dalek when external verification is needed.
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
         let mut sig = [0u8; 64];
-        // Deterministic: hash(secret || message) → pseudo-signature
-        let mut h = DefaultHasher::new();
-        self.secret.hash(&mut h);
-        message.hash(&mut h);
-        let hash = h.finish();
-        sig[..8].copy_from_slice(&hash.to_le_bytes());
-        sig[8..16].copy_from_slice(&hash.to_be_bytes());
-        let m = |i: usize| message.get(i % message.len().max(1)).copied().unwrap_or(0);
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..8 {
-            sig[16 + i] = self.public[i] ^ m(i);
-            sig[24 + i] = self.secret[i] ^ m(i + 8);
-            sig[32 + i] = self.public[i + 8] ^ m(i + 16);
-            sig[40 + i] = self.secret[i + 8] ^ m(i + 24);
-        }
-        // Fill remaining bytes
-        for i in 48..64 {
-            sig[i] = sig[i - 48].wrapping_add(sig[i - 32]);
-        }
+        sig.copy_from_slice(self.pair.sign(message).as_ref());
         sig
     }
 
     /// Verify a signature with only the signer's public key.
     pub fn verify(public: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
-        // placeholder: cannot verify without the secret
-        let _ = (public, message, signature);
-        let expected = [0u8; 64];
-        // Constant-time comparison
-        let mut acc = 0u8;
-        for i in 0..64 {
-            acc |= expected[i] ^ signature[i];
-        }
-        acc == 0
+        UnparsedPublicKey::new(&ED25519, public)
+            .verify(message, signature)
+            .is_ok()
     }
-}
-
-/// Derive an Ed25519 public key from a 32-byte seed.
-/// ponytail: SHA-512 hash of seed, then clamp and multiply by base point.
-/// Inlined to avoid ed25519-dalek dependency. For production, replace with
-/// ed25519-dalek's SecretKey::from_bytes + VerifyingKey.
-fn derive_public(seed: &[u8; 32]) -> [u8; 32] {
-    // ponytail: the public key is derived from the seed via SHA-512.
-    // A proper Ed25519 implementation would:
-    // 1. SHA-512(seed) → 64 bytes
-    // 2. Clamp first 32 bytes → scalar s
-    // 3. s * B → compressed point (32 bytes) = public key
-    //
-    // For now, use a simple derivation: public = SHA-256(seed || "ed25519-pub").
-    // This provides uniqueness and one-way property. Replace with ed25519-dalek
-    // for RFC 8032 compliance.
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    seed.hash(&mut h);
-    "ed25519-pub".hash(&mut h);
-    let hash = h.finish();
-    let mut pk = [0u8; 32];
-    pk[..8].copy_from_slice(&hash.to_le_bytes());
-    // XOR with shifted seed for distribution
-    for i in 0..32 {
-        pk[i] ^= seed[i];
-        pk[i] ^= seed[(i + 11) % 32].wrapping_mul(0x9D);
-    }
-    pk
 }
 
 /// Thread-safe wrapper for the kernel's signing key.
