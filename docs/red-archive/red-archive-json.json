@@ -1,0 +1,8 @@
+{
+  "id": "red-archive-json",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-red-archive-tooling.sh",
+  "captured_at": "2026-10-30T18:04:30Z",
+  "captured_head": "ab3164246797ef454d031c1201b0cd10a104da93",
+  "exit_code": 1
+}

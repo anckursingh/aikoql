@@ -1,0 +1,3 @@
+RED ARCHIVE TOOLING: red-archive.sh wrote a manifest that is not JSON for a quoted command
+RED ARCHIVE TOOLING: check-red-archives.sh accepted a manifest that is not JSON
+EXIT=1
