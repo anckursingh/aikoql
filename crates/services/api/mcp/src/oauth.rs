@@ -31,10 +31,14 @@ const P_CLIENT: &str = "sys/oauth/client/";
 const P_ACCESS: &str = "sys/oauth/access/";
 const P_REFRESH: &str = "sys/oauth/refresh/";
 
+#[derive(Clone)]
 struct Client {
     name: String,
     redirect_uris: Vec<String>,
 }
+
+/// Fetches a client ID metadata document (the URL is the client_id).
+type Fetch = Box<dyn Fn(&str) -> Result<Vec<u8>, String> + Send + Sync>;
 
 struct Code {
     client_id: String,
@@ -107,6 +111,9 @@ pub(crate) struct OAuth {
     codes: Mutex<HashMap<String, Code>>,
     /// serializes the token endpoint's read-check-write (rotation)
     issuing: Mutex<u64>,
+    /// client ID metadata documents: their fetcher, and recent results
+    fetch: Fetch,
+    metadata: Mutex<HashMap<String, (Instant, Option<Client>)>>,
 }
 
 impl OAuth {
@@ -126,7 +133,15 @@ impl OAuth {
             store,
             codes: Mutex::new(HashMap::new()),
             issuing: Mutex::new(0),
+            fetch: Box::new(fetch_metadata),
+            metadata: Mutex::new(HashMap::new()),
         }
+    }
+
+    #[cfg(test)]
+    fn with_fetch(mut self, fetch: Fetch) -> Self {
+        self.fetch = fetch;
+        self
     }
 
     fn client(&self, id: &str) -> Option<Client> {
@@ -656,6 +671,22 @@ fn is_loopback_uri(u: &str) -> bool {
 }
 
 /// A registrable redirect: HTTPS, or loopback http (RFC 8252); no fragment.
+/// A client_id that names a metadata document: an https URL with a path,
+/// no fragment, credentials or dot segments.
+fn metadata_url_ok(_u: &str) -> bool {
+    false
+}
+
+/// An address a metadata fetch may connect to: public unicast only.
+fn public_ip(_ip: std::net::IpAddr) -> bool {
+    true
+}
+
+/// GET a client ID metadata document.
+fn fetch_metadata(_url: &str) -> Result<Vec<u8>, String> {
+    Err("client ID metadata documents are not supported".into())
+}
+
 /// The URI is written into headers (Location, CSP): printable ASCII only,
 /// and a plain host[:port] authority.
 fn redirect_allowed(u: &str) -> bool {
@@ -978,6 +1009,127 @@ mod tests {
                 .find(|(k, _)| *k == "Retry-After")
                 .map(|(_, v)| v.as_str()),
             Some("1")
+        );
+    }
+
+    const CLAUDE_CODE: &str = "https://claude.ai/oauth/claude-code-client-metadata";
+    const CLAUDE_CODE_DOC: &str = r#"{"client_id":"https://claude.ai/oauth/claude-code-client-metadata","client_name":"Claude Code","client_uri":"https://claude.ai","redirect_uris":["http://localhost/callback","http://127.0.0.1/callback"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}"#;
+
+    fn metadata_oauth(doc: &'static str, fetches: Arc<Mutex<u32>>) -> OAuth {
+        OAuth::new(
+            Arc::new(AuthResolver::new(vec![], Some("pw"), 3600)),
+            true,
+            store(),
+        )
+        .with_fetch(Box::new(move |url| {
+            *fetches.lock().unwrap() += 1;
+            assert_eq!(url, CLAUDE_CODE);
+            Ok(doc.as_bytes().to_vec())
+        }))
+    }
+
+    fn page_for(o: &OAuth, client: &str, redirect: &str) -> Reply {
+        let q: HashMap<String, String> = [
+            ("response_type", "code"),
+            ("client_id", client),
+            ("redirect_uri", redirect),
+            ("code_challenge", "c".repeat(43).as_str()),
+            ("code_challenge_method", "S256"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        o.authorize_page(&q, H, None)
+    }
+
+    #[test]
+    fn metadata_urls() {
+        assert!(metadata_url_ok(CLAUDE_CODE));
+        assert!(metadata_url_ok("https://app.example:8443/client.json"));
+        assert!(
+            !metadata_url_ok("http://app.example/client.json"),
+            "https only"
+        );
+        assert!(
+            !metadata_url_ok("https://app.example"),
+            "a path is required"
+        );
+        assert!(
+            !metadata_url_ok("https://app.example/"),
+            "a path is required"
+        );
+        assert!(!metadata_url_ok("https://app.example/c#x"));
+        assert!(!metadata_url_ok("https://u:p@app.example/c"));
+        assert!(!metadata_url_ok("https://app.example/a/../c"));
+        assert!(!metadata_url_ok("https://app.example/./c"));
+    }
+
+    #[test]
+    fn metadata_fetches_reach_public_addresses_only() {
+        for private in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "::1",
+            "::",
+            "fe80::1",
+            "fc00::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+        ] {
+            assert!(!public_ip(private.parse().unwrap()), "{private}");
+        }
+        for public in ["8.8.8.8", "1.1.1.1", "2606:4700::1111"] {
+            assert!(public_ip(public.parse().unwrap()), "{public}");
+        }
+        // refused at resolution, before any connection
+        let err = fetch_metadata("https://localhost/client.json").unwrap_err();
+        assert!(err.contains("public"), "{err}");
+    }
+
+    #[test]
+    fn a_metadata_document_client_signs_in() {
+        let fetches = Arc::new(Mutex::new(0));
+        let o = metadata_oauth(CLAUDE_CODE_DOC, fetches.clone());
+        let page = page_for(&o, CLAUDE_CODE, "http://localhost:5555/callback");
+        assert_eq!(page.0, "200 OK", "{}", page.3);
+        assert!(page.3.contains("Claude Code"));
+        assert_eq!(
+            page_for(&o, CLAUDE_CODE, "http://127.0.0.1:6000/callback").0,
+            "200 OK"
+        );
+        assert_eq!(*fetches.lock().unwrap(), 1, "the document is cached");
+        assert_eq!(
+            page_for(&o, CLAUDE_CODE, "https://evil.example/cb").0,
+            "400 Bad Request",
+            "only the document's redirect URIs"
+        );
+        let meta = o
+            .route("GET", "/.well-known/oauth-authorization-server", "", H, "")
+            .unwrap();
+        let meta: J = serde_json::from_str(&meta.3).unwrap();
+        assert_eq!(meta["client_id_metadata_document_supported"], json!(true));
+    }
+
+    #[test]
+    fn a_metadata_document_must_name_itself_and_be_a_public_client() {
+        let other = r#"{"client_id":"https://claude.ai/oauth/other","client_name":"x","redirect_uris":["http://localhost/callback"]}"#;
+        let o = metadata_oauth(other, Arc::new(Mutex::new(0)));
+        assert_eq!(
+            page_for(&o, CLAUDE_CODE, "http://localhost/callback").0,
+            "400 Bad Request"
+        );
+        let confidential = r#"{"client_id":"https://claude.ai/oauth/claude-code-client-metadata","client_name":"x","redirect_uris":["http://localhost/callback"],"token_endpoint_auth_method":"private_key_jwt"}"#;
+        let o = metadata_oauth(confidential, Arc::new(Mutex::new(0)));
+        assert_eq!(
+            page_for(&o, CLAUDE_CODE, "http://localhost/callback").0,
+            "400 Bad Request"
         );
     }
 
