@@ -1542,8 +1542,17 @@ fn real_s3_ha_failover_then_pitr_from_the_bucket() {
         format!("127.0.0.1:{}", free_port()),
         format!("127.0.0.1:{}", free_port()),
     );
+    // Real AWS: the production default lease (10 s → 3.3 s per S3 request).
+    // ha_args' 3 s (1 s per request) is tuned for a loopback MinIO/Moto; a
+    // WAN round trip to a distant region renews late and the leader
+    // self-fences — safe, but not what this test certifies.
+    let aws = std::env::var_os("AIKOQL_TEST_S3_AWS").is_some();
     let node = |n: &str, repl: &str| {
         let mut args = ha_args(Path::new(&lease), n, repl);
+        if aws {
+            let ttl = args.iter().position(|a| a == "--ha-ttl-ms").unwrap() + 1;
+            args[ttl] = "10000".into();
+        }
         args.extend(["--archive", &archive, "--archive-log-ms", "200"].map(String::from));
         args
     };
