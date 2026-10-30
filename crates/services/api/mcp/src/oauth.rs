@@ -950,6 +950,14 @@ mod tests {
         assert!(!redirect_allowed("http://evil.example/cb"));
         assert!(!redirect_allowed("https://x.example/cb#frag"));
         assert!(!redirect_allowed("javascript:alert(1)"));
+        // the URI lands in Location and the CSP header: no header or
+        // directive breaks, no stray authority characters
+        assert!(!redirect_allowed("https://a.example/cb\r\nSet-Cookie: x=1"));
+        assert!(!redirect_allowed("https://a.example;script-src */cb"));
+        assert!(!redirect_allowed("https://a.example x/cb"));
+        assert!(!redirect_allowed("https://a.example:12x/cb"));
+        assert!(redirect_allowed("https://a-b.example:8443/cb?x=1"));
+        assert!(redirect_allowed("http://[::1]:5000/cb"));
         assert!(redirect_matches(
             "http://localhost/callback",
             "http://localhost:5555/callback"

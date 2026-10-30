@@ -1,0 +1,8 @@
+{
+  "id": "oauth-redirect-chars",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp oauth::tests::redirects",
+  "captured_at": "2026-10-30T06:28:11Z",
+  "captured_head": "8ad0c11a1bcfd0a520cd26c5351c0ab68f87acb0",
+  "exit_code": 101
+}
