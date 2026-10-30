@@ -790,7 +790,8 @@ pub(crate) fn model_install_args<'a>(
         .filter(|s| !s.starts_with("--"))
         .unwrap_or(aikoql_semantic::provider::DEFAULT_MODEL_ID);
     let mut model_dir = None;
-    let mut ti = 2;
+    // from 1: MODEL_ID is optional, so a flag may sit in its slot
+    let mut ti = 1;
     while ti < tail_args.len() {
         if tail_args[ti] == "--model-dir" {
             model_dir = Some(
