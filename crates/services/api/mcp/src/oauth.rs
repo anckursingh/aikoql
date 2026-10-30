@@ -936,6 +936,46 @@ mod tests {
     }
 
     #[test]
+    fn the_sign_in_page_backs_off_with_retry_after() {
+        let o = OAuth::new(
+            Arc::new(AuthResolver::new(vec![], Some("pw"), 3600)),
+            true,
+            store(),
+        );
+        let reg = o.register(r#"{"redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]}"#);
+        let client = serde_json::from_str::<J>(&reg.3).unwrap()["client_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let form = |pw: &str| -> HashMap<String, String> {
+            [
+                ("response_type", "code"),
+                ("client_id", client.as_str()),
+                ("redirect_uri", "https://claude.ai/api/mcp/auth_callback"),
+                ("code_challenge", "c".repeat(43).as_str()),
+                ("code_challenge_method", "S256"),
+                ("username", "admin"),
+                ("password", pw),
+                ("approve", "1"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+        };
+        for _ in 0..5 {
+            assert_eq!(o.authorize(&form("wrong"), H).0, "401 Unauthorized");
+        }
+        let r = o.authorize(&form("pw"), H);
+        assert_eq!(r.0, "429 Too Many Requests");
+        assert_eq!(
+            r.1.iter()
+                .find(|(k, _)| *k == "Retry-After")
+                .map(|(_, v)| v.as_str()),
+            Some("1")
+        );
+    }
+
+    #[test]
     fn a_refresh_token_rotates_once() {
         let o = OAuth::new(
             Arc::new(AuthResolver::new(vec![], Some("pw"), 3600)),

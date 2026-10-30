@@ -486,6 +486,50 @@ fn auth008_rate_limiter_keys_per_principal() {
     );
 }
 
+/// Sign-in backoff: five wrong passwords are free, then each failure
+/// doubles the wait (1 s, 2 s, ...), during which even the right password
+/// is refused (429 on /api/login).
+#[test]
+fn logins_back_off_after_five_failures() {
+    let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86400);
+    for _ in 0..4 {
+        assert!(auth.verify("admin", "wrong").is_none());
+    }
+    assert_eq!(auth.locked_for("admin"), None, "four failures are free");
+    assert!(auth.verify("admin", "wrong").is_none());
+    assert_eq!(
+        auth.locked_for("admin"),
+        Some(1),
+        "the fifth starts the backoff"
+    );
+    assert!(
+        auth.verify("admin", "pw").is_none(),
+        "locked: even the right password"
+    );
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let ok = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
+    let err = crate::http::handle_login(&ok, &sessions, &auth).unwrap_err();
+    assert!(err.0.starts_with("429"), "{err:?}");
+    // a name that is not a login is never tracked (the map stays bounded)
+    for _ in 0..10 {
+        assert!(auth.verify("ghost", "x").is_none());
+    }
+    assert_eq!(auth.locked_for("ghost"), None);
+}
+
+#[test]
+fn a_successful_sign_in_resets_the_backoff() {
+    let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86400);
+    for _ in 0..4 {
+        assert!(auth.verify("admin", "wrong").is_none());
+    }
+    assert!(auth.verify("admin", "pw").is_some());
+    for _ in 0..4 {
+        assert!(auth.verify("admin", "wrong").is_none());
+    }
+    assert_eq!(auth.locked_for("admin"), None);
+}
+
 /// auth001 RED: login verifies CONFIGURED credentials (argon2id) — no
 /// hardcoded admin/admin. The resolver here bootstraps admin from the
 /// AIKOQL_ADMIN_PASSWORD path; the second half pins [auth].users hashes.

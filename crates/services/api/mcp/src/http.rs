@@ -597,6 +597,11 @@ impl AuthResolver {
             .map(|u| u.roles.clone())
     }
 
+    /// Seconds `username` must wait before its next sign-in attempt.
+    pub(crate) fn locked_for(&self, _username: &str) -> Option<u64> {
+        None
+    }
+
     pub(crate) fn verify(&self, username: &str, password: &str) -> Option<Vec<String>> {
         use argon2::password_hash::PasswordVerifier;
         for u in &self.users {
@@ -622,18 +627,20 @@ pub(crate) fn handle_login(
     body: &str,
     sessions: &Mutex<HashMap<String, HttpSession>>,
     auth: &AuthResolver,
-) -> Result<String, String> {
-    let creds: J = serde_json::from_str(body).map_err(|e| format!("bad JSON: {}", e))?;
+) -> Result<String, (&'static str, String)> {
+    let unauthorized = |e: String| ("401 Unauthorized", e);
+    let creds: J =
+        serde_json::from_str(body).map_err(|e| unauthorized(format!("bad JSON: {}", e)))?;
     let username = creds.get("username").and_then(|v| v.as_str()).unwrap_or("");
     let password = creds.get("password").and_then(|v| v.as_str()).unwrap_or("");
 
     let roles = auth
         .verify(username, password)
-        .ok_or("invalid credentials")?;
+        .ok_or_else(|| unauthorized("invalid credentials".into()))?;
     // P3-M1 (auth002): 256-bit CSPRNG session token (64 hex chars). The old
     // time+pid token was predictable; sessions are bearer credentials now.
     let mut raw = [0u8; 32];
-    getrandom::getrandom(&mut raw).map_err(|e| format!("session token: {e}"))?;
+    getrandom::getrandom(&mut raw).map_err(|e| unauthorized(format!("session token: {e}")))?;
     let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     // justified: Mutex poison is unrecoverable
     sessions.lock().unwrap().insert(
@@ -1114,11 +1121,7 @@ pub(crate) fn handle_http(
                 "application/json",
                 json!({"token": token}).to_string(),
             ),
-            Err(e) => (
-                "401 Unauthorized",
-                "application/json",
-                json!({"error": e}).to_string(),
-            ),
+            Err((status, e)) => (status, "application/json", json!({"error": e}).to_string()),
         },
         // P3-M1 (auth005/auth006): the pre-v1 route aliases are part of the
         // same surface — session required, and graph runs as the session's
