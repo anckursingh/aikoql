@@ -1,0 +1,8 @@
+{
+  "id": "oauth-form-action",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp the_sign_in_page",
+  "captured_at": "2026-10-30T06:27:17Z",
+  "captured_head": "1df4e2dd6c816afea1a18fd0e5d6007bc0bb111b",
+  "exit_code": 101
+}

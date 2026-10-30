@@ -872,6 +872,49 @@ mod tests {
         );
     }
 
+    /// Chrome applies form-action to the redirect after the POST too: the
+    /// sign-in page must allow the client's (registered) redirect origin,
+    /// or the browser stays on the page after a correct login.
+    #[test]
+    fn the_sign_in_page_lets_the_form_redirect_to_the_client() {
+        let o = OAuth::new(
+            Arc::new(AuthResolver::new(vec![], Some("pw"), 3600)),
+            true,
+            store(),
+        );
+        let reg = o.register(r#"{"redirect_uris": ["https://claude.ai/api/mcp/auth_callback"]}"#);
+        let client = serde_json::from_str::<J>(&reg.3).unwrap()["client_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let q: HashMap<String, String> = [
+            ("response_type", "code"),
+            ("client_id", client.as_str()),
+            ("redirect_uri", "https://claude.ai/api/mcp/auth_callback"),
+            ("code_challenge", "c".repeat(43).as_str()),
+            ("code_challenge_method", "S256"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        for (what, page) in [
+            ("the page", o.authorize_page(&q, H, None)),
+            ("a wrong password", o.authorize_page(&q, H, Some("wrong"))),
+        ] {
+            let csp = &page
+                .1
+                .iter()
+                .find(|(k, _)| *k == "Content-Security-Policy")
+                .unwrap()
+                .1;
+            assert!(
+                csp.contains("form-action 'self' https://claude.ai;")
+                    || csp.ends_with("form-action 'self' https://claude.ai"),
+                "{what}: {csp}"
+            );
+        }
+    }
+
     #[test]
     fn a_refresh_token_rotates_once() {
         let o = OAuth::new(
