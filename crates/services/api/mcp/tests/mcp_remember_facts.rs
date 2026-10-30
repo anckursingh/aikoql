@@ -114,20 +114,14 @@ fn f01_new_facts_land_with_provenance_and_are_recalled() {
     assert_eq!(r.len(), 2);
     assert!(r.iter().all(|f| f["status"] == "created"), "{r:?}");
     let koid = r[0]["koid"].as_str().unwrap();
-    let ko = m.tool("explain", json!({"koid": koid}));
-    let text = ko.to_string();
-    assert!(
-        text.contains("conversation:chat-1"),
-        "the conversation is the evidence: {ko}"
-    );
-    assert!(
-        text.contains("messages 3-4"),
-        "with the message range: {ko}"
-    );
-    assert!(
-        text.contains("llm_inferred"),
-        "an extracted fact's default authority: {ko}"
-    );
+    // the stored evidence itself (explain's evidence list predates canonical
+    // evidence and stays empty; its `source` does show the conversation)
+    let ko = m.tool("get", json!({"koid": koid}));
+    let ev = &ko["extensions"]["evidence"][0];
+    assert_eq!(ev["source_artifact"], json!("conversation:chat-1"), "{ko}");
+    assert_eq!(ev["location"], json!("messages 3-4"), "{ko}");
+    assert_eq!(ev["method"], json!("llm_inference"), "{ko}");
+    assert_eq!(ko["extensions"]["authority"], json!("llm_inferred"), "{ko}");
     let hits = m.tool(
         "recall",
         json!({"query": "when do we deploy", "wait_for_freshness_ms": 5000}),
