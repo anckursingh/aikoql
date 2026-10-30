@@ -994,6 +994,11 @@ pub(crate) fn handle_http(
             Ok(0) | Err(_) => break,
             Ok(k) => n += k,
         }
+        // not a request line (e.g. a TLS hello on this plain port): stop
+        // here, the parse below drops it, instead of waiting for headers
+        if !buf[0].is_ascii_uppercase() {
+            break;
+        }
     }
     // Read body remainder if Content-Length exceeds what we already got.
     let req = String::from_utf8_lossy(&buf[..n]);
