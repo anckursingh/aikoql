@@ -1,0 +1,8 @@
+{
+  "id": "release-crates-429",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-30T12:46:08Z",
+  "captured_head": "368a2ac563d17ca5064994a7174b6d1b15f5422d",
+  "exit_code": 1
+}
