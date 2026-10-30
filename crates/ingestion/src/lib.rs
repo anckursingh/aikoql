@@ -2024,8 +2024,8 @@ mod tests {
         use std::io::Write;
         let file = std::fs::File::create(path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let options =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("[Content_Types].xml", options).unwrap();
         zip.write_all(
             b"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
@@ -2044,8 +2044,8 @@ mod tests {
         use std::io::Write;
         let file = std::fs::File::create(path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let options =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("[Content_Types].xml", options).unwrap();
         zip.write_all(
             b"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
@@ -2118,8 +2118,8 @@ mod tests {
         use std::io::Write;
         let file = std::fs::File::create(path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let options =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("[Content_Types].xml", options).unwrap();
         zip.write_all(
             b"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
@@ -2213,8 +2213,8 @@ mod tests {
         use std::io::Write;
         let file = std::fs::File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let options =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("[Content_Types].xml", options).unwrap();
         zip.write_all(
             b"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
