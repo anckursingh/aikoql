@@ -120,6 +120,11 @@ docker exec aikoql aikoql --version
 docker exec aikoql aikoql model install --model-dir /data/models   # optional: offline embeddings
 ```
 
+Or start the container with `-e AIKOQL_MODEL_AUTO_INSTALL=1` and it fetches
+the model into `/data/models` (the volume) on first start. Images up to
+0.2.3 ignore `--model-dir` in `model install` without a model id — there,
+use `aikoql model install sentence-transformers/all-MiniLM-L6-v2 --model-dir /data/models`.
+
 With a certificate the image publishes its MCP port like any database image —
 mount it and set `AIKOQL_TLS_CERT` / `AIKOQL_TLS_KEY`:
 
@@ -248,14 +253,19 @@ aikoql> .help
 ## Embeddings (Optional)
 
 Semantic search (`MATCH ... USING EMBEDDING`) runs fully offline — the server
-never downloads models at runtime. Install the bundled model once:
+never downloads models at runtime unless you ask it to. Install the bundled
+model once:
 
 ```bash
 aikoql-mcp model install
 ```
 
+or let `serve` fetch it on its first start with `AIKOQL_MODEL_AUTO_INSTALL=1`
+(a missing default model is downloaded once; later starts load it locally).
+Downloads honour `HF_ENDPOINT` (a mirror) and `HF_HOME` (the cache).
 Without an installed model, `serve` still starts and `/health` reports
-`semantic: {"state": "unavailable"}` together with the install command.
+`semantic: {"state": "unavailable"}` together with the install command (or,
+with the flag, why the download failed).
 Point `--embedding-provider http` + `--embedding-base-url` at an
 Ollama/OpenAI-compatible endpoint to use a remote model instead
 (`ollama` is an alias of `http`; providers are `candle` | `http` | `ollama`).
