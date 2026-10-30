@@ -258,6 +258,7 @@ fn main() {
     let embedding_api_key = cfg.embedding_api_key;
     // PRR-3: local model store override (default ~/.aikoql/models).
     let model_dir_flag = cfg.model_dir;
+    let model_auto_install = cfg.model_auto_install;
     MEMORY_DIR.set(memory_dir).ok();
 
     // P3-M1 (§53–54): build the HTTP login resolver once — argon2id hashes
@@ -549,10 +550,10 @@ fn main() {
                     None
                 } else {
                     use aikoql_semantic::provider::{CandleEmbedding, DEFAULT_MODEL_ID};
-                    // AIKOQL_MODEL_AUTO_INSTALL: the one opt-in exception to
-                    // PRR-3 — a missing default model is downloaded once, at start
-                    let auto_install = std::env::var("AIKOQL_MODEL_AUTO_INSTALL")
-                        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+                    // the one opt-in exception to PRR-3 ([embedding].auto_install /
+                    // AIKOQL_MODEL_AUTO_INSTALL): a missing default model is
+                    // downloaded once, at start
+                    let auto_install = model_auto_install;
                     let loaded = CandleEmbedding::from_local(&candle_dir).or_else(|e| {
                         if !auto_install {
                             return Err(format!(

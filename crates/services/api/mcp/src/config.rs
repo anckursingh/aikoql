@@ -212,6 +212,7 @@ struct TomlEmbedding {
     base_url: Option<String>,
     model: Option<String>,
     api_key: Option<String>,
+    auto_install: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -420,6 +421,9 @@ pub(crate) fn load(
                 cfg.embedding_model = v;
             }
             cfg.embedding_api_key = e.api_key;
+            if let Some(v) = e.auto_install {
+                cfg.model_auto_install = v;
+            }
         }
         if let Some(l) = t.logging {
             if let Some(v) = l.level {
@@ -494,6 +498,9 @@ pub(crate) fn load(
     }
     if let Some(v) = env_opt("AIKOQL_MODEL_DIR") {
         cfg.model_dir = Some(v);
+    }
+    if let Some(v) = env_opt("AIKOQL_MODEL_AUTO_INSTALL") {
+        cfg.model_auto_install = v == "1" || v.eq_ignore_ascii_case("true");
     }
     if let Some(v) = env_opt("AIKOQL_PASSPHRASE") {
         cfg.encryption.passphrase = Some(v);
