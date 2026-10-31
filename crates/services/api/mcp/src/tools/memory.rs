@@ -111,14 +111,15 @@ pub(crate) fn resolve_memory_dir(args: &J) -> String {
         })
 }
 
-pub(crate) fn parse_memory_frontmatter(raw: &str) -> Option<(String, String, String)> {
+pub(crate) fn parse_memory_frontmatter(raw: &str) -> Option<(String, String, String, String)> {
     // Parse YAML frontmatter between --- delimiters.
-    // Returns (name, description, type) from the frontmatter.
+    // Returns (name, description, type, trust).
     let body = raw.strip_prefix("---\n")?;
     let (front, _rest) = body.split_once("\n---")?;
     let mut name = String::new();
     let mut desc = String::new();
     let mut mtype = String::new();
+    let mut trust = String::new();
     for line in front.lines() {
         let trimmed = line.trim();
         if let Some(v) = trimmed.strip_prefix("name:") {
@@ -128,12 +129,15 @@ pub(crate) fn parse_memory_frontmatter(raw: &str) -> Option<(String, String, Str
         } else if let Some(v) = trimmed.strip_prefix("type:") {
             // may appear under metadata: block
             mtype = v.trim().trim_matches('"').to_string();
+        } else if let Some(v) = trimmed.strip_prefix("trust:") {
+            // AG-33: may appear under metadata: block
+            trust = v.trim().trim_matches('"').to_string();
         }
     }
     if name.is_empty() {
         None
     } else {
-        Some((name, desc, mtype))
+        Some((name, desc, mtype, trust))
     }
 }
 
@@ -151,6 +155,7 @@ fn search_memory_files(args: &J) -> Result<J, String> {
     let dir = resolve_memory_dir(args);
 
     let mut results: Vec<J> = Vec::new();
+    let fence = Fence::new();
     let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
         Err(e) => return Err(format!("cannot read memory dir '{}': {}", dir, e)),
@@ -169,8 +174,27 @@ fn search_memory_files(args: &J) -> Result<J, String> {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let (name, desc, _mtype) = parse_memory_frontmatter(&raw)
-            .unwrap_or_else(|| (fname.to_string(), String::new(), String::new()));
+        let (name, desc, _mtype, trust) = parse_memory_frontmatter(&raw).unwrap_or_else(|| {
+            (
+                fname.to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+            )
+        });
+        let trust = if trust.is_empty() {
+            "undeclared"
+        } else {
+            &trust
+        };
+        // AG-33: a file without a declared trust class is untrusted data
+        let wrap = |s: String| {
+            if trust_is_untrusted(trust) {
+                fence.wrap(&s)
+            } else {
+                s
+            }
+        };
 
         // Tokenized scoring: split both query and candidate on
         // whitespace/hyphens/underscores, score by token intersection.
@@ -217,11 +241,12 @@ fn search_memory_files(args: &J) -> Result<J, String> {
             };
 
             results.push(json!({
-                "name": name,
-                "description": desc,
-                "file": path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-                "snippet": snippet,
+                "name": wrap(name.clone()),
+                "description": wrap(desc.clone()),
+                "file": wrap(path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string()),
+                "snippet": wrap(snippet.clone()),
                 "score": score,
+                "trust": trust,
             }));
         }
     }
@@ -235,7 +260,9 @@ fn search_memory_files(args: &J) -> Result<J, String> {
     });
     results.truncate(max_results);
 
-    Ok(json!({"results": results, "count": results.len(), "query": query}))
+    let mut out = json!({"results": results, "count": results.len(), "query": query});
+    out["fence"] = fence.json();
+    Ok(out)
 }
 
 /// AG-10: the KO type a memory is stored as.
@@ -301,8 +328,9 @@ fn memory_body(raw: &str) -> String {
 
 /// Upsert the memory into the knowledge base: a new KO, a new version when
 /// something changed, nothing when it did not. A new memory is private
-/// unless a scope is given; an existing one keeps its scope. Returns
-/// {koid, version, scope}.
+/// unless a scope is given; an existing one keeps its scope. AG-33: the
+/// trust class is the declared source, else the existing class, else
+/// undeclared (untrusted). Returns {koid, version, scope, trust}.
 fn mirror(
     k: &Kernel,
     args: &J,
@@ -311,8 +339,14 @@ fn mirror(
     content: &str,
     mtype: &str,
     scope: Option<&str>,
+    trust: Option<&str>,
 ) -> Result<J, String> {
     let existing = memory_ko(k, args, name)?;
+    let trust = trust
+        .map(str::to_string)
+        .filter(|t| !t.is_empty())
+        .or_else(|| existing.as_ref().map(|ko| ko.trust_class().to_string()))
+        .unwrap_or_else(|| "undeclared".into());
     let scope = scope
         .map(String::from)
         .or_else(|| {
@@ -336,15 +370,20 @@ fn mirror(
     if let Some(ko) = &existing {
         let same = ["description", "content", "memory_type", "scope", "session"]
             .iter()
-            .all(|key| text_prop(ko, key) == props[*key].as_str().unwrap_or(""));
+            .all(|key| text_prop(ko, key) == props[*key].as_str().unwrap_or(""))
+            && ko.trust_class() == trust;
         if same {
-            return Ok(json!({"koid": ko.koid.to_hex(), "version": ko.version, "scope": scope}));
+            return Ok(json!({
+                "koid": ko.koid.to_hex(), "version": ko.version, "scope": scope,
+                "trust": trust,
+            }));
         }
         req["koid"] = json!(ko.koid.to_hex());
         req["expected_version"] = json!(ko.version);
     }
     req["type_name"] = json!(MEMORY_TYPE);
     req["properties"] = props;
+    req["trust"] = json!(trust);
     // AG-61: embed at write time — an agent searches what it just stored,
     // and the semantic engine attaches embeddings later (ms001). Without a
     // model, or while it stays busy, the asynchronous path still runs.
@@ -366,7 +405,7 @@ fn mirror(
         "private"
     });
     let r = crate::tools::tool_remember(k, &req)?;
-    Ok(json!({"koid": r["koid"], "version": r["version"], "scope": scope}))
+    Ok(json!({"koid": r["koid"], "version": r["version"], "scope": scope, "trust": trust}))
 }
 
 /// Write the memory's file view and its MEMORY.md index line.
@@ -376,6 +415,7 @@ fn write_memory_file(
     description: &str,
     mtype: &str,
     content: &str,
+    trust: &str,
 ) -> Result<std::path::PathBuf, String> {
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("cannot create memory dir '{}': {}", dir, e))?;
@@ -383,8 +423,8 @@ fn write_memory_file(
     let filepath = std::path::PathBuf::from(dir).join(&filename);
     let frontmatter =
         format!(
-        "---\nname: {}\ndescription: \"{}\"\nmetadata:\n  type: {}\n  modified: {}\n---\n\n{}\n",
-        name, description, mtype, system_time_iso8601(), content
+        "---\nname: {}\ndescription: \"{}\"\nmetadata:\n  type: {}\n  trust: {}\n  modified: {}\n---\n\n{}\n",
+        name, description, mtype, trust, system_time_iso8601(), content
     );
     std::fs::write(&filepath, &frontmatter)
         .map_err(|e| format!("cannot write memory '{}': {}", filepath.display(), e))?;
@@ -465,28 +505,45 @@ pub(crate) fn tool_memory_search(k: &Kernel, args: &J) -> Result<J, String> {
             },
         })
         .map_err(|e| e.to_string())?;
+    // AG-33: agents may filter by trust class; untrusted content is fenced
+    let trust_want = args.get("trust").and_then(|v| v.as_str());
+    let fence = Fence::new();
     let results: Vec<J> = hits
         .iter()
         .filter(|h| {
-            h.score > 0.0 && h.ko.metadata.type_name == MEMORY_TYPE && in_this_session(&h.ko, args)
+            h.score > 0.0
+                && h.ko.metadata.type_name == MEMORY_TYPE
+                && in_this_session(&h.ko, args)
+                && trust_want.is_none_or(|w| h.ko.trust_class() == w)
         })
         .take(max_results)
         .map(|h| {
             let name = text_prop(&h.ko, "name");
             let content = text_prop(&h.ko, "content");
+            let trust = h.ko.trust_class();
+            let wrap = |s: String| {
+                if trust_is_untrusted(trust) {
+                    fence.wrap(&s)
+                } else {
+                    s
+                }
+            };
             json!({
-                "name": name,
-                "description": text_prop(&h.ko, "description"),
-                "file": format!("{name}.md"),
-                "snippet": content.chars().take(200).collect::<String>(),
+                "name": wrap(name.clone()),
+                "description": wrap(text_prop(&h.ko, "description")),
+                "file": wrap(format!("{name}.md")),
+                "snippet": wrap(content.chars().take(200).collect()),
                 "score": h.score,
                 "koid": h.ko.koid.to_hex(),
                 "scope": text_prop(&h.ko, "scope"),
                 "owner": h.ko.security.owner,
+                "trust": trust,
             })
         })
         .collect();
-    Ok(json!({"results": results, "count": results.len(), "query": query}))
+    let mut out = json!({"results": results, "count": results.len(), "query": query});
+    out["fence"] = fence.json();
+    Ok(out)
 }
 
 pub(crate) fn tool_memory_store(k: &Kernel, args: &J) -> Result<J, String> {
@@ -504,8 +561,25 @@ pub(crate) fn tool_memory_store(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|v| v.as_str())
         .unwrap_or("project");
     // the knowledge base first: a file never claims a memory it does not hold
-    let ko = mirror(k, args, name, description, content, mtype, scope_arg(args)?)?;
-    let filepath = write_memory_file(&resolve_memory_dir(args), name, description, mtype, content)?;
+    let ko = mirror(
+        k,
+        args,
+        name,
+        description,
+        content,
+        mtype,
+        scope_arg(args)?,
+        args.get("trust").and_then(|v| v.as_str()),
+    )?;
+    let trust = ko["trust"].as_str().unwrap_or("undeclared");
+    let filepath = write_memory_file(
+        &resolve_memory_dir(args),
+        name,
+        description,
+        mtype,
+        content,
+        trust,
+    )?;
     Ok(json!({
         "stored": true,
         "name": name,
@@ -523,17 +597,23 @@ pub(crate) fn tool_memory_update(k: &Kernel, args: &J) -> Result<J, String> {
     let name = slug(args)?;
     let dir = resolve_memory_dir(args);
     let filepath = std::path::PathBuf::from(&dir).join(format!("{name}.md"));
-    let (cur_desc, cur_content, cur_type) = match memory_ko(k, args, name)? {
+    let (cur_desc, cur_content, cur_type, cur_trust) = match memory_ko(k, args, name)? {
         Some(ko) => (
             text_prop(&ko, "description"),
             text_prop(&ko, "content"),
             text_prop(&ko, "memory_type"),
+            args.get("trust").and_then(|v| v.as_str()).map(String::from),
         ),
         None if filepath.exists() && !someone_elses(k, args, name)? => {
             let raw = std::fs::read_to_string(&filepath)
                 .map_err(|e| format!("cannot read '{}': {}", filepath.display(), e))?;
-            let (_, desc, mtype) = parse_memory_frontmatter(&raw).unwrap_or_default();
-            (desc, memory_body(&raw), mtype)
+            let (_, desc, mtype, trust) = parse_memory_frontmatter(&raw).unwrap_or_default();
+            (
+                desc,
+                memory_body(&raw),
+                mtype,
+                if trust.is_empty() { None } else { Some(trust) },
+            )
         }
         None => return Err(format!("memory '{}' not found among your memories", name)),
     };
@@ -552,8 +632,18 @@ pub(crate) fn tool_memory_update(k: &Kernel, args: &J) -> Result<J, String> {
             cur_type
         },
     );
-    let ko = mirror(k, args, name, &desc, &content, &mtype, scope_arg(args)?)?;
-    write_memory_file(&dir, name, &desc, &mtype, &content)?;
+    let ko = mirror(
+        k,
+        args,
+        name,
+        &desc,
+        &content,
+        &mtype,
+        scope_arg(args)?,
+        cur_trust.as_deref(),
+    )?;
+    let trust = ko["trust"].as_str().unwrap_or("undeclared");
+    write_memory_file(&dir, name, &desc, &mtype, &content, trust)?;
     Ok(json!({
         "updated": true,
         "name": name,
@@ -591,7 +681,7 @@ pub(crate) fn tool_memory_delete(k: &Kernel, args: &J) -> Result<J, String> {
             .map_err(|e| format!("cannot read '{}': {}", filepath.display(), e))?;
         if description.is_empty() {
             description = parse_memory_frontmatter(&raw)
-                .map(|(_, d, _)| d)
+                .map(|(_, d, _, _)| d)
                 .unwrap_or_default();
         }
         std::fs::remove_file(&filepath)
@@ -635,7 +725,7 @@ pub(crate) fn import_memory_dir(k: &Kernel, dir: &str) -> Result<usize, String> 
         }
         let raw = std::fs::read_to_string(&path)
             .map_err(|e| format!("cannot read '{}': {}", path.display(), e))?;
-        let Some((name, desc, mtype)) = parse_memory_frontmatter(&raw) else {
+        let Some((name, desc, mtype, trust)) = parse_memory_frontmatter(&raw) else {
             continue; // not a memory file
         };
         let mtype = if mtype.is_empty() {
@@ -644,7 +734,20 @@ pub(crate) fn import_memory_dir(k: &Kernel, dir: &str) -> Result<usize, String> 
             mtype
         };
         let before = memory_ko(k, &args, &name)?.map(|ko| ko.version);
-        let after = mirror(k, &args, &name, &desc, &memory_body(&raw), &mtype, None)?;
+        let after = mirror(
+            k,
+            &args,
+            &name,
+            &desc,
+            &memory_body(&raw),
+            &mtype,
+            None,
+            if trust.is_empty() {
+                None
+            } else {
+                Some(trust.as_str())
+            },
+        )?;
         if before != after["version"].as_u64() {
             changed += 1;
         }

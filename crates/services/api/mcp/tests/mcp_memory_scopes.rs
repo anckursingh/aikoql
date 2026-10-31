@@ -105,6 +105,9 @@ impl Mcp {
         scope: Option<&str>,
     ) -> J {
         let mut args = json!({"name": name, "description": name, "content": content});
+        // AG-33: these tests are about scopes — store as user content so
+        // the names come back unfenced
+        args["trust"] = json!("user");
         if let Some(s) = scope {
             args["scope"] = json!(s);
         }
@@ -243,7 +246,10 @@ fn s03_sharing_stops_at_the_tenant() {
         m.search("carol", "globex", "dashboard").is_empty(),
         "another tenant never sees it"
     );
-    assert_eq!(m.search("bob", "acme", "dashboard"), vec!["roadmap"]);
+    // AG-33: undeclared memories come back fenced, the name inside its fence
+    let hits = m.search("bob", "acme", "dashboard");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].contains("roadmap"), "{hits:?}");
 }
 
 #[test]

@@ -110,5 +110,12 @@ fn ms001_a_memory_is_semantically_searchable_right_after_store() {
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&root);
-    assert_eq!(r["results"][0]["name"], "commute", "{r}");
+    // AG-33: no trust declared → undeclared → the name comes back fenced
+    assert!(
+        r["results"][0]["name"]
+            .as_str()
+            .is_some_and(|n| n.contains("commute")),
+        "{r}"
+    );
+    assert_eq!(r["results"][0]["trust"], "undeclared", "{r}");
 }

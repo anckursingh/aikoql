@@ -403,15 +403,20 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
         })
         .collect();
     let budget = max_tokens * 4; // ~4 bytes per token
+                                 // AG-33: agents may filter by trust class; untrusted content is fenced
+    let trust_want = args.get("trust").and_then(J::as_str);
+    let fence = Fence::new();
     let (mut items, mut used, mut truncated) = (Vec::new(), 2usize, false);
     for hit in hits {
         let ko = &hit.ko;
         let status = ko.epistemic_status();
+        let trust = ko.trust_class();
         // a zero score is filler from the fused list, not a match
         if hit.score <= 0.0
             || !crate::tools::memory::in_this_session(ko, args)
             || ko.metadata.type_name.starts_with("aikoql:")
             || matches!(status, crate::EpistemicStatus::Superseded)
+            || trust_want.is_some_and(|w| w != trust)
         {
             continue;
         }
@@ -447,6 +452,11 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
         if snippet.chars().count() > 300 {
             snippet = snippet.chars().take(300).collect::<String>() + "…";
         }
+        // AG-33: stored text from an untrusted source travels inside a
+        // nonce-carrying fence, so an agent cannot take it for instructions
+        if trust_is_untrusted(trust) {
+            snippet = fence.wrap(&snippet);
+        }
         let item = json!({
             "koid": koid,
             "type_name": ko.metadata.type_name,
@@ -454,6 +464,7 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
             "score": hit.score,
             "status": status.as_str(),
             "authority": ko.authority().map(|a| a.as_str()),
+            "trust": trust,
             "snippet": snippet,
             "why": why,
             "conflicts": open.iter().filter(|(_, a, b)| *a == koid || *b == koid).map(|(c, _, _)| c).collect::<Vec<_>>(),
@@ -469,6 +480,8 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
     }
     let mut out =
         json!({ "query": query, "semantic": semantic, "items": items, "truncated": truncated });
+    // AG-33: the fence this response used, so a caller can strip it exactly
+    out["fence"] = fence.json();
     if let Some(note) = semantic_note {
         out["semantic_note"] = json!(note);
     }
