@@ -167,7 +167,7 @@ and a `lesson` KO type distilled by AG-12 sampling.
   0.992 (`benches/ann_recall`, 64-d random — the hard case). Then every
   recall path: VectorOnly with text (recall) takes the bounded leg; RRF
   ranks in N log N (was N^2); hybrid fusions score a bounded vector ∪
-  text union (RRF 100k: 232 → 7.1 ms); the unindexed tail is scored
+  text union (RRF 100k: 232 → 7.1 ms; 1M: 12.7 ms p50, p95 20.0); the unindexed tail is scored
   exactly; no zero-score pads. Open: 20b filtered-ANN buckets, 20c
   quantization, 20d persisted segments.
 - *Problem:* 1M vector_recall 17.0 s, brute force (REPORT §Scale). An HNSW

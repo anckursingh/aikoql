@@ -19,7 +19,8 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   passed its question as text, which sent vector search down the old
   full scan; RRF ranked hits with a quadratic search; and hybrid
   fusions scored every object. Hybrid now scores the union of a bounded
-  vector pool and a bounded text pool — RRF at 100k: 232 ms → 7.1 ms.
+  vector pool and a bounded text pool — RRF at 100k: 232 ms → 7.1 ms; at
+  1M: 12.7 ms p50.
 - **New writes are searchable at once**: objects the index has not
   reached yet are scored exactly next to the index's candidates (up to
   10 000 unindexed events; past that, search is eventual until the index
