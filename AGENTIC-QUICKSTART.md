@@ -124,6 +124,18 @@ status, authority, a short provenance line (`why`) and any open conflict
 about it. `max_tokens` (default 2000) bounds the answer; `fusion: "rrf"`
 adds keyword matching for exact identifiers.
 
+**Stored data is marked as data (AG-33)**: every object carries a trust
+class of its source — `trust: "user"` (or `"system"`) for content you can
+vouch for, `"tool_output"` / `"web"` / `"document"` otherwise; an object
+stored without one reads as `undeclared`. `recall` and `memory_search`
+return the class on every item, accept `trust` to filter by it, and wrap
+content from untrusted classes in a fence (`⟦untrusted <nonce>⟧ …
+⟦/untrusted <nonce>⟧`, nonce in `fence.nonce`) so an embedded
+"ignore all previous instructions" inside a web page you remembered
+cannot be mistaken for yours. The injection corpus
+(`crates/services/api/mcp/tests/injection_corpus.rs`) keeps zero
+untrusted text outside its fence.
+
 **A smaller tool surface**: `serve --tool-profile core` lists 13 tools
 (session_init, remember, get, find_similar, relate, traverse, forget,
 trace, find_conflicts, resolve_conflict, aikoql, health, tools_more) in

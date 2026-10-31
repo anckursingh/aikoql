@@ -9,6 +9,15 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Security
 
+- **Stored content is fenced and trust-classed (AG-33)**: `remember` and
+  `memory_store` accept a `trust` class of the content's source (`user`,
+  `system`, `tool_output`, `web`, `document`; absent reads as
+  `undeclared`). `recall` and `memory_search` return the class on every
+  item, accept `trust` to filter by it, and wrap untrusted content in a
+  nonce-carrying fence (`⟦untrusted <nonce>⟧ … ⟦/untrusted <nonce>⟧`,
+  nonce in `fence.nonce`), so an embedded instruction inside stored data
+  cannot be mistaken for the user's. The injection corpus (300 payloads,
+  forged fence closers) keeps zero untrusted text outside its fence.
 - **OAuth scopes narrow a token (AG-34)**: `mcp:read` reaches read tools
   only (and only `MATCH` through `aikoql`), `mcp:write` everything but
   admin, `mcp:admin` the login's admin role; `mcp` (what every grant had)

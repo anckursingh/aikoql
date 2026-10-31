@@ -243,6 +243,10 @@ of its source (`user`, `tool_output`, `web`, `document`, `system`);
 output (delimited, marked as data). Agents can filter by trust. *Gate:*
 the injection corpus (TESTING-PLAN §T) never surfaces untrusted text
 outside its fence.
+- *Status (2026-10-31): AG-33 done* — ij001: 300-payload corpus green;
+  `trust` is a KO extension (undeclared reads as untrusted), recall and
+  memory_search return it, accept a `trust` filter, and fence untrusted
+  text in a per-response nonce fence; memory files carry the class too.
 
 **AG-34 (P1) OAuth scopes → roles.** Today every OAuth grant has scope
 `mcp` and the login's roles. Add `mcp:read`, `mcp:write`, `mcp:admin`
