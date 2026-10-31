@@ -7,6 +7,20 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Security
+
+- **Real master-key rotation (AG-31)**: `aikoql-mcp key rotate [DB]`
+  rewraps every data key under a new master key — nothing is
+  re-encrypted, the old key file no longer opens the database, and a
+  crash at any step recovers on the next open. The store's data key now
+  lives, wrapped, in `<key_path>.store-dek` (existing databases keep their
+  key; back up both files together). Before this, the rotation the
+  scheduler job pointed at would have made the database unreadable (the
+  store key was derived from the master key) — nothing called it.
+- **Two threads encrypting the first object of a tenant could mint two
+  different keys**, leaving one object under a key that was never saved.
+- **The key-rotation job's shutdown hung**, and the job never rotated.
+
 ### Fixed
 
 - **Vector search uses its index at scale (AG-20)**: `find_similar`

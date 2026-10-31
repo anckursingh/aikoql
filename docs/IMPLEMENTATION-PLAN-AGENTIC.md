@@ -225,6 +225,12 @@ an external verifier (Python `cryptography`) accepts an exported chain.
 (`key_rotation.rs:60` — "actual rotation would call envelope.rotate_kek").
 *Gate:* rotate under write load; every object readable after; old KEK
 unusable.
+- *Status (2026-10-31): AG-31 done* — KeyRing (wrapped store data key,
+  generation-safe rotation), `aikoql-mcp key rotate`, the job rotates;
+  kr001–kr004 + the job test. Found on the way: the derived store key
+  (any rotation = an unreadable store), the DEK first-use race, the job's
+  hanging shutdown. Open: cloud KMS `install` (AWS/Azure/GCP return
+  unsupported), passphrase change, data-key (DEK) re-encryption.
 
 **AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). *Gate:*
 usage per tenant matches the oracle count.
