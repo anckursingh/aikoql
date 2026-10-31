@@ -785,6 +785,9 @@ impl KnowledgeObject {
     pub const EXT_SCOPE: &str = "scope";
     /// Extension key for `ContentTrust` value (R8 remediation).
     pub const EXT_CONTENT_TRUST: &str = "content_trust";
+    /// AG-33: the trust class of the content's source (`user`, `system`,
+    /// `tool_output`, `web`, `document` — or absent).
+    pub const EXT_TRUST: &str = "trust";
 
     /// Get the Authority level from extensions, if set.
     pub fn authority(&self) -> Option<crate::knowledge::authority::Authority> {
@@ -836,6 +839,18 @@ impl KnowledgeObject {
             Self::EXT_CONTENT_TRUST.into(),
             Value::Text(ct.as_str().into()),
         );
+    }
+
+    /// AG-33: the trust class of the content's source. Absent or empty →
+    /// "undeclared", which reads as untrusted (conservative default).
+    pub fn trust_class(&self) -> &str {
+        self.extensions
+            .get(Self::EXT_TRUST)
+            .and_then(|v| match v {
+                Value::Text(s) if !s.is_empty() => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap_or("undeclared")
     }
 
     // ---- v0.3 K1: Epistemic status helpers (stored in extensions) ----
@@ -3345,6 +3360,33 @@ pub fn hmac_sha256(key: &[u8; 32], bytes: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trust_class_defaults_to_undeclared_and_roundtrips() {
+        let mut ko = KnowledgeObject::new(
+            KOID::ZERO,
+            Metadata {
+                type_name: "note".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            SecurityDescriptor {
+                owner: "t".into(),
+                acl: vec![],
+                classification: None,
+            },
+        );
+        assert_eq!(ko.trust_class(), "undeclared", "absent → untrusted default");
+        ko.extensions.insert(
+            KnowledgeObject::EXT_TRUST.into(),
+            Value::Text("tool_output".into()),
+        );
+        assert_eq!(ko.trust_class(), "tool_output");
+        ko.extensions
+            .insert(KnowledgeObject::EXT_TRUST.into(), Value::Text("".into()));
+        assert_eq!(ko.trust_class(), "undeclared", "empty reads as absent");
+    }
 
     #[test]
     fn lifecycle_legal_transitions() {

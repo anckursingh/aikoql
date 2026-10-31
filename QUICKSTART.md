@@ -201,6 +201,20 @@ hierarchy (KEK→tenant DEK→field) encrypts policy-listed properties per type,
 decrypted transparently on read. All subcommands (`audit`, `backup`,
 `restore`, `import`, `ingest-dir`, `shell`) honor the same settings.
 
+**Key files and rotation.** The first encrypted open also writes
+`aikoql.key.store-dek` next to the key file: the store's data key, wrapped
+by the master key. **Back up both files together** — the key file alone no
+longer opens the database. Rotate the master key with the server stopped:
+
+```bash
+AIKOQL_PASSPHRASE=... aikoql-mcp key rotate ./kb
+```
+
+Every data key is rewrapped under the new master key (nothing is
+re-encrypted, so it takes milliseconds), and the old key file no longer
+opens the database. An interrupted rotation finishes or rolls back on the
+next open.
+
 ## Building from Source
 
 Requires: Rust toolchain (https://rustup.rs). No other dependencies for Windows.

@@ -158,6 +158,10 @@ impl StorageEngine for AikoqlStorageEngineV2 {
         self.db.scan(prefix).map_err(se)
     }
 
+    fn scan_from(&self, prefix: &[u8], start: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.db.scan_from(prefix, start).map_err(se)
+    }
+
     fn write_batch(&self, batch: &WriteBatch) -> KResult<()> {
         if batch.is_empty() {
             return Ok(()); // KSE-005: no state change

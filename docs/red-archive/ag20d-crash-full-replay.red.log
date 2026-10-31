@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/index_checkpoint.rs (target/debug/deps/index_checkpoint-b2a4572b58912f6c)
+
+running 1 test
+test ck001_a_killed_server_resumes_its_indexes_from_a_checkpoint ... FAILED
+
+failures:
+
+---- ck001_a_killed_server_resumes_its_indexes_from_a_checkpoint stdout ----
+
+thread 'ck001_a_killed_server_resumes_its_indexes_from_a_checkpoint' (4231905) panicked at crates/services/api/mcp/tests/index_checkpoint.rs:91:5:
+a killed server must resume from its periodic checkpoint, got: [2m2026-10-31T18:40:26.995476Z[0m [32m INFO[0m [2maikoql_mcp::http[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-31T18:40:26.995619Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0m/var/folders/hq/50v7jlgn0hj__fj_2pr9xlhr0000gn/T/ckpt-ck001-3994/db [3mprotocol[0m[2m=[0m"2025-06-18"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-31T18:40:27.016396Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m index maintainer full replay [3mreplayed[0m[2m=[0m21
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ck001_a_killed_server_resumes_its_indexes_from_a_checkpoint
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.08s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test index_checkpoint`
+EXIT=101

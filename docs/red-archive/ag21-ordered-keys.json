@@ -1,0 +1,8 @@
+{
+  "id": "ag21-ordered-keys",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-runtime --test cbo_default cbo_default_00",
+  "captured_at": "2026-10-31T16:58:14Z",
+  "captured_head": "c0c2a0f8634aa87ff83150e4fcb0af6e325165c7",
+  "exit_code": 101
+}

@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/scan_from.rs (target/debug/deps/scan_from-497fb194fc2f0ad9)
+
+running 2 tests
+test sf001_scan_from_seeks_instead_of_scanning_the_prefix ... FAILED
+test sf002_scan_from_equals_the_filtered_scan_across_layers ... ok
+
+failures:
+
+---- sf001_scan_from_seeks_instead_of_scanning_the_prefix stdout ----
+
+thread 'sf001_scan_from_seeks_instead_of_scanning_the_prefix' (4053359) panicked at crates/storage/aikoql-v2/tests/scan_from.rs:46:5:
+the tail of 20000 keys decoded 20001 entries
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    sf001_scan_from_seeks_instead_of_scanning_the_prefix
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+error: test failed, to rerun pass `-p aikoql-storage-v2 --test scan_from`
+EXIT=101

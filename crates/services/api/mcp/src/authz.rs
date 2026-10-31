@@ -4,6 +4,86 @@
 //! shared, principal-keyed limiter is the single gate (R5).
 
 use crate::session::TrustMode;
+/// AG-34 — the role a read-scoped OAuth token (`mcp:read`) carries.
+pub(crate) const READ_SCOPE_ROLE: &str = "scope:read";
+
+/// AG-34 — what an `mcp:read` token may call: an allowlist, so a tool is a
+/// write until classified here (fail-closed). `aikoql` is checked further:
+/// only a MATCH statement reads.
+const READ_TOOLS: &[&str] = &[
+    "abi_version",
+    "aikoql",
+    "audit_report",
+    "compliance_report",
+    "constraint_diagnostics",
+    "document_list",
+    "document_status",
+    "eval_contradictions",
+    "eval_recall",
+    "eval_staleness",
+    "evidence_pack",
+    "explain",
+    "explain_component",
+    "explain_decision",
+    "filter_secrets",
+    "find_conflicts",
+    "find_experiences",
+    "find_similar",
+    "find_stale",
+    "get",
+    "get_by_idem",
+    "health",
+    "job_status",
+    "list_agents",
+    "list_backups",
+    "list_benchmarks",
+    "list_connectors",
+    "list_programs",
+    "list_reports",
+    "list_views",
+    "memory_search",
+    "metrics",
+    "program_cache_stats",
+    "provenance",
+    "recall",
+    "session_init",
+    "storage_stats",
+    "trace",
+    "trace_requirement",
+    "traverse",
+];
+
+/// AG-34 — a read-scoped token reaches read tools only; through `aikoql`,
+/// only a statement that parses to MATCH.
+pub(crate) fn check_scope(
+    roles: &[String],
+    tool: &str,
+    args: &serde_json::Value,
+) -> Result<(), (i64, String)> {
+    if !roles.iter().any(|r| r == READ_SCOPE_ROLE) {
+        return Ok(());
+    }
+    let denied = |what: &str| {
+        Err((
+            -32001,
+            format!("the token's scope is mcp:read — {what} (sign in again with mcp:write)"),
+        ))
+    };
+    if !READ_TOOLS.contains(&tool) {
+        return denied(&format!("tool '{tool}' writes"));
+    }
+    if tool == "aikoql" {
+        let q = args.get("query").and_then(|q| q.as_str()).unwrap_or("");
+        if !matches!(
+            aikoql_compiler::parser::parse(q),
+            Ok(aikoql_compiler::parser::ast::Statement::Match(_))
+        ) {
+            return denied("only a MATCH statement reads");
+        }
+    }
+    Ok(())
+}
+
 /// Capability grants: which roles can call which tools.
 /// Review P1-10: the empty-roles passthrough is trust-mode-aware — on stdio
 /// the OS process boundary IS the trust boundary (single-user local mode,

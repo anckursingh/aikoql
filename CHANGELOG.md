@@ -7,8 +7,54 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Security
+
+- **Stored content is fenced and trust-classed (AG-33)**: `remember` and
+  `memory_store` accept a `trust` class of the content's source (`user`,
+  `system`, `tool_output`, `web`, `document`; absent reads as
+  `undeclared`). `recall` and `memory_search` return the class on every
+  item, accept `trust` to filter by it, and wrap untrusted content in a
+  nonce-carrying fence (`⟦untrusted <nonce>⟧ … ⟦/untrusted <nonce>⟧`,
+  nonce in `fence.nonce`), so an embedded instruction inside stored data
+  cannot be mistaken for the user's. The injection corpus (300 payloads,
+  forged fence closers) keeps zero untrusted text outside its fence.
+- **OAuth scopes narrow a token (AG-34)**: `mcp:read` reaches read tools
+  only (and only `MATCH` through `aikoql`), `mcp:write` everything but
+  admin, `mcp:admin` the login's admin role; `mcp` (what every grant had)
+  is unchanged. The consent page says what is requested. Before, every
+  token carried the login's full roles whatever the client asked for.
+- **Real master-key rotation (AG-31)**: `aikoql-mcp key rotate [DB]`
+  rewraps every data key under a new master key — nothing is
+  re-encrypted, the old key file no longer opens the database, and a
+  crash at any step recovers on the next open. The store's data key now
+  lives, wrapped, in `<key_path>.store-dek` (existing databases keep their
+  key; back up both files together). Before this, the rotation the
+  scheduler job pointed at would have made the database unreadable (the
+  store key was derived from the master key) — nothing called it.
+- **Two threads encrypting the first object of a tenant could mint two
+  different keys**, leaving one object under a key that was never saved.
+- **The key-rotation job's shutdown hung**, and the job never rotated.
+
+### Added
+
+- **The agent-memory benchmark harnesses (AG-61)**: `longmemeval.py` runs
+  LongMemEval-S retrieval through the product path (`memory_store` /
+  `memory_search` over MCP stdio, per-question subjects, session-level
+  recall_any/recall_all/NDCG at k=5,10 — no LLM judge needed) and is
+  fence-aware for AG-33, with `--shards/--shard` and `merge_lme_shards.py`
+  to pool round-robin shards; `memory_cells.py` covers what the published
+  benchmarks do not — contradiction, provenance and time travel (n=100,
+  every rate 1.0, committed in `benchmarks/results/`). The full
+  LongMemEval run is not yet committed (the write path costs ~1.3 s/turn
+  on scalar-CPU embeddings, ~40 h single-process).
+
 ### Fixed
 
+- **A crashed server no longer rebuilds its search indexes (AG-20d)**:
+  only a replication leader checkpointed its indexes on a timer, so a
+  standalone server killed or OOM-stopped rebuilt the whole HNSW on
+  restart (~11 min at 1M objects). Every server now checkpoints every
+  `--index-checkpoint-secs` (30 s), skipping when nothing changed.
 - **Vector search uses its index at scale (AG-20)**: `find_similar`
   asked the HNSW index for every object, so a top-10 query at 1M objects
   walked the whole graph (17 s in the scale benchmark). It now asks for
@@ -25,6 +71,22 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   reached yet are scored exactly next to the index's candidates (up to
   10 000 unindexed events; past that, search is eventual until the index
   catches up).
+- **Property indexes work under live writes (AG-21)**: one write after
+  `analyze` switched every index off (stale statistics never drove a
+  plan), and a lagging index cost an O(N) check per query. Indexes now
+  serve their rows plus the journal tail they have not applied (up to
+  10 000 events), staying exact. 100k: an indexed lookup with 100
+  pending writes takes 0.25 ms instead of a 190 ms scan.
+- **Range filters use indexes** (`>`, `>=`, `<`, `<=` on a
+  single-property index): 0.1% range at 100k 133.6 ms → 0.15 ms.
+- **Index equality matched `5` and `5.0` differently**: rows stored as
+  floats were missed by `WHERE x == 5` through an index (the filter
+  treats them as equal). Index keys are now order-preserving bytes with
+  one numeric domain. Existing index checkpoints are rebuilt once.
+- **Index builds are linear**: maintenance swept the whole index per row
+  — 5 indexes over 100k objects 32.85 s → 0.26 s.
+- **Journal tail reads seek** (`scan_from` in every storage engine): they
+  read the whole journal before.
 - **No zero-score padding**: a search hit is something the vector or
   text leg scored. Searches without an index used to pad `k` with every
   visible object at score 0, and `eval_recall` counted those pads as

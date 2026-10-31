@@ -1,0 +1,8 @@
+{
+  "id": "ag34-oauth-scopes",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_oauth o011",
+  "captured_at": "2026-10-31T19:12:52Z",
+  "captured_head": "98eba90ccadcbb5dfec333896431a2596f8b3635",
+  "exit_code": 101
+}

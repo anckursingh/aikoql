@@ -100,6 +100,13 @@ pub trait Index: Send + Sync {
             "this index does not answer equality scans".into(),
         ))
     }
+    /// AG-21c: the rows whose single indexed value may lie in `[lo, hi]`
+    /// (inclusive bounds; None = unbounded) — a SUPERSET the caller's Filter
+    /// trims (strict bounds, precision ties). `Ok(None)`: this index does not
+    /// answer ranges.
+    fn scan_range(&self, _lo: Option<&Value>, _hi: Option<&Value>) -> KResult<Option<Vec<KOID>>> {
+        Ok(None)
+    }
     /// Whether this index answers `property` equality scans over `type_name`
     /// — the M4 read-path assist hook (idx2-008).
     fn covers(&self, _type_name: &str, _property: &str) -> bool {

@@ -9,6 +9,7 @@ pub mod crypto;
 pub mod envelope;
 pub mod field_crypto;
 pub mod hkdf;
+pub mod keyring;
 pub mod kms;
 pub mod signing;
 pub mod tenant;

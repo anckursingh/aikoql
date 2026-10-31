@@ -46,7 +46,54 @@ struct Code {
     challenge: String,
     resource: String,
     user: String,
+    scope: String,
     expires: Instant,
+}
+
+/// AG-34 — the scopes a client may ask for. `mcp` (what every grant had
+/// before) keeps the login's roles; `mcp:admin` too; `mcp:write` drops
+/// admin; `mcp:read` drops admin and is limited to read tools.
+const SCOPES: &[&str] = &[
+    "mcp",
+    "mcp:read",
+    "mcp:write",
+    "mcp:admin",
+    "offline_access",
+];
+
+/// The requested scope, space-separated and normalized (sorted, deduped);
+/// none asked = `mcp`. None: an unsupported scope (RFC 6749 invalid_scope).
+fn normalize_scope(raw: &str) -> Option<String> {
+    let mut v: Vec<&str> = raw.split_whitespace().collect();
+    if v.iter().any(|s| !SCOPES.contains(s)) {
+        return None;
+    }
+    if !v.iter().any(|s| s.starts_with("mcp")) {
+        v.push("mcp");
+    }
+    v.sort_unstable();
+    v.dedup();
+    Some(v.join(" "))
+}
+
+/// AG-34 — the login's roles narrowed by the grant's scope. A narrowed
+/// token always carries its scope marker (the capability gate enforces
+/// `scope:read`), so an admin-only login keeps a role to act with.
+fn scoped_roles(scope: &str, mut roles: Vec<String>) -> Vec<String> {
+    let has = |s: &str| scope.split(' ').any(|x| x == s);
+    if has("mcp") || has("mcp:admin") {
+        return roles;
+    }
+    roles.retain(|r| r != "admin");
+    roles.push(
+        if has("mcp:write") {
+            "scope:write"
+        } else {
+            crate::authz::READ_SCOPE_ROLE
+        }
+        .into(),
+    );
+    roles
 }
 
 /// What an access or refresh token stands for — stored as JSON under the
@@ -57,15 +104,18 @@ struct Grant {
     client_id: String,
     user: String,
     resource: String,
+    /// AG-34: the granted scope (a grant stored before AG-34 reads as `mcp`)
+    scope: String,
     /// unix seconds (an Instant does not outlive the process)
     expires: u64,
 }
 
 impl Grant {
     fn to_json(&self) -> Vec<u8> {
-        json!({"client_id": self.client_id, "user": self.user, "resource": self.resource, "expires": self.expires})
-            .to_string()
-            .into_bytes()
+        json!({"client_id": self.client_id, "user": self.user, "resource": self.resource,
+               "scope": self.scope, "expires": self.expires})
+        .to_string()
+        .into_bytes()
     }
 
     fn from_json(raw: &[u8]) -> Option<Grant> {
@@ -74,6 +124,11 @@ impl Grant {
             client_id: v.get("client_id")?.as_str()?.to_string(),
             user: v.get("user")?.as_str()?.to_string(),
             resource: v.get("resource")?.as_str()?.to_string(),
+            scope: v
+                .get("scope")
+                .and_then(J::as_str)
+                .unwrap_or("mcp")
+                .to_string(),
             expires: v.get("expires")?.as_u64()?,
         })
     }
@@ -254,7 +309,7 @@ impl OAuth {
                 ok_json(json!({
                     "resource": format!("{base}/mcp"),
                     "authorization_servers": [base],
-                    "scopes_supported": ["mcp"],
+                    "scopes_supported": ["mcp", "mcp:read", "mcp:write", "mcp:admin"],
                     "bearer_methods_supported": ["header"],
                     "resource_name": "aikoql",
                 }))
@@ -271,7 +326,7 @@ impl OAuth {
                     "code_challenge_methods_supported": ["S256"],
                     "token_endpoint_auth_methods_supported": ["none"],
                     "client_id_metadata_document_supported": true,
-                    "scopes_supported": ["mcp", "offline_access"],
+                    "scopes_supported": ["mcp", "mcp:read", "mcp:write", "mcp:admin", "offline_access"],
                 }))
             }
             ("POST", "/oauth/register") => self.register(body),
@@ -292,8 +347,9 @@ impl OAuth {
         if g.expires <= unix_now() || g.resource != format!("{}/mcp", self.base(headers)) {
             return None;
         }
-        // the login's current roles; a removed login is refused
-        let roles = self.logins.roles_of(&g.user)?;
+        // the login's current roles, narrowed by the scope; a removed login
+        // is refused
+        let roles = scoped_roles(&g.scope, self.logins.roles_of(&g.user)?);
         Some(OAuthIdentity {
             principal: format!("oauth:{}:{}", g.client_id, g.user),
             user: g.user,
@@ -483,13 +539,23 @@ impl OAuth {
         let error = error
             .map(|e| format!("<p class=\"err\">{}</p>", esc(e)))
             .unwrap_or_default();
+        // AG-34: say what the token will be able to do
+        let access = match normalize_scope(q.get("scope").map(String::as_str).unwrap_or("")) {
+            Some(sc) if sc.split(' ').any(|x| x == "mcp" || x == "mcp:admin") => {
+                "read, write and administer (as far as your login may)"
+            }
+            Some(sc) if sc.split(' ').any(|x| x == "mcp:write") => "read and write",
+            Some(_) => "read only",
+            None => "an unsupported scope — this sign-in will be refused",
+        };
         let body = format!(
             "<!doctype html><html><head><meta charset=\"utf-8\"><title>Sign in to aikoql</title>\
              <meta name=\"viewport\" content=\"width=device-width\"><style>body{{font-family:system-ui;max-width:26rem;\
              margin:3rem auto;padding:0 1rem}}input{{display:block;width:100%;margin:.4rem 0 .9rem;padding:.5rem}}\
              button{{padding:.6rem 1.2rem}}.err{{color:#b00}}.warn{{color:#8a5a00}}</style></head><body>\
              <h1>Sign in to aikoql</h1><p><strong>{}</strong> wants access to this knowledge base. \
-             After you sign in you are sent back to <strong>{}</strong>.</p>{loopback_note}{error}\
+             After you sign in you are sent back to <strong>{}</strong>.</p>\
+             <p>Access requested: <strong>{access}</strong>.</p>{loopback_note}{error}\
              <form method=\"post\" action=\"/oauth/authorize\">{hidden}\
              <label>Username<input name=\"username\" autocomplete=\"username\" required></label>\
              <label>Password<input name=\"password\" type=\"password\" autocomplete=\"current-password\" required></label>\
@@ -528,6 +594,10 @@ impl OAuth {
         if get("approve") != "1" {
             return redirect_to(&redirect, &[("error", "access_denied")], state);
         }
+        // AG-34: an unsupported scope goes back to the client (RFC 6749 4.1.2.1)
+        let Some(scope) = normalize_scope(get("scope")) else {
+            return redirect_to(&redirect, &[("error", "invalid_scope")], state);
+        };
         let user = get("username");
         if let Some(wait) = self.logins.locked_for(user) {
             let msg = format!("Too many failed sign-ins. Try again in {wait} s.");
@@ -550,6 +620,7 @@ impl OAuth {
                 challenge: get("code_challenge").to_string(),
                 resource,
                 user: user.to_string(),
+                scope,
                 expires: now + CODE_TTL,
             },
         );
@@ -594,6 +665,7 @@ impl OAuth {
                     client_id: code.client_id,
                     user: code.user,
                     resource: code.resource,
+                    scope: code.scope,
                     expires: now,
                 }
             }
@@ -636,6 +708,7 @@ impl OAuth {
         };
         let _ = headers;
         let (access, refresh) = (random_token(), random_token());
+        let scope = grant.scope.clone();
         let access_grant = Grant {
             expires: now + ACCESS_TTL.as_secs(),
             ..grant.clone()
@@ -669,7 +742,7 @@ impl OAuth {
                 "token_type": "Bearer",
                 "expires_in": ACCESS_TTL.as_secs(),
                 "refresh_token": refresh,
-                "scope": "mcp",
+                "scope": scope,
             })
             .to_string(),
         )
