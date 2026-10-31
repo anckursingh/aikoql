@@ -16,9 +16,13 @@ questions inside one store); the question runs as `memory_search` for that
 subject, and ranked turns collapse to ranked sessions (first occurrence).
 
     python3 benchmarks/scripts/longmemeval.py DATA.json [--limit N] [--out FILE]
+        [--shards K --shard I]
 
 Prints one JSON line per question type plus "overall"; --out writes the
-whole result with the dataset hash, binary version and machine.
+whole result with the dataset hash, binary version, machine and the raw
+rows. --shards/--shard run a round-robin slice of the questions (they are
+independent — per-question subjects in one store); merge the shard files
+with merge_lme_shards.py.
 """
 import argparse
 import hashlib
@@ -85,15 +89,43 @@ class Mcp:
         self.p.wait(timeout=60)
 
 
+def unfence(text, fence):
+    # AG-33: undeclared results come back inside the per-response fence;
+    # strip it with the markers the response itself declares (never by
+    # guessing) before parsing the harness's own name format.
+    o, c = fence.get("open", ""), fence.get("close", "")
+    if o and text.startswith(o) and text.endswith(c):
+        return text[len(o):len(text) - len(c)].strip()
+    return text
+
+
+def _unfence_self_check():
+    f = {"open": "⟦untrusted aabbccdd⟧", "close": "⟦/untrusted aabbccdd⟧"}
+    assert unfence("⟦untrusted aabbccdd⟧ s-7-t3 ⟦/untrusted aabbccdd⟧", f) == "s-7-t3"
+    assert unfence("s-7-t3", f) == "s-7-t3"  # trusted content passes through
+    assert unfence("⟦untrusted aabbccdd⟧ s-7-t3", f) != "s-7-t3"  # never half-strip
+
+
 def ndcg(ranked, gold, k):
     dcg = sum(1 / math.log2(i + 2) for i, s in enumerate(ranked[:k]) if s in gold)
     ideal = sum(1 / math.log2(i + 2) for i in range(min(len(gold), k)))
     return dcg / ideal if ideal else 0.0
 
 
+def summary(sel):
+    keys = [k for k in sel[0] if k != "type"]
+    return {"n": len(sel), **{k: round(sum(r[k] for r in sel) / len(sel), 4) for k in keys}}
+
+
 def run(args):
+    _unfence_self_check()
+    if args.shard >= args.shards:
+        sys.exit(f"shard {args.shard} >= shards {args.shards}")
     data = json.load(open(args.data))
     questions = [q for q in data if not q["question_id"].endswith("_abs")][: args.limit]
+    # sharding: questions are independent (per-question subjects in one
+    # store), so a shard is a round-robin slice — the merge script pools rows
+    questions = questions[args.shard::args.shards]
     work = tempfile.mkdtemp(prefix="aikoql-lme-")
     mcp = Mcp(args.binary, os.path.join(work, "db"), os.path.join(work, "memory"))
     rows, stored, t0 = [], 0, time.time()
@@ -117,9 +149,10 @@ def run(args):
                 "max_results": 50,
                 "wait_for_freshness_ms": 60000,
             })
+            fence = hits.get("fence", {})
             ranked = []
             for h in hits.get("results", []):
-                sid = h["name"].rsplit("-t", 1)[0][2:]
+                sid = unfence(h["name"], fence).rsplit("-t", 1)[0][2:]
                 if sid not in ranked:
                     ranked.append(sid)
             gold = set(q["answer_session_ids"])
@@ -136,10 +169,6 @@ def run(args):
         mcp.close()
         shutil.rmtree(work, ignore_errors=True)
 
-    def summary(sel):
-        keys = [k for k in sel[0] if k != "type"]
-        return {"n": len(sel), **{k: round(sum(r[k] for r in sel) / len(sel), 4) for k in keys}}
-
     by_type = {"overall": summary(rows)}
     for t in sorted({r["type"] for r in rows}):
         by_type[t] = summary([r for r in rows if r["type"] == t])
@@ -155,6 +184,9 @@ def run(args):
         "machine": f"{platform.system()} {platform.machine()} {platform.processor()}",
         "turns_stored": stored,
         "seconds": round(time.time() - t0, 1),
+        "shards": args.shards,
+        "shard": args.shard,
+        "rows": rows,
         "results": by_type,
     }
     for t, s in by_type.items():
@@ -171,4 +203,6 @@ if __name__ == "__main__":
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--out")
     ap.add_argument("--binary", default="target/release/aikoql-mcp")
+    ap.add_argument("--shards", type=int, default=1)
+    ap.add_argument("--shard", type=int, default=0)
     run(ap.parse_args())
