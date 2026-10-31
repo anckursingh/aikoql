@@ -1,0 +1,8 @@
+{
+  "id": "ag61-memory-embedded-late",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_memory_semantic",
+  "captured_at": "2026-10-31T19:00:26Z",
+  "captured_head": "5bb2bb1bbb997fdbec9d6f0427719f11f6190c25",
+  "exit_code": 101
+}

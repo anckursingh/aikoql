@@ -861,6 +861,37 @@ fn main() {
     }
     // an HA standby serves no stream (its promoted, re-executed process
     // does); a `--follow` replica may — downstream replicas cascade off it
+    // R3b + AG-20d: a crashed server leaves no shutdown checkpoint — take
+    // one on a timer, for every role (standbys hold a recent one; a killed
+    // standalone server resumes instead of rebuilding its indexes, ck001).
+    let (k, ctx, dir, lock) = (
+        kernel.clone(),
+        server_ctx.clone(),
+        ckpt_dir.clone(),
+        ckpt_lock.clone(),
+    );
+    let every = std::time::Duration::from_secs(cfg.index_checkpoint_secs);
+    thread::spawn(move || {
+        let mut saved = None;
+        loop {
+            thread::sleep(every);
+            // justified: Mutex poison is unrecoverable
+            let m = ctx.db.maintainer.lock().unwrap().clone();
+            let Some(m) = m else { continue };
+            // an idle server does not rewrite an unchanged index (at 1M
+            // objects the HNSW alone is hundreds of MB)
+            let water = m.water();
+            if saved == Some(water) {
+                continue;
+            }
+            // justified: Mutex poison is unrecoverable
+            let _g = lock.lock().unwrap();
+            match m.checkpoint(&k, &dir) {
+                Ok(()) => saved = Some(water),
+                Err(e) => warn!("periodic index checkpoint: {e}"),
+            }
+        }
+    });
     if let Some(addr) = replicate_listen.filter(|_| serves_stream) {
         // MRFC-0080 R3a: the replication stream rides beside any serve mode
         // (stdio included) under the TCP gates — tokens required, loopback
@@ -920,26 +951,6 @@ fn main() {
                 acked,
                 repl_tls,
             )
-        });
-        // R3b: a leader that crashes leaves no shutdown checkpoint — take
-        // one on a timer so standbys always hold a recent one.
-        let (k, ctx, dir, lock) = (
-            kernel.clone(),
-            server_ctx.clone(),
-            ckpt_dir.clone(),
-            ckpt_lock.clone(),
-        );
-        let every = std::time::Duration::from_secs(cfg.index_checkpoint_secs);
-        thread::spawn(move || loop {
-            thread::sleep(every);
-            // justified: Mutex poison is unrecoverable
-            let m = ctx.db.maintainer.lock().unwrap().clone();
-            if let Some(m) = m {
-                let _g = lock.lock().unwrap();
-                if let Err(e) = m.checkpoint(&k, &dir) {
-                    warn!("periodic index checkpoint: {e}");
-                }
-            }
         });
     }
 

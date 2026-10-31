@@ -35,7 +35,9 @@ use crate::object::ObjectManager;
 use crate::relationship::RelationshipManager;
 use crate::security::auth::{AuthManager, POLICY_TYPE, ROLE_TYPE};
 use crate::security::crypto::Crypto;
-use crate::security::envelope::{Envelope, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_STORAGE_KEY};
+use crate::security::envelope::{
+    Envelope, WrappedDek, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_NEXT_KEY, DEKS_STORAGE_KEY,
+};
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
 use crate::security::tenant::TenantManager;
 use crate::statistics::Statistics;
@@ -932,17 +934,69 @@ impl Kernel {
                 .write_batch(&batch)
                 .map_err(|e| KError::Store(format!("crypto meta persist: {}", e)))?;
         }
-        if let Some(raw) = self.store.get(DEKS_STORAGE_KEY)? {
-            let deks = Envelope::decode_wrapped_deks(&raw)
-                .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
-            for d in &deks {
-                envelope
-                    .load_dek(d)
-                    .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
+        // AG-31: the generation that unwraps under the installed KEK wins —
+        // a NEXT set that authenticates is a committed rotation interrupted
+        // before its promotion (finished here); one that does not is a
+        // rotation that never committed (dropped).
+        let decode = |raw: &[u8]| {
+            Envelope::decode_wrapped_deks(raw).map_err(|e| KError::Store(format!("DEK load: {e}")))
+        };
+        let next = match self.store.get(DEKS_NEXT_KEY)? {
+            Some(raw) => Some(decode(&raw)?),
+            None => None,
+        };
+        let deks = match next {
+            Some(n) if envelope.unwraps_all(&n) => {
+                self.promote_next_deks(&n)?;
+                n
             }
+            stale => {
+                if stale.is_some() {
+                    let mut b = WriteBatch::new();
+                    b.del(DEKS_NEXT_KEY.to_vec());
+                    self.store.write_batch(&b)?;
+                }
+                match self.store.get(DEKS_STORAGE_KEY)? {
+                    Some(raw) => decode(&raw)?,
+                    None => Vec::new(),
+                }
+            }
+        };
+        for d in &deks {
+            envelope
+                .load_dek(d)
+                .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
         }
         self.field_crypto = Some(Arc::new(FieldCrypto::new(crypto, envelope)));
         Ok(self)
+    }
+
+    /// AG-31 — the field-encryption envelope (None: no field encryption).
+    pub fn field_envelope(&self) -> Option<Arc<Envelope>> {
+        self.field_crypto.as_ref().map(|fc| fc.envelope().clone())
+    }
+
+    /// AG-31 rotation step 3 — the next generation's wraps, durable before
+    /// the KMS commits the new KEK.
+    pub fn persist_next_deks(&self, wraps: &[WrappedDek]) -> KResult<()> {
+        let mut b = WriteBatch::new();
+        b.put(DEKS_NEXT_KEY.to_vec(), Envelope::encode_wrapped_deks(wraps));
+        self.store
+            .write_batch(&b)
+            .map_err(|e| KError::Store(format!("DEK persist: {e}")))
+    }
+
+    /// AG-31 rotation step 5 — the next generation becomes the current one.
+    pub fn promote_next_deks(&self, wraps: &[WrappedDek]) -> KResult<()> {
+        let mut b = WriteBatch::new();
+        b.put(
+            DEKS_STORAGE_KEY.to_vec(),
+            Envelope::encode_wrapped_deks(wraps),
+        );
+        b.del(DEKS_NEXT_KEY.to_vec());
+        self.store
+            .write_batch(&b)
+            .map_err(|e| KError::Store(format!("DEK persist: {e}")))
     }
 
     /// Register an encryption policy for a schema type. Fields listed in the
@@ -2212,6 +2266,10 @@ impl Kernel {
                     // reverse would leave field ciphertext with no recoverable
                     // key. ponytail: unconditional rewrite (tens of bytes);
                     // dirty-tracking if this path gets hot.
+                    // AG-31: read-and-write under the creation guard, so a
+                    // rotation's adopt cannot land between them (this would
+                    // rewrite the old KEK's wraps after the switch)
+                    let _no_rotation = fc.envelope().creation_guard();
                     let mut batch = WriteBatch::new();
                     batch.put(
                         DEKS_STORAGE_KEY.to_vec(),

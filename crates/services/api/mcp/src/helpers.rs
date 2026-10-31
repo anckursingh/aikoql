@@ -269,3 +269,49 @@ pub(crate) fn ke_json(ke: &KnowledgeEvent) -> J {
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
+
+// ---- AG-33: the injection fence -------------------------------------------
+
+/// A per-response fence for untrusted content. The open/close markers carry
+/// a fresh random nonce the stored text cannot know, so a payload that
+/// forges a closer (or guesses an old nonce) cannot escape its fence.
+pub(crate) struct Fence {
+    nonce: String,
+}
+
+impl Fence {
+    pub fn new() -> Self {
+        let mut bytes = [0u8; 8];
+        // justified: a CSPRNG failure is unrecoverable — untrusted content
+        // must not go out without a nonce
+        getrandom::getrandom(&mut bytes).expect("getrandom for the fence nonce");
+        Fence {
+            nonce: bytes.iter().map(|b| format!("{b:02x}")).collect(),
+        }
+    }
+    pub fn open(&self) -> String {
+        format!("⟦untrusted {}⟧", self.nonce)
+    }
+    pub fn close(&self) -> String {
+        format!("⟦/untrusted {}⟧", self.nonce)
+    }
+    pub fn wrap(&self, text: &str) -> String {
+        format!("{} {} {}", self.open(), text, self.close())
+    }
+    pub fn json(&self) -> J {
+        json!({"nonce": self.nonce, "open": self.open(), "close": self.close()})
+    }
+}
+
+impl Default for Fence {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// AG-33: the trusted classes. Everything else — tool_output, web,
+/// document, undeclared — is data an agent must not mistake for its
+/// user's instructions.
+pub(crate) fn trust_is_untrusted(class: &str) -> bool {
+    !matches!(class, "user" | "system")
+}

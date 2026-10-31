@@ -19,6 +19,8 @@ type HmacSha256 = Hmac<Sha256>;
 /// metadata (see `CRYPTO_META_V1` in `envelope.rs`).
 pub const DOMAIN_DEK_WRAP: &[u8] = b"aikoql/dek-wrap/v1";
 pub const DOMAIN_STORE: &[u8] = b"aikoql/store/v1";
+/// AG-31 — wraps the store data key under the KEK (`keyring`).
+pub const DOMAIN_STORE_WRAP: &[u8] = b"aikoql/store-wrap/v1";
 pub const DOMAIN_FIELD: &[u8] = b"aikoql/field/v1";
 
 /// HKDF-SHA256 (RFC 5869): extract then expand to a 32-byte key.

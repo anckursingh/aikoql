@@ -57,6 +57,12 @@ pub trait KeyManager: Send + Sync {
     /// Rotate to a new master key. Old data must be re-encrypted by the
     /// caller (online rotation in Phase 2).
     fn rotate(&self, passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String>;
+    /// AG-31 — make `key` the master key, atomically (a crash leaves the
+    /// old key or the new one, never a torn file). Rotation mints the key
+    /// first so every wrap under it is durable BEFORE this commit point.
+    fn install(&self, _key: &[u8; 32], _passphrase: &str) -> Result<(), String> {
+        Err("this key manager cannot install a master key".into())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -126,10 +132,17 @@ impl KeyManager for LocalKms {
         }
     }
 
+    fn install(&self, key: &[u8; 32], passphrase: &str) -> Result<(), String> {
+        let envelope = encrypt_v2_envelope(key, passphrase)?;
+        crate::security::keyring::write_atomic(Path::new(&self.path), &envelope)?;
+        // justified: RwLock poison is unrecoverable
+        *self.cached_key.write().unwrap() = Some(*key);
+        Ok(())
+    }
+
     fn rotate(&self, passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String> {
         let new_key = provider.generate_key();
-        let envelope = encrypt_v2_envelope(&new_key, passphrase)?;
-        fs::write(&self.path, &envelope).map_err(|e| format!("write rotated key: {}", e))?;
+        self.install(&new_key, passphrase)?;
         // justified: RwLock poison is unrecoverable
         *self.cached_key.write().unwrap() = Some(new_key);
         Ok(new_key)

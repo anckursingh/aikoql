@@ -1,0 +1,38 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/cbo_default.rs (target/debug/deps/cbo_default-f6cfe39625a89f86)
+
+running 9 tests
+test cbo_default_003_no_declared_indexes_executes_byte_identical_to_pre_m15 ... ok
+test cbo_default_001_indexed_fresh_kernel_uses_the_index_on_the_default_path ... ok
+test cbo_default_002_lagging_or_stale_index_stays_exact_on_the_default_path ... ok
+test cbo_default_004_gate6_oracle_divergence_zero_through_the_default_path ... ok
+test cbo_default_008_an_index_eq_matches_across_int_and_float ... FAILED
+test cbo_default_006_live_writes_keep_the_index_exact ... ok
+test cbo_default_005_production_shape_selects_the_index_at_harness_selectivity ... ok
+test cbo_default_009_a_range_filter_is_served_by_the_index ... FAILED
+test cbo_default_007_a_tail_past_the_cap_falls_back_to_the_scan ... ok
+
+failures:
+
+---- cbo_default_008_an_index_eq_matches_across_int_and_float stdout ----
+
+thread 'cbo_default_008_an_index_eq_matches_across_int_and_float' (3998947) panicked at crates/runtime/tests/cbo_default.rs:386:5:
+5.0 == 5, as the Filter says
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- cbo_default_009_a_range_filter_is_served_by_the_index stdout ----
+
+thread 'cbo_default_009_a_range_filter_is_served_by_the_index' (3998948) panicked at crates/runtime/tests/cbo_default.rs:409:9:
+assertion `left == right` failed: MATCH Person WHERE points >= 995 RETURN *
+  left: None
+ right: Some("by_points")
+
+
+failures:
+    cbo_default_008_an_index_eq_matches_across_int_and_float
+    cbo_default_009_a_range_filter_is_served_by_the_index
+
+test result: FAILED. 7 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+error: test failed, to rerun pass `-p aikoql-runtime --test cbo_default`
+EXIT=101

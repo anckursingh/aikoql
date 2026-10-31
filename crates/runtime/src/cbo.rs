@@ -63,6 +63,41 @@ pub(crate) fn first_eq_after(
     }
 }
 
+/// AG-21c: the range bounds on one property in the Filter IMMEDIATELY after
+/// op `i` (same positional rule as `first_eq_after`): the first property
+/// with a `>`/`>=`/`<`/`<=` comparison, and its first lower and upper
+/// bound. Bounds are served inclusive — strictness is the Filter's.
+pub(crate) fn range_after(
+    ops: &[PhysicalOp],
+    i: usize,
+) -> Option<(
+    &str,
+    Option<&aikoql_kernel::Value>,
+    Option<&aikoql_kernel::Value>,
+)> {
+    let Some(IrOp::Filter { predicates }) = ops.get(i + 1).map(|po| &po.op) else {
+        return None;
+    };
+    let cmps: Vec<(&str, PredOp, &aikoql_kernel::Value)> =
+        predicates.iter().filter_map(|p| p.as_cmp()).collect();
+    let (property, _, _) = cmps
+        .iter()
+        .find(|(_, op, _)| matches!(op, PredOp::Gt | PredOp::Gte | PredOp::Lt | PredOp::Lte))?;
+    let bound = |lower: bool| {
+        cmps.iter()
+            .find(|(p, op, _)| {
+                p == property
+                    && if lower {
+                        matches!(op, PredOp::Gt | PredOp::Gte)
+                    } else {
+                        matches!(op, PredOp::Lt | PredOp::Lte)
+                    }
+            })
+            .map(|(_, _, v)| *v)
+    };
+    Some((property, bound(true), bound(false)))
+}
+
 /// The uniform match fraction of that predicate: 1/distinct from the stats,
 /// 1.0 (no information) when the property was never seen (or the node is a
 /// boolean branch with no single property).
@@ -84,6 +119,69 @@ fn may_serve_exact(idx: &dyn aikoql_kernel::Index) -> bool {
         && idx.state() == aikoql_kernel::IndexState::Ready
 }
 
+/// AG-21b: the most journal events a lagging index is patched over; past
+/// it the full scan is cheaper than reading the tail.
+const INDEX_TAIL_CAP: u64 = 10_000;
+
+/// The rows an index may NOT reflect: every object in the journal after
+/// its stamp (None past the cap). The index was exact at its stamp, so
+/// only these can be missing or stale — O(lag), never an O(N) walk.
+pub(crate) fn unapplied(
+    kernel: &Kernel,
+    idx: &dyn aikoql_kernel::Index,
+) -> KResult<Option<Vec<aikoql_kernel::KOID>>> {
+    let stamp = idx.applied_seq();
+    let head = kernel.journal_head()?.0;
+    if head.saturating_sub(stamp) > INDEX_TAIL_CAP {
+        return Ok(None);
+    }
+    Ok(Some(
+        kernel
+            .journal_after(stamp)?
+            .into_iter()
+            .map(|e| e.koid)
+            .collect(),
+    ))
+}
+
+/// An Eq lookup that is exact however far (up to the cap) the index lags:
+/// its rows plus the unapplied tail, sorted and deduplicated. A superset is
+/// exact because the Scan skips deleted and foreign-type rows and the
+/// Filter re-checks every predicate on the committed object.
+pub(crate) fn patched_eq(
+    kernel: &Kernel,
+    idx: &dyn aikoql_kernel::Index,
+    value: &aikoql_kernel::Value,
+) -> KResult<Option<Vec<aikoql_kernel::KOID>>> {
+    let Some(tail) = unapplied(kernel, idx)? else {
+        return Ok(None);
+    };
+    let mut koids = idx.scan_eq(std::slice::from_ref(value))?;
+    koids.extend(tail);
+    koids.sort();
+    koids.dedup();
+    Ok(Some(koids))
+}
+
+/// AG-21c: a range lookup with the same tail patch as `patched_eq`.
+pub(crate) fn patched_range(
+    kernel: &Kernel,
+    idx: &dyn aikoql_kernel::Index,
+    lo: Option<&aikoql_kernel::Value>,
+    hi: Option<&aikoql_kernel::Value>,
+) -> KResult<Option<Vec<aikoql_kernel::KOID>>> {
+    let Some(tail) = unapplied(kernel, idx)? else {
+        return Ok(None);
+    };
+    let Some(mut koids) = idx.scan_range(lo, hi)? else {
+        return Ok(None);
+    };
+    koids.extend(tail);
+    koids.sort();
+    koids.dedup();
+    Ok(Some(koids))
+}
+
 /// The executor's index assist for a Scan the CBO flagged `PropertyIndex`:
 /// the same derivation the optimizer used, so the flag's koid list comes
 /// from the covering index. A flag without an index falls back to the full
@@ -99,6 +197,15 @@ pub(crate) fn scan_assist(
         return Ok(None);
     };
     let Some(pred) = first_eq_after(ops, i) else {
+        // AG-21c: no Eq to serve — a range on a covered property
+        let Some((property, lo, hi)) = range_after(ops, i) else {
+            return Ok(None);
+        };
+        for idx in kernel.property_indexes()? {
+            if may_serve_exact(&*idx) && idx.covers(type_name, property) {
+                return patched_range(kernel, &*idx, lo, hi);
+            }
+        }
         return Ok(None);
     };
     // T-71: first_eq_after guarantees a Cmp-Eq node.
@@ -110,7 +217,7 @@ pub(crate) fn scan_assist(
             continue; // CandidateOnly never answers an exact scan
         }
         if idx.covers(type_name, property) {
-            return Ok(Some(idx.scan_eq(std::slice::from_ref(value))?));
+            return patched_eq(kernel, &*idx, value);
         }
     }
     Ok(None)
@@ -243,8 +350,10 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
     let ann_dim = kernel.index_maintainer().and_then(|m| m.vector_dim());
 
     let mut index_used: Option<String> = None;
+    // AG-21b: stale stats still price the plan — exactness is the index's
+    // gate below, not the stats' (one write used to switch indexes off)
     if let Some(stats) = &stats {
-        if stats_used {
+        {
             // T-71: first_eq_after guarantees a Cmp-Eq node; as_cmp on it
             // always yields the (property, _, _) triple.
             if let Some((property, _, _)) = first_eq_after(&ops, 0).and_then(|p| p.as_cmp()) {
@@ -257,10 +366,9 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
                     if !idx.covers(&stats.type_name, property) {
                         continue;
                     }
-                    // The exactness gate: the index must hold the committed
-                    // truth — verified clean, nothing missing, nothing stale.
-                    let report = idx.verify(kernel)?;
-                    if !report.verified || !report.missing.is_empty() || !report.stale.is_empty() {
+                    // The exactness gate: the index's rows plus its unapplied
+                    // tail must be readable within the cap (patched_eq).
+                    if unapplied(kernel, &*idx)?.is_none() {
                         continue;
                     }
                     let mut cand_ops = ops.clone();
@@ -270,6 +378,23 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
                     {
                         ops = cand_ops;
                         index_used = Some(idx.name().to_string());
+                    }
+                    break;
+                }
+            } else if let Some((property, lo, hi)) = range_after(&ops, 0) {
+                // AG-21c: a range is priced by the index itself — its exact
+                // candidate count against the type's rows (no histogram)
+                for idx in kernel.property_indexes()? {
+                    if idx.state() != aikoql_kernel::IndexState::Ready
+                        || !idx.covers(&stats.type_name, property)
+                    {
+                        continue;
+                    }
+                    if let Some(cands) = patched_range(kernel, &*idx, lo, hi)? {
+                        if (cands.len() as u64).saturating_mul(2) < stats.row_count {
+                            ops[0].strategy = Strategy::PropertyIndex;
+                            index_used = Some(idx.name().to_string());
+                        }
                     }
                     break;
                 }
@@ -328,10 +453,11 @@ pub fn explain_cost(kernel: &Kernel, query: &str) -> KResult<Vec<String>> {
     };
     lines.push(footer.to_string());
     // PR6 P0-07: every index-assisted plan states its snapshot — the journal
-    // head the index read is assumed fresh at.
+    // head it was planned at; AG-21b: the scan serves the index's rows plus
+    // the journal tail it has not applied, re-read at execution.
     if report.index_used.is_some() {
         lines.push(format!(
-            "snapshot: journal head pinned at {}",
+            "snapshot: planned at journal head {} (index rows + unapplied tail)",
             report.plan.pinned_head
         ));
     }

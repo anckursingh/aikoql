@@ -427,14 +427,11 @@ pub fn execute_streaming<'a>(
                     IndexStrategy::Exact => {
                         let mut head = kernel.journal_head()?.0;
                         for _ in 0..2 {
-                            let report = idx.verify(kernel)?;
-                            if !report.verified
-                                || !report.missing.is_empty()
-                                || !report.stale.is_empty()
-                            {
-                                break; // the index lags the store — Scan answers the truth
-                            }
-                            let koids = idx.scan_eq(std::slice::from_ref(value))?;
+                            // AG-21b: the index's rows plus its unapplied
+                            // tail — past the cap, Scan answers the truth
+                            let Some(koids) = crate::cbo::patched_eq(kernel, &*idx, value)? else {
+                                break;
+                            };
                             let now = kernel.journal_head()?.0;
                             if now == head {
                                 assist = Some(koids);

@@ -152,6 +152,15 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     // v0.3 K1: extensions may be declared at the protocol boundary
     // (epistemic status, authority, scope, canonical evidence).
     req.extensions = parse_extensions(args)?;
+    // AG-33: the trust class of the content's source; the top-level spelling
+    // wins over the extensions object. Absent → the KO reads as undeclared
+    // (untrusted), the conservative default.
+    if let Some(t) = args.get("trust").and_then(|v| v.as_str()) {
+        req.extensions.insert(
+            KnowledgeObject::EXT_TRUST.into(),
+            Value::Text(t.to_string()),
+        );
+    }
     // T-60 (POC-3 MINOR): remember accepts a top-level `valid_from` — the
     // observe/assert_knowledge spelling. It lands in the same extension the
     // kernel honors (EXT_VALID_FROM is deliberately not kernel-managed:

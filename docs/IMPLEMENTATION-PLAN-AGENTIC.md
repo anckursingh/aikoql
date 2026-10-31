@@ -211,7 +211,9 @@ and a `lesson` KO type distilled by AG-12 sampling.
   ranks in N log N (was N^2); hybrid fusions score a bounded vector ∪
   text union (RRF 100k: 232 → 7.1 ms; 1M: 12.7 ms p50, p95 20.0); the unindexed tail is scored
   exactly; no zero-score pads. Open: 20b filtered-ANN buckets, 20c
-  quantization, 20d persisted segments.
+  quantization. 20d: the HNSW already persisted in the maintainer
+  checkpoint, but only replication leaders took one on a timer — every
+  server does now (ck001); the embedded SDK still checkpoints on close only.
 - *Problem:* 1M vector_recall 17.0 s, brute force (REPORT §Scale). An HNSW
   exists (`engines/vector`, attached to `find_similar` since M18) — the
   first step is to establish why the certified cell does not use it
@@ -232,6 +234,12 @@ and a `lesson` KO type distilled by AG-12 sampling.
   10 ms; it measures result transfer. Equality indexes already exist and
   the CBO uses them (`Strategy::PropertyIndex`, P5-M9). AG-21 needs a
   selective cell (0.1–1%) before its gate means anything.
+- *Status (2026-10-31): AG-21 done* (`benches/filter_select`, 100k): eq
+  0.1% 0.143 ms, range 0.1% 0.151 ms (was 133.6), eq under 100 live
+  writes 0.254 ms (was a full scan — one write after analyze switched
+  indexes off), build 32.85 → 0.26 s. Fixed on the way: Int/Float Eq
+  through an index missed rows; scan_from never seeked. Open: composite
+  range (prefix ranges on a tuple), a CBO histogram for ranges.
 - *Problem:* 1M structured_filter 22.9 s (brute force + sort).
 - *Design:* property secondary indexes (`index_create` exists) used by the
   planner (the CBO in `runtime/src/cbo.rs` estimates only the first Eq —
@@ -261,6 +269,12 @@ an external verifier (Python `cryptography`) accepts an exported chain.
 (`key_rotation.rs:60` — "actual rotation would call envelope.rotate_kek").
 *Gate:* rotate under write load; every object readable after; old KEK
 unusable.
+- *Status (2026-10-31): AG-31 done* — KeyRing (wrapped store data key,
+  generation-safe rotation), `aikoql-mcp key rotate`, the job rotates;
+  kr001–kr004 + the job test. Found on the way: the derived store key
+  (any rotation = an unreadable store), the DEK first-use race, the job's
+  hanging shutdown. Open: cloud KMS `install` (AWS/Azure/GCP return
+  unsupported), passphrase change, data-key (DEK) re-encryption.
 
 **AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). *Gate:*
 usage per tenant matches the oracle count.
@@ -271,11 +285,17 @@ of its source (`user`, `tool_output`, `web`, `document`, `system`);
 output (delimited, marked as data). Agents can filter by trust. *Gate:*
 the injection corpus (TESTING-PLAN §T) never surfaces untrusted text
 outside its fence.
+- *Status (2026-10-31): AG-33 done* — ij001: 300-payload corpus green;
+  `trust` is a KO extension (undeclared reads as untrusted), recall and
+  memory_search return it, accept a `trust` filter, and fence untrusted
+  text in a per-response nonce fence; memory files carry the class too.
 
 **AG-34 (P1) OAuth scopes → roles.** Today every OAuth grant has scope
 `mcp` and the login's roles. Add `mcp:read`, `mcp:write`, `mcp:admin`
 (consent page shows them), intersected with the login's roles. *Gate:* a
 read-scoped token cannot write (every write tool).
+- *Status (2026-10-31): AG-34 done* — o011; the read-tool list is an
+  allowlist (a new tool is a write until classified, authz.rs).
 
 ### Phase X — multi-agent
 
@@ -312,7 +332,19 @@ SDK (TS), each as a memory/store provider over `recall`/`remember`.
 CI.
 
 **AG-61 (P0) Public agent-memory benchmark — measured, not claimed.**
-Run published long-term-memory benchmarks (e.g. LongMemEval, LoCoMo — the
+- *Status (2026-10-31): harnesses committed; the run stays open.*
+  `longmemeval.py` (LongMemEval-S, xiaowu0162/longmemeval at 2ec2a557,
+  session-level recall_any/recall_all/NDCG at k=5,10, no LLM judge) and
+  `memory_cells.py` (contradiction / provenance / time travel, n=100,
+  every rate 1.0 — `benchmarks/results/memory-cells.json`). The harness
+  is fence-aware (AG-33) and shardable (`--shards/--shard` +
+  `merge_lme_shards.py`, validated on a 2-question micro-run). The full
+  run is not yet done: the store path embeds per turn on scalar CPU
+  (~1.3 s/turn measured), so 115k turns is ~40 h single-process; AWS was
+  ruled out (the project's FREE plan caps instances at 2 vCPU). Next: run
+  it sharded (8 shards ≈ 5 h on the dev Mac mini), commit the result,
+  then LoCoMo and the comparison products.
+- Run published long-term-memory benchmarks (e.g. LongMemEval, LoCoMo — the
 choice recorded with versions) against aikoql and the agent-memory
 products at default settings; publish with the REPORT.md candor. Adds the
 cells the field does not measure: contradiction handling, provenance

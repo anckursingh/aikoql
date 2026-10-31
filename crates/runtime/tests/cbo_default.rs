@@ -125,9 +125,9 @@ fn cbo_default_001_indexed_fresh_kernel_uses_the_index_on_the_default_path() {
 // --- cbo_default_002 — the guards hold on the default path ----------------------
 
 #[test]
-fn cbo_default_002_lagging_or_stale_index_falls_back_on_the_default_path() {
-    // An index that has not caught up (stats fresh, index lagging): the
-    // default path must NOT use it — the unseen row answers the truth.
+fn cbo_default_002_lagging_or_stale_index_stays_exact_on_the_default_path() {
+    // AG-21b: an index that has not caught up (stats fresh, index lagging)
+    // serves its rows plus the unapplied tail — the unseen row is patched in.
     let k = mk();
     k.catalog_create_index("by_name", "Person", &["name"])
         .unwrap();
@@ -141,14 +141,11 @@ fn cbo_default_002_lagging_or_stale_index_falls_back_on_the_default_path() {
     let query = "MATCH Person WHERE name == \"Unseen\" RETURN *";
     let plan = plan_of(&k, query);
     let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
-    assert!(
-        report.stats_used,
-        "stats fresh — the index is the rejected piece"
-    );
-    assert_eq!(report.plan.operators[0].strategy, Strategy::FullScan);
+    assert!(report.stats_used, "stats fresh");
+    assert_eq!(report.plan.operators[0].strategy, Strategy::PropertyIndex);
     assert_eq!(exec_ids(&rows), vec![unseen], "not silently wrong");
 
-    // Stale stats (a write after analyze): same fallback on the default path.
+    // Stale stats (a write after analyze): the index still serves, exactly.
     let k2 = mk();
     k2.catalog_create_index("by_name", "Person", &["name"])
         .unwrap();
@@ -162,15 +159,17 @@ fn cbo_default_002_lagging_or_stale_index_falls_back_on_the_default_path() {
     let plan = plan_of(&k2, query);
     let (rows, report) = Interpreter::execute_with_report(&k2, &plan).unwrap();
     assert!(report.stats_stale, "staleness is detected");
-    assert!(!report.stats_used, "stale stats never drive the plan");
-    assert_eq!(report.plan.operators[0].strategy, Strategy::FullScan);
+    assert_eq!(report.plan.operators[0].strategy, Strategy::PropertyIndex);
     let ids = exec_ids(&rows);
     assert!(
         ids.iter().all(|id| *id != late),
-        "the stale path returns the committed truth, not index artifacts"
+        "the committed truth, not index artifacts"
     );
-    assert_eq!(ids.len(), 1, "exactly P042 — the rule-based answer");
-    let _ = late;
+    assert_eq!(
+        ids,
+        rule_based(&k2, &plan),
+        "exactly P042 — the rule-based answer"
+    );
 }
 
 // --- cbo_default_003 — no declared indexes: byte-identical to pre-M15 -----------
@@ -287,4 +286,133 @@ fn cbo_default_005_production_shape_selects_the_index_at_harness_selectivity() {
     assert_eq!(report.index_used.as_deref(), Some("by_dept"));
     // Row-for-row identical to the rule path — same rows, same order.
     assert_eq!(exec_ids(&rows), rule_based(&k, &plan));
+}
+
+// --- cbo_default_006/007 — AG-21b: indexes stay on under live writes -------------
+
+/// RED pre-fix: ANY write after analyze staled the stats (no index plan),
+/// and a lagging index was rejected after an O(N) verify walk — under a
+/// steady write load the index never served. Now stale stats still price
+/// the plan, and a lagging index serves its rows plus the journal tail
+/// since its stamp (the Filter re-checks every row), so it stays exact.
+#[test]
+fn cbo_default_006_live_writes_keep_the_index_exact() {
+    let k = mk();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
+    for i in 0..200 {
+        person(&k, &format!("P{i:03}"), "Eng");
+    }
+    catch_up_indexes(&k);
+    k.analyze("Person").unwrap();
+    for idx in k.property_indexes().unwrap() {
+        idx.set_applied_seq(k.journal_head().unwrap().0); // the maintainer's stamp
+    }
+    // live writes the index has not applied: a new match and a re-key
+    let fresh = person(&k, "P042", "Ops");
+    let query = "MATCH Person WHERE name == \"P042\" RETURN *";
+    let plan = plan_of(&k, query);
+    let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
+    assert!(report.stats_stale, "the writes staled the stats");
+    assert_eq!(report.index_used.as_deref(), Some("by_name"), "{report:?}");
+    let mut got = exec_ids(&rows);
+    got.sort();
+    let mut want = rule_based(&k, &plan);
+    want.sort();
+    assert_eq!(got, want, "exact: the unindexed tail is patched in");
+    assert!(got.contains(&fresh));
+}
+
+/// Guard: past the tail cap the patch would cost more than it saves — the
+/// plan falls back to the full scan, still exact.
+#[test]
+fn cbo_default_007_a_tail_past_the_cap_falls_back_to_the_scan() {
+    let k = mk();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
+    for i in 0..50 {
+        person(&k, &format!("P{i:03}"), "Eng");
+    }
+    catch_up_indexes(&k);
+    k.analyze("Person").unwrap();
+    for idx in k.property_indexes().unwrap() {
+        idx.set_applied_seq(k.journal_head().unwrap().0);
+    }
+    for i in 0..10_001 {
+        person(&k, &format!("Q{i}"), "Ops"); // an unapplied bulk load
+    }
+    let plan = plan_of(&k, "MATCH Person WHERE name == \"P007\" RETURN *");
+    let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
+    assert_eq!(report.plan.operators[0].strategy, Strategy::FullScan);
+    assert_eq!(exec_ids(&rows).len(), 1);
+}
+
+// --- cbo_default_008/009 — AG-21c: ordered keys -----------------------------------
+
+fn scored(k: &Kernel, name: &str, score: Value) -> KOID {
+    let mut req = RememberRequest::create(alice(), meta("Person"));
+    req.properties
+        .insert("name".into(), Value::Text(name.into()));
+    req.properties.insert("points".into(), score);
+    k.remember(req).unwrap().koid
+}
+
+fn indexed_points(k: &Kernel) {
+    k.catalog_create_index("by_points", "Person", &["points"])
+        .unwrap();
+    catch_up_indexes(k);
+    k.analyze("Person").unwrap();
+    for idx in k.property_indexes().unwrap() {
+        idx.set_applied_seq(k.journal_head().unwrap().0);
+    }
+}
+
+/// RED pre-fix: the index keyed rows by `format!("{:?}")`, so `Int(5)` and
+/// `Float(5.0)` landed in different buckets — but the Filter treats them
+/// as equal (T-32 numeric promotion). `points == 5` through the index
+/// silently dropped the row stored as 5.0.
+#[test]
+fn cbo_default_008_an_index_eq_matches_across_int_and_float() {
+    let k = mk();
+    for i in 0..200 {
+        scored(&k, &format!("P{i}"), Value::Int(i % 50));
+    }
+    let as_float = scored(&k, "F", Value::Float(5.0));
+    indexed_points(&k);
+    let plan = plan_of(&k, "MATCH Person WHERE points == 5 RETURN *");
+    let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
+    assert_eq!(report.index_used.as_deref(), Some("by_points"));
+    let got = exec_ids(&rows);
+    assert!(got.contains(&as_float), "5.0 == 5, as the Filter says");
+    assert_eq!(got, rule_based(&k, &plan), "exactly the scan's answer");
+}
+
+/// RED pre-fix: a range filter never used an index — the 0.1% range cell
+/// full-scanned (133.6 ms at 100k). A single-property index now serves
+/// `>`, `>=`, `<`, `<=` from ordered keys, across Int and Float.
+#[test]
+fn cbo_default_009_a_range_filter_is_served_by_the_index() {
+    let k = mk();
+    for i in 0..1000 {
+        scored(&k, &format!("P{i}"), Value::Int(i));
+    }
+    let half = scored(&k, "half", Value::Float(995.5));
+    indexed_points(&k);
+    for q in [
+        "MATCH Person WHERE points >= 995 RETURN *",
+        "MATCH Person WHERE points > 995 RETURN *",
+        "MATCH Person WHERE points < 3 RETURN *",
+        "MATCH Person WHERE points <= 3 RETURN *",
+    ] {
+        let plan = plan_of(&k, q);
+        let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
+        assert_eq!(report.index_used.as_deref(), Some("by_points"), "{q}");
+        let mut got = exec_ids(&rows);
+        got.sort();
+        let mut want = rule_based(&k, &plan);
+        want.sort();
+        assert_eq!(got, want, "{q}: exactly the scan's answer");
+    }
+    let plan = plan_of(&k, "MATCH Person WHERE points > 995 RETURN *");
+    assert!(exec_ids(&Interpreter::execute(&k, &plan).unwrap()).contains(&half));
 }

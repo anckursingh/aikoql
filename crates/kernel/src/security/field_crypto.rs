@@ -67,6 +67,11 @@ pub struct FieldCrypto {
 }
 
 impl FieldCrypto {
+    /// AG-31 — the envelope whose tenant DEKs a KEK rotation rewraps.
+    pub fn envelope(&self) -> &Arc<Envelope> {
+        &self.envelope
+    }
+
     pub fn new(crypto: Arc<Crypto>, envelope: Arc<Envelope>) -> Self {
         FieldCrypto {
             crypto,

@@ -9,15 +9,119 @@
 use crate::index::unified::{ConsistencyLevel, Index, IndexState, VerifyReport};
 use crate::knowledge::kom::*;
 use crate::transaction::kernel::Kernel;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ops::Bound;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
+
+// AG-21c — order-preserving key bytes. Two values encode equal exactly when
+// the runtime Filter calls them equal (Int and Float share one numeric
+// domain — T-32's promotion; -0.0 is 0.0), and keys sort in the Filter's
+// order within a domain, so one map answers Eq and ranges. Domains sort by
+// tag; a range never crosses one (the Filter never orders across types).
+const TAG_NULL: u8 = 0;
+const TAG_BOOL: u8 = 1;
+const TAG_NUM: u8 = 2;
+const TAG_TEXT: u8 = 3;
+const TAG_BYTES: u8 = 4;
+const TAG_OTHER: u8 = 5;
+
+/// Bytes with 0x00 escaped (0x00 0xFF) and a 0x00 0x00 terminator — a
+/// shorter string sorts first, and a tuple's fields cannot run together.
+fn put_escaped(out: &mut Vec<u8>, bytes: &[u8]) {
+    for &b in bytes {
+        out.push(b);
+        if b == 0 {
+            out.push(0xFF);
+        }
+    }
+    out.extend_from_slice(&[0, 0]);
+}
+
+fn put_value(out: &mut Vec<u8>, v: &Value) {
+    match v {
+        Value::Null => out.push(TAG_NULL),
+        Value::Bool(b) => out.extend_from_slice(&[TAG_BOOL, *b as u8]),
+        Value::Int(_) | Value::Float(_) => {
+            let f = match v {
+                Value::Int(i) => *i as f64, // > 2^53 ties: a superset, the Filter trims
+                Value::Float(f) if f.is_nan() => f64::NAN,
+                Value::Float(f) => *f + 0.0, // -0.0 -> 0.0
+                _ => unreachable!(),
+            };
+            let bits = f.to_bits();
+            let ordered = if bits >> 63 == 1 {
+                !bits
+            } else {
+                bits ^ (1 << 63)
+            };
+            out.push(TAG_NUM);
+            out.extend_from_slice(&ordered.to_be_bytes());
+        }
+        Value::Text(t) => {
+            out.push(TAG_TEXT);
+            put_escaped(out, t.as_bytes());
+        }
+        Value::Bytes(b) => {
+            out.push(TAG_BYTES);
+            put_escaped(out, b);
+        }
+        // shortcut: List/Map key by their Debug form (Eq only, never ranged);
+        // a -0.0 inside one misses its 0.0 twin — a typed encoding if it bites
+        other => {
+            out.push(TAG_OTHER);
+            put_escaped(out, format!("{other:?}").as_bytes());
+        }
+    }
+}
+
+fn encode(values: &[&Value]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for v in values {
+        put_value(&mut out, v);
+    }
+    out
+}
+
+/// The index contents: each key's rows, and each row's key — the reverse
+/// map makes a re-key or a remove touch only the row's own bucket.
+#[derive(Default)]
+struct Buckets {
+    by_key: BTreeMap<Vec<u8>, BTreeSet<KOID>>,
+    by_koid: HashMap<KOID, Vec<u8>>,
+}
+
+impl Buckets {
+    fn insert(&mut self, koid: KOID, key: Vec<u8>) {
+        self.by_key.entry(key.clone()).or_default().insert(koid);
+        self.by_koid.insert(koid, key);
+    }
+
+    /// Drop the row's entry; returns the entries examined (0 or 1).
+    fn remove(&mut self, koid: &KOID) -> u64 {
+        let Some(key) = self.by_koid.remove(koid) else {
+            return 0;
+        };
+        if let Some(bucket) = self.by_key.get_mut(&key) {
+            bucket.remove(koid);
+            if bucket.is_empty() {
+                self.by_key.remove(&key);
+            }
+        }
+        1
+    }
+
+    fn clear(&mut self) {
+        self.by_key.clear();
+        self.by_koid.clear();
+    }
+}
 
 pub struct PropertyIndex {
     name: String,
     type_name: String,
     properties: Vec<String>,
-    map: RwLock<HashMap<String, Vec<KOID>>>,
+    map: RwLock<Buckets>,
     /// P5-M17b — the freshness stamp: the last committed event seq the
     /// index has fully applied. Set by `rebuild` (the head it reseeded
     /// from) and by the maintainer after a successful batch; 0 means no
@@ -27,6 +131,9 @@ pub struct PropertyIndex {
     /// carries the durable copy; this is the live registry's. Only `Ready`
     /// indexes may be CBO-chosen (P1-16).
     state: RwLock<IndexState>,
+    /// AG-21 probe — bucket entries examined by upsert/remove (the
+    /// idx6-001 seam: maintenance must stay O(1) per row, not O(index)).
+    steps: AtomicU64,
 }
 
 impl PropertyIndex {
@@ -35,20 +142,26 @@ impl PropertyIndex {
             name: name.into(),
             type_name: type_name.into(),
             properties: properties.iter().map(|p| p.to_string()).collect(),
-            map: RwLock::new(HashMap::new()),
+            map: RwLock::new(Buckets::default()),
             applied: AtomicU64::new(0),
             state: RwLock::new(IndexState::Declared),
+            steps: AtomicU64::new(0),
         }
     }
 
-    /// The Debug-derived key of the property tuple, or None when any key
+    /// AG-21 probe — bucket entries upsert/remove examined since creation.
+    pub fn maintenance_steps(&self) -> u64 {
+        self.steps.load(Ordering::Relaxed)
+    }
+
+    /// The ordered key of the property tuple, or None when any key
     /// property is missing (the row is not indexed).
-    fn key_of(&self, ko: &KnowledgeObject) -> Option<String> {
+    fn key_of(&self, ko: &KnowledgeObject) -> Option<Vec<u8>> {
         let mut vals = Vec::with_capacity(self.properties.len());
         for p in &self.properties {
-            vals.push(ko.properties.get(p)?.clone());
+            vals.push(ko.properties.get(p)?);
         }
-        Some(format!("{vals:?}"))
+        Some(encode(&vals))
     }
 
     /// P5-M26 — the checkpoint file name: the hex of the index name. Names
@@ -85,23 +198,20 @@ impl Index for PropertyIndex {
         // (an update moves the entry between keys — idx2-004). The sweep
         // runs for foreign types too: a re-typed row must not keep
         // answering scans for its old type (P1-01).
-        for bucket in map.values_mut() {
-            bucket.retain(|k| *k != koid);
-        }
+        self.steps.fetch_add(map.remove(&koid), Ordering::Relaxed);
         if ko.metadata.type_name != self.type_name {
             return Ok(());
         }
         if let Some(key) = self.key_of(ko) {
-            map.entry(key).or_default().push(koid);
+            map.insert(koid, key);
         }
         Ok(())
     }
 
     fn remove(&self, koid: &KOID) -> KResult<()> {
         // justified: RwLock poison is unrecoverable
-        for bucket in self.map.write().unwrap().values_mut() {
-            bucket.retain(|k| k != koid);
-        }
+        let steps = self.map.write().unwrap().remove(koid);
+        self.steps.fetch_add(steps, Ordering::Relaxed);
         Ok(())
     }
 
@@ -115,15 +225,59 @@ impl Index for PropertyIndex {
             )));
         }
         // justified: RwLock poison is unrecoverable
-        let mut out = self
+        // a BTreeSet iterates in KOID order — the sorted contract
+        Ok(self
             .map
             .read()
             .unwrap()
-            .get(&format!("{key:?}"))
-            .cloned()
-            .unwrap_or_default();
+            .by_key
+            .get(&encode(&key.iter().collect::<Vec<_>>()))
+            .map(|b| b.iter().copied().collect())
+            .unwrap_or_default())
+    }
+
+    fn scan_range(&self, lo: Option<&Value>, hi: Option<&Value>) -> KResult<Option<Vec<KOID>>> {
+        if self.properties.len() != 1 {
+            return Ok(None);
+        }
+        let domain = |v: &Value| -> Option<u8> {
+            match v {
+                Value::Int(_) | Value::Float(_) => Some(TAG_NUM),
+                Value::Text(_) => Some(TAG_TEXT),
+                Value::Bool(_) => Some(TAG_BOOL),
+                _ => None, // the Filter orders nothing else
+            }
+        };
+        let tags: Vec<u8> = match lo.iter().chain(hi.iter()).map(|v| domain(v)).collect() {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+        let Some(&tag) = tags.first() else {
+            return Ok(None); // no bound at all: not a range
+        };
+        if tags.iter().any(|t| *t != tag) {
+            return Ok(Some(Vec::new())); // across domains nothing compares
+        }
+        let start = lo.map_or(Bound::Included(vec![tag]), |v| {
+            Bound::Included(encode(&[v]))
+        });
+        let end = hi.map_or(Bound::Excluded(vec![tag + 1]), |v| {
+            Bound::Included(encode(&[v]))
+        });
+        if let (Bound::Included(a), Bound::Included(b)) = (&start, &end) {
+            if a > b {
+                return Ok(Some(Vec::new()));
+            }
+        }
+        // justified: RwLock poison is unrecoverable
+        let map = self.map.read().unwrap();
+        let mut out: Vec<KOID> = map
+            .by_key
+            .range((start, end))
+            .flat_map(|(_, b)| b.iter().copied())
+            .collect();
         out.sort();
-        Ok(out)
+        Ok(Some(out))
     }
 
     fn covers(&self, type_name: &str, property: &str) -> bool {
@@ -132,7 +286,7 @@ impl Index for PropertyIndex {
 
     fn len(&self) -> usize {
         // justified: RwLock poison is unrecoverable
-        self.map.read().unwrap().values().map(|b| b.len()).sum()
+        self.map.read().unwrap().by_koid.len()
     }
 
     fn set_applied_seq(&self, seq: u64) {
@@ -183,12 +337,13 @@ impl Index for PropertyIndex {
             }
             if let Some(key) = self.key_of(&ko) {
                 live.insert(koid);
-                if !map.get(&key).is_some_and(|b| b.contains(&koid)) {
+                if !map.by_key.get(&key).is_some_and(|b| b.contains(&koid)) {
                     missing.push(koid);
                 }
             }
         }
         let mut stale: Vec<KOID> = map
+            .by_key
             .values()
             .flatten()
             .copied()
@@ -196,7 +351,7 @@ impl Index for PropertyIndex {
             .collect();
         stale.sort();
         stale.dedup();
-        let indexed = map.values().map(|b| b.len()).sum();
+        let indexed = map.by_koid.len();
         Ok(VerifyReport {
             name: self.name.clone(),
             indexed,
@@ -252,7 +407,7 @@ impl Index for PropertyIndex {
                 continue;
             }
             if let Some(key) = self.key_of(&ko) {
-                map.entry(key).or_default().push(koid);
+                map.insert(koid, key);
             }
         }
         self.applied.store(h0, Ordering::SeqCst);
@@ -270,11 +425,11 @@ impl Index for PropertyIndex {
         // justified: RwLock poison is unrecoverable
         let map = self.map.read().unwrap();
         let mut out = Vec::new();
-        out.extend_from_slice(b"AKPI");
-        out.extend_from_slice(&(map.len() as u64).to_le_bytes());
-        for (key, bucket) in map.iter() {
+        out.extend_from_slice(b"AKP2"); // AG-21c: ordered byte keys
+        out.extend_from_slice(&(map.by_key.len() as u64).to_le_bytes());
+        for (key, bucket) in map.by_key.iter() {
             out.extend_from_slice(&(key.len() as u64).to_le_bytes());
-            out.extend_from_slice(key.as_bytes());
+            out.extend_from_slice(key);
             out.extend_from_slice(&(bucket.len() as u64).to_le_bytes());
             for koid in bucket {
                 out.extend_from_slice(koid.as_bytes());
@@ -307,32 +462,29 @@ impl Index for PropertyIndex {
             Ok(s)
         }
         let mut pos = 0usize;
-        if take(&bytes, &mut pos, 4)? != b"AKPI" {
+        let magic = take(&bytes, &mut pos, 4)?;
+        if magic == b"AKPI" {
+            // a pre-AG-21c checkpoint keyed by Debug strings: reseed once
+            return Ok(false);
+        }
+        if magic != b"AKP2" {
             return Err(KError::Store(format!(
                 "property checkpoint '{}' corrupt: bad magic",
                 self.name
             )));
         }
         let n_buckets = u64::from_le_bytes(take(&bytes, &mut pos, 8)?.try_into().unwrap()) as usize;
-        let mut map: HashMap<String, Vec<KOID>> = HashMap::new();
+        let mut map = Buckets::default();
         for _ in 0..n_buckets {
             let key_len =
                 u64::from_le_bytes(take(&bytes, &mut pos, 8)?.try_into().unwrap()) as usize;
-            let key =
-                String::from_utf8(take(&bytes, &mut pos, key_len)?.to_vec()).map_err(|_| {
-                    KError::Store(format!(
-                        "property checkpoint '{}' corrupt: bad key",
-                        self.name
-                    ))
-                })?;
+            let key = take(&bytes, &mut pos, key_len)?.to_vec();
             let n = u64::from_le_bytes(take(&bytes, &mut pos, 8)?.try_into().unwrap()) as usize;
-            let mut bucket = Vec::with_capacity(n);
             for _ in 0..n {
                 let mut buf = [0u8; KOID_LEN];
                 buf.copy_from_slice(take(&bytes, &mut pos, KOID_LEN)?);
-                bucket.push(KOID::from_bytes(buf));
+                map.insert(KOID::from_bytes(buf), key.clone());
             }
-            map.insert(key, bucket);
         }
         if pos != bytes.len() {
             return Err(KError::Store(format!(
@@ -369,6 +521,72 @@ mod tests {
         ko.properties
             .insert("title".into(), Value::Text("same title".into()));
         ko
+    }
+
+    // --- AG-21c — idx6-002: the key encoding agrees with the Filter. Equal
+    // per the Filter -> equal keys (an index never misses an Eq row); a < b
+    // per the Filter -> key(a) <= key(b) (a range never misses a row).
+    // Unequal values may share a key (Int > 2^53): a superset, trimmed. ---
+    fn filter_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+        match (a, b) {
+            (Value::Int(x), Value::Int(y)) => x.partial_cmp(y),
+            (Value::Float(x), Value::Float(y)) => x.partial_cmp(y),
+            (Value::Int(x), Value::Float(y)) => (*x as f64).partial_cmp(y),
+            (Value::Float(x), Value::Int(y)) => x.partial_cmp(&(*y as f64)),
+            (Value::Text(x), Value::Text(y)) => Some(x.cmp(y)),
+            (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),
+            _ => None,
+        }
+    }
+
+    fn any_value() -> impl proptest::strategy::Strategy<Value = Value> {
+        use proptest::prelude::*;
+        prop_oneof![
+            any::<i64>().prop_map(Value::Int),
+            (-5i64..5).prop_map(Value::Int),
+            any::<f64>().prop_map(Value::Float),
+            prop::sample::select(vec![0.0, -0.0, 1.0, -1.0, 9007199254740993.0, f64::NAN])
+                .prop_map(Value::Float),
+            "[a\\x00b]{0,4}".prop_map(Value::Text),
+            any::<bool>().prop_map(Value::Bool),
+        ]
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn idx6_002_key_order_agrees_with_the_filter(a in any_value(), b in any_value()) {
+            let (ka, kb) = (encode(&[&a]), encode(&[&b]));
+            match filter_cmp(&a, &b) {
+                Some(std::cmp::Ordering::Equal) => proptest::prop_assert_eq!(ka, kb),
+                Some(std::cmp::Ordering::Less) => proptest::prop_assert!(ka <= kb),
+                Some(std::cmp::Ordering::Greater) => proptest::prop_assert!(ka >= kb),
+                None => {}
+            }
+        }
+    }
+
+    // --- AG-21 — idx6-001: maintenance is O(1) per row. RED: upsert swept
+    // every bucket to drop the row's old entry — 2 000 rows into one index
+    // examined ~2 million entries; a 1M-row index build took ~an hour. ---
+    #[test]
+    fn idx6_001_maintenance_does_not_sweep_the_index() {
+        let idx = PropertyIndex::new("by_title", "note", &["title"]);
+        let n = 2000u64;
+        for i in 0..n {
+            let mut b = [0u8; KOID_LEN];
+            b[..8].copy_from_slice(&i.to_le_bytes());
+            idx.upsert(KOID::from_bytes(b), &ko(KOID::from_bytes(b), "note"))
+                .unwrap();
+        }
+        let first = KOID::from_bytes([0u8; KOID_LEN]);
+        idx.upsert(first, &ko(first, "note")).unwrap(); // a re-key
+        idx.remove(&first).unwrap();
+        let steps = idx.maintenance_steps();
+        assert!(
+            steps <= 4 * n,
+            "{n} upserts examined {steps} bucket entries"
+        );
+        assert_eq!(idx.len() as u64, n - 1);
     }
 
     // --- P5-M19 — idx3-003 (PR6 P1-01): a foreign-type upsert must still

@@ -1,0 +1,8 @@
+{
+  "id": "ag33-injection-corpus",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test injection_corpus",
+  "captured_at": "2026-10-31T19:24:21Z",
+  "captured_head": "e24714dd1fe7bd37150cbbcc694c2814210f2eb9",
+  "exit_code": 101
+}

@@ -124,6 +124,18 @@ status, authority, a short provenance line (`why`) and any open conflict
 about it. `max_tokens` (default 2000) bounds the answer; `fusion: "rrf"`
 adds keyword matching for exact identifiers.
 
+**Stored data is marked as data (AG-33)**: every object carries a trust
+class of its source — `trust: "user"` (or `"system"`) for content you can
+vouch for, `"tool_output"` / `"web"` / `"document"` otherwise; an object
+stored without one reads as `undeclared`. `recall` and `memory_search`
+return the class on every item, accept `trust` to filter by it, and wrap
+content from untrusted classes in a fence (`⟦untrusted <nonce>⟧ …
+⟦/untrusted <nonce>⟧`, nonce in `fence.nonce`) so an embedded
+"ignore all previous instructions" inside a web page you remembered
+cannot be mistaken for yours. The injection corpus
+(`crates/services/api/mcp/tests/injection_corpus.rs`) keeps zero
+untrusted text outside its fence.
+
 **A smaller tool surface**: `serve --tool-profile core` lists 13 tools
 (session_init, remember, get, find_similar, relate, traverse, forget,
 trace, find_conflicts, resolve_conflict, aikoql, health, tools_more) in
@@ -167,6 +179,12 @@ Claude Code's client ID is an https URL) need no registration: aikoql
 fetches the document from public addresses only. After five wrong
 passwords a login backs off (1 s, doubling, up to 15 min; 429 with
 `Retry-After`).
+
+A client can ask for less than the login's full access with the OAuth
+`scope`: `mcp:read` (read tools only; through `aikoql`, `MATCH` only),
+`mcp:write` (everything except admin tools) or `mcp:admin`. `mcp` — what
+clients ask for by default — keeps the login's roles. The sign-in page
+shows what is requested.
 
 To try the connector from a laptop, a Cloudflare quick tunnel gives the
 loopback server a public HTTPS URL (no inbound ports, no account):

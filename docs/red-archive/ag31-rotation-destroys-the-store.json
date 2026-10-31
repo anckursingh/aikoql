@@ -1,0 +1,8 @@
+{
+  "id": "ag31-rotation-destroys-the-store",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --bin aikoql-mcp kr001",
+  "captured_at": "2026-10-31T18:00:52Z",
+  "captured_head": "25298090c29e1f9906961f42a2fc2e82c9b2879f",
+  "exit_code": 101
+}

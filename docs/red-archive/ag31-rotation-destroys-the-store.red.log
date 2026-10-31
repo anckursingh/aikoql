@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+     Running unittests src/main.rs (target/debug/deps/aikoql_mcp-1e7e44aa7a0e0f07)
+
+running 1 test
+test engine::tests::kr001_rotation_keeps_every_object_readable_and_retires_the_old_kek ... FAILED
+
+failures:
+
+---- engine::tests::kr001_rotation_keeps_every_object_readable_and_retires_the_old_kek stdout ----
+
+thread 'engine::tests::kr001_rotation_keeps_every_object_readable_and_retires_the_old_kek' (4143093) panicked at crates/services/api/mcp/src/engine.rs:241:61:
+the rotated database opens: Store("decrypt: aes-gcm decrypt: aead::Error")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    engine::tests::kr001_rotation_keeps_every_object_readable_and_retires_the_old_kek
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 145 filtered out; finished in 3.51s
+
+error: test failed, to rerun pass `-p aikoql-mcp --bin aikoql-mcp`
+EXIT=101

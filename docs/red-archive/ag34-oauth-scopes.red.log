@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/mcp_oauth.rs (target/debug/deps/mcp_oauth-c9857a3b0989a4fa)
+
+running 1 test
+test o011_scopes_bound_what_a_token_may_do ... FAILED
+
+failures:
+
+---- o011_scopes_bound_what_a_token_may_do stdout ----
+
+thread 'o011_scopes_bound_what_a_token_may_do' (4314899) panicked at crates/services/api/mcp/tests/mcp_oauth.rs:726:5:
+mcp:write does not carry the login's admin role
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    o011_scopes_bound_what_a_token_may_do
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 5.68s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_oauth`
+EXIT=101

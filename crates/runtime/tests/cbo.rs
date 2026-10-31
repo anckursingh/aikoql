@@ -457,8 +457,11 @@ fn cbo007_temporal_plans_cost_the_version_reconstruction() {
 
 // --- cbo008 — stale statistics: the plan is not silently wrong ------------------
 
+// AG-21b: stale stats still price the plan (one write used to switch every
+// index off); exactness is the index's own gate — its rows plus the
+// unapplied tail — so the answer is the committed truth either way.
 #[test]
-fn cbo008_stale_statistics_fall_back_to_the_rules() {
+fn cbo008_stale_statistics_still_price_the_index_and_stay_exact() {
     let k = mk();
     k.catalog_create_index("by_name", "Person", &["name"])
         .unwrap();
@@ -473,18 +476,18 @@ fn cbo008_stale_statistics_fall_back_to_the_rules() {
     let query = "MATCH Person WHERE name == \"P042\" RETURN *";
     let report = cost_optimize(&k, &plan_of(&k, query)).unwrap();
     assert!(report.stats_stale, "staleness is detected");
-    assert!(!report.stats_used, "stale stats never drive the plan");
-    assert_eq!(
-        scan_strategy(&report),
-        Strategy::FullScan,
-        "rule-based fallback, never worse than today"
-    );
-    assert!(report.index_used.is_none());
-    let _ = late;
+    assert!(!report.stats_used, "stats_used reports fresh stats only");
+    assert_eq!(scan_strategy(&report), Strategy::PropertyIndex);
+    assert_eq!(report.index_used.as_deref(), Some("by_name"));
+    let rows = costed(&k, query);
+    assert_eq!(rows.len(), 1, "exactly P042");
+    assert!(!rows.contains(&late), "never an index artifact");
 }
 
+// AG-21b: a lagging index serves its rows plus the unapplied tail — the
+// row it never saw is patched in, not silently dropped.
 #[test]
-fn cbo008b_an_index_that_has_not_caught_up_is_not_used() {
+fn cbo008b_an_index_that_has_not_caught_up_is_patched_by_the_tail() {
     let k = mk();
     k.catalog_create_index("by_name", "Person", &["name"])
         .unwrap();
@@ -498,12 +501,9 @@ fn cbo008b_an_index_that_has_not_caught_up_is_not_used() {
 
     let query = "MATCH Person WHERE name == \"Unseen\" RETURN *";
     let report = cost_optimize(&k, &plan_of(&k, query)).unwrap();
-    assert!(
-        report.stats_used,
-        "stats are fresh — the index is the rejected piece"
-    );
-    assert_eq!(scan_strategy(&report), Strategy::FullScan);
-    assert!(report.index_used.is_none());
+    assert!(report.stats_used, "stats are fresh");
+    assert_eq!(scan_strategy(&report), Strategy::PropertyIndex);
+    assert_eq!(report.index_used.as_deref(), Some("by_name"));
     // Not silently wrong: the unindexed row answers the committed truth.
     let rows = costed(&k, query);
     assert_eq!(rows, vec![unseen]);
@@ -545,21 +545,19 @@ fn cbo009_explain_cost_shows_per_op_costs_and_stats_freshness() {
         "fresh stats, visible"
     );
 
-    // Stale case.
+    // Stale case: the index still serves (AG-21b), and staleness is visible.
     person(&k2, "Late", "Eng");
     let lines =
         aikoql_runtime::cbo::explain_cost(&k2, "MATCH Person WHERE name == \"P042\" RETURN *")
             .unwrap();
     assert!(
-        lines[0].contains("[FullScan]"),
-        "stale → fallback: {}",
+        lines[0].contains("[PropertyIndex]"),
+        "stale stats still price the index: {}",
         lines[0]
     );
     assert!(
-        lines
-            .last()
-            .is_some_and(|l| l.contains("statistics: stale")),
-        "staleness is visible"
+        lines.iter().any(|l| l.contains("statistics: stale")),
+        "staleness is visible: {lines:?}"
     );
 }
 

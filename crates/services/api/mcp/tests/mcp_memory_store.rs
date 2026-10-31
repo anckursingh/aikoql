@@ -232,15 +232,14 @@ fn m05_memory_search_answers_from_the_knowledge_base_in_its_old_shape() {
         json!({"query": "billing owner", "max_results": 5}),
     );
     let r = &s["results"][0];
-    assert_eq!(r["name"], json!("billing-owner"), "{s}");
-    assert_eq!(r["description"], json!("who owns billing"));
-    assert_eq!(r["file"], json!("billing-owner.md"));
-    assert!(
-        r["snippet"]
-            .as_str()
-            .is_some_and(|t| t.contains("payments team")),
-        "{s}"
-    );
+    // AG-33: the memory stored no trust class → undeclared → fenced as data
+    let has = |field: &str, needle: &str| r[field].as_str().is_some_and(|t| t.contains(needle));
+    assert!(has("name", "billing-owner"), "{s}");
+    assert!(has("description", "who owns billing"));
+    assert!(has("file", "billing-owner.md"));
+    assert!(has("snippet", "payments team"), "{s}");
+    assert_eq!(r["trust"], json!("undeclared"), "{s}");
+    assert!(s["fence"]["nonce"].is_string(), "{s}");
     assert!(r["score"].as_f64().is_some_and(|v| v > 0.0), "{s}");
 }
 
