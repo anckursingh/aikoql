@@ -35,6 +35,7 @@ mod protocol;
 mod rate_limiter;
 mod replication;
 mod s3;
+mod sampling;
 mod session;
 mod shell;
 mod studio;
