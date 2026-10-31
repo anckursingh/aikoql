@@ -1,0 +1,8 @@
+{
+  "id": "storage-scan-from-seek",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-storage-v2 --test scan_from",
+  "captured_at": "2026-10-31T17:13:51Z",
+  "captured_head": "eaa8169ed04829454e2344db293ff4c0a5f2b5e5",
+  "exit_code": 101
+}
