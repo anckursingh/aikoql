@@ -153,7 +153,7 @@ stdio from the host, use the npm binary instead. A compose file
 
 ```bash
 aikoql-mcp --version
-# aikoql-mcp 0.2.4
+# aikoql-mcp 0.3.0
 ```
 
 ## 5-Second Start
