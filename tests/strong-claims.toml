@@ -767,13 +767,43 @@ evidence = "staged_sorted_publish_is_byte_identical_to_the_sorting_publish"
 
 
 [[claim]]
-file = "crates/kernel/src/index/coordinator.rs"
-line = 195
-text = "// AG-20: a bounded pool, widened 4x while the guards leave fewer"
-evidence = "vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool"
-
-[[claim]]
 file = "crates/kernel/tests/vs_scan.rs"
 line = 182
 text = "// --- vs_scan_004/005 — AG-20: the ANN leg asks for a bounded candidate pool ----"
 evidence = "vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive"
+
+[[claim]]
+file = "crates/kernel/src/index/coordinator.rs"
+line = 213
+text = "// AG-20: a bounded pool, widened 4x while the guards leave fewer"
+evidence = "vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool"
+
+[[claim]]
+file = "crates/kernel/src/index/coordinator.rs"
+line = 301
+text = "// AG-20: with indexes, hybrid fusions score the union of a bounded"
+evidence = "vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool"
+
+[[claim]]
+file = "crates/kernel/src/index/coordinator.rs"
+line = 302
+text = "// vector pool and a bounded text pool, widened 4x while fewer than k"
+evidence = "vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool"
+
+[[claim]]
+file = "crates/kernel/tests/vs_scan.rs"
+line = 283
+text = "/// scored under VectorOnly, so it must not cost the bounded pool."
+evidence = "vs_scan_006_vector_only_with_text_still_asks_a_bounded_pool"
+
+[[claim]]
+file = "crates/kernel/tests/vs_scan.rs"
+line = 302
+text = "/// N candidates must examine O(N) positions."
+evidence = "vs_scan_007_rrf_ranks_without_a_quadratic_search"
+
+[[claim]]
+file = "crates/kernel/tests/vs_scan.rs"
+line = 329
+text = "// --- vs_scan_008/009 — AG-20: hybrid fusions score a bounded candidate union --"
+evidence = "vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool"
