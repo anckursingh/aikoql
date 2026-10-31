@@ -7,6 +7,17 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Added
+
+- **MCP sampling extraction on `summarize_conversation` (AG-12b)**: with
+  a client that advertises `sampling`, the server asks the client's model
+  for candidate facts (`sampling/createMessage` with a fixed JSON schema
+  in the prompt) and judges them with `remember_facts`'s shared judging —
+  dedupe, contradiction → Conflict KO, supersede, message-range
+  provenance. Any failure (no capability, unusable answer, 30 s timeout)
+  degrades to the deterministic summary, whose response shape is
+  unchanged.
+
 ### Fixed
 
 - **Vector search uses its index at scale (AG-20)**: `find_similar`

@@ -144,6 +144,22 @@ string error (architecture hygiene leg).
   path; zero facts without a message-range provenance; every contradiction
   with an existing fact becomes a Conflict KO (never an overwrite).
 
+- *Status (2026-10-31):* **AG-12b done** (branch
+  `feature/agentic-wave-4`). With a client that advertises `sampling`,
+  `summarize_conversation` sends `sampling/createMessage` (the
+  conversation plus a fixed JSON schema for the facts), judges the model's
+  candidate facts with `remember_facts`'s shared `judge_extracted` — the
+  same scan and dedupe/conflict/supersede logic — and reports the judged
+  statuses in the response. Any failure (no capability, garbage answer,
+  a 30 s timeout, no stdio sink) degrades to the deterministic summary;
+  its response shape is unchanged, and s002 pins that byte-for-byte.
+  Tests `tests/mcp_memory_sampling.rs` (s001 judged created+conflict with
+  message-range provenance, s002 guard, s003 fallback). The stdio loop
+  gained a reader thread so replies reach their waiter while a tool is
+  still running; requests still dispatch one at a time. **Open leg:**
+  HTTP sampling (the sink and capability are per-process stdio state),
+  and the gate's eval measurement (needs the AG-61 run).
+
 **AG-13 (P1) Consolidation, salience and decay.**
 - *Design:* per-KO `salience` (recency × access × authority × links),
   updated on access; a scheduler job consolidates near-duplicates (existing

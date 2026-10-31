@@ -60,7 +60,11 @@ impl Sampler {
             asked: vec![],
             canned,
         };
-        let caps = if sampling { json!({"sampling": {}}) } else { json!({}) };
+        let caps = if sampling {
+            json!({"sampling": {}})
+        } else {
+            json!({})
+        };
         m.call(
             "initialize",
             json!({"protocolVersion": "2025-06-18", "capabilities": caps}),
@@ -161,7 +165,11 @@ fn s001_a_sampling_client_is_asked_then_its_facts_are_judged() {
     let root = tmp("s001");
     let mut m = Sampler::serve(&root, true, Some(canned_facts()));
     let r = m.tool("summarize_conversation", summarize_args());
-    assert_eq!(m.asked.len(), 1, "the server must ask exactly once — RED: it never asks");
+    assert_eq!(
+        m.asked.len(),
+        1,
+        "the server must ask exactly once — RED: it never asks"
+    );
     let params = &m.asked[0]["params"];
     assert_eq!(
         params["messages"].as_array().map(|a| a.len()),
@@ -206,7 +214,12 @@ fn s002_without_sampling_the_deterministic_shape_is_unchanged() {
     assert!(m.asked.is_empty(), "no capability: no sampling request");
     assert_eq!(
         deterministic_keys(&r),
-        vec!["koid".to_string(), "message_count".to_string(), "type_name".to_string(), "version".to_string()],
+        vec![
+            "koid".to_string(),
+            "message_count".to_string(),
+            "type_name".to_string(),
+            "version".to_string()
+        ],
         "the old response shape, byte-for-byte: {r}"
     );
 }
@@ -219,7 +232,12 @@ fn s003_an_unusable_sampled_answer_falls_back_to_deterministic() {
     assert_eq!(m.asked.len(), 1, "sampling was attempted");
     assert_eq!(
         deterministic_keys(&r),
-        vec!["koid".to_string(), "message_count".to_string(), "type_name".to_string(), "version".to_string()],
+        vec![
+            "koid".to_string(),
+            "message_count".to_string(),
+            "type_name".to_string(),
+            "version".to_string()
+        ],
         "a garbage answer degrades to the deterministic shape: {r}"
     );
 }
