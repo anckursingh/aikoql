@@ -1,0 +1,2 @@
+ARCH: release jobs bypass the version gate via always(): go-tag crates-io-publish maven-central-publish npm-publish ts-sdk-publish pypi-wheel-matrix pypi-publish training-pypi-publish sdk-release-cert verify-release-identity (D-18)
+EXIT=1
