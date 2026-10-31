@@ -651,3 +651,121 @@ fn o008_sign_ins_are_not_knowledge() {
         "OAuth state leaks into the schema"
     );
 }
+
+/// AG-34 — a token for `scope` (authorize + exchange), and its MCP session.
+fn scoped_session(srv: &Server, scope: &str) -> Result<(String, String), Resp> {
+    let client = register(srv.port, &[CLAUDE_CALLBACK]);
+    let resource = format!("{}/mcp", srv.base());
+    let r = post_form(
+        srv.port,
+        "/oauth/authorize",
+        &[
+            ("response_type", "code"),
+            ("client_id", &client),
+            ("redirect_uri", CLAUDE_CALLBACK),
+            ("code_challenge", &challenge(VERIFIER)),
+            ("code_challenge_method", "S256"),
+            ("state", "st-scope"),
+            ("scope", scope),
+            ("resource", &resource),
+            ("username", "admin"),
+            ("password", "oauth-pw"),
+            ("approve", "1"),
+        ],
+    );
+    let Some(location) = r.header("location").map(String::from) else {
+        return Err(r);
+    };
+    if !location.contains("code=") {
+        return Err(r);
+    }
+    let t = exchange(srv, &client, CLAUDE_CALLBACK, &code_of(&location), VERIFIER).json();
+    let token = t["access_token"].as_str().expect("a token").to_string();
+    let sid = mcp_initialize(srv.port, &token)
+        .header("mcp-session-id")
+        .expect("a session")
+        .to_string();
+    Ok((token, sid))
+}
+
+/// The tools/call reply: Ok(text) or Err(the JSON-RPC error message).
+fn call(port: u16, (token, sid): &(String, String), name: &str, args: J) -> Result<String, String> {
+    let auth = format!("Bearer {token}");
+    let r = http(
+        port,
+        "POST",
+        "/mcp",
+        &[("Authorization", &auth), ("Mcp-Session-Id", sid), ("Content-Type", "application/json")],
+        &json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": name, "arguments": args}}).to_string(),
+    )
+    .json();
+    match r["result"]["content"][0]["text"].as_str() {
+        Some(t) if r["result"]["isError"] != true => Ok(t.to_string()),
+        _ => Err(r.to_string()),
+    }
+}
+
+/// AG-34 — RED: every OAuth grant had scope `mcp` and the login's full
+/// roles, so a client asking only to read could write (and administer).
+/// `mcp:read` reaches read tools only (and only MATCH through `aikoql`),
+/// `mcp:write` everything but admin, `mcp:admin` the login's admin role.
+#[test]
+fn o011_scopes_bound_what_a_token_may_do() {
+    let srv = serve("011");
+    let writer = scoped_session(&srv, "mcp:write")
+        .unwrap_or_else(|r| panic!("mcp:write is a supported scope: {}", r.body));
+    let made = call(
+        srv.port,
+        &writer,
+        "remember",
+        json!({"type_name": "note", "properties": {"body": "hello"}}),
+    )
+    .expect("a write-scoped token writes");
+    let koid: J = serde_json::from_str(&made).unwrap();
+    let koid = koid["koid"].as_str().unwrap().to_string();
+    assert!(
+        call(srv.port, &writer, "storage_compact", json!({})).is_err(),
+        "mcp:write does not carry the login's admin role"
+    );
+
+    let reader = scoped_session(&srv, "mcp:read")
+        .unwrap_or_else(|r| panic!("mcp:read is a supported scope: {}", r.body));
+    for (tool, args) in [
+        ("get", json!({"koid": koid})),
+        ("recall", json!({"query": "hello"})),
+        ("aikoql", json!({"query": "MATCH note RETURN *"})),
+    ] {
+        assert!(
+            call(srv.port, &reader, tool, args).is_ok(),
+            "mcp:read may {tool}"
+        );
+    }
+    for (tool, args) in [
+        (
+            "remember",
+            json!({"type_name": "note", "properties": {"body": "x"}}),
+        ),
+        (
+            "memory_store",
+            json!({"name": "n", "description": "d", "content": "c"}),
+        ),
+        ("forget", json!({"koid": koid})),
+        ("aikoql", json!({"query": "CREATE note {body: \"x\"}"})),
+    ] {
+        let r = call(srv.port, &reader, tool, args);
+        assert!(
+            r.as_ref().is_err_and(|e| e.contains("mcp:read")),
+            "mcp:read must not {tool}: {r:?}"
+        );
+    }
+
+    let admin = scoped_session(&srv, "mcp:admin")
+        .unwrap_or_else(|r| panic!("mcp:admin is a supported scope: {}", r.body));
+    assert!(
+        call(srv.port, &admin, "storage_compact", json!({})).is_ok(),
+        "mcp:admin keeps admin"
+    );
+
+    let bad = scoped_session(&srv, "mcp:everything");
+    assert!(bad.is_err(), "an unknown scope is refused");
+}
