@@ -107,17 +107,19 @@ impl IndexCoordinator {
         } else {
             0
         };
-        let vmap: Option<BTreeMap<KOID, f32>> = if use_indexes {
+        // The index's `want` nearest candidates (None: no index to ask).
+        let ann = |want: usize| -> Option<BTreeMap<KOID, f32>> {
+            if !use_indexes {
+                return None;
+            }
             m.as_ref().and_then(|mm| {
                 q.vector.as_ref().map(|qv| {
                     mm.vectors()
-                        .search(qv, usize::MAX, q.embedding_model.as_deref())
+                        .search(qv, want, q.embedding_model.as_deref())
                         .into_iter()
                         .collect()
                 })
             })
-        } else {
-            None
         };
         let tmap: Option<BTreeMap<KOID, f32>> = if use_indexes {
             match (&m, &q_tokens) {
@@ -149,23 +151,23 @@ impl IndexCoordinator {
             // committed cosine from the slim embedding — the index only
             // nominates candidates, its own sim never becomes a published
             // score.
-            let mut consider = |koid: &KOID, deleted: bool| -> KResult<()> {
+            let consider = |koid: &KOID, deleted: bool| -> KResult<Option<f32>> {
                 if deleted {
-                    return Ok(());
+                    return Ok(None);
                 }
                 let Some(rec) = kernel.object_scoring(koid, snap, &required)? else {
-                    return Ok(());
+                    return Ok(None);
                 };
                 if kernel
                     .check_access_parts(&q.context.subject, &rec, Action::Read)
                     .is_err()
                 {
-                    return Ok(()); // ACL-filtered, silently (no existence leak)
+                    return Ok(None); // ACL-filtered, silently (no existence leak)
                 }
                 if let Some(f) = &q.filter {
                     if let Some(tn) = &f.type_name {
                         if rec.type_name != *tn {
-                            return Ok(());
+                            return Ok(None);
                         }
                     }
                     let mut ok = true;
@@ -176,7 +178,7 @@ impl IndexCoordinator {
                         }
                     }
                     if !ok {
-                        return Ok(());
+                        return Ok(None);
                     }
                 }
                 let vscore = match (&q.vector, &rec.embedding) {
@@ -186,30 +188,46 @@ impl IndexCoordinator {
                     // (during the semantic catch-up window every KO became
                     // a zero-score "match"). Only embedded KOs can answer a
                     // vector query; the caller sees an honest empty.
-                    _ => return Ok(()),
+                    _ => return Ok(None),
                 };
-                ranked.push((*koid, vscore));
-                Ok(())
+                Ok(Some(vscore))
             };
-            if let Some(vmap) = &vmap {
-                // M18 (ann001): candidate-driven ranking. The ANN index is
-                // capacity-capped, so rank ONLY the candidates it returned —
-                // scoring every head with vmap.get(koid).unwrap_or(0.0)
-                // hands non-candidates a 0.0 "hole" that outranks real
-                // negative-cosine neighbors. The index lags deletes
-                // (eventual): a tombstoned koid can still be a candidate,
-                // and its head state is the authority.
-                for koid in vmap.keys() {
-                    let deleted = match kernel.head_object(koid)? {
-                        Some(head) => head.lifecycle.state == LifecycleState::Deleted,
-                        None => true, // head erased — not a live candidate
-                    };
-                    consider(koid, deleted)?;
+            // AG-20: a bounded pool, widened 4x while the guards leave fewer
+            // than k and the index holds more — never the whole index at
+            // once (usize::MAX walked every HNSW node and read every record).
+            let mut want = q.k.saturating_mul(16).max(512);
+            if let Some(mut vmap) = ann(want) {
+                let held = m.as_ref().map_or(0, |mm| mm.vectors().len());
+                loop {
+                    ranked.clear();
+                    // M18 (ann001): candidate-driven ranking. The ANN index is
+                    // capacity-capped, so rank ONLY the candidates it returned —
+                    // scoring every head with vmap.get(koid).unwrap_or(0.0)
+                    // hands non-candidates a 0.0 "hole" that outranks real
+                    // negative-cosine neighbors. The index lags deletes
+                    // (eventual): a tombstoned koid can still be a candidate,
+                    // and its head state is the authority.
+                    for koid in vmap.keys() {
+                        let deleted = match kernel.head_object(koid)? {
+                            Some(head) => head.lifecycle.state == LifecycleState::Deleted,
+                            None => true, // head erased — not a live candidate
+                        };
+                        if let Some(score) = consider(koid, deleted)? {
+                            ranked.push((*koid, score));
+                        }
+                    }
+                    if ranked.len() >= q.k || want >= held {
+                        break;
+                    }
+                    want = want.saturating_mul(4);
+                    vmap = ann(want).unwrap_or_default();
                 }
             } else {
                 // Exact fallback: all heads, inline cosine (no index reads).
                 for (koid, _version, _ts, state) in &heads()? {
-                    consider(koid, *state == LifecycleState::Deleted)?;
+                    if let Some(score) = consider(koid, *state == LifecycleState::Deleted)? {
+                        ranked.push((*koid, score));
+                    }
                 }
             }
             ranked.sort_by(|a, b| {
@@ -260,6 +278,9 @@ impl IndexCoordinator {
             return Ok(merged);
         }
 
+        // shortcut: text-bearing fusions score every head, so they keep the
+        // whole candidate list; bound it when hybrid search is measured at 1M
+        let vmap = ann(usize::MAX);
         for (koid, _version, _ts, state) in &heads()? {
             let ko = match kernel.object_at(koid, snap)? {
                 Some(ko) => ko,

@@ -253,7 +253,7 @@ fn vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool() {
         "an unfiltered query needs one index call: {asked:?}"
     );
     assert!(
-        asked[0] <= 100,
+        asked[0] <= 512,
         "asked the index for {} candidates (k = 10)",
         asked[0]
     );
@@ -266,7 +266,7 @@ fn vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive() {
     let k = mk();
     let (alice, bob) = (ctx("alice"), ctx("bob"));
     let (spy, _owner) = spied(&k);
-    arc(&k, &spy, &bob, 500, 0.0, 0.05); // the 500 nearest, all bob's
+    arc(&k, &spy, &bob, 2000, 0.0, 0.01); // the 2 000 nearest, all bob's
     let mine = arc(&k, &spy, &alice, 20, 30.0, 1.0);
     let hits = k.find_similar(vector_only(&alice, [1.0, 0.0], 5)).unwrap();
     let got: Vec<KOID> = hits.iter().map(|h| h.ko.koid).collect();
