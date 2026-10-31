@@ -72,8 +72,8 @@ impl Client {
                 self.stdout.read_line(&mut line).unwrap() > 0,
                 "server closed stdout"
             );
-            let frame: J = serde_json::from_str(line.trim())
-                .unwrap_or_else(|_| panic!("bad frame: {line:?}"));
+            let frame: J =
+                serde_json::from_str(line.trim()).unwrap_or_else(|_| panic!("bad frame: {line:?}"));
             if frame["id"].as_u64() == Some(id) {
                 return frame;
             }
@@ -84,14 +84,6 @@ impl Client {
     fn raw_call(&mut self, name: &str, args: J) -> J {
         let r = self.call("tools/call", json!({"name": name, "arguments": args}));
         r["result"].clone()
-    }
-
-    fn tool(&mut self, name: &str, args: J) -> J {
-        let r = self.raw_call(name, args);
-        let text = r["content"][0]["text"]
-            .as_str()
-            .unwrap_or_else(|| panic!("{name}: {r}"));
-        serde_json::from_str(text).unwrap_or_else(|_| json!(text))
     }
 }
 
@@ -158,9 +150,15 @@ fn s002_structured_content_beside_text() {
 fn s003_errors_stay_unstructured() {
     let root = tmp("error");
     let mut c = Client::serve(&root);
-    let r = c.raw_call("get", json!({"subject": "mcp-agent", "koid": "ffffffffffffffffffffffffffffffff"}));
+    let r = c.raw_call(
+        "get",
+        json!({"subject": "mcp-agent", "koid": "ffffffffffffffffffffffffffffffff"}),
+    );
     assert_eq!(r["isError"], true, "{r}");
-    assert!(r.get("structuredContent").is_none(), "errors carry no structuredContent: {r}");
+    assert!(
+        r.get("structuredContent").is_none(),
+        "errors carry no structuredContent: {r}"
+    );
 }
 
 /// s004: recall's structuredContent matches its declared schema (items
@@ -169,7 +167,10 @@ fn s003_errors_stay_unstructured() {
 fn s004_recall_structured() {
     let root = tmp("recall");
     let mut c = Client::serve(&root);
-    let r = c.raw_call("recall", json!({"subject": "mcp-agent", "query": "anything"}));
+    let r = c.raw_call(
+        "recall",
+        json!({"subject": "mcp-agent", "query": "anything"}),
+    );
     let sc = r
         .get("structuredContent")
         .unwrap_or_else(|| panic!("no structuredContent: {r}"));

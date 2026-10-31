@@ -18,6 +18,7 @@ import tempfile
 import time
 
 import httpx2
+import jsonschema
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -49,6 +50,18 @@ async def run(url):
                 via = json.loads(got.content[0].text)["properties"]["via"]
                 assert via == "mcp-sdk", got
                 print(f"remember + get: {koid} round-trips")
+
+                # AG-04: structured output — the SDK's CallToolResult exposes
+                # structuredContent, validated against the declared outputSchema.
+                rem_def = next(t for t in tools.tools if t.name == "remember")
+                assert rem_def.output_schema is not None, "remember declares outputSchema"
+                jsonschema.validate(put.structured_content, rem_def.output_schema)
+                got_def = next(t for t in tools.tools if t.name == "get")
+                jsonschema.validate(got.structured_content, got_def.output_schema)
+                rec = await session.call_tool("recall", {"subject": "admin", "query": "mcp-sdk"})
+                rec_def = next(t for t in tools.tools if t.name == "recall")
+                jsonschema.validate(rec.structured_content, rec_def.output_schema)
+                print("structured output: remember + get + recall validate against outputSchema")
 
                 # AG-03: resources and prompts through the official SDK.
                 resources = await session.list_resources()
