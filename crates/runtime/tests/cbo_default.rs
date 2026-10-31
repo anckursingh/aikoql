@@ -346,3 +346,73 @@ fn cbo_default_007_a_tail_past_the_cap_falls_back_to_the_scan() {
     assert_eq!(report.plan.operators[0].strategy, Strategy::FullScan);
     assert_eq!(exec_ids(&rows).len(), 1);
 }
+
+// --- cbo_default_008/009 — AG-21c: ordered keys -----------------------------------
+
+fn scored(k: &Kernel, name: &str, score: Value) -> KOID {
+    let mut req = RememberRequest::create(alice(), meta("Person"));
+    req.properties
+        .insert("name".into(), Value::Text(name.into()));
+    req.properties.insert("points".into(), score);
+    k.remember(req).unwrap().koid
+}
+
+fn indexed_points(k: &Kernel) {
+    k.catalog_create_index("by_points", "Person", &["points"])
+        .unwrap();
+    catch_up_indexes(k);
+    k.analyze("Person").unwrap();
+    for idx in k.property_indexes().unwrap() {
+        idx.set_applied_seq(k.journal_head().unwrap().0);
+    }
+}
+
+/// RED pre-fix: the index keyed rows by `format!("{:?}")`, so `Int(5)` and
+/// `Float(5.0)` landed in different buckets — but the Filter treats them
+/// as equal (T-32 numeric promotion). `points == 5` through the index
+/// silently dropped the row stored as 5.0.
+#[test]
+fn cbo_default_008_an_index_eq_matches_across_int_and_float() {
+    let k = mk();
+    for i in 0..200 {
+        scored(&k, &format!("P{i}"), Value::Int(i % 50));
+    }
+    let as_float = scored(&k, "F", Value::Float(5.0));
+    indexed_points(&k);
+    let plan = plan_of(&k, "MATCH Person WHERE points == 5 RETURN *");
+    let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
+    assert_eq!(report.index_used.as_deref(), Some("by_points"));
+    let got = exec_ids(&rows);
+    assert!(got.contains(&as_float), "5.0 == 5, as the Filter says");
+    assert_eq!(got, rule_based(&k, &plan), "exactly the scan's answer");
+}
+
+/// RED pre-fix: a range filter never used an index — the 0.1% range cell
+/// full-scanned (133.6 ms at 100k). A single-property index now serves
+/// `>`, `>=`, `<`, `<=` from ordered keys, across Int and Float.
+#[test]
+fn cbo_default_009_a_range_filter_is_served_by_the_index() {
+    let k = mk();
+    for i in 0..1000 {
+        scored(&k, &format!("P{i}"), Value::Int(i));
+    }
+    let half = scored(&k, "half", Value::Float(995.5));
+    indexed_points(&k);
+    for q in [
+        "MATCH Person WHERE points >= 995 RETURN *",
+        "MATCH Person WHERE points > 995 RETURN *",
+        "MATCH Person WHERE points < 3 RETURN *",
+        "MATCH Person WHERE points <= 3 RETURN *",
+    ] {
+        let plan = plan_of(&k, q);
+        let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
+        assert_eq!(report.index_used.as_deref(), Some("by_points"), "{q}");
+        let mut got = exec_ids(&rows);
+        got.sort();
+        let mut want = rule_based(&k, &plan);
+        want.sort();
+        assert_eq!(got, want, "{q}: exactly the scan's answer");
+    }
+    let plan = plan_of(&k, "MATCH Person WHERE points > 995 RETURN *");
+    assert!(exec_ids(&Interpreter::execute(&k, &plan).unwrap()).contains(&half));
+}
