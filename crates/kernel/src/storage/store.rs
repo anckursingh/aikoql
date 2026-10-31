@@ -152,8 +152,8 @@ impl StorageEngine for MemoryEngine {
             .collect())
     }
 
-    /// AG-21 — a seek: the range starts at `start` (clamped into the prefix),
-    /// so a journal tail costs O(tail), not the whole prefix.
+    /// AG-21 — a seek: the range starts at `start` (clamped into the prefix)
+    /// instead of filtering the whole prefix.
     fn scan_from(&self, prefix: &[u8], start: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>> {
         let m = self.map.read().map_err(|_| poisoned())?;
         Ok(m.range(start.max(prefix).to_vec()..)

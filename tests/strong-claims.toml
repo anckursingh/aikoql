@@ -59,7 +59,7 @@ evidence = "idx4_002_restart_replays_only_events_after_the_checkpoint"
 
 [[claim]]
 file = "crates/kernel/src/index/property.rs"
-line = 154
+line = 308
 text = "// P5-M17b — the O(1) freshness proof. rebuild stamps the head it"
 evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
 
@@ -125,7 +125,7 @@ evidence = "predecessor_boundary_cases"
 
 [[claim]]
 file = "crates/kernel/src/storage/store.rs"
-line = 156
+line = 166
 text = "/// next_back step finds the predecessor or proves absence (O(log n))."
 evidence = "predecessor_boundary_cases"
 
@@ -341,31 +341,31 @@ evidence = "m42_batch_sweep_cells"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 2272
+line = 2283
 text = "// authoritative backlog (O(flushed), never O(all segments))."
 evidence = "lba002_authoritative_counters_match_scan_l0_after_every_change"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 2887
+line = 2898
 text = "// P5-M40 — recompute the authoritative backlog (O(segments) once per"
 evidence = "lba002_authoritative_counters_match_scan_l0_after_every_change"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 2950
+line = 2961
 text = "/// write trigger reads the authoritative State counters in O(1) — this"
 evidence = "lba001_write_trigger_never_rescans_l0"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 3293
+line = 3304
 text = "/// The committer: drain the queue into groups bounded by the caps and"
 evidence = "group_commit_coalesces_batches_into_one_fsync"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 3313
+line = 3324
 text = "// O(g²) fold (P1-02), the seqs buffer is cleared and reused (P1-03)."
 evidence = "per_group_allocations_drop_with_the_hoisted_seqs_buffer"
 
@@ -807,3 +807,27 @@ file = "crates/kernel/tests/vs_scan.rs"
 line = 329
 text = "// --- vs_scan_008/009 — AG-20: hybrid fusions score a bounded candidate union --"
 evidence = "vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool"
+
+[[claim]]
+file = "crates/kernel/src/index/property.rs"
+line = 135
+text = "/// idx6-001 seam: maintenance must stay O(1) per row, not O(index))."
+evidence = "idx6_001_maintenance_does_not_sweep_the_index"
+
+[[claim]]
+file = "crates/kernel/src/index/property.rs"
+line = 568
+text = "// --- AG-21 — idx6-001: maintenance is O(1) per row. RED: upsert swept"
+evidence = "idx6_001_maintenance_does_not_sweep_the_index"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 2031
+text = "/// heads below it are skipped, so a tail read costs O(tail), not"
+evidence = "sf001_scan_from_seeks_instead_of_scanning_the_prefix"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 2032
+text = "/// O(prefix) — the kernel's journal replay depends on it (sf001)."
+evidence = "sf001_scan_from_seeks_instead_of_scanning_the_prefix"
