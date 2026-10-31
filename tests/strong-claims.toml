@@ -765,3 +765,15 @@ line = 8
 text = "//! full O(n log n) sort over heap-ordered entries is the R4 review's"
 evidence = "staged_sorted_publish_is_byte_identical_to_the_sorting_publish"
 
+
+[[claim]]
+file = "crates/kernel/src/index/coordinator.rs"
+line = 195
+text = "// AG-20: a bounded pool, widened 4x while the guards leave fewer"
+evidence = "vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool"
+
+[[claim]]
+file = "crates/kernel/tests/vs_scan.rs"
+line = 182
+text = "// --- vs_scan_004/005 — AG-20: the ANN leg asks for a bounded candidate pool ----"
+evidence = "vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive"
