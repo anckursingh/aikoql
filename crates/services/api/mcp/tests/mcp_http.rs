@@ -8,7 +8,7 @@
 
 use rustls::pki_types::{pem::PemObject, CertificateDer, ServerName};
 use serde_json::{json, Value as J};
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -793,4 +793,109 @@ fn h018_a_tls_hello_on_the_plain_port_is_closed_at_once() {
         closed.is_ok(),
         "the server held the connection open: {closed:?}"
     );
+}
+
+/// h019 — AG-12b: an HTTP session advertising `sampling` must not flip the
+/// stdio-only sampling state (guard test: in this serve configuration the
+/// deterministic fallback and the silent stdio stream pin the contract).
+#[test]
+fn h019_http_sampling_capability_does_not_leak_to_the_stdio_transport() {
+    struct Guard(Child, PathBuf);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+            let _ = std::fs::remove_dir_all(&self.1);
+        }
+    }
+    let (db, port) = (tmp("sampling-leak"), free_port());
+    let mut guard = Guard(
+        Command::new(bin())
+            .arg("serve")
+            .args(["--metrics-addr", &format!("127.0.0.1:{port}")])
+            .args(["--tcp-token", "http-tok::admin"])
+            .arg(&db)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn aikoql-mcp serve"),
+        db,
+    );
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while TcpStream::connect(("127.0.0.1", port)).is_err() {
+        assert!(Instant::now() < deadline, "server never listened on {port}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // a reader thread turns the stdio client's stdout into a line channel,
+    // so the test sees a leaked frame without waiting for EOF
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let out = guard.0.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        let mut r = std::io::BufReader::new(out);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match r.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if tx.send(line.clone()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    let r = request(
+        port,
+        "POST",
+        &[BEARER],
+        &rpc(
+            1,
+            "initialize",
+            json!({"protocolVersion": "2025-06-18", "capabilities": {"sampling": {}}}),
+        ),
+    );
+    assert_eq!(r.status, 200, "initialize: {}", r.body);
+    let sid = r.header("mcp-session-id").expect("session id").to_string();
+    let sid2 = sid.clone();
+    let req = rpc(
+        2,
+        "tools/call",
+        json!({"name": "summarize_conversation", "arguments": {
+            "subject": "admin", "conversation_id": "conv-1",
+            "messages": [{"speaker": "a", "ts_ms": 1, "text": "we ship friday"}],
+            "evidence": [{"source_artifact": "test", "method": "llm_inference"}]}}),
+    );
+    let call = std::thread::spawn(move || {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        request_on(
+            &mut s,
+            "POST",
+            port,
+            &[BEARER, ("Mcp-Session-Id", &sid2)],
+            &req,
+        )
+    });
+    // buggy: sampling/createMessage appears on the stdio stream within seconds
+    match rx.recv_timeout(Duration::from_secs(3)) {
+        Ok(line) if line.contains("sampling/createMessage") => {
+            panic!("sampling leaked to the stdio transport: {line:?}")
+        }
+        Ok(line) => panic!("unexpected frame on the stdio client's stream: {line:?}"),
+        Err(_) => {} // the stdio client stayed silent — correct
+    }
+    let call = call.join().unwrap();
+    assert_eq!(
+        call.status, 200,
+        "the deterministic summary answers: {}",
+        call.body
+    );
+    assert!(
+        call.body.contains("aikoql:conversation_summary"),
+        "the deterministic summary, not a sampling wait: {}",
+        call.body
+    );
+    let _ = sid;
 }

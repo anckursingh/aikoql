@@ -88,14 +88,18 @@ pub(crate) fn handle_message(
     let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
     match method {
         "initialize" => {
-            // AG-12b: stdio initialize — record whether the client can sample
-            // (HTTP initialize never reaches this arm, so it never samples).
-            crate::sampling::set_client_sampling(
-                msg.get("params")
-                    .and_then(|p| p.get("capabilities"))
-                    .and_then(|c| c.get("sampling"))
-                    .is_some(),
-            );
+            // AG-12b: stdio initialize records whether the client can
+            // sample. The flag is stdio-only process state (the sink is the
+            // stdio stdout); HTTP sessions never flip it, so a sampling
+            // client over HTTP deterministically degrades (h019 pins it).
+            if session.trust_mode == TrustMode::Stdio {
+                crate::sampling::set_client_sampling(
+                    msg.get("params")
+                        .and_then(|p| p.get("capabilities"))
+                        .and_then(|c| c.get("sampling"))
+                        .is_some(),
+                );
+            }
             if let Some(id) = id {
                 write_frame(
                     &mut *out,
