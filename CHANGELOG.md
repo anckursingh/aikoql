@@ -25,6 +25,22 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   reached yet are scored exactly next to the index's candidates (up to
   10 000 unindexed events; past that, search is eventual until the index
   catches up).
+- **Property indexes work under live writes (AG-21)**: one write after
+  `analyze` switched every index off (stale statistics never drove a
+  plan), and a lagging index cost an O(N) check per query. Indexes now
+  serve their rows plus the journal tail they have not applied (up to
+  10 000 events), staying exact. 100k: an indexed lookup with 100
+  pending writes takes 0.25 ms instead of a 190 ms scan.
+- **Range filters use indexes** (`>`, `>=`, `<`, `<=` on a
+  single-property index): 0.1% range at 100k 133.6 ms → 0.15 ms.
+- **Index equality matched `5` and `5.0` differently**: rows stored as
+  floats were missed by `WHERE x == 5` through an index (the filter
+  treats them as equal). Index keys are now order-preserving bytes with
+  one numeric domain. Existing index checkpoints are rebuilt once.
+- **Index builds are linear**: maintenance swept the whole index per row
+  — 5 indexes over 100k objects 32.85 s → 0.26 s.
+- **Journal tail reads seek** (`scan_from` in every storage engine): they
+  read the whole journal before.
 - **No zero-score padding**: a search hit is something the vector or
   text leg scored. Searches without an index used to pad `k` with every
   visible object at score 0, and `eval_recall` counted those pads as

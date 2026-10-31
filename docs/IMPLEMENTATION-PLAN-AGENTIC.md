@@ -190,6 +190,12 @@ and a `lesson` KO type distilled by AG-12 sampling.
   10 ms; it measures result transfer. Equality indexes already exist and
   the CBO uses them (`Strategy::PropertyIndex`, P5-M9). AG-21 needs a
   selective cell (0.1–1%) before its gate means anything.
+- *Status (2026-10-31): AG-21 done* (`benches/filter_select`, 100k): eq
+  0.1% 0.143 ms, range 0.1% 0.151 ms (was 133.6), eq under 100 live
+  writes 0.254 ms (was a full scan — one write after analyze switched
+  indexes off), build 32.85 → 0.26 s. Fixed on the way: Int/Float Eq
+  through an index missed rows; scan_from never seeked. Open: composite
+  range (prefix ranges on a tuple), a CBO histogram for ranges.
 - *Problem:* 1M structured_filter 22.9 s (brute force + sort).
 - *Design:* property secondary indexes (`index_create` exists) used by the
   planner (the CBO in `runtime/src/cbo.rs` estimates only the first Eq —
