@@ -13,11 +13,45 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
+/// The index contents: each key's rows, and each row's key — the reverse
+/// map makes a re-key or a remove touch only the row's own bucket.
+#[derive(Default)]
+struct Buckets {
+    by_key: HashMap<String, BTreeSet<KOID>>,
+    by_koid: HashMap<KOID, String>,
+}
+
+impl Buckets {
+    fn insert(&mut self, koid: KOID, key: String) {
+        self.by_key.entry(key.clone()).or_default().insert(koid);
+        self.by_koid.insert(koid, key);
+    }
+
+    /// Drop the row's entry; returns the entries examined (0 or 1).
+    fn remove(&mut self, koid: &KOID) -> u64 {
+        let Some(key) = self.by_koid.remove(koid) else {
+            return 0;
+        };
+        if let Some(bucket) = self.by_key.get_mut(&key) {
+            bucket.remove(koid);
+            if bucket.is_empty() {
+                self.by_key.remove(&key);
+            }
+        }
+        1
+    }
+
+    fn clear(&mut self) {
+        self.by_key.clear();
+        self.by_koid.clear();
+    }
+}
+
 pub struct PropertyIndex {
     name: String,
     type_name: String,
     properties: Vec<String>,
-    map: RwLock<HashMap<String, Vec<KOID>>>,
+    map: RwLock<Buckets>,
     /// P5-M17b — the freshness stamp: the last committed event seq the
     /// index has fully applied. Set by `rebuild` (the head it reseeded
     /// from) and by the maintainer after a successful batch; 0 means no
@@ -38,7 +72,7 @@ impl PropertyIndex {
             name: name.into(),
             type_name: type_name.into(),
             properties: properties.iter().map(|p| p.to_string()).collect(),
-            map: RwLock::new(HashMap::new()),
+            map: RwLock::new(Buckets::default()),
             applied: AtomicU64::new(0),
             state: RwLock::new(IndexState::Declared),
             steps: AtomicU64::new(0),
@@ -94,25 +128,20 @@ impl Index for PropertyIndex {
         // (an update moves the entry between keys — idx2-004). The sweep
         // runs for foreign types too: a re-typed row must not keep
         // answering scans for its old type (P1-01).
-        for bucket in map.values_mut() {
-            self.steps.fetch_add(bucket.len() as u64, Ordering::Relaxed);
-            bucket.retain(|k| *k != koid);
-        }
+        self.steps.fetch_add(map.remove(&koid), Ordering::Relaxed);
         if ko.metadata.type_name != self.type_name {
             return Ok(());
         }
         if let Some(key) = self.key_of(ko) {
-            map.entry(key).or_default().push(koid);
+            map.insert(koid, key);
         }
         Ok(())
     }
 
     fn remove(&self, koid: &KOID) -> KResult<()> {
         // justified: RwLock poison is unrecoverable
-        for bucket in self.map.write().unwrap().values_mut() {
-            self.steps.fetch_add(bucket.len() as u64, Ordering::Relaxed);
-            bucket.retain(|k| k != koid);
-        }
+        let steps = self.map.write().unwrap().remove(koid);
+        self.steps.fetch_add(steps, Ordering::Relaxed);
         Ok(())
     }
 
@@ -126,15 +155,15 @@ impl Index for PropertyIndex {
             )));
         }
         // justified: RwLock poison is unrecoverable
-        let mut out = self
+        // a BTreeSet iterates in KOID order — the sorted contract
+        Ok(self
             .map
             .read()
             .unwrap()
+            .by_key
             .get(&format!("{key:?}"))
-            .cloned()
-            .unwrap_or_default();
-        out.sort();
-        Ok(out)
+            .map(|b| b.iter().copied().collect())
+            .unwrap_or_default())
     }
 
     fn covers(&self, type_name: &str, property: &str) -> bool {
@@ -143,7 +172,7 @@ impl Index for PropertyIndex {
 
     fn len(&self) -> usize {
         // justified: RwLock poison is unrecoverable
-        self.map.read().unwrap().values().map(|b| b.len()).sum()
+        self.map.read().unwrap().by_koid.len()
     }
 
     fn set_applied_seq(&self, seq: u64) {
@@ -194,12 +223,13 @@ impl Index for PropertyIndex {
             }
             if let Some(key) = self.key_of(&ko) {
                 live.insert(koid);
-                if !map.get(&key).is_some_and(|b| b.contains(&koid)) {
+                if !map.by_key.get(&key).is_some_and(|b| b.contains(&koid)) {
                     missing.push(koid);
                 }
             }
         }
         let mut stale: Vec<KOID> = map
+            .by_key
             .values()
             .flatten()
             .copied()
@@ -207,7 +237,7 @@ impl Index for PropertyIndex {
             .collect();
         stale.sort();
         stale.dedup();
-        let indexed = map.values().map(|b| b.len()).sum();
+        let indexed = map.by_koid.len();
         Ok(VerifyReport {
             name: self.name.clone(),
             indexed,
@@ -263,7 +293,7 @@ impl Index for PropertyIndex {
                 continue;
             }
             if let Some(key) = self.key_of(&ko) {
-                map.entry(key).or_default().push(koid);
+                map.insert(koid, key);
             }
         }
         self.applied.store(h0, Ordering::SeqCst);
@@ -282,8 +312,8 @@ impl Index for PropertyIndex {
         let map = self.map.read().unwrap();
         let mut out = Vec::new();
         out.extend_from_slice(b"AKPI");
-        out.extend_from_slice(&(map.len() as u64).to_le_bytes());
-        for (key, bucket) in map.iter() {
+        out.extend_from_slice(&(map.by_key.len() as u64).to_le_bytes());
+        for (key, bucket) in map.by_key.iter() {
             out.extend_from_slice(&(key.len() as u64).to_le_bytes());
             out.extend_from_slice(key.as_bytes());
             out.extend_from_slice(&(bucket.len() as u64).to_le_bytes());
@@ -325,7 +355,7 @@ impl Index for PropertyIndex {
             )));
         }
         let n_buckets = u64::from_le_bytes(take(&bytes, &mut pos, 8)?.try_into().unwrap()) as usize;
-        let mut map: HashMap<String, Vec<KOID>> = HashMap::new();
+        let mut map = Buckets::default();
         for _ in 0..n_buckets {
             let key_len =
                 u64::from_le_bytes(take(&bytes, &mut pos, 8)?.try_into().unwrap()) as usize;
@@ -337,13 +367,11 @@ impl Index for PropertyIndex {
                     ))
                 })?;
             let n = u64::from_le_bytes(take(&bytes, &mut pos, 8)?.try_into().unwrap()) as usize;
-            let mut bucket = Vec::with_capacity(n);
             for _ in 0..n {
                 let mut buf = [0u8; KOID_LEN];
                 buf.copy_from_slice(take(&bytes, &mut pos, KOID_LEN)?);
-                bucket.push(KOID::from_bytes(buf));
+                map.insert(KOID::from_bytes(buf), key.clone());
             }
-            map.insert(key, bucket);
         }
         if pos != bytes.len() {
             return Err(KError::Store(format!(
