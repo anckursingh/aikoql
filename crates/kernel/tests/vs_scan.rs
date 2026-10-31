@@ -459,6 +459,34 @@ fn vs_scan_009_hybrid_union_keeps_both_legs_and_widens() {
     assert_eq!(got[2], mine[1], "then the next nearest");
 }
 
+/// RED pre-fix: an object committed after the index's position is not a
+/// candidate of either index leg, so a write is invisible until the
+/// maintainer catches up (the old full loop only padded it in at score 0).
+/// The fake lags by one event: the last commit is the unindexed tail, and
+/// it must be found — and scored exactly — by hybrid and vector search.
+#[test]
+fn vs_scan_010_the_unindexed_tail_is_scored_exactly() {
+    let k = mk();
+    let alice = ctx("alice");
+    let (v, t, _owner) = spied_both(&k);
+    for i in 0..100 {
+        indexed(&k, (&v, &t), &alice, "plain", at(40.0 + i as f32 * 0.1));
+    }
+    let fresh = note(&k, &alice, "fresh zebra", Some([1.0, 0.0])); // not indexed
+    let hybrid = SimilarityQuery::new(alice.clone(), 3, Fusion::Rrf { k0: 60 })
+        .with_vector(vec![1.0, 0.0])
+        .with_text("zebra");
+    let got = k.find_similar(hybrid).unwrap();
+    assert_eq!(
+        got.first().map(|h| h.ko.koid),
+        Some(fresh),
+        "hybrid: {got:?}"
+    );
+    let got = k.find_similar(vector_only(&alice, [1.0, 0.0], 3)).unwrap();
+    assert_eq!(got.first().map(|h| h.ko.koid), Some(fresh), "vector");
+    assert!((got[0].score - 1.0).abs() < 1e-5, "the committed cosine");
+}
+
 /// The P4-M7 fake from the index subsystem tests: indexes lag the kernel.
 struct FakeMaintainer {
     vectors: Arc<dyn aikoql_kernel::index::VectorIndex>,

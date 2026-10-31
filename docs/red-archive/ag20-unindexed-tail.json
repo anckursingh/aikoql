@@ -1,0 +1,8 @@
+{
+  "id": "ag20-unindexed-tail",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test vs_scan vs_scan_010",
+  "captured_at": "2026-10-31T15:02:30Z",
+  "captured_head": "133a9519db7c54c063a983b4d57059a71bb727be",
+  "exit_code": 101
+}
