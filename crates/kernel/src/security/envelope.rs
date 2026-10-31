@@ -7,7 +7,7 @@
 //! Key hierarchy: KMS/KEK → Tenant DEK → Data
 
 use crate::security::audit::{KeyAuditLog, KeyEvent, KeyEventKind};
-use crate::security::crypto::{Crypto, CryptoProvider};
+use crate::security::crypto::Crypto;
 use crate::security::hkdf::{self, DOMAIN_DEK_WRAP};
 use crate::security::kms::KeyManager;
 use std::collections::HashMap;
@@ -16,6 +16,10 @@ use std::sync::{Arc, RwLock};
 /// Storage key under which wrapped DEKs are persisted (inside the store;
 /// the wrapped form is KEK-encrypted and safe to sit beside the data).
 pub const DEKS_STORAGE_KEY: &[u8] = b"__encryption__/deks";
+/// AG-31 — the next generation's wrapped DEKs, written BEFORE the KMS
+/// switches to a new KEK: after a crash the set that unwraps under the
+/// installed KEK wins (`Kernel::with_field_encryption`).
+pub const DEKS_NEXT_KEY: &[u8] = b"__encryption__/deks.next";
 
 /// Storage key under which the crypto-version metadata record lives. Written
 /// on first open and verified on every later open — an unknown record fails
@@ -53,6 +57,11 @@ pub struct Envelope {
     wrapped_deks: RwLock<HashMap<String, WrappedDek>>,
     /// Optional audit log for key lifecycle events (MRFC-0020 Phase 4).
     audit: RwLock<Option<Arc<KeyAuditLog>>>,
+    /// AG-31 — serializes DEK creation and the DEK persist with a KEK
+    /// rotation: a DEK minted mid-rotation would be wrapped by the old KEK
+    /// and missing from the new set. Also closes the create race (two
+    /// threads minting different DEKs for one tenant).
+    creation: std::sync::Mutex<()>,
 }
 
 impl Envelope {
@@ -71,6 +80,7 @@ impl Envelope {
             deks: RwLock::new(HashMap::new()),
             wrapped_deks: RwLock::new(HashMap::new()),
             audit: RwLock::new(None),
+            creation: std::sync::Mutex::new(()),
         })
     }
 
@@ -89,7 +99,14 @@ impl Envelope {
         if let Some(dek) = self.deks.read().unwrap().get(tenant) {
             return Ok(*dek);
         }
-        // Slow path: generate new DEK, wrap it with KEK.
+        // Slow path, under the creation lock (re-checked: another thread may
+        // have minted it while we waited) — generate a new DEK, wrap it.
+        // justified: Mutex poison is unrecoverable
+        let _creating = self.creation.lock().unwrap();
+        // justified: RwLock poison is unrecoverable
+        if let Some(dek) = self.deks.read().unwrap().get(tenant) {
+            return Ok(*dek);
+        }
         let dek = self.crypto.generate_key();
         // justified: RwLock poison is unrecoverable
         let kek = *self.kek.read().unwrap();
@@ -124,16 +141,80 @@ impl Envelope {
         Ok(dek)
     }
 
-    /// Load a previously-wrapped DEK (e.g., from database metadata on startup).
-    pub fn load_dek(&self, wrapped: &WrappedDek) -> Result<[u8; 32], String> {
+    /// Unwrap a DEK under the current KEK without caching it (AEAD: a wrap
+    /// made by another KEK fails authentication).
+    fn unwrap_dek(&self, wrapped: &WrappedDek) -> Result<[u8; 32], String> {
         // justified: RwLock poison is unrecoverable
         let kek = *self.kek.read().unwrap();
         let wrap_key = hkdf::domain_sep(&kek, DOMAIN_DEK_WRAP);
         let dek_bytes =
             self.crypto
                 .decrypt(&wrap_key, &wrapped.wrapped_key, wrapped.tenant.as_bytes())?;
-        let mut dek = [0u8; 32];
-        dek.copy_from_slice(&dek_bytes);
+        let dek: [u8; 32] = dek_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| "unwrapped DEK is not 32 bytes".to_string())?;
+        Ok(dek)
+    }
+
+    /// AG-31 — every wrap in `set` unwraps under the current KEK.
+    pub fn unwraps_all(&self, set: &[WrappedDek]) -> bool {
+        set.iter().all(|w| self.unwrap_dek(w).is_ok())
+    }
+
+    /// AG-31 — hold to keep DEK creation (and the DEK persist) out of a
+    /// rotation's window.
+    pub fn creation_guard(&self) -> std::sync::MutexGuard<'_, ()> {
+        // justified: Mutex poison is unrecoverable
+        self.creation.lock().unwrap()
+    }
+
+    /// AG-31 — every loaded DEK wrapped by `new_kek` (the next generation),
+    /// without changing this envelope: the caller persists it first.
+    pub fn rewrapped(&self, new_kek: &[u8; 32]) -> Result<Vec<WrappedDek>, String> {
+        let wrap_key = hkdf::domain_sep(new_kek, DOMAIN_DEK_WRAP);
+        // justified: RwLock poison is unrecoverable
+        let next_id = *self.kek_id.read().unwrap() + 1;
+        // justified: RwLock poison is unrecoverable
+        let deks = self.deks.read().unwrap();
+        let mut out = Vec::with_capacity(deks.len());
+        for (tenant, dek) in deks.iter() {
+            out.push(WrappedDek {
+                tenant: tenant.clone(),
+                kek_id: next_id,
+                wrapped_key: self.crypto.encrypt(&wrap_key, dek, tenant.as_bytes())?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// AG-31 — switch to `new_kek` and its wraps (after the KMS installed it).
+    pub fn adopt(&self, new_kek: [u8; 32], wraps: Vec<WrappedDek>) {
+        let n = wraps.len();
+        // justified: RwLock poison is unrecoverable
+        *self.kek.write().unwrap() = new_kek;
+        // justified: RwLock poison is unrecoverable
+        let id = {
+            let mut id = self.kek_id.write().unwrap();
+            *id += 1;
+            *id
+        };
+        // justified: RwLock poison is unrecoverable
+        *self.wrapped_deks.write().unwrap() =
+            wraps.into_iter().map(|w| (w.tenant.clone(), w)).collect();
+        // justified: RwLock poison is unrecoverable
+        if let Some(ref audit) = *self.audit.read().unwrap() {
+            let _ = audit.record(&KeyEvent::now(
+                KeyEventKind::Rotated,
+                "kek:master",
+                &format!("KEK rotated to id {id}, {n} DEKs rewrapped"),
+            ));
+        }
+    }
+
+    /// Load a previously-wrapped DEK (e.g., from database metadata on startup).
+    pub fn load_dek(&self, wrapped: &WrappedDek) -> Result<[u8; 32], String> {
+        let dek = self.unwrap_dek(wrapped)?;
         // justified: RwLock poison is unrecoverable
         self.deks
             .write()
@@ -208,64 +289,6 @@ impl Envelope {
         }
         Ok(out)
     }
-
-    /// Rotate the KEK: re-wrap all DEKs with the new KEK.
-    /// This is online — old data does NOT need re-encryption.
-    pub fn rotate_kek(&self, kms: &dyn KeyManager, passphrase: &str) -> Result<(), String> {
-        // justified: RwLock poison is unrecoverable
-        let guard = self.crypto.inner().read().unwrap();
-        let provider: &dyn CryptoProvider = &**guard;
-        let new_kek = kms.rotate(passphrase, provider)?;
-        // justified: RwLock poison is unrecoverable
-        let old_kek = *self.kek.read().unwrap();
-        // justified: RwLock poison is unrecoverable
-        let new_id = *self.kek_id.read().unwrap() + 1;
-
-        // Re-wrap all DEKs with the new KEK.
-        let mut new_wrapped = HashMap::new();
-        // justified: RwLock poison is unrecoverable
-        for (tenant, wrapped) in self.wrapped_deks.read().unwrap().iter() {
-            // Decrypt DEK with the old wrap key.
-            let old_wrap_key = hkdf::domain_sep(&old_kek, DOMAIN_DEK_WRAP);
-            let dek_bytes =
-                self.crypto
-                    .decrypt(&old_wrap_key, &wrapped.wrapped_key, tenant.as_bytes())?;
-            // Re-encrypt DEK with the new wrap key.
-            let new_wrap_key = hkdf::domain_sep(&new_kek, DOMAIN_DEK_WRAP);
-            let new_wrapped_key =
-                self.crypto
-                    .encrypt(&new_wrap_key, &dek_bytes, tenant.as_bytes())?;
-            new_wrapped.insert(
-                tenant.clone(),
-                WrappedDek {
-                    tenant: tenant.clone(),
-                    kek_id: new_id,
-                    wrapped_key: new_wrapped_key,
-                },
-            );
-        }
-
-        // justified: RwLock poison is unrecoverable
-        *self.kek.write().unwrap() = new_kek;
-        // justified: RwLock poison is unrecoverable
-        *self.kek_id.write().unwrap() = new_id;
-        let deks_count = new_wrapped.len();
-        // justified: RwLock poison is unrecoverable
-        *self.wrapped_deks.write().unwrap() = new_wrapped;
-        // Audit: log key rotation.
-        // justified: RwLock poison is unrecoverable
-        if let Some(ref audit) = *self.audit.read().unwrap() {
-            let _ = audit.record(&KeyEvent::now(
-                KeyEventKind::Rotated,
-                "kek:master",
-                &format!(
-                    "KEK rotated to id {}, {} DEKs rewrapped",
-                    new_id, deks_count
-                ),
-            ));
-        }
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +298,7 @@ impl Envelope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::crypto::Aes256Gcm;
+    use crate::security::crypto::{Aes256Gcm, CryptoProvider};
     use std::sync::RwLock;
 
     /// In-memory mock KMS for deterministic tests (no file I/O).
@@ -346,11 +369,43 @@ mod tests {
 
         let env = Envelope::init(&kms, "pw", crypto.clone()).unwrap();
         let dek_a = env.tenant_key("a").unwrap();
-        env.rotate_kek(&kms, "pw").unwrap();
+        let old_wraps = env.wrapped_deks();
+        // AG-31: rewrap for the next KEK, then adopt it (the KMS install sits
+        // between the two in KeyRing::rotate)
+        let new_kek = crypto.generate_key();
+        let next = env.rewrapped(&new_kek).unwrap();
+        assert!(env.unwraps_all(&old_wraps) && !env.unwraps_all(&next));
+        env.adopt(new_kek, next.clone());
         let dek_a_after = env.tenant_key("a").unwrap();
-        assert_eq!(dek_a, dek_a_after);
+        assert_eq!(dek_a, dek_a_after, "the DEK itself never changes");
+        assert!(
+            env.unwraps_all(&next),
+            "the new wraps unwrap under the new KEK"
+        );
+        assert!(
+            !env.unwraps_all(&old_wraps),
+            "the old KEK's wraps no longer do"
+        );
+        assert_eq!(env.wrapped_deks()[0].kek_id, 1);
+    }
 
-        let wrapped = env.wrapped_deks();
-        assert_eq!(wrapped[0].kek_id, 1);
+    /// AG-31 — the create race: concurrent first calls for one tenant must
+    /// agree on ONE DEK (two minted keys = ciphertext under a lost key).
+    #[test]
+    fn envelope_concurrent_first_use_mints_one_dek() {
+        let kms = MemKms::new();
+        let crypto = std::sync::Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+        let env = std::sync::Arc::new(Envelope::init(&kms, "pw", crypto).unwrap());
+        let keys: Vec<[u8; 32]> = (0..16)
+            .map(|_| {
+                let env = env.clone();
+                std::thread::spawn(move || env.tenant_key("t").unwrap())
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect();
+        assert!(keys.iter().all(|k| *k == keys[0]), "one DEK for the tenant");
+        assert_eq!(env.tenant_key("t").unwrap(), keys[0]);
     }
 }

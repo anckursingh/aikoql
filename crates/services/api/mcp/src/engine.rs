@@ -8,9 +8,8 @@ use crate::config::RuntimeEncryption;
 use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto};
 use aikoql_kernel::security::envelope::Envelope;
 use aikoql_kernel::security::field_crypto::EncryptionPolicy;
-use aikoql_kernel::security::hkdf::{self, DOMAIN_STORE};
+use aikoql_kernel::security::keyring::KeyRing;
 use aikoql_kernel::security::kms::LocalKms;
-use aikoql_kernel::security::KeyManager;
 use aikoql_kernel::storage::encrypted::EncryptedStore;
 use aikoql_kernel::storage::store::StorageEngine;
 use aikoql_kernel::{KError, KResult, Kernel, SystemClock};
@@ -23,6 +22,22 @@ pub(crate) fn open_kernel(
     retain_log: bool,
     standby: Option<String>,
 ) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
+    open_kernel_with_ring(db_path, enc, retain_log, standby).map(|(k, a, _)| (k, a))
+}
+
+/// `open_kernel`, also returning the key ring of an encrypted database (the
+/// handle a KEK rotation runs through — AG-31).
+#[allow(clippy::type_complexity)]
+pub(crate) fn open_kernel_with_ring(
+    db_path: &str,
+    enc: &RuntimeEncryption,
+    retain_log: bool,
+    standby: Option<String>,
+) -> KResult<(
+    Kernel,
+    Option<Arc<dyn StorageAdminApi>>,
+    Option<Arc<KeyRing>>,
+)> {
     // The runtime's ONE opener; every subcommand funnels through here.
     let (engine, admin) =
         aikoql_runtime::backend::open_engine_with(std::path::Path::new(db_path), retain_log)?;
@@ -42,7 +57,7 @@ pub(crate) fn open_kernel(
         a.fence(why);
     }
     if !enc.enabled {
-        return Ok((open(engine)?, admin));
+        return Ok((open(engine)?, admin, None));
     }
     let Some(pass) = enc.passphrase.as_deref() else {
         return Err(KError::Store(
@@ -50,20 +65,29 @@ pub(crate) fn open_kernel(
                 .into(),
         ));
     };
-    let kms = LocalKms::new(&enc.key_path);
-    let kek = kms.master_key(pass).map_err(KError::Store)?;
-    // The store key is a domain-separated subkey of the KEK — the KEK itself
-    // never encrypts data directly (DEK wrapping uses its own subkey).
-    let store_key = hkdf::domain_sep(&kek, DOMAIN_STORE);
+    let kms = Arc::new(LocalKms::new(&enc.key_path));
     let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
-    let envelope = Arc::new(Envelope::init(&kms, pass, crypto.clone()).map_err(KError::Store)?);
-    let store: Arc<dyn StorageEngine> =
-        Arc::new(EncryptedStore::new(engine, crypto.clone(), store_key));
+    // AG-31: the store key is a data key WRAPPED by the KEK (a pre-AG-31
+    // database keeps its HKDF(KEK, store) value as that key), so the KEK
+    // can rotate without re-encrypting the store.
+    let ring = KeyRing::open(
+        kms.clone(),
+        pass,
+        format!("{}.store-dek", enc.key_path),
+        crypto.clone(),
+    )
+    .map_err(KError::Store)?;
+    let envelope = Arc::new(Envelope::init(&*kms, pass, crypto.clone()).map_err(KError::Store)?);
+    let store: Arc<dyn StorageEngine> = Arc::new(EncryptedStore::new(
+        engine,
+        crypto.clone(),
+        ring.store_key(),
+    ));
     let kernel = open(store)?.with_field_encryption(crypto, envelope)?;
     for (type_name, fields) in &enc.policies {
         kernel.set_encryption_policy(type_name, EncryptionPolicy::new(fields.clone()));
     }
-    Ok((kernel, admin))
+    Ok((kernel, admin, Some(ring)))
 }
 
 /// Subcommand variant: one config pipeline (R10, PR#2 review SE-02) —
@@ -76,21 +100,19 @@ pub(crate) fn open_kernel_auto(
     open_kernel(db_path, &cfg.encryption, false, None)
 }
 
-/// AG-31 — rotate the master KEK of an encrypted database (offline: no
-/// other process may hold it). RED: the naive rotation the scheduler job
-/// names ("would call envelope.rotate_kek") — the KMS mints a new KEK —
-/// while the store key is derived from the KEK itself.
-pub(crate) fn rotate_keys(_db_path: &str, enc: &RuntimeEncryption) -> KResult<()> {
-    let pass = enc
-        .passphrase
-        .as_deref()
-        .ok_or_else(|| KError::Store("key rotation needs the passphrase".into()))?;
-    let crypto = Crypto::new(Box::new(Aes256Gcm::new()));
-    let guard = crypto.inner().read().unwrap();
-    LocalKms::new(&enc.key_path)
-        .rotate(pass, &**guard)
-        .map(|_| ())
-        .map_err(KError::Store)
+/// AG-31 — rotate the master KEK of an encrypted database (offline: the
+/// database must not be open elsewhere). Every data key is rewrapped under
+/// the new KEK — nothing is re-encrypted — and the old KEK unwraps nothing
+/// current afterwards (keyring.rs has the crash-safe sequence).
+pub(crate) fn rotate_keys(db_path: &str, enc: &RuntimeEncryption) -> KResult<()> {
+    if !enc.enabled {
+        return Err(KError::Store(
+            "key rotation needs [encryption] enabled".into(),
+        ));
+    }
+    let (kernel, _admin, ring) = open_kernel_with_ring(db_path, enc, false, None)?;
+    ring.expect("an encrypted open returns its key ring")
+        .rotate(&kernel)
 }
 
 #[cfg(test)]
@@ -258,5 +280,167 @@ mod tests {
         );
         std::fs::write(&key, &new_kek).unwrap();
         TEMP_PATHS.with(|t| t.borrow_mut().paths.push(key.into()));
+    }
+
+    fn secret_enc(dir: &str) -> super::RuntimeEncryption {
+        super::RuntimeEncryption {
+            enabled: true,
+            key_path: format!("{dir}.key"),
+            passphrase: Some("pw".into()),
+            policies: [("Secret".to_string(), vec!["pin".to_string()])].into(),
+        }
+    }
+
+    fn ctx_of(tenant: Option<&str>) -> aikoql_kernel::KnowledgeContext {
+        let mut subject = aikoql_kernel::Subject::new("alice");
+        if let Some(t) = tenant {
+            subject = subject.in_tenant(t);
+        }
+        let mut ctx = aikoql_kernel::KnowledgeContext::new(subject);
+        ctx.tenant = tenant.map(String::from);
+        ctx
+    }
+
+    type Written = (aikoql_kernel::KOID, Option<String>, String);
+
+    /// One object, optionally for a tenant; returns (koid, tenant, pin).
+    fn put_secret(k: &aikoql_kernel::Kernel, tenant: Option<&str>, pin: &str) -> Written {
+        use aikoql_kernel::{Metadata, RememberRequest, Value};
+        let ctx = ctx_of(tenant);
+        let mut req = RememberRequest::create(
+            ctx,
+            Metadata {
+                type_name: "Secret".into(),
+                tenant: tenant.map(String::from),
+                schema_version: 1,
+                tags: vec![],
+            },
+        );
+        req.properties.insert("pin".into(), Value::Text(pin.into()));
+        (
+            k.remember(req).unwrap().koid,
+            tenant.map(String::from),
+            pin.to_string(),
+        )
+    }
+
+    fn read_all(dir: &str, enc: &super::RuntimeEncryption, want: &[Written]) {
+        let (k, _) = super::open_kernel(dir, enc, false, None).expect("the database opens");
+        for (id, tenant, pin) in want {
+            let ko = k.get(ctx_of(tenant.as_deref()), id).unwrap();
+            assert_eq!(
+                ko.properties.get("pin"),
+                Some(&aikoql_kernel::Value::Text(pin.clone())),
+                "{id:?}"
+            );
+        }
+    }
+
+    /// AG-31 — kr002: a rotation stopped after any step (the crash windows)
+    /// reopens with every object readable, and a later rotation succeeds.
+    #[test]
+    fn kr002_an_interrupted_rotation_recovers_at_every_step() {
+        for step in 1..=5 {
+            let dir = scratch(&format!("kr002-{step}"));
+            let enc = secret_enc(&dir);
+            TEMP_PATHS.with(|t| t.borrow_mut().paths.push(enc.key_path.clone().into()));
+            let want: Vec<_> = {
+                let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
+                (0..4)
+                    .map(|i| put_secret(&k, [None, Some("acme")][i % 2], &format!("p{i}")))
+                    .collect()
+            };
+            {
+                let (k, _, ring) = super::open_kernel_with_ring(&dir, &enc, false, None).unwrap();
+                let err = ring
+                    .unwrap()
+                    .rotate_steps(&k, &mut |n| {
+                        if n == step {
+                            Err(aikoql_kernel::KError::Store("injected stop".into()))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .unwrap_err();
+                assert!(
+                    err.to_string().contains("injected stop"),
+                    "step {step}: {err}"
+                );
+            }
+            read_all(&dir, &enc, &want);
+            super::rotate_keys(&dir, &enc).unwrap_or_else(|e| panic!("step {step}: {e}"));
+            read_all(&dir, &enc, &want);
+        }
+    }
+
+    /// AG-31 — kr003: rotation online, under write load — writers keep
+    /// committing field-encrypted objects (new tenants included: a DEK
+    /// minted mid-rotation must land in the new generation).
+    #[test]
+    fn kr003_rotation_under_write_load_loses_nothing() {
+        let dir = scratch("kr003");
+        let enc = secret_enc(&dir);
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(enc.key_path.clone().into()));
+        let want = {
+            let (k, _, ring) = super::open_kernel_with_ring(&dir, &enc, false, None).unwrap();
+            let ring = ring.unwrap();
+            let k = &k;
+            std::thread::scope(|s| {
+                let writers: Vec<_> = (0..4)
+                    .map(|w| {
+                        s.spawn(move || {
+                            (0..40)
+                                .map(|i| {
+                                    let tenant = format!("t{w}-{}", i / 10); // new tenants as it goes
+                                    put_secret(k, Some(&tenant), &format!("{w}:{i}"))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                ring.rotate(k).unwrap();
+                ring.rotate(k).unwrap(); // twice, while the writers run
+                writers
+                    .into_iter()
+                    .flat_map(|h| h.join().unwrap())
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(want.len(), 160);
+        read_all(&dir, &enc, &want);
+    }
+
+    /// AG-31 — kr004 (deterministic interleave): a writer minting a NEW
+    /// tenant's DEK inside the rotation window (after the rewrap snapshot,
+    /// before the adopt) must wait for the rotation — otherwise its DEK is
+    /// missing from the new generation and its object is unreadable.
+    #[test]
+    fn kr004_a_dek_minted_mid_rotation_lands_in_the_new_generation() {
+        let dir = scratch("kr004");
+        let enc = secret_enc(&dir);
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(enc.key_path.clone().into()));
+        let mut want = Vec::new();
+        {
+            let (k, _, ring) = super::open_kernel_with_ring(&dir, &enc, false, None).unwrap();
+            want.push(put_secret(&k, Some("old"), "before"));
+            let k = &k;
+            let late = std::thread::scope(|s| {
+                let mut writer = None;
+                ring.unwrap()
+                    .rotate_steps(k, &mut |step| {
+                        if step == 3 {
+                            writer = Some(s.spawn(move || put_secret(k, Some("brand-new"), "mid")));
+                            // a guarded rotation blocks this writer; give an
+                            // unguarded one the time to let it through
+                            std::thread::sleep(std::time::Duration::from_millis(300));
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                writer.unwrap().join().unwrap()
+            });
+            want.push(late);
+        }
+        read_all(&dir, &enc, &want);
     }
 }

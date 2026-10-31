@@ -30,6 +30,7 @@ pub(crate) fn print_usage() {
         "  ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR] Ingest directory into knowledge base\n",
         "  report [PATH]          Print knowledge report for directory\n",
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
+        "  key rotate [DB]        Rotate the master key of an encrypted database (offline; rewraps, no re-encryption)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
         "  pitr --archive URL --to DIR [--until-seq N | --until-ms MS]  Restore from the archive\n",
         "  archive-prune --archive URL --keep N  Keep the newest N archived snapshots\n",
@@ -261,6 +262,26 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         }
         Some("backup") => {
             run_backup(arg_after.unwrap_or(DEFAULT_DB_PATH));
+            true
+        }
+        Some("key") => {
+            if arg_after != Some("rotate") {
+                eprintln!("Usage: aikoql-mcp key rotate [DB_PATH]");
+                eprintln!("Rotates the master key (KEK) of an encrypted database: every data key");
+                eprintln!("is rewrapped under the new KEK, no data is re-encrypted, and the old");
+                eprintln!("key file no longer opens the database. Stop the server first.");
+                std::process::exit(2);
+            }
+            let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
+            let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            });
+            if let Err(e) = crate::engine::rotate_keys(db, &cfg.encryption) {
+                eprintln!("key rotate: {e}");
+                std::process::exit(1);
+            }
+            println!("{}", serde_json::json!({"rotated": true, "db": db}));
             true
         }
         Some("restore") => {
