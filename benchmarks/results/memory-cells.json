@@ -1,0 +1,22 @@
+{
+  "benchmark": "aikoql memory cells (AG-61)",
+  "binary": "aikoql-mcp 0.3.0",
+  "machine": "Darwin arm64",
+  "results": {
+    "contradiction": {
+      "n": 100,
+      "conflict_recorded": 1.0,
+      "original_kept": 1.0,
+      "repeat_deduplicated": 1.0
+    },
+    "provenance": {
+      "n": 100,
+      "complete_evidence": 1.0
+    },
+    "time_travel": {
+      "n": 50,
+      "versions_per_object": 3,
+      "as_of_correct": 1.0
+    }
+  }
+}
