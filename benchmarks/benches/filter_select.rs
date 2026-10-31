@@ -121,8 +121,28 @@ fn main() {
     for i in &idx {
         i.set_applied_seq(head);
     }
-    for ((cell, q), (scan_ms, rows)) in cells.iter().zip(scan) {
-        let (ms, r) = p50(&k, q);
+    let measured: Vec<(f64, usize)> = cells.iter().map(|(_, q)| p50(&k, q)).collect();
+    // AG-21b: 100 live writes the indexes have not applied — the eq cell
+    // must stay indexed (stale stats, lagging index, tail-patched)
+    for i in 0..100 {
+        let mut req = RememberRequest::create(
+            alice.clone(),
+            Metadata {
+                type_name: "note".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+        );
+        req.properties
+            .insert("tag".into(), Value::Text(format!("g{}", i % 1000)));
+        k.remember(req).unwrap();
+    }
+    let (live_ms, live_rows) = p50(&k, &cells[1].1);
+    println!(
+        "{{\"cell\":\"eq_0.1pct_live_writes\",\"n\":{n},\"rows\":{live_rows},\"unapplied\":100,\"indexed_p50_ms\":{live_ms:.3}}}"
+    );
+    for (((cell, _), (scan_ms, rows)), (ms, r)) in cells.iter().zip(scan).zip(measured) {
         assert_eq!(r, rows, "{cell}: indexed rows match the scan");
         println!(
             "{{\"cell\":\"{cell}\",\"n\":{n},\"rows\":{rows},\"scan_p50_ms\":{scan_ms:.3},\
