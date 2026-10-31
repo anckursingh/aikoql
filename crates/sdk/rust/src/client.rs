@@ -26,7 +26,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 /// The oldest aikoql-mcp server this SDK will talk to (the ND-12 version
 /// contract, mirrored from the Go and Python SDKs).
-pub const MIN_SERVER_VERSION: &str = "0.2.4";
+pub const MIN_SERVER_VERSION: &str = "0.3.0";
 
 const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
