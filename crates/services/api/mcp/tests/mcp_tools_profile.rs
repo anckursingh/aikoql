@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 /// The core profile's budget: what every agent pays before its first call.
-const CORE_BYTES: usize = 8 * 1024;
+/// Re-pinned 8→9 KiB after AG-04's outputSchema and AG-33's trust props
+/// grew the core defs (8235 bytes at the re-pin).
+const CORE_BYTES: usize = 9 * 1024;
 
 fn tmp(name: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!("tools-profile-{name}-{}", std::process::id()));
@@ -127,8 +129,7 @@ fn ag01a_the_core_profile_is_small() {
     let (names, bytes) = m.tools();
     assert!(
         bytes <= CORE_BYTES,
-        "core tools/list is {bytes} bytes > {CORE_BYTES} ({} tools)",
-        names.len()
+        "core tools/list is {bytes} bytes > {CORE_BYTES} ({names:?})"
     );
     assert!(names.len() <= 13, "{} core tools: {names:?}", names.len());
     for must in [
