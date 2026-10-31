@@ -8,7 +8,7 @@ use crate::index::IndexMaintainerApi;
 use crate::knowledge::kom::{Action, KError, KResult, LifecycleState, KOID};
 use crate::knowledge::scoring::{cosine, jaccard, ko_text, tokenize};
 use crate::transaction::kernel::{Fusion, Kernel, ScoredKO, SimilarityQuery};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Weak};
 
 /// Similarity-search service. Holds an optional async index maintainer; when no
@@ -353,23 +353,13 @@ impl IndexCoordinator {
         }
 
         if let Fusion::Rrf { k0 } = q.fusion {
-            vec_scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            txt_scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            let rank_of = |list: &[(KOID, f32)], id: &KOID| -> Option<usize> {
-                let r = list.iter().position(|(k, s)| k == id && *s > 0.0);
-                kernel.fusion_rank_probes.fetch_add(
-                    r.map_or(list.len(), |r| r + 1) as u64,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                r
-            };
+            let (vr, tr) = (rrf_ranks(kernel, vec_scored), rrf_ranks(kernel, txt_scored));
             for s in merged.iter_mut() {
                 let mut rrf = 0.0f32;
-                if let Some(r) = rank_of(&vec_scored, &s.ko.koid) {
-                    rrf += 1.0 / (k0 as f32 + 1.0 + r as f32);
-                }
-                if let Some(r) = rank_of(&txt_scored, &s.ko.koid) {
-                    rrf += 1.0 / (k0 as f32 + 1.0 + r as f32);
+                for ranks in [&vr, &tr] {
+                    if let Some(r) = ranks.get(&s.ko.koid) {
+                        rrf += 1.0 / (k0 as f32 + 1.0 + *r as f32);
+                    }
                 }
                 s.score = rrf;
             }
@@ -384,4 +374,18 @@ impl IndexCoordinator {
         merged.truncate(q.k);
         Ok(merged)
     }
+}
+
+/// Each positive-scored KOID's 0-based rank in `list` once sorted by score
+/// (stable, as before) — one pass, so RRF is N log N, not N^2 (vs_scan_007).
+fn rrf_ranks(kernel: &Kernel, mut list: Vec<(KOID, f32)>) -> HashMap<KOID, usize> {
+    list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    kernel
+        .fusion_rank_probes
+        .fetch_add(list.len() as u64, std::sync::atomic::Ordering::Relaxed);
+    list.into_iter()
+        .enumerate()
+        .filter(|(_, (_, s))| *s > 0.0)
+        .map(|(r, (k, _))| (k, r))
+        .collect()
 }
