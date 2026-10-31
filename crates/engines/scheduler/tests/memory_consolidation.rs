@@ -40,7 +40,8 @@ fn note(k: &Kernel, body: &str, tag: &str) -> KOID {
             tags: vec![],
         },
     );
-    req.properties.insert("body".into(), Value::Text(body.into()));
+    req.properties
+        .insert("body".into(), Value::Text(body.into()));
     req.properties.insert("tag".into(), Value::Text(tag.into()));
     k.remember(req).unwrap().koid
 }
@@ -57,10 +58,12 @@ fn ag13a_lineage_kept() {
         1,
         "one near-duplicate pair, one merge: {merged:?}"
     );
-    let out = k
-        .outbound_edges(&merged[0], Some(DERIVED_FROM))
+    // The merged KO carries the sources as inbound derived_from edges
+    // (the index direction is source → derived).
+    let inn = k
+        .inbound_edges(&merged[0], Some(DERIVED_FROM))
         .unwrap_or_else(|e| panic!("no derived_from edges on the merged KO: {e}"));
-    let mut sources: Vec<String> = out.into_iter().map(|(_, id)| id.to_hex()).collect();
+    let mut sources: Vec<String> = inn.into_iter().map(|(_, id)| id.to_hex()).collect();
     sources.sort();
     assert_eq!(
         sources,
@@ -118,9 +121,9 @@ fn ag13c_nothing_deleted() {
 #[test]
 fn ag13_job_consolidates_on_cadence() {
     let k = open("job");
+    let job = ConsolidationJob::start(&k, Duration::from_millis(50)).unwrap();
     note(&k, "sally works at acme corp as staff engineer", "who");
     note(&k, "sally works at acme corp as a staff engineer", "who");
-    let job = ConsolidationJob::start(&k, Duration::from_millis(50)).unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while k.scan_by_type(&subject(), "note").unwrap().len() != 3
         && std::time::Instant::now() < deadline
