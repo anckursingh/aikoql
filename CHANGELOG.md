@@ -7,6 +7,15 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Fixed
+
+- **Vector search uses its index at scale (AG-20)**: `find_similar`
+  asked the HNSW index for every object, so a top-10 query at 1M objects
+  walked the whole graph (17 s in the scale benchmark). It now asks for
+  a bounded pool (512 candidates, widened only when access rules or
+  filters leave fewer than k) — 11.9 ms p50 with recall@10 0.992 at 1M
+  (`benches/ann_recall`).
+
 ## [0.3.0] — 2026-10-31 (agent surface, memory as knowledge, security fixes)
 
 ### Added
