@@ -179,6 +179,105 @@ fn vs_scan_003_index_lag_ms_keeps_the_exact_eventual_contract() {
     );
 }
 
+// --- vs_scan_004/005 — AG-20: the ANN leg asks for a bounded candidate pool ----
+
+/// Records every `k` the coordinator asks the index for.
+struct SpyIndex {
+    inner: BruteForceVectorIndex,
+    asked: std::sync::Mutex<Vec<usize>>,
+}
+
+impl aikoql_kernel::index::VectorIndex for SpyIndex {
+    fn upsert(&self, koid: KOID, model: &str, vec: &[f32]) {
+        self.inner.upsert(koid, model, vec)
+    }
+    fn remove(&self, koid: &KOID) {
+        self.inner.remove(koid)
+    }
+    fn search(&self, qv: &[f32], k: usize, model: Option<&str>) -> Vec<(KOID, f32)> {
+        self.asked.lock().unwrap().push(k);
+        self.inner.search(qv, k, model)
+    }
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+/// `n` notes on the unit circle at `start + i * step` degrees, indexed too.
+fn arc(
+    k: &Kernel,
+    spy: &SpyIndex,
+    owner: &KnowledgeContext,
+    n: usize,
+    start: f32,
+    step: f32,
+) -> Vec<KOID> {
+    (0..n)
+        .map(|i| {
+            let a = (start + i as f32 * step).to_radians();
+            let e = [a.cos(), a.sin()];
+            let id = note(k, owner, &format!("n{i}"), Some(e));
+            spy.upsert(id, "bge-m3", &e);
+            id
+        })
+        .collect()
+}
+
+fn spied(k: &Kernel) -> (Arc<SpyIndex>, Arc<FakeMaintainer>) {
+    let spy = Arc::new(SpyIndex {
+        inner: BruteForceVectorIndex::new(),
+        asked: Default::default(),
+    });
+    let fake = Arc::new(FakeMaintainer {
+        vectors: spy.clone(),
+        text: Arc::new(TokenTextIndex::new()),
+    });
+    k.attach_indexes(fake.clone());
+    (spy, fake)
+}
+
+/// RED pre-fix: the coordinator asked the index for usize::MAX — at 1M
+/// objects HNSW walked every node and the leg read 1M scoring records.
+#[test]
+fn vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool() {
+    let k = mk();
+    let alice = ctx("alice");
+    let (spy, _owner) = spied(&k);
+    arc(&k, &spy, &alice, 2000, 0.0, 0.17);
+    let hits = k.find_similar(vector_only(&alice, [1.0, 0.0], 10)).unwrap();
+    assert_eq!(hits.len(), 10);
+    let asked = spy.asked.lock().unwrap().clone();
+    assert_eq!(
+        asked.len(),
+        1,
+        "an unfiltered query needs one index call: {asked:?}"
+    );
+    assert!(
+        asked[0] <= 100,
+        "asked the index for {} candidates (k = 10)",
+        asked[0]
+    );
+}
+
+/// Guard: when the ACL drops the nearest candidates, the pool widens until
+/// k visible ones are found — the answer equals the exact ranking.
+#[test]
+fn vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive() {
+    let k = mk();
+    let (alice, bob) = (ctx("alice"), ctx("bob"));
+    let (spy, _owner) = spied(&k);
+    arc(&k, &spy, &bob, 500, 0.0, 0.05); // the 500 nearest, all bob's
+    let mine = arc(&k, &spy, &alice, 20, 30.0, 1.0);
+    let hits = k.find_similar(vector_only(&alice, [1.0, 0.0], 5)).unwrap();
+    let got: Vec<KOID> = hits.iter().map(|h| h.ko.koid).collect();
+    assert_eq!(
+        got,
+        mine[..5].to_vec(),
+        "alice's own five nearest, in order"
+    );
+    assert!(spy.asked.lock().unwrap().len() > 1, "the pool widened");
+}
+
 /// The P4-M7 fake from the index subsystem tests: indexes lag the kernel.
 struct FakeMaintainer {
     vectors: Arc<dyn aikoql_kernel::index::VectorIndex>,

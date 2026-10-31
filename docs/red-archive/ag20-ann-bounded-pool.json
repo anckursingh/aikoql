@@ -1,0 +1,8 @@
+{
+  "id": "ag20-ann-bounded-pool",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test vs_scan",
+  "captured_at": "2026-10-31T13:57:29Z",
+  "captured_head": "80198bd62fe4132df967e23be4c3a944819c62c4",
+  "exit_code": 101
+}
