@@ -343,6 +343,10 @@ pub(crate) fn call_tool(
         audit_log(db_path, &session.agent_id, name, "denied:capability", &e.1);
         return Err(e);
     }
+    if let Err(e) = crate::authz::check_scope(&session.roles, name, args) {
+        audit_log(db_path, &session.agent_id, name, "denied:scope", &e.1);
+        return Err(e);
+    }
 
     let res = match name {
         "remember" => tool_remember(k, args),
