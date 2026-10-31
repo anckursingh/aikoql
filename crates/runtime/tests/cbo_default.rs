@@ -125,9 +125,9 @@ fn cbo_default_001_indexed_fresh_kernel_uses_the_index_on_the_default_path() {
 // --- cbo_default_002 — the guards hold on the default path ----------------------
 
 #[test]
-fn cbo_default_002_lagging_or_stale_index_falls_back_on_the_default_path() {
-    // An index that has not caught up (stats fresh, index lagging): the
-    // default path must NOT use it — the unseen row answers the truth.
+fn cbo_default_002_lagging_or_stale_index_stays_exact_on_the_default_path() {
+    // AG-21b: an index that has not caught up (stats fresh, index lagging)
+    // serves its rows plus the unapplied tail — the unseen row is patched in.
     let k = mk();
     k.catalog_create_index("by_name", "Person", &["name"])
         .unwrap();
@@ -141,14 +141,11 @@ fn cbo_default_002_lagging_or_stale_index_falls_back_on_the_default_path() {
     let query = "MATCH Person WHERE name == \"Unseen\" RETURN *";
     let plan = plan_of(&k, query);
     let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
-    assert!(
-        report.stats_used,
-        "stats fresh — the index is the rejected piece"
-    );
-    assert_eq!(report.plan.operators[0].strategy, Strategy::FullScan);
+    assert!(report.stats_used, "stats fresh");
+    assert_eq!(report.plan.operators[0].strategy, Strategy::PropertyIndex);
     assert_eq!(exec_ids(&rows), vec![unseen], "not silently wrong");
 
-    // Stale stats (a write after analyze): same fallback on the default path.
+    // Stale stats (a write after analyze): the index still serves, exactly.
     let k2 = mk();
     k2.catalog_create_index("by_name", "Person", &["name"])
         .unwrap();
@@ -162,15 +159,17 @@ fn cbo_default_002_lagging_or_stale_index_falls_back_on_the_default_path() {
     let plan = plan_of(&k2, query);
     let (rows, report) = Interpreter::execute_with_report(&k2, &plan).unwrap();
     assert!(report.stats_stale, "staleness is detected");
-    assert!(!report.stats_used, "stale stats never drive the plan");
-    assert_eq!(report.plan.operators[0].strategy, Strategy::FullScan);
+    assert_eq!(report.plan.operators[0].strategy, Strategy::PropertyIndex);
     let ids = exec_ids(&rows);
     assert!(
         ids.iter().all(|id| *id != late),
-        "the stale path returns the committed truth, not index artifacts"
+        "the committed truth, not index artifacts"
     );
-    assert_eq!(ids.len(), 1, "exactly P042 — the rule-based answer");
-    let _ = late;
+    assert_eq!(
+        ids,
+        rule_based(&k2, &plan),
+        "exactly P042 — the rule-based answer"
+    );
 }
 
 // --- cbo_default_003 — no declared indexes: byte-identical to pre-M15 -----------

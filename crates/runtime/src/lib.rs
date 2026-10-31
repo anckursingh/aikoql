@@ -355,9 +355,10 @@ impl Interpreter {
             None
         };
         for (i, po) in plan.operators.iter().enumerate() {
-            if po.strategy == Strategy::PropertyIndex
-                && exec_head.is_some_and(|h| h == plan.pinned_head)
-            {
+            // AG-21b: the assist re-reads the unapplied tail at execution
+            // time (patched_eq), so a commit since the plan was pinned no
+            // longer forces the full scan — the patch covers it
+            if po.strategy == Strategy::PropertyIndex && exec_head.is_some() {
                 interp.assist = cbo::scan_assist(kernel, &plan.operators, i)?;
             }
             rows = interp.exec_op(kernel, &po.op, rows)?;

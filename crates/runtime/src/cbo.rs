@@ -84,6 +84,50 @@ fn may_serve_exact(idx: &dyn aikoql_kernel::Index) -> bool {
         && idx.state() == aikoql_kernel::IndexState::Ready
 }
 
+/// AG-21b: the most journal events a lagging index is patched over; past
+/// it the full scan is cheaper than reading the tail.
+const INDEX_TAIL_CAP: u64 = 10_000;
+
+/// The rows an index may NOT reflect: every object in the journal after
+/// its stamp (None past the cap). The index was exact at its stamp, so
+/// only these can be missing or stale — O(lag), never an O(N) walk.
+pub(crate) fn unapplied(
+    kernel: &Kernel,
+    idx: &dyn aikoql_kernel::Index,
+) -> KResult<Option<Vec<aikoql_kernel::KOID>>> {
+    let stamp = idx.applied_seq();
+    let head = kernel.journal_head()?.0;
+    if head.saturating_sub(stamp) > INDEX_TAIL_CAP {
+        return Ok(None);
+    }
+    Ok(Some(
+        kernel
+            .journal_after(stamp)?
+            .into_iter()
+            .map(|e| e.koid)
+            .collect(),
+    ))
+}
+
+/// An Eq lookup that is exact however far (up to the cap) the index lags:
+/// its rows plus the unapplied tail, sorted and deduplicated. A superset is
+/// exact because the Scan skips deleted and foreign-type rows and the
+/// Filter re-checks every predicate on the committed object.
+pub(crate) fn patched_eq(
+    kernel: &Kernel,
+    idx: &dyn aikoql_kernel::Index,
+    value: &aikoql_kernel::Value,
+) -> KResult<Option<Vec<aikoql_kernel::KOID>>> {
+    let Some(tail) = unapplied(kernel, idx)? else {
+        return Ok(None);
+    };
+    let mut koids = idx.scan_eq(std::slice::from_ref(value))?;
+    koids.extend(tail);
+    koids.sort();
+    koids.dedup();
+    Ok(Some(koids))
+}
+
 /// The executor's index assist for a Scan the CBO flagged `PropertyIndex`:
 /// the same derivation the optimizer used, so the flag's koid list comes
 /// from the covering index. A flag without an index falls back to the full
@@ -110,7 +154,7 @@ pub(crate) fn scan_assist(
             continue; // CandidateOnly never answers an exact scan
         }
         if idx.covers(type_name, property) {
-            return Ok(Some(idx.scan_eq(std::slice::from_ref(value))?));
+            return patched_eq(kernel, &*idx, value);
         }
     }
     Ok(None)
@@ -243,8 +287,10 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
     let ann_dim = kernel.index_maintainer().and_then(|m| m.vector_dim());
 
     let mut index_used: Option<String> = None;
+    // AG-21b: stale stats still price the plan — exactness is the index's
+    // gate below, not the stats' (one write used to switch indexes off)
     if let Some(stats) = &stats {
-        if stats_used {
+        {
             // T-71: first_eq_after guarantees a Cmp-Eq node; as_cmp on it
             // always yields the (property, _, _) triple.
             if let Some((property, _, _)) = first_eq_after(&ops, 0).and_then(|p| p.as_cmp()) {
@@ -257,10 +303,9 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
                     if !idx.covers(&stats.type_name, property) {
                         continue;
                     }
-                    // The exactness gate: the index must hold the committed
-                    // truth — verified clean, nothing missing, nothing stale.
-                    let report = idx.verify(kernel)?;
-                    if !report.verified || !report.missing.is_empty() || !report.stale.is_empty() {
+                    // The exactness gate: the index's rows plus its unapplied
+                    // tail must be readable within the cap (patched_eq).
+                    if unapplied(kernel, &*idx)?.is_none() {
                         continue;
                     }
                     let mut cand_ops = ops.clone();
@@ -328,10 +373,11 @@ pub fn explain_cost(kernel: &Kernel, query: &str) -> KResult<Vec<String>> {
     };
     lines.push(footer.to_string());
     // PR6 P0-07: every index-assisted plan states its snapshot — the journal
-    // head the index read is assumed fresh at.
+    // head it was planned at; AG-21b: the scan serves the index's rows plus
+    // the journal tail it has not applied, re-read at execution.
     if report.index_used.is_some() {
         lines.push(format!(
-            "snapshot: journal head pinned at {}",
+            "snapshot: planned at journal head {} (index rows + unapplied tail)",
             report.plan.pinned_head
         ));
     }
