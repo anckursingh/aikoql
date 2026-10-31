@@ -1,0 +1,47 @@
+   Compiling aikoql-kernel v0.3.0 (/Users/pukku/coding/aikoql/crates/kernel)
+   Compiling aikoql-storage-v2 v0.3.0 (/Users/pukku/coding/aikoql/crates/storage/aikoql-v2)
+   Compiling aikoql-compiler v0.3.0 (/Users/pukku/coding/aikoql/crates/compiler)
+   Compiling aikoql-vector v0.3.0 (/Users/pukku/coding/aikoql/crates/engines/vector)
+   Compiling aikoql-graph v0.3.0 (/Users/pukku/coding/aikoql/crates/engines/graph)
+   Compiling aikoql-scheduler v0.3.0 (/Users/pukku/coding/aikoql/crates/engines/scheduler)
+   Compiling aikoql-runtime v0.3.0 (/Users/pukku/coding/aikoql/crates/runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.75s
+     Running tests/vs_scan.rs (target/debug/deps/vs_scan-a50932fdb2802804)
+
+running 3 tests
+test vs_scan_012_no_zero_score_pads ... FAILED
+test vs_scan_011_the_tail_keeps_the_model_scope ... FAILED
+test vs_scan_010_the_unindexed_tail_is_scored_exactly ... FAILED
+
+failures:
+
+---- vs_scan_012_no_zero_score_pads stdout ----
+
+thread 'vs_scan_012_no_zero_score_pads' (3880598) panicked at crates/kernel/tests/vs_scan.rs:551:9:
+assertion `left == right` failed: Rrf { k0: 60 }: only the match, got 5
+  left: 5
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- vs_scan_011_the_tail_keeps_the_model_scope stdout ----
+
+thread 'vs_scan_011_the_tail_keeps_the_model_scope' (3880597) panicked at crates/kernel/tests/vs_scan.rs:520:10:
+the text leg finds it
+
+---- vs_scan_010_the_unindexed_tail_is_scored_exactly stdout ----
+
+thread 'vs_scan_010_the_unindexed_tail_is_scored_exactly' (3880596) panicked at crates/kernel/tests/vs_scan.rs:480:5:
+assertion `left == right` failed: hybrid: [ScoredKO { ko: KnowledgeObject { koid: KOID(00000000271000000001000000c0ffee), version: 1, commit_ts: 655360001, metadata: Metadata { type_name: "note", tenant: None, schema_version: 1, tags: [] }, properties: {"body": Text("plain")}, semantic: Some(SemanticBlock { embedding_model: Some("bge-m3"), embedding: Some([0.76604444, 0.6427876]), confidence: None, source: None, summary: None }), relationships: [], event_refs: [EventRef { seq: 2, kind: Created, commit_ts: 655360001 }], security: SecurityDescriptor { owner: "alice", acl: [], classification: None }, lifecycle: Lifecycle { state: Draft, origin: Human }, extensions: {"authority": Text("human_approved"), "epistemic_status": Text("asserted"), "scope": Text("user")} }, score: 0.016393442, index_lag_ms: 1 }, ScoredKO { ko: KnowledgeObject { koid: KOID(00000000271000000002000000c0ffee), version: 1, commit_ts: 655360002, metadata: Metadata { type_name: "note", tenant: None, schema_version: 1, tags: [] }, properties: {"body": Text("plain")}, semantic: Some(SemanticBlock { embedding_model: Some("bge-m3"), embedding: Some([0.7649214, 0.6441236]), confidence: None, source: None, summary: None }), relationships: [], event_refs: [EventRef { seq: 3, kind: Created, commit_ts: 655360002 }], security: SecurityDescriptor { owner: "alice", acl: [], classification: None }, lifecycle: Lifecycle { state: Draft, origin: Human }, extensions: {"authority": Text("human_approved"), "epistemic_status": Text("asserted"), "scope": Text("user")} }, score: 0.016129032, index_lag_ms: 1 }, ScoredKO { ko: KnowledgeObject { koid: KOID(00000000271000000003000000c0ffee), version: 1, commit_ts: 655360003, metadata: Metadata { type_name: "note", tenant: None, schema_version: 1, tags: [] }, properties: {"body": Text("plain")}, semantic: Some(SemanticBlock { embedding_model: Some("bge-m3"), embedding: Some([0.76379603, 0.6454577]), confidence: None, source: None, summary: None }), relationships: [], event_refs: [EventRef { seq: 4, kind: Created, commit_ts: 655360003 }], security: SecurityDescriptor { owner: "alice", acl: [], classification: None }, lifecycle: Lifecycle { state: Draft, origin: Human }, extensions: {"authority": Text("human_approved"), "epistemic_status": Text("asserted"), "scope": Text("user")} }, score: 0.015873017, index_lag_ms: 1 }]
+  left: Some(KOID(00000000271000000001000000c0ffee))
+ right: Some(KOID(00000000271000000065000000c0ffee))
+
+
+failures:
+    vs_scan_010_the_unindexed_tail_is_scored_exactly
+    vs_scan_011_the_tail_keeps_the_model_scope
+    vs_scan_012_no_zero_score_pads
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p aikoql-kernel --test vs_scan`
+EXIT=101

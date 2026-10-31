@@ -487,6 +487,76 @@ fn vs_scan_010_the_unindexed_tail_is_scored_exactly() {
     assert!((got[0].score - 1.0).abs() < 1e-5, "the committed cosine");
 }
 
+/// Guard: the tail keeps the index's model scope. A tail object embedded by
+/// another model matches the text only — RRF gives it one 1/61 (text rank
+/// 0), never a second one from a vector it was never scoped into.
+#[test]
+fn vs_scan_011_the_tail_keeps_the_model_scope() {
+    let k = mk();
+    let alice = ctx("alice");
+    let (v, t, _owner) = spied_both(&k);
+    for i in 0..50 {
+        indexed(&k, (&v, &t), &alice, "plain", at(40.0 + i as f32));
+    }
+    let mut req = RememberRequest::create(alice.clone(), meta("note"));
+    req.properties
+        .insert("body".into(), Value::Text("zebra".into()));
+    req.semantic = Some(SemanticBlock {
+        embedding_model: Some("other-model".into()),
+        embedding: Some(vec![1.0, 0.0]),
+        confidence: None,
+        source: None,
+        summary: None,
+    });
+    let zebra = k.remember(req).unwrap().koid; // the unindexed tail
+    let mut q = SimilarityQuery::new(alice.clone(), 5, Fusion::Rrf { k0: 60 })
+        .with_vector(vec![1.0, 0.0])
+        .with_text("zebra");
+    q.embedding_model = Some("bge-m3".into());
+    let hits = k.find_similar(q).unwrap();
+    let z = hits
+        .iter()
+        .find(|h| h.ko.koid == zebra)
+        .expect("the text leg finds it");
+    assert!(
+        (z.score - 1.0 / 61.0).abs() < 1e-6,
+        "text rank only, got {}",
+        z.score
+    );
+    let mut vq = vector_only(&alice, [1.0, 0.0], 5);
+    vq.embedding_model = Some("bge-m3".into());
+    assert!(
+        k.find_similar(vq)
+            .unwrap()
+            .iter()
+            .all(|h| h.ko.koid != zebra),
+        "vector-only never scores another model's tail"
+    );
+}
+
+/// A hit is something a leg matched: the exact (no-index) path used to pad
+/// k with every visible object at score 0, so it and the indexed path
+/// disagreed on how many hits a query has.
+#[test]
+fn vs_scan_012_no_zero_score_pads() {
+    let k = mk();
+    let alice = ctx("alice");
+    note(&k, &alice, "zebra crossing", None);
+    for i in 0..9 {
+        note(&k, &alice, &format!("plain {i}"), None);
+    }
+    for fusion in [Fusion::Rrf { k0: 60 }, Fusion::TextOnly] {
+        let q = SimilarityQuery::new(alice.clone(), 5, fusion).with_text("zebra");
+        let hits = k.find_similar(q).unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "{fusion:?}: only the match, got {}",
+            hits.len()
+        );
+    }
+}
+
 /// The P4-M7 fake from the index subsystem tests: indexes lag the kernel.
 struct FakeMaintainer {
     vectors: Arc<dyn aikoql_kernel::index::VectorIndex>,
