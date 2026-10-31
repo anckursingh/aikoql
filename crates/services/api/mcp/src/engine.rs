@@ -76,6 +76,23 @@ pub(crate) fn open_kernel_auto(
     open_kernel(db_path, &cfg.encryption, false, None)
 }
 
+/// AG-31 — rotate the master KEK of an encrypted database (offline: no
+/// other process may hold it). RED: the naive rotation the scheduler job
+/// names ("would call envelope.rotate_kek") — the KMS mints a new KEK —
+/// while the store key is derived from the KEK itself.
+pub(crate) fn rotate_keys(_db_path: &str, enc: &RuntimeEncryption) -> KResult<()> {
+    let pass = enc
+        .passphrase
+        .as_deref()
+        .ok_or_else(|| KError::Store("key rotation needs the passphrase".into()))?;
+    let crypto = Crypto::new(Box::new(Aes256Gcm::new()));
+    let guard = crypto.inner().read().unwrap();
+    LocalKms::new(&enc.key_path)
+        .rotate(pass, &**guard)
+        .map(|_| ())
+        .map_err(KError::Store)
+}
+
 #[cfg(test)]
 mod tests {
     use super::open_kernel_auto;
@@ -174,5 +191,72 @@ mod tests {
             std::path::Path::new(&fresh).join("CURRENT").is_file(),
             "a missing path must create a v2 database directory through the startup path"
         );
+    }
+
+    // --- AG-31 — kr001: rotation keeps every object readable and retires the
+    // old KEK. RED: the KMS mints a new KEK, but the store key is derived
+    // from the KEK, so the database no longer opens. ---
+    #[test]
+    fn kr001_rotation_keeps_every_object_readable_and_retires_the_old_kek() {
+        use aikoql_kernel::{Metadata, RememberRequest, Subject, Value};
+        let dir = scratch("kr001");
+        let key = format!("{dir}.key");
+        let enc = super::RuntimeEncryption {
+            enabled: true,
+            key_path: key.clone(),
+            passphrase: Some("pw".into()),
+            policies: [("Secret".to_string(), vec!["pin".to_string()])].into(),
+        };
+        let alice = Subject::new("alice");
+        let write = |k: &aikoql_kernel::Kernel, t: &str, body: &str| {
+            let mut req = RememberRequest::create(
+                alice.clone(),
+                Metadata {
+                    type_name: t.into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+            );
+            req.properties
+                .insert("pin".into(), Value::Text(body.into()));
+            k.remember(req).unwrap().koid
+        };
+        let ids: Vec<_> = {
+            let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
+            (0..20)
+                .map(|i| write(&k, "note", &format!("n{i}")))
+                .chain((0..5).map(|i| write(&k, "Secret", &format!("{i}{i}{i}{i}"))))
+                .collect()
+        };
+        let old_kek = std::fs::read(&key).unwrap();
+        super::rotate_keys(&dir, &enc).unwrap();
+        assert_ne!(
+            std::fs::read(&key).unwrap(),
+            old_kek,
+            "a new KEK is in place"
+        );
+        {
+            let (k, _) =
+                super::open_kernel(&dir, &enc, false, None).expect("the rotated database opens");
+            for (i, id) in ids.iter().enumerate() {
+                let ko = k.get(alice.clone(), id).unwrap();
+                let want = if i < 20 {
+                    format!("n{i}")
+                } else {
+                    let j = i - 20;
+                    format!("{j}{j}{j}{j}")
+                };
+                assert_eq!(ko.properties.get("pin"), Some(&Value::Text(want)), "{id:?}");
+            }
+        }
+        let new_kek = std::fs::read(&key).unwrap();
+        std::fs::write(&key, &old_kek).unwrap();
+        assert!(
+            super::open_kernel(&dir, &enc, false, None).is_err(),
+            "the old KEK unwraps nothing current"
+        );
+        std::fs::write(&key, &new_kek).unwrap();
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(key.into()));
     }
 }
