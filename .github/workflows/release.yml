@@ -640,7 +640,7 @@ jobs:
   # a module tag for a release that never landed is a phantom version.
   go-tag:
     name: Tag the Go SDK module (crates/sdk/go)
-    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && needs.validate-versions.result == 'success') || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ubuntu-latest
     permissions:
@@ -672,7 +672,7 @@ jobs:
   # lags a fresh sibling publish by up to a minute.
   crates-io-publish:
     name: Publish Rust crates to crates.io
-    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && needs.validate-versions.result == 'success') || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ubuntu-latest
     permissions: {}
@@ -728,7 +728,7 @@ jobs:
   # before any upload: the pom version is the publish truth.
   maven-central-publish:
     name: Publish Java SDK to Maven Central
-    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && needs.validate-versions.result == 'success') || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ubuntu-latest
     permissions: {}
@@ -787,7 +787,7 @@ jobs:
   # version in npm-publish/package.json, e.g. v0.1.18's gap).
   npm-publish:
     name: Publish npm package
-    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && needs.validate-versions.result == 'success') || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ubuntu-latest
     permissions:
@@ -832,7 +832,7 @@ jobs:
   # CLIENT_VERSION reads at runtime — against the tag's version.
   ts-sdk-publish:
     name: Publish the TypeScript SDK
-    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && needs.validate-versions.result == 'success') || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ubuntu-latest
     permissions:
@@ -880,7 +880,7 @@ jobs:
   # GitHub trusted publishing.
   pypi-wheel-matrix:
     name: Build Python wheel (${{ matrix.os }})
-    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && needs.validate-versions.result == 'success') || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ${{ matrix.os }}
     strategy:
@@ -943,7 +943,7 @@ jobs:
     name: Publish Python SDK to PyPI
     # Every wheel or none (V-05): v0.2.3 shipped without the mac wheel because
     # always() published the survivors of a failed matrix leg.
-    if: ${{ always() && needs.pypi-wheel-matrix.result == 'success' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.github-release.result == 'success')) }}
+    if: ${{ always() && needs.validate-versions.result == 'success' && needs.pypi-wheel-matrix.result == 'success' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.github-release.result == 'success')) }}
     needs: [pypi-wheel-matrix, github-release, validate-versions]
     runs-on: ubuntu-latest
     permissions:
@@ -987,7 +987,7 @@ jobs:
   # the shipped artifact, not the source tree.
   training-pypi-publish:
     name: Publish aikoql-training to PyPI
-    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && needs.validate-versions.result == 'success') || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ubuntu-latest
     permissions:
@@ -1035,7 +1035,7 @@ jobs:
   # artifacts exist, so a broken SDK never ships under a green tag.
   sdk-release-cert:
     name: Certify every SDK
-    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && needs.validate-versions.result == 'success') || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ubuntu-latest
     permissions: {}
@@ -1075,7 +1075,7 @@ jobs:
   # published, the job passes with a notice (nothing to verify).
   verify-release-identity:
     name: Verify published identity vs tag
-    if: ${{ always() }}
+    if: ${{ always() && needs.validate-versions.result == 'success' }}
     needs: [validate-versions, github-release, npm-publish, pypi-publish, docker-manifest]
     runs-on: ubuntu-latest
     permissions:
