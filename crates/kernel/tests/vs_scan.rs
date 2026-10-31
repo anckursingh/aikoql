@@ -278,6 +278,25 @@ fn vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive() {
     assert!(spy.asked.lock().unwrap().len() > 1, "the pool widened");
 }
 
+/// RED pre-fix: `recall` asks VectorOnly but passes the question as text,
+/// and any text sent the query down the full-scan loop — the text is never
+/// scored under VectorOnly, so it must not cost the bounded pool.
+#[test]
+fn vs_scan_006_vector_only_with_text_still_asks_a_bounded_pool() {
+    let k = mk();
+    let alice = ctx("alice");
+    let (spy, _owner) = spied(&k);
+    arc(&k, &spy, &alice, 2000, 0.0, 0.17);
+    let q = vector_only(&alice, [1.0, 0.0], 10).with_text("what is nearest");
+    let hits = k.find_similar(q).unwrap();
+    assert_eq!(hits.len(), 10);
+    let asked = spy.asked.lock().unwrap().clone();
+    assert!(
+        asked.iter().all(|&n| n <= 512),
+        "VectorOnly + text asked the index for {asked:?} candidates"
+    );
+}
+
 /// The P4-M7 fake from the index subsystem tests: indexes lag the kernel.
 struct FakeMaintainer {
     vectors: Arc<dyn aikoql_kernel::index::VectorIndex>,
