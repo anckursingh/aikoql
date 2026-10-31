@@ -77,13 +77,17 @@ class AikoqlCrewAIMemory:
         # ponytail: O(n) linear scan+forget; CrewAI memory reset is rare in
         production runs, so this is fine. Add a bulk-tombstone API if it ever
         becomes hot.
+        # An empty find_similar query used to enumerate every visible
+        # object via pre-AG-20 zero-score padding — it now honestly finds
+        # nothing, so enumerate with a MATCH statement instead.
         """
-        results = self.client.find_similar(
-            self.subject, text="", k=1000, fusion="text_only"
+        rows = self.client.aikoql(
+            f"MATCH {self._type_name} RETURN *", subject=self.subject
         )
-        for r in results:
-            if r["ko"]["type_name"] == self._type_name:
-                self.client.forget(self.subject, r["ko"]["koid"])
+        if isinstance(rows, dict):  # MCP clients wrap rows in {"results": [...]}
+            rows = rows.get("results", [])
+        for r in rows:
+            self.client.forget(self.subject, r["koid"])
 
     def close(self) -> None:
         self.client.close()
