@@ -27,6 +27,9 @@ pub struct PropertyIndex {
     /// carries the durable copy; this is the live registry's. Only `Ready`
     /// indexes may be CBO-chosen (P1-16).
     state: RwLock<IndexState>,
+    /// AG-21 probe — bucket entries examined by upsert/remove (the
+    /// idx6-001 seam: maintenance must stay O(1) per row, not O(index)).
+    steps: AtomicU64,
 }
 
 impl PropertyIndex {
@@ -38,7 +41,13 @@ impl PropertyIndex {
             map: RwLock::new(HashMap::new()),
             applied: AtomicU64::new(0),
             state: RwLock::new(IndexState::Declared),
+            steps: AtomicU64::new(0),
         }
+    }
+
+    /// AG-21 probe — bucket entries upsert/remove examined since creation.
+    pub fn maintenance_steps(&self) -> u64 {
+        self.steps.load(Ordering::Relaxed)
     }
 
     /// The Debug-derived key of the property tuple, or None when any key
@@ -86,6 +95,7 @@ impl Index for PropertyIndex {
         // runs for foreign types too: a re-typed row must not keep
         // answering scans for its old type (P1-01).
         for bucket in map.values_mut() {
+            self.steps.fetch_add(bucket.len() as u64, Ordering::Relaxed);
             bucket.retain(|k| *k != koid);
         }
         if ko.metadata.type_name != self.type_name {
@@ -100,6 +110,7 @@ impl Index for PropertyIndex {
     fn remove(&self, koid: &KOID) -> KResult<()> {
         // justified: RwLock poison is unrecoverable
         for bucket in self.map.write().unwrap().values_mut() {
+            self.steps.fetch_add(bucket.len() as u64, Ordering::Relaxed);
             bucket.retain(|k| k != koid);
         }
         Ok(())
@@ -369,6 +380,30 @@ mod tests {
         ko.properties
             .insert("title".into(), Value::Text("same title".into()));
         ko
+    }
+
+    // --- AG-21 — idx6-001: maintenance is O(1) per row. RED: upsert swept
+    // every bucket to drop the row's old entry — 2 000 rows into one index
+    // examined ~2 million entries; a 1M-row index build took ~an hour. ---
+    #[test]
+    fn idx6_001_maintenance_does_not_sweep_the_index() {
+        let idx = PropertyIndex::new("by_title", "note", &["title"]);
+        let n = 2000u64;
+        for i in 0..n {
+            let mut b = [0u8; KOID_LEN];
+            b[..8].copy_from_slice(&i.to_le_bytes());
+            idx.upsert(KOID::from_bytes(b), &ko(KOID::from_bytes(b), "note"))
+                .unwrap();
+        }
+        let first = KOID::from_bytes([0u8; KOID_LEN]);
+        idx.upsert(first, &ko(first, "note")).unwrap(); // a re-key
+        idx.remove(&first).unwrap();
+        let steps = idx.maintenance_steps();
+        assert!(
+            steps <= 4 * n,
+            "{n} upserts examined {steps} bucket entries"
+        );
+        assert_eq!(idx.len() as u64, n - 1);
     }
 
     // --- P5-M19 — idx3-003 (PR6 P1-01): a foreign-type upsert must still

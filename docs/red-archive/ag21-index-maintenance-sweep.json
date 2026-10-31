@@ -1,0 +1,8 @@
+{
+  "id": "ag21-index-maintenance-sweep",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --lib idx6_001",
+  "captured_at": "2026-10-31T16:36:37Z",
+  "captured_head": "f1bec792e117bd348752d854af1e8d6027e70d7b",
+  "exit_code": 101
+}
