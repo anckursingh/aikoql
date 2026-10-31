@@ -345,6 +345,20 @@ fn mirror(
     }
     req["type_name"] = json!(MEMORY_TYPE);
     req["properties"] = props;
+    // AG-61: embed at write time — an agent searches what it just stored,
+    // and the semantic engine attaches embeddings later (ms001). Without a
+    // model, or while it stays busy, the asynchronous path still runs.
+    // shortcut: the embedding carries no model name (indexed under the ""
+    // model, which memory_search matches); thread the provider's model id
+    // through the kernel if a caller ever scopes memory search by model
+    let text = if content.starts_with(description) {
+        content.to_string()
+    } else {
+        format!("{description}\n{content}")
+    };
+    if let (Some(v), _) = crate::tools::query::embed_query(k, &text) {
+        req["semantic"] = json!({ "embedding": v });
+    }
     req["embed"] = json!(true);
     req["visibility"] = json!(if scope == "shared" {
         "shared"
