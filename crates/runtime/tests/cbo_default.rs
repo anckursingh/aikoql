@@ -288,3 +288,62 @@ fn cbo_default_005_production_shape_selects_the_index_at_harness_selectivity() {
     // Row-for-row identical to the rule path — same rows, same order.
     assert_eq!(exec_ids(&rows), rule_based(&k, &plan));
 }
+
+// --- cbo_default_006/007 — AG-21b: indexes stay on under live writes -------------
+
+/// RED pre-fix: ANY write after analyze staled the stats (no index plan),
+/// and a lagging index was rejected after an O(N) verify walk — under a
+/// steady write load the index never served. Now stale stats still price
+/// the plan, and a lagging index serves its rows plus the journal tail
+/// since its stamp (the Filter re-checks every row), so it stays exact.
+#[test]
+fn cbo_default_006_live_writes_keep_the_index_exact() {
+    let k = mk();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
+    for i in 0..200 {
+        person(&k, &format!("P{i:03}"), "Eng");
+    }
+    catch_up_indexes(&k);
+    k.analyze("Person").unwrap();
+    for idx in k.property_indexes().unwrap() {
+        idx.set_applied_seq(k.journal_head().unwrap().0); // the maintainer's stamp
+    }
+    // live writes the index has not applied: a new match and a re-key
+    let fresh = person(&k, "P042", "Ops");
+    let query = "MATCH Person WHERE name == \"P042\" RETURN *";
+    let plan = plan_of(&k, query);
+    let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
+    assert!(report.stats_stale, "the writes staled the stats");
+    assert_eq!(report.index_used.as_deref(), Some("by_name"), "{report:?}");
+    let mut got = exec_ids(&rows);
+    got.sort();
+    let mut want = rule_based(&k, &plan);
+    want.sort();
+    assert_eq!(got, want, "exact: the unindexed tail is patched in");
+    assert!(got.contains(&fresh));
+}
+
+/// Guard: past the tail cap the patch would cost more than it saves — the
+/// plan falls back to the full scan, still exact.
+#[test]
+fn cbo_default_007_a_tail_past_the_cap_falls_back_to_the_scan() {
+    let k = mk();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
+    for i in 0..50 {
+        person(&k, &format!("P{i:03}"), "Eng");
+    }
+    catch_up_indexes(&k);
+    k.analyze("Person").unwrap();
+    for idx in k.property_indexes().unwrap() {
+        idx.set_applied_seq(k.journal_head().unwrap().0);
+    }
+    for i in 0..10_001 {
+        person(&k, &format!("Q{i}"), "Ops"); // an unapplied bulk load
+    }
+    let plan = plan_of(&k, "MATCH Person WHERE name == \"P007\" RETURN *");
+    let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
+    assert_eq!(report.plan.operators[0].strategy, Strategy::FullScan);
+    assert_eq!(exec_ids(&rows).len(), 1);
+}

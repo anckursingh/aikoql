@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/cbo_default.rs (target/debug/deps/cbo_default-f6cfe39625a89f86)
+
+running 1 test
+test cbo_default_006_live_writes_keep_the_index_exact ... FAILED
+
+failures:
+
+---- cbo_default_006_live_writes_keep_the_index_exact stdout ----
+
+thread 'cbo_default_006_live_writes_keep_the_index_exact' (3954930) panicked at crates/runtime/tests/cbo_default.rs:318:5:
+assertion `left == right` failed: CostReport { plan: PhysicalPlan { version: 1, operators: [PhysicalOp { op: Scan { type_name: "Person", subject: "alice", roles: [], tenant: None }, strategy: FullScan }, PhysicalOp { op: Filter { predicates: [Cmp { property: "name", op: Eq, value: Text("P042") }] }, strategy: Inline }], description: None, pinned_head: 0 }, costs: [Cost { rows: 200, cpu: 200 }, Cost { rows: 1, cpu: 200 }], stats_used: false, stats_stale: true, index_used: None }
+  left: None
+ right: Some("by_name")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cbo_default_006_live_writes_keep_the_index_exact
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p aikoql-runtime --test cbo_default`
+EXIT=101
