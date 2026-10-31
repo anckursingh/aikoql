@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/mcp_memory_semantic.rs (target/debug/deps/mcp_memory_semantic-2c1d3f45c0a391e7)
+
+running 1 test
+test ms001_a_memory_is_semantically_searchable_right_after_store ... FAILED
+
+failures:
+
+---- ms001_a_memory_is_semantically_searchable_right_after_store stdout ----
+
+thread 'ms001_a_memory_is_semantically_searchable_right_after_store' (4276978) panicked at crates/services/api/mcp/tests/mcp_memory_semantic.rs:100:5:
+the stored memory is embedded: {"koid":"01a19355ba0b0000000100000000a9c9","version":1,"commit_ts":1793473231375,"type_name":"Memory","state":"draft","properties":{"content":"my daily commute takes forty-five minutes on the train","description":"my daily commute takes forty-five minutes on the train","memory_type":"project","name":"commute","scope":"private","session":""},"extensions":{"authority":"agent_derived","epistemic_status":"asserted","scope":"session"},"semantic":null,"relationships":[],"event_refs":1}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ms001_a_memory_is_semantically_searchable_right_after_store
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.73s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_memory_semantic`
+EXIT=101
