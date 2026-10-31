@@ -77,6 +77,9 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Fixed
 
+- **A failed release version check publishes nothing.** Manual release
+  runs skipped the check's result for ten publish jobs, so the first 0.3.0
+  run published the Java and TypeScript SDKs while failing validation.
 - **`memory_update` with only a description** no longer wipes the
   memory's body (it looked for the body after a delimiter that never
   exists).
