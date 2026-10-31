@@ -55,7 +55,10 @@ impl Client {
             next: 0,
             notes: vec![],
         };
-        c.call("initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}}));
+        c.call(
+            "initialize",
+            json!({"protocolVersion": "2025-06-18", "capabilities": {}}),
+        );
         c
     }
 
@@ -75,8 +78,8 @@ impl Client {
                 self.stdout.read_line(&mut line).unwrap() > 0,
                 "server closed stdout"
             );
-            let frame: J = serde_json::from_str(line.trim())
-                .unwrap_or_else(|_| panic!("bad frame: {line:?}"));
+            let frame: J =
+                serde_json::from_str(line.trim()).unwrap_or_else(|_| panic!("bad frame: {line:?}"));
             if frame.get("id").is_none() {
                 self.notes.push(frame);
                 continue;
@@ -135,7 +138,10 @@ fn r002_read_ko() {
     );
     let text = r["result"]["contents"][0]["text"].as_str().unwrap();
     assert!(text.contains(koid), "the KO text names its koid: {r}");
-    assert!(text.contains("resource"), "the KO text carries its properties: {r}");
+    assert!(
+        text.contains("resource"),
+        "the KO text carries its properties: {r}"
+    );
 }
 
 /// r003: aikoql://conflicts/open lists the unresolved conflicts.
@@ -147,16 +153,23 @@ fn r003_read_open_conflicts() {
         "remember",
         json!({"subject": "mcp-agent", "type_name": "Claim", "properties": {"key": "x", "value": "a"}}),
     );
-    c.tool(
+    let ct = c.tool(
         "contradict",
         json!({"subject": "mcp-agent", "claim": a["koid"], "counter_type": "Claim",
                "properties": {"key": "x", "value": "b"},
-               "evidence": [{"source_artifact": "test", "method": "test"}]}),
+               "evidence": [{"source_artifact": "test", "method": "llm_inference"}]}),
     );
-    let r = c.call("resources/read", json!({"uri": "aikoql://conflicts/open", "subject": "mcp-agent"}));
+    assert!(ct["conflict"].is_string(), "contradict failed: {ct}");
+    let r = c.call(
+        "resources/read",
+        json!({"uri": "aikoql://conflicts/open", "subject": "mcp-agent"}),
+    );
     let text = r["result"]["contents"][0]["text"].as_str().unwrap();
     assert!(text.contains("open"), "the conflict read says open: {r}");
-    assert!(text.contains(a["koid"].as_str().unwrap()), "it names the conflicted claim: {r}");
+    assert!(
+        text.contains(a["koid"].as_str().unwrap()),
+        "it names the conflicted claim: {r}"
+    );
 }
 
 /// r004: aikoql://session/{id}/context answers for the session's run id and
@@ -165,8 +178,11 @@ fn r003_read_open_conflicts() {
 fn r004_read_session_context() {
     let root = tmp("session");
     let mut c = Client::serve(&root);
-    let init = c.tool("session_init", json!({"agent_id": "ada", "run_id": "run-7"}));
-    let run_id = init["run_id"].as_str().unwrap();
+    let init = c.tool(
+        "session_init",
+        json!({"agent_id": "ada", "run_id": "run-7"}),
+    );
+    let run_id = init["session"]["run_id"].as_str().unwrap();
     let r = c.call(
         "resources/read",
         json!({"uri": format!("aikoql://session/{run_id}/context"), "subject": "ada"}),
@@ -174,8 +190,14 @@ fn r004_read_session_context() {
     let text = r["result"]["contents"][0]["text"].as_str().unwrap();
     assert!(text.contains("ada"), "the context names the agent: {r}");
     assert!(text.contains("run-7"), "the context names the run: {r}");
-    let bad = c.call("resources/read", json!({"uri": "aikoql://session/run-other/context", "subject": "ada"}));
-    assert!(bad["error"].is_object(), "an unknown session id is an error: {bad}");
+    let bad = c.call(
+        "resources/read",
+        json!({"uri": "aikoql://session/run-other/context", "subject": "ada"}),
+    );
+    assert!(
+        bad["error"].is_object(),
+        "an unknown session id is an error: {bad}"
+    );
 }
 
 /// r005: prompts/list names both prompts; prompts/get compiles them.
@@ -190,16 +212,33 @@ fn r005_prompts() {
         .iter()
         .map(|x| x["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, vec!["aikoql-context", "aikoql-review-conflicts"], "{r}");
+    assert_eq!(
+        names,
+        vec!["aikoql-context", "aikoql-review-conflicts"],
+        "{r}"
+    );
     let g = c.call(
         "prompts/get",
         json!({"name": "aikoql-context", "arguments": {"task": "plan AG-03"}}),
     );
-    let text = g["result"]["messages"][0]["content"]["text"].as_str().unwrap();
-    assert!(text.contains("plan AG-03"), "the context prompt embeds the task: {g}");
-    let g = c.call("prompts/get", json!({"name": "aikoql-review-conflicts", "arguments": {}}));
-    let text = g["result"]["messages"][0]["content"]["text"].as_str().unwrap();
-    assert!(text.contains("conflict"), "the review prompt is about conflicts: {g}");
+    let text = g["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(
+        text.contains("plan AG-03"),
+        "the context prompt embeds the task: {g}"
+    );
+    let g = c.call(
+        "prompts/get",
+        json!({"name": "aikoql-review-conflicts", "arguments": {}}),
+    );
+    let text = g["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(
+        text.contains("conflict"),
+        "the review prompt is about conflicts: {g}"
+    );
 }
 
 /// r006: resources/subscribe emits notifications/resources/updated when a
@@ -208,18 +247,22 @@ fn r005_prompts() {
 fn r006_subscribe_conflicts() {
     let root = tmp("subscribe");
     let mut c = Client::serve(&root);
-    let sub = c.call("resources/subscribe", json!({"uri": "aikoql://conflicts/open", "subject": "mcp-agent"}));
-    assert!(sub["result"].is_object(), "subscribe answers: {sub}");
     let a = c.tool(
         "remember",
         json!({"subject": "mcp-agent", "type_name": "Claim", "properties": {"key": "y", "value": "a"}}),
     );
-    c.tool(
+    let sub = c.call(
+        "resources/subscribe",
+        json!({"uri": "aikoql://conflicts/open", "subject": "mcp-agent"}),
+    );
+    assert!(sub["result"].is_object(), "subscribe answers: {sub}");
+    let ct = c.tool(
         "contradict",
         json!({"subject": "mcp-agent", "claim": a["koid"], "counter_type": "Claim",
                "properties": {"key": "y", "value": "b"},
-               "evidence": [{"source_artifact": "test", "method": "test"}]}),
+               "evidence": [{"source_artifact": "test", "method": "llm_inference"}]}),
     );
+    assert!(ct["conflict"].is_string(), "contradict failed: {ct}");
     // the notification rides the same stream as tools/list_changed — it may
     // already have arrived during the contradict call
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -240,7 +283,13 @@ fn r006_subscribe_conflicts() {
         .iter()
         .find(|n| n["method"] == "notifications/resources/updated")
         .unwrap();
-    assert_eq!(updated["params"]["uri"], "aikoql://conflicts/open", "{updated}");
-    let un = c.call("resources/unsubscribe", json!({"uri": "aikoql://conflicts/open"}));
+    assert_eq!(
+        updated["params"]["uri"], "aikoql://conflicts/open",
+        "{updated}"
+    );
+    let un = c.call(
+        "resources/unsubscribe",
+        json!({"uri": "aikoql://conflicts/open"}),
+    );
     assert!(un["result"].is_object(), "unsubscribe answers: {un}");
 }

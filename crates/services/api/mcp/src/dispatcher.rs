@@ -108,7 +108,12 @@ pub(crate) fn handle_message(
                                     .and_then(|p| p.get("protocolVersion"))
                                     .and_then(|v| v.as_str()),
                             ),
-                            "capabilities": {"tools": if crate::tool_registry::core_profile() { json!({"listChanged": true}) } else { json!({}) }},
+                            "capabilities": {
+                                "tools": if crate::tool_registry::core_profile() { json!({"listChanged": true}) } else { json!({}) },
+                                // AG-03: resources (subscribable) and prompts
+                                "resources": {"subscribe": true},
+                                "prompts": {}
+                            },
                             "serverInfo": {"name": "aikoql-mcp", "version": env!("CARGO_PKG_VERSION")}
                         }
                     }),
@@ -346,6 +351,68 @@ pub(crate) fn handle_message(
         "notifications/ack" => {
             let params = msg.get("params").cloned().unwrap_or(J::Null);
             let result = notification_ack(k, &params);
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
+            }
+        }
+        "resources/list" => {
+            if let Some(id) = id {
+                write_frame(
+                    &mut *out,
+                    json!({"jsonrpc":"2.0","id":id,"result":crate::resources::resources_list()}),
+                );
+            }
+        }
+        "resources/read" => {
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let result = crate::resources::resources_read(k, session, &params);
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
+            }
+        }
+        "resources/subscribe" => {
+            drop(out); // release lock before subscription setup
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let result = crate::resources::resources_subscribe(k, sub_ids, stdout, &params);
+            let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
+            }
+        }
+        "resources/unsubscribe" => {
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let result = crate::resources::resources_unsubscribe(k, sub_ids, &params);
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
+            }
+        }
+        "prompts/list" => {
+            if let Some(id) = id {
+                write_frame(
+                    &mut *out,
+                    json!({"jsonrpc":"2.0","id":id,"result":crate::prompts::prompts_list()}),
+                );
+            }
+        }
+        "prompts/get" => {
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let result = crate::prompts::prompts_get(k, session, &params);
             if let Some(id) = id {
                 let frame = match result {
                     Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
