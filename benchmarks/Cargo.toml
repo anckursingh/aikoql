@@ -33,3 +33,7 @@ harness = false
 [[bench]]
 name = "ann_recall"
 harness = false
+
+[[bench]]
+name = "filter_select"
+harness = false
