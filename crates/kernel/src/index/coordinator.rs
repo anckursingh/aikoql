@@ -121,16 +121,6 @@ impl IndexCoordinator {
                 })
             })
         };
-        let tmap: Option<BTreeMap<KOID, f32>> = if use_indexes {
-            match (&m, &q_tokens) {
-                // R4: text().search() returns KResult — propagate, don't swallow
-                (Some(m), Some(t)) => Some(m.text().search(t, usize::MAX)?.into_iter().collect()),
-                _ => None,
-            }
-        } else {
-            None
-        };
-
         // P5-M16 — the vector-only leg ranks slim scoring records instead of
         // materializing every head KO. The slim read decodes the same wire
         // blob through the same predecessor walk as the full read, so it can
@@ -140,7 +130,9 @@ impl IndexCoordinator {
         // ponytail: ceiling — text-bearing fusions (text scoring needs
         // ko_text over the whole property map) and Exact keep the full loop
         // below; extend the slim read only if those fusions need the win.
-        if q.text.is_none() && matches!(q.fusion, Fusion::VectorOnly) {
+        // VectorOnly never scores text, so a query that carries it (recall
+        // does) still takes this leg.
+        if matches!(q.fusion, Fusion::VectorOnly) {
             let required: Vec<String> = q
                 .filter
                 .as_ref()
@@ -281,6 +273,16 @@ impl IndexCoordinator {
         // shortcut: text-bearing fusions score every head, so they keep the
         // whole candidate list; bound it when hybrid search is measured at 1M
         let vmap = ann(usize::MAX);
+        let tmap: Option<BTreeMap<KOID, f32>> = if use_indexes {
+            match (&m, &q_tokens) {
+                // R4: text().search() returns KResult — propagate, don't swallow
+                (Some(m), Some(t)) => Some(m.text().search(t, usize::MAX)?.into_iter().collect()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         for (koid, _version, _ts, state) in &heads()? {
             let ko = match kernel.object_at(koid, snap)? {
                 Some(ko) => ko,
