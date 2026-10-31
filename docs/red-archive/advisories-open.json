@@ -1,0 +1,8 @@
+{
+  "id": "advisories-open",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-advisories.sh",
+  "captured_at": "2026-10-30T18:13:36Z",
+  "captured_head": "f455f1d0428b5c6a46ee1fa1dd0738aebc2eec26",
+  "exit_code": 1
+}

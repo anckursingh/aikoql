@@ -51,7 +51,7 @@ the architect review.
   doc AS THE TIP. The tip commit is always the re-stamp.
 - **Gates** (run before declaring anything done): the `scripts/check-*.sh`
   chain (architecture hygiene, red archives, skip drift, test-env hygiene,
-  shuffle wiring, disposition head) + `cargo fmt --check` +
+  shuffle wiring, disposition head, RustSec advisories — `cargo install cargo-audit --locked` to run it locally) + `cargo fmt --check` +
   `cargo clippy --workspace --all-targets -- -D warnings`.
 - **Test hygiene**: no unseeded RNG or bare `set_var` in test code
   (`scripts/check-test-env-hygiene.sh`); env-gated cells register in
