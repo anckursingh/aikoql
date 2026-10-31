@@ -20,6 +20,13 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Fixed
 
+- **CrewAI `reset()` actually forgets**: it enumerated memories with an
+  empty `find_similar` query, which pre-AG-20 zero-score padding filled
+  with every visible object; the padding is gone, so reset silently
+  forgot nothing. It now enumerates with `MATCH <type> RETURN *`. The
+  adapter search test's "pets" query relied on the same padding and is
+  replaced with one that matches ("mammals").
+
 - **Vector search uses its index at scale (AG-20)**: `find_similar`
   asked the HNSW index for every object, so a top-10 query at 1M objects
   walked the whole graph (17 s in the scale benchmark). It now asks for
