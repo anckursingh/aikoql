@@ -356,7 +356,12 @@ impl IndexCoordinator {
             vec_scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             txt_scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             let rank_of = |list: &[(KOID, f32)], id: &KOID| -> Option<usize> {
-                list.iter().position(|(k, s)| k == id && *s > 0.0)
+                let r = list.iter().position(|(k, s)| k == id && *s > 0.0);
+                kernel.fusion_rank_probes.fetch_add(
+                    r.map_or(list.len(), |r| r + 1) as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                r
             };
             for s in merged.iter_mut() {
                 let mut rrf = 0.0f32;

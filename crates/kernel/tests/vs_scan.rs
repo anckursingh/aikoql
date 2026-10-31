@@ -297,6 +297,35 @@ fn vs_scan_006_vector_only_with_text_still_asks_a_bounded_pool() {
     );
 }
 
+/// RED pre-fix: RRF found each hit's rank by a linear search of both
+/// ranked lists — N^2 positions per query (10^12 at 1M objects). Ranking
+/// N candidates must examine O(N) positions.
+#[test]
+fn vs_scan_007_rrf_ranks_without_a_quadratic_search() {
+    let k = mk();
+    let alice = ctx("alice");
+    let n = 2000u64;
+    for i in 0..n {
+        let a = (i as f32 * 0.17).to_radians();
+        note(
+            &k,
+            &alice,
+            &format!("note {i} body"),
+            Some([a.cos(), a.sin()]),
+        );
+    }
+    let before = k.fusion_rank_probes();
+    let q = SimilarityQuery::new(alice.clone(), 10, Fusion::Rrf { k0: 60 })
+        .with_vector(vec![1.0, 0.0])
+        .with_text("note body");
+    assert_eq!(k.find_similar(q).unwrap().len(), 10);
+    let probes = k.fusion_rank_probes() - before;
+    assert!(
+        probes <= 4 * n,
+        "RRF examined {probes} list positions for {n} candidates"
+    );
+}
+
 /// The P4-M7 fake from the index subsystem tests: indexes lag the kernel.
 struct FakeMaintainer {
     vectors: Arc<dyn aikoql_kernel::index::VectorIndex>,
