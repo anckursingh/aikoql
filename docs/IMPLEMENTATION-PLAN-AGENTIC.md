@@ -164,9 +164,12 @@ and a `lesson` KO type distilled by AG-12 sampling.
   index for `usize::MAX` candidates, so HNSW walked every node and the
   leg read every scoring record. Now a bounded pool (max(512, 16k),
   widened 4x while the guards leave < k): 1M p50 11.9 ms, recall@10
-  0.992 (`benches/ann_recall`, 64-d random — the hard case). Open:
-  20b filtered-ANN buckets, 20c quantization, 20d persisted segments,
-  and the hybrid fusions (still the full list).
+  0.992 (`benches/ann_recall`, 64-d random — the hard case). Then every
+  recall path: VectorOnly with text (recall) takes the bounded leg; RRF
+  ranks in N log N (was N^2); hybrid fusions score a bounded vector ∪
+  text union (RRF 100k: 232 → 7.1 ms); the unindexed tail is scored
+  exactly; no zero-score pads. Open: 20b filtered-ANN buckets, 20c
+  quantization, 20d persisted segments.
 - *Problem:* 1M vector_recall 17.0 s, brute force (REPORT §Scale). An HNSW
   exists (`engines/vector`, attached to `find_similar` since M18) — the
   first step is to establish why the certified cell does not use it
