@@ -9,6 +9,24 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **MCP resources, subscriptions and prompts (AG-03)**: the three spec
+  resources (`aikoql://ko/{koid}`, `aikoql://conflicts/open`,
+  `aikoql://session/{id}/context`) answer as text over `resources/read`
+  (compiled fresh at read time); `resources/subscribe` rides the kernel
+  event system and emits `notifications/resources/updated` as a hint to
+  re-read; the prompts `aikoql-context` and `aikoql-review-conflicts`
+  compile session context and open-conflict reviews at get time. Both
+  transports share the dispatcher, so all of it serves over stdio and
+  Streamable HTTP alike.
+
+- **Structured tool output (AG-04)**: the core tools' defs carry
+  `outputSchema` — real schemas for remember/get/recall, the honest
+  `{"type":"object"}` for the rest — and a successful `tools/call`
+  result carries `structuredContent` beside the text (errors carry
+  none). Older clients ignore the extra field, newer read the
+  structure; the e2e gate validates remember/get/recall results against
+  their declared schemas through the official SDK.
+
 - **MCP sampling extraction on `summarize_conversation` (AG-12b)**: with
   a client that advertises `sampling`, the server asks the client's model
   for candidate facts (`sampling/createMessage` with a fixed JSON schema
@@ -19,6 +37,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   unchanged.
 
 ### Fixed
+
+- **HTTP initialize no longer flips the stdio-only sampling flag
+  (AG-12b)**: the flag is stdio process state (the sink is the stdio
+  stdout); an HTTP session advertising `sampling` now deterministically
+  degrades without touching it, pinned by the h019 guard test.
 
 - **CrewAI `reset()` actually forgets**: it enumerated memories with an
   empty `find_similar` query, which pre-AG-20 zero-score padding filled
