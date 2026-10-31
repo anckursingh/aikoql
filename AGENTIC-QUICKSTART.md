@@ -40,7 +40,7 @@ language uses its standard MCP client.
 ```bash
 npm i -g aikoql-mcp            # npm launcher (downloads the right binary)
 # or grab the binary from https://github.com/anckursingh/aikoql/releases
-# or Docker: ghcr.io/anckursingh/aikoql:0.2.4  (state under /data volume)
+# or Docker: ghcr.io/anckursingh/aikoql:0.3.0  (state under /data volume)
 ```
 
 A fresh path creates an **aikoql-v2** directory (the only engine: WAL +
@@ -52,7 +52,7 @@ they are no longer readable.
 **Claude Code:**
 
 ```bash
-claude mcp add aikoql -- npx -y aikoql-mcp@0.2.4 serve ./kb
+claude mcp add aikoql -- npx -y aikoql-mcp@0.3.0 serve ./kb
 ```
 
 (A packaged aikoql plugin also exists for Claude Code — it runs this same
@@ -61,7 +61,7 @@ server, with the knowledge-base path pinned via `userConfig.KB_PATH`.)
 **Codex:**
 
 ```bash
-codex mcp add aikoql -- npx -y aikoql-mcp@0.2.4 serve ./kb
+codex mcp add aikoql -- npx -y aikoql-mcp@0.3.0 serve ./kb
 ```
 
 **Anything else** (Cursor, Windsurf, VS Code, custom harnesses) — the
@@ -72,7 +72,7 @@ portable MCP config block, e.g. `.vscode/mcp.json` / `.cursor/mcp.json`:
   "mcpServers": {
     "aikoql": {
       "command": "npx",
-      "args": ["-y", "aikoql-mcp@0.2.4", "serve", "./kb"]
+      "args": ["-y", "aikoql-mcp@0.3.0", "serve", "./kb"]
     }
   }
 }

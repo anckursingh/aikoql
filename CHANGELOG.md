@@ -19,6 +19,17 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   confined to the tenant, and only the owner writes. Session memories are
   seen only from their own `run_id`. `memory_search` now waits briefly for
   the index, so a just-stored memory is found.
+
+### Fixed
+
+- **`explain` and `provenance` show the evidence records** (source,
+  method, location, confidence) as `evidence_records`; `explain`'s
+  `evidence` list held only the object's edges.
+
+## [0.3.0] — 2026-10-31 (agent surface, memory as knowledge, security fixes)
+
+### Added
+
 - **Signed audit evidence (AG-30)**: with `AIKOQL_AUDIT_SIGNING_KEY`
   (a hex Ed25519 seed file) `evidence_pack` adds `audit_signature` — a
   standard RFC 8032 signature of the audit chain, verifiable with the
@@ -45,6 +56,19 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Security
 
+- **Dependency advisories fixed** (25 RustSec advisories in the workspace
+  lockfile, 5 in the SDK fuzz crate's): `zip` 0.6 → 9.1 (critical parser
+  differential; extraction outside the destination), `lopdf` 0.36 → 0.46
+  (stack overflow on nested PDF objects), `rustls` → 0.23.46+ (Debug
+  output exposed TLS secrets, cross-level handshake messages),
+  `rustls-webpki`, `webpki-roots` (distrusted intermediates), `h2`,
+  `quinn-proto`, `hickory-*`, `ctutils`, `tantivy` 0.26 → 0.27 (its `zstd`
+  chain). An index written by the previous `tantivy` opens unchanged.
+  Left, with the reason in `.cargo/audit.toml`: candle's `zip` 7.2.0
+  extraction advisories — candle never extracts, and aikoql loads models
+  only from safetensors.
+- **A RustSec gate in CI** (`scripts/check-advisories.sh`, `cargo audit`
+  over both lockfiles): a new advisory fails the change that brings it.
 - **The audit "Ed25519" was a placeholder** that was never wired up: its
   signatures mixed bytes of the private seed into the output (one
   signature leaked the key), verification needed the private key, and

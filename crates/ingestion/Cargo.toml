@@ -11,8 +11,8 @@ aikoql-kernel = { path = "../kernel" }
 # PDF text (per-page extract_text_chunks) + embedded-image extraction.
 # pdf-extract (0.9) was dropped in the DoD 19 root-cause fix: it joins pages
 # without a separator, silently merging multi-page PDFs into one page.
-lopdf = "0.36"
-zip = "0.6"
+lopdf = "0.46"
+zip = { version = "9.1", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
