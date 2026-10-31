@@ -131,7 +131,7 @@ evidence = "predecessor_boundary_cases"
 
 [[claim]]
 file = "crates/kernel/src/transaction/kernel.rs"
-line = 344
+line = 346
 text = "/// Retried calls with the same key commit exactly once (MRFC-0011 req 10)."
 evidence = "t06_idempotent_retry_commits_exactly_once"
 
