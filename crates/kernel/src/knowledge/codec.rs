@@ -566,6 +566,7 @@ pub(crate) struct ScoringRecord {
     /// Only the keys the query's required-filter asks for.
     pub props: BTreeMap<String, Value>,
     pub embedding: Option<Vec<f32>>,
+    pub embedding_model: Option<String>,
     pub security: SecurityDescriptor,
 }
 
@@ -634,10 +635,11 @@ pub(crate) fn decode_ko_scoring(buf: &[u8], required: &[String]) -> KResult<Scor
             skip_value(&mut d)?;
         }
     }
+    let mut embedding_model = None;
     let embedding = match d.u8()? {
         0 => None,
         1 => {
-            d.opt_str()?; // embedding_model — the exact path scores any model
+            embedding_model = d.opt_str()?;
             let emb = match d.u8()? {
                 0 => None,
                 1 => {
@@ -698,6 +700,7 @@ pub(crate) fn decode_ko_scoring(buf: &[u8], required: &[String]) -> KResult<Scor
         tenant,
         props,
         embedding,
+        embedding_model,
         security,
     })
 }

@@ -508,7 +508,9 @@ fn m06_memory_evals_over_mcp() {
     );
     let c_oid = c.call_tool(
         "remember",
-        json!({"subject": "eval", "type_name": "fact", "properties": {"body": "alpha2"}, "semantic": {"embedding": [0.99, 0.01]}}),
+        // "alpha two" genuinely matches "alpha" — "alpha2" never did, it was
+        // counted as a hit only as a zero-score pad (vs_scan_012)
+        json!({"subject": "eval", "type_name": "fact", "properties": {"body": "alpha two"}, "semantic": {"embedding": [0.99, 0.01]}}),
     );
 
     let recall = c.call_tool(

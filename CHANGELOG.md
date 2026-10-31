@@ -7,6 +7,29 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Fixed
+
+- **Vector search uses its index at scale (AG-20)**: `find_similar`
+  asked the HNSW index for every object, so a top-10 query at 1M objects
+  walked the whole graph (17 s in the scale benchmark). It now asks for
+  a bounded pool (512 candidates, widened only when access rules or
+  filters leave fewer than k) — 11.9 ms p50 with recall@10 0.992 at 1M
+  (`benches/ann_recall`).
+- **`recall` and hybrid search use the indexes too (AG-20)**: `recall`
+  passed its question as text, which sent vector search down the old
+  full scan; RRF ranked hits with a quadratic search; and hybrid
+  fusions scored every object. Hybrid now scores the union of a bounded
+  vector pool and a bounded text pool — RRF at 100k: 232 ms → 7.1 ms; at
+  1M: 12.7 ms p50.
+- **New writes are searchable at once**: objects the index has not
+  reached yet are scored exactly next to the index's candidates (up to
+  10 000 unindexed events; past that, search is eventual until the index
+  catches up).
+- **No zero-score padding**: a search hit is something the vector or
+  text leg scored. Searches without an index used to pad `k` with every
+  visible object at score 0, and `eval_recall` counted those pads as
+  hits — recall it reported could be higher than the truth.
+
 ## [0.3.0] — 2026-10-31 (agent surface, memory as knowledge, security fixes)
 
 ### Added

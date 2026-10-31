@@ -1,0 +1,32 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/vs_scan.rs (target/debug/deps/vs_scan-a50932fdb2802804)
+
+running 5 tests
+test vs_scan_003_index_lag_ms_keeps_the_exact_eventual_contract ... ok
+test vs_scan_001_ranking_parity_with_acl_denied_and_embeddingless_rows ... ok
+test vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive ... FAILED
+test vs_scan_002_top_k_query_materializes_at_most_k_plus_margin ... ok
+test vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool ... FAILED
+
+failures:
+
+---- vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive stdout ----
+
+thread 'vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive' (3459609) panicked at crates/kernel/tests/vs_scan.rs:278:5:
+the pool widened
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool stdout ----
+
+thread 'vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool' (3459608) panicked at crates/kernel/tests/vs_scan.rs:255:5:
+asked the index for 18446744073709551615 candidates (k = 10)
+
+
+failures:
+    vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool
+    vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+error: test failed, to rerun pass `-p aikoql-kernel --test vs_scan`
+EXIT=101

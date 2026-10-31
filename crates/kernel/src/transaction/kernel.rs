@@ -697,6 +697,9 @@ pub struct Kernel {
     /// P5-M16 — number of KOs fully materialized by `find_similar`'s top-k
     /// candidate loop (the vs_scan probe seam). Kernel-lifetime, shared.
     pub(crate) similarity_materializations: Arc<AtomicU64>,
+    /// AG-20 — list positions RRF fusion examined to rank its hits (the
+    /// vs_scan_007 probe seam). Kernel-lifetime, shared.
+    pub(crate) fusion_rank_probes: Arc<AtomicU64>,
     /// P5-M17b — parsed statistics cache (type_name → Statistics). Populated
     /// by `analyze` and by first-read misses; reads never re-walk the heads
     /// (the default query path reads statistics per query). Freshness stays
@@ -826,6 +829,7 @@ impl Kernel {
             jobs,
             txn_metrics: Arc::new(txn::TxnMetrics::default()),
             similarity_materializations: Arc::new(AtomicU64::new(0)),
+            fusion_rank_probes: Arc::new(AtomicU64::new(0)),
             statistics_cache: Arc::new(RwLock::new(HashMap::new())),
         };
         // P5-M7 — database catalog: bootstrap/migrate the catalog rows, or
@@ -1040,6 +1044,7 @@ impl Kernel {
             jobs: self.jobs.clone(),
             txn_metrics: self.txn_metrics.clone(),
             similarity_materializations: self.similarity_materializations.clone(),
+            fusion_rank_probes: self.fusion_rank_probes.clone(),
             statistics_cache: self.statistics_cache.clone(),
         }
     }
@@ -1406,6 +1411,11 @@ impl Kernel {
     /// open (the vs_scan observability seam).
     pub fn similarity_materializations(&self) -> u64 {
         self.similarity_materializations.load(Ordering::Relaxed)
+    }
+
+    /// AG-20 probe — list positions RRF fusion examined since open.
+    pub fn fusion_rank_probes(&self) -> u64 {
+        self.fusion_rank_probes.load(Ordering::Relaxed)
     }
 
     pub(crate) fn accessible_objects(
@@ -3979,6 +3989,11 @@ impl Kernel {
     /// Full journal scan (conformance + debugging).
     pub fn journal(&self) -> KResult<Vec<KnowledgeEvent>> {
         self.repo.scan_events()
+    }
+
+    /// The events after `seq`, by the journal's seek (no whole-journal scan).
+    pub fn journal_after(&self, seq: u64) -> KResult<Vec<KnowledgeEvent>> {
+        self.repo.scan_events_after(seq)
     }
 
     pub fn journal_head(&self) -> KResult<(u64, [u8; 32])> {

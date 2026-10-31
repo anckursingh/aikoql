@@ -1,0 +1,8 @@
+{
+  "id": "ag20-hybrid-bounded-union",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test vs_scan vs_scan_008",
+  "captured_at": "2026-10-31T14:52:17Z",
+  "captured_head": "111a6561be5be00968ded240bc088f2ac026bbab",
+  "exit_code": 101
+}

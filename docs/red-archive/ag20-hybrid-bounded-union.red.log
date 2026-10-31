@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/vs_scan.rs (target/debug/deps/vs_scan-a50932fdb2802804)
+
+running 1 test
+test vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool ... FAILED
+
+failures:
+
+---- vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool stdout ----
+
+thread 'vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool' (3610517) panicked at crates/kernel/tests/vs_scan.rs:421:5:
+asked vector [18446744073709551615], text [18446744073709551615]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.09s
+
+error: test failed, to rerun pass `-p aikoql-kernel --test vs_scan`
+EXIT=101

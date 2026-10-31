@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/vs_scan.rs (target/debug/deps/vs_scan-a50932fdb2802804)
+
+running 1 test
+test vs_scan_007_rrf_ranks_without_a_quadratic_search ... FAILED
+
+failures:
+
+---- vs_scan_007_rrf_ranks_without_a_quadratic_search stdout ----
+
+thread 'vs_scan_007_rrf_ranks_without_a_quadratic_search' (3590823) panicked at crates/kernel/tests/vs_scan.rs:323:5:
+RRF examined 4562211 list positions for 2000 candidates
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    vs_scan_007_rrf_ranks_without_a_quadratic_search
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p aikoql-kernel --test vs_scan`
+EXIT=101

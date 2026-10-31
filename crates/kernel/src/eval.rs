@@ -299,7 +299,9 @@ mod tests {
         let clock = Arc::new(ManualClock::new(1_000));
         let k = Kernel::open(Arc::new(MemoryEngine::new()), clock, 1).unwrap();
         let a = fact(&k, "alpha", &[1.0, 0.0]);
-        let b = fact(&k, "beta", &[0.0, 1.0]);
+        // b genuinely matches "alpha": a recall hit is a match, never a
+        // zero-score pad (vs_scan_012) — the old "beta" body counted as a hit
+        let b = fact(&k, "beta alpha", &[0.0, 1.0]);
         let c = fact(&k, "gamma", &[1.0, 1.0]);
 
         let q = EvalRecallQuery {

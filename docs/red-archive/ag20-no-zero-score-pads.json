@@ -1,0 +1,8 @@
+{
+  "id": "ag20-no-zero-score-pads",
+  "pre_fix_commit": "HEAD~1",
+  "command": "cargo test -p aikoql-kernel --test vs_scan vs_scan_01",
+  "captured_at": "2026-10-31T15:58:52Z",
+  "captured_head": "50dd579bdbc0eab992683a394fb8936eb3be15ec",
+  "exit_code": 101
+}

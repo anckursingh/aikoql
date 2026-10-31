@@ -160,6 +160,16 @@ and a `lesson` KO type distilled by AG-12 sampling.
 ### Phase R — retrieval at scale
 
 **AG-20 (P0) ANN on the measured path.**
+- *Status (2026-10-31): AG-20a done.* Cause: the coordinator asked the
+  index for `usize::MAX` candidates, so HNSW walked every node and the
+  leg read every scoring record. Now a bounded pool (max(512, 16k),
+  widened 4x while the guards leave < k): 1M p50 11.9 ms, recall@10
+  0.992 (`benches/ann_recall`, 64-d random — the hard case). Then every
+  recall path: VectorOnly with text (recall) takes the bounded leg; RRF
+  ranks in N log N (was N^2); hybrid fusions score a bounded vector ∪
+  text union (RRF 100k: 232 → 7.1 ms; 1M: 12.7 ms p50, p95 20.0); the unindexed tail is scored
+  exactly; no zero-score pads. Open: 20b filtered-ANN buckets, 20c
+  quantization, 20d persisted segments.
 - *Problem:* 1M vector_recall 17.0 s, brute force (REPORT §Scale). An HNSW
   exists (`engines/vector`, attached to `find_similar` since M18) — the
   first step is to establish why the certified cell does not use it
@@ -174,6 +184,12 @@ and a `lesson` KO type distilled by AG-12 sampling.
   distance computations per query (must be sublinear).
 
 **AG-21 (P0) Indexed structured filters.**
+- *Correction (2026-10-31):* the 1M structured_filter cell
+  (`MATCH note WHERE topic == "pet" RETURN *`) returns half the dataset —
+  500 000 rows, 46 µs each through the Python SDK. No index can make it
+  10 ms; it measures result transfer. Equality indexes already exist and
+  the CBO uses them (`Strategy::PropertyIndex`, P5-M9). AG-21 needs a
+  selective cell (0.1–1%) before its gate means anything.
 - *Problem:* 1M structured_filter 22.9 s (brute force + sort).
 - *Design:* property secondary indexes (`index_create` exists) used by the
   planner (the CBO in `runtime/src/cbo.rs` estimates only the first Eq —
