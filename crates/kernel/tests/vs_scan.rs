@@ -326,6 +326,139 @@ fn vs_scan_007_rrf_ranks_without_a_quadratic_search() {
     );
 }
 
+// --- vs_scan_008/009 — AG-20: hybrid fusions score a bounded candidate union --
+
+/// Records every `k` the coordinator asks the text index for.
+struct SpyText {
+    inner: TokenTextIndex,
+    asked: std::sync::Mutex<Vec<usize>>,
+}
+
+impl aikoql_kernel::index::TextIndex for SpyText {
+    fn upsert(&self, koid: KOID, tokens: &std::collections::BTreeSet<String>) -> KResult<()> {
+        self.inner.upsert(koid, tokens)
+    }
+    fn remove(&self, koid: &KOID) -> KResult<()> {
+        self.inner.remove(koid)
+    }
+    fn search(
+        &self,
+        tokens: &std::collections::BTreeSet<String>,
+        k: usize,
+    ) -> KResult<Vec<(KOID, f32)>> {
+        self.asked.lock().unwrap().push(k);
+        self.inner.search(tokens, k)
+    }
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+fn words(s: &str) -> std::collections::BTreeSet<String> {
+    s.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// A note with body text and an embedding, in both indexes.
+fn indexed(
+    k: &Kernel,
+    (v, t): (&SpyIndex, &SpyText),
+    owner: &KnowledgeContext,
+    body: &str,
+    e: [f32; 2],
+) -> KOID {
+    let id = note(k, owner, body, Some(e));
+    v.upsert(id, "bge-m3", &e);
+    t.upsert(id, &words(body)).unwrap();
+    id
+}
+
+fn spied_both(k: &Kernel) -> (Arc<SpyIndex>, Arc<SpyText>, Arc<FakeMaintainer>) {
+    let v = Arc::new(SpyIndex {
+        inner: BruteForceVectorIndex::new(),
+        asked: Default::default(),
+    });
+    let t = Arc::new(SpyText {
+        inner: TokenTextIndex::new(),
+        asked: Default::default(),
+    });
+    let fake = Arc::new(FakeMaintainer {
+        vectors: v.clone(),
+        text: t.clone(),
+    });
+    k.attach_indexes(fake.clone());
+    (v, t, fake)
+}
+
+fn at(deg: f32) -> [f32; 2] {
+    let a = deg.to_radians();
+    [a.cos(), a.sin()]
+}
+
+/// RED pre-fix: an RRF query scored every head and asked both indexes for
+/// usize::MAX — hybrid search stayed a full scan after AG-20's vector fix.
+#[test]
+fn vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool() {
+    let k = mk();
+    let alice = ctx("alice");
+    let (v, t, _owner) = spied_both(&k);
+    for i in 0..2000 {
+        indexed(
+            &k,
+            (&v, &t),
+            &alice,
+            &format!("note {i}"),
+            at(i as f32 * 0.17),
+        );
+    }
+    let q = SimilarityQuery::new(alice.clone(), 10, Fusion::Rrf { k0: 60 })
+        .with_vector(vec![1.0, 0.0])
+        .with_text("note");
+    assert_eq!(k.find_similar(q).unwrap().len(), 10);
+    let (va, ta) = (
+        v.asked.lock().unwrap().clone(),
+        t.asked.lock().unwrap().clone(),
+    );
+    assert!(
+        va.iter().chain(&ta).all(|&n| n <= 512),
+        "asked vector {va:?}, text {ta:?}"
+    );
+}
+
+/// Guard: both legs feed the union, and the pools widen past what the ACL
+/// hides — a text-only match and alice's nearest vector both come back.
+#[test]
+fn vs_scan_009_hybrid_union_keeps_both_legs_and_widens() {
+    let k = mk();
+    let (alice, bob) = (ctx("alice"), ctx("bob"));
+    let (v, t, _owner) = spied_both(&k);
+    for i in 0..1500 {
+        indexed(&k, (&v, &t), &bob, "alpha", at(i as f32 * 0.01)); // nearest, all bob's
+    }
+    let zebra = indexed(&k, (&v, &t), &alice, "zebra", at(90.0)); // text only
+    let mine: Vec<KOID> = (0..20)
+        .map(|i| indexed(&k, (&v, &t), &alice, "plain", at(30.0 + i as f32)))
+        .collect();
+    let q = SimilarityQuery::new(alice.clone(), 3, Fusion::Rrf { k0: 60 })
+        .with_vector(vec![1.0, 0.0])
+        .with_text("zebra");
+    let got: Vec<KOID> = k
+        .find_similar(q)
+        .unwrap()
+        .iter()
+        .map(|h| h.ko.koid)
+        .collect();
+    assert_eq!(got.len(), 3, "{got:?}");
+    let mut top2 = got[..2].to_vec();
+    top2.sort();
+    let mut want = vec![zebra, mine[0]];
+    want.sort();
+    assert_eq!(
+        top2, want,
+        "the text match and the nearest visible vector tie first"
+    );
+    assert_eq!(got[2], mine[1], "then the next nearest");
+}
+
 /// The P4-M7 fake from the index subsystem tests: indexes lag the kernel.
 struct FakeMaintainer {
     vectors: Arc<dyn aikoql_kernel::index::VectorIndex>,
