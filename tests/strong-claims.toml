@@ -831,3 +831,9 @@ file = "crates/storage/aikoql-v2/src/db.rs"
 line = 2032
 text = "/// O(prefix) — the kernel's journal replay depends on it (sf001)."
 evidence = "sf001_scan_from_seeks_instead_of_scanning_the_prefix"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/scan_from.rs"
+line = 5
+text = "//! every tail read was O(journal). The observable is the engine's own"
+evidence = "sf001_scan_from_seeks_instead_of_scanning_the_prefix"
