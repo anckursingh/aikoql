@@ -1,0 +1,8 @@
+{
+  "id": "ag31-rotation-job-shutdown-hang",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-scheduler --lib kr_job",
+  "captured_at": "2026-10-31T18:22:18Z",
+  "captured_head": "dab08bd5c40d24fe7f25406507b6afb4172e766f",
+  "exit_code": 101
+}

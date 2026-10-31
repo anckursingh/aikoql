@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/aikoql_scheduler-e0e398641be112a4)
+
+running 1 test
+test key_rotation::tests::kr_job_shutdown_returns_promptly ... FAILED
+
+failures:
+
+---- key_rotation::tests::kr_job_shutdown_returns_promptly stdout ----
+key-rotation: tick (0 DEKs loaded, rotation available)
+key-rotation: tick (0 DEKs loaded, rotation available)
+
+thread 'key_rotation::tests::kr_job_shutdown_returns_promptly' (4175335) panicked at crates/engines/scheduler/src/key_rotation.rs:134:9:
+shutdown of a started job must return
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    key_rotation::tests::kr_job_shutdown_returns_promptly
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 4.14s
+
+error: test failed, to rerun pass `-p aikoql-scheduler --lib`
+EXIT=101

@@ -106,4 +106,31 @@ mod tests {
         job.shutdown(); // no-op if not started
         let _ = std::fs::remove_file(&tmp);
     }
+
+    /// AG-31 — RED: shutdown joined a thread whose running flag nothing
+    /// ever cleared — a started job's shutdown never returned.
+    #[test]
+    fn kr_job_shutdown_returns_promptly() {
+        let tmp = std::env::temp_dir().join(format!("aikoql-kr-sd-{}", std::process::id()));
+        let kms = LocalKms::new(tmp.to_str().unwrap());
+        let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+        let env = Arc::new(Envelope::init(&kms, "pw", crypto).unwrap());
+        let job = Arc::new(KeyRotationJob::new(env, "pw".into(), 1));
+        let k = Kernel::open(
+            Arc::new(aikoql_kernel::MemoryEngine::new()),
+            Arc::new(aikoql_kernel::ManualClock::new(1)),
+            1,
+        )
+        .unwrap();
+        job.start(&k).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let j = job.clone();
+        std::thread::spawn(move || {
+            j.shutdown();
+            let _ = tx.send(());
+        });
+        let done = rx.recv_timeout(Duration::from_secs(3)).is_ok();
+        let _ = std::fs::remove_file(&tmp);
+        assert!(done, "shutdown of a started job must return");
+    }
 }
