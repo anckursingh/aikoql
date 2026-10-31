@@ -22,7 +22,7 @@ aikoql-mcp shell
 
 From there, serve it to agents:
 
-- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql-mcp@0.2.4 serve ./kb`
+- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql-mcp@0.3.0 serve ./kb`
 - **TCP + Studio UI:** `aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091` → open http://127.0.0.1:9091/studio (no default credentials — set `AIKOQL_ADMIN_PASSWORD` on first start to bootstrap the admin login)
 
 ## Usage Modes
@@ -290,11 +290,11 @@ Embedded ACID storage — no external database server required.
 Release images are multi-arch (linux/amd64 + linux/arm64) and published on every release tag alongside the binaries:
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.2.4   # pin the immutable release tag
+docker pull ghcr.io/anckursingh/aikoql:0.3.0   # pin the immutable release tag
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=TOKEN::admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.2.4
+  ghcr.io/anckursingh/aikoql:0.3.0
 ```
 
 Container contract: config at `/etc/aikoql/aikoql.toml`; state under the `/data` volume — the `aikoql-v2` database directory, the local embedding model store (`/data/models`, install with `docker exec aikoql aikoql model install --model-dir /data/models`, or start with `-e AIKOQL_MODEL_AUTO_INSTALL=1` to fetch it on first start) and agent memory (`/data/memory`, via `AIKOQL_MEMORY_DIR`). The image is stateless: upgrades are pull + recreate, the knowledge base survives in the volume (the database is `/data/aikoql`; a volume from an image up to 0.2.3 keeps it at `/data/aikoql.redb`, and the first start of a newer image renames it — once, in place). TCP auth is fail-closed — the container refuses to listen without a token (and a token without roles exits 2). Without TLS the server binds loopback-only inside the container (a plaintext token never leaves it), so published ports don't reach it — probe from inside: `docker exec aikoql curl -fsS http://127.0.0.1:9091/health`. With a certificate it publishes like any database image:
@@ -305,7 +305,7 @@ docker run -d --name aikoql -p 9090:9090 \
   -e AIKOQL_TLS_CERT=/certs/server.pem -e AIKOQL_TLS_KEY=/certs/server.key \
   -e AIKOQL_TCP_TOKEN=TOKEN::admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.2.4
+  ghcr.io/anckursingh/aikoql:0.3.0
 ```
 
 Remote MCP clients (Claude Code's `--transport http`, other Streamable-HTTP clients) use `POST /mcp` on the HTTP port with `Authorization: Bearer <token>` — the same tokens — and claude.ai connectors sign in through the built-in OAuth server when `[auth]` logins are configured; see AGENTIC-QUICKSTART.md. The MCP port (9090) then serves TLS on every interface; connect with an SDK's TLS option (Rust `Client::dial_tls`, Python `tls=`, Go `WithTLS`, TypeScript `{ tls }`, Java `dial(addr, sslContext)`). The HTTP surface (9091: login, query API, Studio, `/health`) serves HTTPS with the same certificate, and is published only when also armed for remote use — add `-p 9091:9091 -e AIKOQL_ALLOW_REMOTE_HTTP=1 -e AIKOQL_ADMIN_PASSWORD=…` (remote HTTP always needs a login and TLS). The certificate must name the host clients dial (SAN). Compose variant: `AIKOQL_VERSION=0.2.4 AIKOQL_TCP_TOKEN=TOKEN::admin docker compose -f docker-compose.release.yml up -d`.

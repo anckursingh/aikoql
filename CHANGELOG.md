@@ -7,6 +7,8 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-31 (agent surface, memory as knowledge, security fixes)
+
 ### Added
 
 - **Signed audit evidence (AG-30)**: with `AIKOQL_AUDIT_SIGNING_KEY`
