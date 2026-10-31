@@ -1,0 +1,8 @@
+{
+  "id": "ag20d-crash-full-replay",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test index_checkpoint",
+  "captured_at": "2026-10-31T18:40:22Z",
+  "captured_head": "a833825eca9b72553423e0a657cf9a24df7084f1",
+  "exit_code": 101
+}
