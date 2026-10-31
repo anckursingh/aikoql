@@ -248,6 +248,8 @@ outside its fence.
 `mcp` and the login's roles. Add `mcp:read`, `mcp:write`, `mcp:admin`
 (consent page shows them), intersected with the login's roles. *Gate:* a
 read-scoped token cannot write (every write tool).
+- *Status (2026-10-31): AG-34 done* — o011; the read-tool list is an
+  allowlist (a new tool is a write until classified, authz.rs).
 
 ### Phase X — multi-agent
 

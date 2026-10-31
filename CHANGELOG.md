@@ -9,6 +9,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Security
 
+- **OAuth scopes narrow a token (AG-34)**: `mcp:read` reaches read tools
+  only (and only `MATCH` through `aikoql`), `mcp:write` everything but
+  admin, `mcp:admin` the login's admin role; `mcp` (what every grant had)
+  is unchanged. The consent page says what is requested. Before, every
+  token carried the login's full roles whatever the client asked for.
 - **Real master-key rotation (AG-31)**: `aikoql-mcp key rotate [DB]`
   rewraps every data key under a new master key — nothing is
   re-encrypted, the old key file no longer opens the database, and a

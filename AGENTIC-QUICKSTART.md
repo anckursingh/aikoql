@@ -168,6 +168,12 @@ fetches the document from public addresses only. After five wrong
 passwords a login backs off (1 s, doubling, up to 15 min; 429 with
 `Retry-After`).
 
+A client can ask for less than the login's full access with the OAuth
+`scope`: `mcp:read` (read tools only; through `aikoql`, `MATCH` only),
+`mcp:write` (everything except admin tools) or `mcp:admin`. `mcp` — what
+clients ask for by default — keeps the login's roles. The sign-in page
+shows what is requested.
+
 To try the connector from a laptop, a Cloudflare quick tunnel gives the
 loopback server a public HTTPS URL (no inbound ports, no account):
 
