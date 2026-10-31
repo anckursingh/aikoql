@@ -510,10 +510,14 @@ mod tests {
             SimilarityQuery::new(alice.clone(), 1, Fusion::VectorOnly).with_vector(vec![0.9, 0.1])
         };
 
+        // AG-20: b is the unindexed tail (lag 1), so the eventual path scores
+        // it exactly next to the index's candidates — a write is searchable
+        // before the maintainer reaches it. Only past the tail cap (a bulk
+        // ingest) do eventual answers lag the committed state.
         let eventual = coord.search(&k, q()).unwrap();
         assert_eq!(
-            eventual[0].ko.koid, a,
-            "the lagging index scores only its stale copy — eventual answers may lag"
+            eventual[0].ko.koid, b,
+            "the unindexed tail is scored from committed state"
         );
         assert_eq!(
             eventual[0].index_lag_ms, 1,

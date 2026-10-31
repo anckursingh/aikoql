@@ -11,6 +11,9 @@ use crate::transaction::kernel::{Fusion, Kernel, ScoredKO, SimilarityQuery};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Weak};
 
+/// The most unindexed events a search scores exactly (see `fresh`).
+const TAIL_CAP: u64 = 10_000;
+
 /// Similarity-search service. Holds an optional async index maintainer; when no
 /// maintainer is attached it falls back to the exact inline path (same scoring,
 /// zero lag). This keeps the kernel working out-of-the-box without background
@@ -107,6 +110,22 @@ impl IndexCoordinator {
         } else {
             0
         };
+        // AG-20: the objects committed after the index's position — no index
+        // leg nominates them, so both legs add them and score them exactly
+        // (committed cosine / Jaccard), and a write is searchable at once.
+        // shortcut: past TAIL_CAP events (a bulk ingest) the tail is skipped
+        // and search is eventual until the maintainer catches up
+        let fresh: std::collections::BTreeSet<KOID> =
+            if use_indexes && m.is_some() && lag > 0 && lag <= TAIL_CAP {
+                let (head, _) = kernel.journal_head()?;
+                kernel
+                    .journal_after(head.saturating_sub(lag))?
+                    .into_iter()
+                    .map(|e| e.koid)
+                    .collect()
+            } else {
+                Default::default()
+            };
         // The index's `want` nearest candidates (None: no index to ask).
         let ann = |want: usize| -> Option<BTreeMap<KOID, f32>> {
             if !use_indexes {
@@ -173,6 +192,13 @@ impl IndexCoordinator {
                         return Ok(None);
                     }
                 }
+                // the index scopes its candidates by model; the tail must too
+                if fresh.contains(koid)
+                    && q.embedding_model.is_some()
+                    && rec.embedding_model != q.embedding_model
+                {
+                    return Ok(None);
+                }
                 let vscore = match (&q.vector, &rec.embedding) {
                     (Some(qv), Some(emb)) => cosine(qv, emb),
                     // Device-eval N4: a KO without an embedding has no
@@ -199,7 +225,9 @@ impl IndexCoordinator {
                     // negative-cosine neighbors. The index lags deletes
                     // (eventual): a tombstoned koid can still be a candidate,
                     // and its head state is the authority.
-                    for koid in vmap.keys() {
+                    let pool: std::collections::BTreeSet<&KOID> =
+                        vmap.keys().chain(&fresh).collect();
+                    for koid in pool {
                         let deleted = match kernel.head_object(koid)? {
                             Some(head) => head.lifecycle.state == LifecycleState::Deleted,
                             None => true, // head erased — not a live candidate
@@ -270,86 +298,155 @@ impl IndexCoordinator {
             return Ok(merged);
         }
 
-        // shortcut: text-bearing fusions score every head, so they keep the
-        // whole candidate list; bound it when hybrid search is measured at 1M
-        let vmap = ann(usize::MAX);
-        let tmap: Option<BTreeMap<KOID, f32>> = if use_indexes {
-            match (&m, &q_tokens) {
-                // R4: text().search() returns KResult — propagate, don't swallow
-                (Some(m), Some(t)) => Some(m.text().search(t, usize::MAX)?.into_iter().collect()),
-                _ => None,
-            }
+        // AG-20: with indexes, hybrid fusions score the union of a bounded
+        // vector pool and a bounded text pool, widened 4x while fewer than k
+        // survive the guards and a pool came back full; without indexes
+        // (or Exact) every head is scored, as before. An object outside
+        // both pools is not a candidate — the usual hybrid-retrieval
+        // contract; inside one pool only, its other leg scores 0 (RRF: no
+        // rank in that list).
+        let indexed = use_indexes && m.is_some() && !matches!(q.fusion, Fusion::Exact);
+        let held = m
+            .as_ref()
+            .map_or(0, |mm| mm.vectors().len().max(mm.text().len()));
+        let mut want = if indexed {
+            q.k.saturating_mul(16).max(512)
         } else {
-            None
+            usize::MAX
         };
-
-        for (koid, _version, _ts, state) in &heads()? {
-            let ko = match kernel.object_at(koid, snap)? {
-                Some(ko) => ko,
-                None => continue,
+        loop {
+            let vmap = ann(want);
+            let tmap: Option<BTreeMap<KOID, f32>> = if use_indexes {
+                match (&m, &q_tokens) {
+                    // R4: text().search() returns KResult — propagate, don't swallow
+                    (Some(m), Some(t)) => Some(m.text().search(t, want)?.into_iter().collect()),
+                    _ => None,
+                }
+            } else {
+                None
             };
-            if kernel
-                .check_access(&q.context.subject, &ko, Action::Read)
-                .is_err()
-            {
-                continue; // ACL-filtered, silently (no existence leak)
-            }
-            if *state == LifecycleState::Deleted {
-                continue;
-            }
-            if let Some(f) = &q.filter {
-                if let Some(tn) = &f.type_name {
-                    if &ko.metadata.type_name != tn {
+            let candidates: Vec<(KOID, LifecycleState)> = if indexed {
+                let pool: std::collections::BTreeSet<KOID> = vmap
+                    .iter()
+                    .flat_map(|v| v.keys())
+                    .chain(tmap.iter().flat_map(|t| t.keys()))
+                    .chain(&fresh)
+                    .copied()
+                    .collect();
+                let mut live = Vec::with_capacity(pool.len());
+                for koid in pool {
+                    // the index lags deletes: the head state is the authority
+                    if let Some(head) = kernel.head_object(&koid)? {
+                        live.push((koid, head.lifecycle.state));
+                    }
+                }
+                live
+            } else {
+                heads()?
+                    .into_iter()
+                    .map(|(koid, _, _, state)| (koid, state))
+                    .collect()
+            };
+            let full =
+                |p: &Option<BTreeMap<KOID, f32>>| p.as_ref().is_some_and(|p| p.len() >= want);
+            let capped = full(&vmap) || full(&tmap);
+            merged.clear();
+            vec_scored.clear();
+            txt_scored.clear();
+            for (koid, state) in &candidates {
+                let ko = match kernel.object_at(koid, snap)? {
+                    Some(ko) => ko,
+                    None => continue,
+                };
+                if kernel
+                    .check_access(&q.context.subject, &ko, Action::Read)
+                    .is_err()
+                {
+                    continue; // ACL-filtered, silently (no existence leak)
+                }
+                if *state == LifecycleState::Deleted {
+                    continue;
+                }
+                if let Some(f) = &q.filter {
+                    if let Some(tn) = &f.type_name {
+                        if &ko.metadata.type_name != tn {
+                            continue;
+                        }
+                    }
+                    let mut ok = true;
+                    for (k, v) in &f.required {
+                        if ko.properties.get(k) != Some(v) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if !ok {
                         continue;
                     }
                 }
-                let mut ok = true;
-                for (k, v) in &f.required {
-                    if ko.properties.get(k) != Some(v) {
-                        ok = false;
-                        break;
+                let mut vscore: f32 = 0.0;
+                let mut tscore: f32 = 0.0;
+                // the vector leg scored it (any similarity, even 0) — an
+                // index candidate, or an in-scope committed embedding
+                let mut vscored = false;
+                match vmap.as_ref().filter(|_| !fresh.contains(koid)) {
+                    Some(m) => {
+                        if let Some(s) = m.get(koid) {
+                            (vscore, vscored) = (*s, true);
+                        }
                     }
-                }
-                if !ok {
-                    continue;
-                }
-            }
-            let mut vscore: f32 = 0.0;
-            let mut tscore: f32 = 0.0;
-            match &vmap {
-                Some(m) => vscore = m.get(koid).copied().unwrap_or(0.0),
-                None => {
-                    if let Some(qv) = &q.vector {
-                        if let Some(sem) = &ko.semantic {
-                            if let Some(emb) = &sem.embedding {
-                                vscore = cosine(qv, emb);
+                    None => {
+                        if let Some(qv) = &q.vector {
+                            if let Some(sem) = &ko.semantic {
+                                // the tail keeps the index's model scope (the
+                                // no-index exact path scores any model)
+                                let scoped = q.embedding_model.is_none()
+                                    || !fresh.contains(koid)
+                                    || sem.embedding_model == q.embedding_model;
+                                if let (Some(emb), true) = (&sem.embedding, scoped) {
+                                    (vscore, vscored) = (cosine(qv, emb), true);
+                                }
                             }
                         }
                     }
                 }
-            }
-            match &tmap {
-                Some(m) => tscore = m.get(koid).copied().unwrap_or(0.0),
-                None => {
-                    if let Some(tokens) = &q_tokens {
-                        tscore = jaccard(tokens, &tokenize(&ko_text(&ko)));
+                match tmap.as_ref().filter(|_| !fresh.contains(koid)) {
+                    Some(m) => tscore = m.get(koid).copied().unwrap_or(0.0),
+                    None => {
+                        if let Some(tokens) = &q_tokens {
+                            tscore = jaccard(tokens, &tokenize(&ko_text(&ko)));
+                        }
                     }
                 }
+                // a hit is something a leg scored — never a zero-score pad of
+                // every visible object that neither leg touched (vs_scan_012)
+                let matched = match q.fusion {
+                    Fusion::TextOnly => tscore != 0.0,
+                    Fusion::Exact => true,
+                    _ => vscored || tscore != 0.0,
+                };
+                if !matched {
+                    continue;
+                }
+                vec_scored.push((*koid, vscore));
+                txt_scored.push((*koid, tscore));
+                let score = match q.fusion {
+                    Fusion::VectorOnly => vscore,
+                    Fusion::TextOnly => tscore,
+                    Fusion::Weighted { wv, wt } => wv * vscore + wt * tscore,
+                    Fusion::Rrf { .. } => 0.0, // computed below
+                    Fusion::Exact => 0.0,      // bypasses index entirely, computed via direct scan
+                };
+                merged.push(ScoredKO {
+                    ko,
+                    score,
+                    index_lag_ms: lag,
+                });
             }
-            vec_scored.push((*koid, vscore));
-            txt_scored.push((*koid, tscore));
-            let score = match q.fusion {
-                Fusion::VectorOnly => vscore,
-                Fusion::TextOnly => tscore,
-                Fusion::Weighted { wv, wt } => wv * vscore + wt * tscore,
-                Fusion::Rrf { .. } => 0.0, // computed below
-                Fusion::Exact => 0.0,      // bypasses index entirely, computed via direct scan
-            };
-            merged.push(ScoredKO {
-                ko,
-                score,
-                index_lag_ms: lag,
-            });
+            if !indexed || merged.len() >= q.k || !capped || want >= held {
+                break;
+            }
+            want = want.saturating_mul(4);
         }
 
         if let Fusion::Rrf { k0 } = q.fusion {

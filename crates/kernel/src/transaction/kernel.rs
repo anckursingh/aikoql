@@ -3991,6 +3991,11 @@ impl Kernel {
         self.repo.scan_events()
     }
 
+    /// The events after `seq`, by the journal's seek (no whole-journal scan).
+    pub fn journal_after(&self, seq: u64) -> KResult<Vec<KnowledgeEvent>> {
+        self.repo.scan_events_after(seq)
+    }
+
     pub fn journal_head(&self) -> KResult<(u64, [u8; 32])> {
         match self.repo.journal_head()? {
             Some((seq, audit, _)) => Ok((seq, audit)),
