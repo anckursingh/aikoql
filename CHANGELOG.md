@@ -7,6 +7,8 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-31 (agent surface, memory as knowledge, security fixes)
+
 ### Added
 
 - **`remember_facts` (AG-12a)**: agent-extracted facts, judged by the
@@ -19,17 +21,6 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   confined to the tenant, and only the owner writes. Session memories are
   seen only from their own `run_id`. `memory_search` now waits briefly for
   the index, so a just-stored memory is found.
-
-### Fixed
-
-- **`explain` and `provenance` show the evidence records** (source,
-  method, location, confidence) as `evidence_records`; `explain`'s
-  `evidence` list held only the object's edges.
-
-## [0.3.0] — 2026-10-31 (agent surface, memory as knowledge, security fixes)
-
-### Added
-
 - **Signed audit evidence (AG-30)**: with `AIKOQL_AUDIT_SIGNING_KEY`
   (a hex Ed25519 seed file) `evidence_pack` adds `audit_signature` — a
   standard RFC 8032 signature of the audit chain, verifiable with the
@@ -77,6 +68,9 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Fixed
 
+- **`explain` and `provenance` show the evidence records** (source,
+  method, location, confidence) as `evidence_records`; `explain`'s
+  `evidence` list held only the object's edges.
 - **A failed release version check publishes nothing.** Manual release
   runs skipped the check's result for ten publish jobs, so the first 0.3.0
   run published the Java and TypeScript SDKs while failing validation.

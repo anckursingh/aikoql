@@ -97,18 +97,18 @@ chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql-mcp
 ### Docker (multi-arch: amd64 + arm64)
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.2.4
+docker pull ghcr.io/anckursingh/aikoql:0.3.0
 
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.2.4
+  ghcr.io/anckursingh/aikoql:0.3.0
 ```
 
 `AIKOQL_TCP_TOKEN` is required — TCP auth is fail-closed
 (`TOKEN[:TENANT[:ROLES]]`). State lives under the `/data` volume (the
 `aikoql-v2` database directory, models in `/data/models`, agent memory in
-`/data/memory`). Tags: `0.2.4` (pin this), `0.2`, `latest`.
+`/data/memory`). Tags: `0.3.0` (pin this), `0.3`, `latest`.
 
 Without TLS the server binds loopback-only inside the container (plaintext
 bearer tokens never leave it), so published ports don't reach it — probe and
@@ -134,7 +134,7 @@ docker run -d --name aikoql -p 9090:9090 \
   -e AIKOQL_TLS_CERT=/certs/server.pem -e AIKOQL_TLS_KEY=/certs/server.key \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.2.4
+  ghcr.io/anckursingh/aikoql:0.3.0
 ```
 
 Clients connect over TLS (Rust `Client::dial_tls`, Python `tls=`, Go
