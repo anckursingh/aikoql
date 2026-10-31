@@ -169,7 +169,9 @@ and a `lesson` KO type distilled by AG-12 sampling.
   ranks in N log N (was N^2); hybrid fusions score a bounded vector ∪
   text union (RRF 100k: 232 → 7.1 ms; 1M: 12.7 ms p50, p95 20.0); the unindexed tail is scored
   exactly; no zero-score pads. Open: 20b filtered-ANN buckets, 20c
-  quantization, 20d persisted segments.
+  quantization. 20d: the HNSW already persisted in the maintainer
+  checkpoint, but only replication leaders took one on a timer — every
+  server does now (ck001); the embedded SDK still checkpoints on close only.
 - *Problem:* 1M vector_recall 17.0 s, brute force (REPORT §Scale). An HNSW
   exists (`engines/vector`, attached to `find_similar` since M18) — the
   first step is to establish why the certified cell does not use it

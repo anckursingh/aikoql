@@ -23,6 +23,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Fixed
 
+- **A crashed server no longer rebuilds its search indexes (AG-20d)**:
+  only a replication leader checkpointed its indexes on a timer, so a
+  standalone server killed or OOM-stopped rebuilt the whole HNSW on
+  restart (~11 min at 1M objects). Every server now checkpoints every
+  `--index-checkpoint-secs` (30 s), skipping when nothing changed.
 - **Vector search uses its index at scale (AG-20)**: `find_similar`
   asked the HNSW index for every object, so a top-10 query at 1M objects
   walked the whole graph (17 s in the scale benchmark). It now asks for
