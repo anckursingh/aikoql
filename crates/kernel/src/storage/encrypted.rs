@@ -63,6 +63,20 @@ impl StorageEngine for EncryptedStore {
         Ok(out)
     }
 
+    /// AG-21 — forward the seek (keys are plaintext; values decrypt as in scan).
+    fn scan_from(&self, prefix: &[u8], start: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        let rows = self.inner.scan_from(prefix, start)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (k, v) in rows {
+            let plaintext = self
+                .crypto
+                .decrypt(&self.key, &v, &k)
+                .map_err(|e| crate::knowledge::kom::KError::Store(format!("decrypt: {}", e)))?;
+            out.push((k, plaintext));
+        }
+        Ok(out)
+    }
+
     fn write_batch(&self, batch: &WriteBatch) -> KResult<()> {
         let mut encrypted_batch = WriteBatch::new();
         for (k, v) in &batch.puts {

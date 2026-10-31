@@ -2023,6 +2023,15 @@ impl Db {
     /// only — the kernel stores history as distinct (koid, ts) keys, so
     /// head-per-key loses nothing.
     pub fn scan(&self, prefix: &[u8]) -> Result<Vec<ScanRow>, FormatError> {
+        self.scan_from(prefix, prefix)
+    }
+
+    /// AG-21 — `scan` from `start` (clamped into the prefix): the segment
+    /// cursors seek to `start` (block partition + restart table), memtable
+    /// heads below it are skipped, so a tail read costs O(tail), not
+    /// O(prefix) — the kernel's journal replay depends on it (sf001).
+    pub fn scan_from(&self, prefix: &[u8], start: &[u8]) -> Result<Vec<ScanRow>, FormatError> {
+        let start = start.max(prefix);
         let end = prefix_end(prefix);
         // SE2-M12 — a k-way merge over the layer streams, oldest first
         // (segments in manifest order, immutables, active): for a key the
@@ -2038,6 +2047,7 @@ impl Db {
             for mem in state.immutables.iter() {
                 mem_runs.push(
                     mem.prefix_heads(prefix)
+                        .filter(|(k, _)| *k >= start)
                         .map(|(k, e)| (k.to_vec(), e.value.clone()))
                         .collect(),
                 );
@@ -2045,13 +2055,14 @@ impl Db {
             let act_run: Vec<MergeEntry> = state
                 .active
                 .prefix_heads(prefix)
+                .filter(|(k, _)| *k >= start)
                 .map(|(k, e)| (k.to_vec(), e.value.clone()))
                 .collect();
             (segs, mem_runs, act_run)
         };
         let mut streams: Vec<ScanStream<'_>> = Vec::new();
         for seg in segs.iter() {
-            streams.push(ScanStream::Seg(seg.scan_iter(prefix, end.as_deref())));
+            streams.push(ScanStream::Seg(seg.scan_iter(start, end.as_deref())));
         }
         for run in mem_runs {
             streams.push(ScanStream::Mem(run.into_iter()));

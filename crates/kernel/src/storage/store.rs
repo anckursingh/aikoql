@@ -152,6 +152,16 @@ impl StorageEngine for MemoryEngine {
             .collect())
     }
 
+    /// AG-21 — a seek: the range starts at `start` (clamped into the prefix),
+    /// so a journal tail costs O(tail), not the whole prefix.
+    fn scan_from(&self, prefix: &[u8], start: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        let m = self.map.read().map_err(|_| poisoned())?;
+        Ok(m.range(start.max(prefix).to_vec()..)
+            .take_while(|(k, _)| k.starts_with(prefix))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
+    }
+
     /// P4-M4 — in-range prefix rows sort above non-prefix rows, so one
     /// next_back step finds the predecessor or proves absence (O(log n)).
     fn predecessor(&self, prefix: &[u8], at: &[u8]) -> KResult<Option<(Vec<u8>, Vec<u8>)>> {
