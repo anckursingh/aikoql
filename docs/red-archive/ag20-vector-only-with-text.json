@@ -1,0 +1,8 @@
+{
+  "id": "ag20-vector-only-with-text",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test vs_scan vs_scan_006",
+  "captured_at": "2026-10-31T14:43:41Z",
+  "captured_head": "67e2ba9c9c75cb2792444c8de22852f2cdc06a40",
+  "exit_code": 101
+}

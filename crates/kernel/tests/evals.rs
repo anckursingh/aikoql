@@ -50,8 +50,11 @@ fn e01_recall_at_k_against_expected_set() {
     };
     let r = k.eval_recall(q).unwrap();
     assert_eq!(r.k, 5);
-    assert_eq!(r.hits, 3);
-    assert!((r.recall - 1.0).abs() < 1e-6);
+    // "blue cube" does not match "red": it used to count as a hit only as a
+    // zero-score pad (vs_scan_012), so the evaluator reported perfect recall
+    assert_eq!(r.hits, 2);
+    assert!((r.recall - 2.0 / 3.0).abs() < 1e-6, "recall {}", r.recall);
+    assert_eq!(r.missing, vec![b], "the non-match is the miss");
     assert_eq!(r.max_lag_ms, 0);
 }
 

@@ -179,6 +179,384 @@ fn vs_scan_003_index_lag_ms_keeps_the_exact_eventual_contract() {
     );
 }
 
+// --- vs_scan_004/005 — AG-20: the ANN leg asks for a bounded candidate pool ----
+
+/// Records every `k` the coordinator asks the index for.
+struct SpyIndex {
+    inner: BruteForceVectorIndex,
+    asked: std::sync::Mutex<Vec<usize>>,
+}
+
+impl aikoql_kernel::index::VectorIndex for SpyIndex {
+    fn upsert(&self, koid: KOID, model: &str, vec: &[f32]) {
+        self.inner.upsert(koid, model, vec)
+    }
+    fn remove(&self, koid: &KOID) {
+        self.inner.remove(koid)
+    }
+    fn search(&self, qv: &[f32], k: usize, model: Option<&str>) -> Vec<(KOID, f32)> {
+        self.asked.lock().unwrap().push(k);
+        self.inner.search(qv, k, model)
+    }
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+/// `n` notes on the unit circle at `start + i * step` degrees, indexed too.
+fn arc(
+    k: &Kernel,
+    spy: &SpyIndex,
+    owner: &KnowledgeContext,
+    n: usize,
+    start: f32,
+    step: f32,
+) -> Vec<KOID> {
+    (0..n)
+        .map(|i| {
+            let a = (start + i as f32 * step).to_radians();
+            let e = [a.cos(), a.sin()];
+            let id = note(k, owner, &format!("n{i}"), Some(e));
+            spy.upsert(id, "bge-m3", &e);
+            id
+        })
+        .collect()
+}
+
+fn spied(k: &Kernel) -> (Arc<SpyIndex>, Arc<FakeMaintainer>) {
+    let spy = Arc::new(SpyIndex {
+        inner: BruteForceVectorIndex::new(),
+        asked: Default::default(),
+    });
+    let fake = Arc::new(FakeMaintainer {
+        vectors: spy.clone(),
+        text: Arc::new(TokenTextIndex::new()),
+    });
+    k.attach_indexes(fake.clone());
+    (spy, fake)
+}
+
+/// RED pre-fix: the coordinator asked the index for usize::MAX — at 1M
+/// objects HNSW walked every node and the leg read 1M scoring records.
+#[test]
+fn vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool() {
+    let k = mk();
+    let alice = ctx("alice");
+    let (spy, _owner) = spied(&k);
+    arc(&k, &spy, &alice, 2000, 0.0, 0.17);
+    let hits = k.find_similar(vector_only(&alice, [1.0, 0.0], 10)).unwrap();
+    assert_eq!(hits.len(), 10);
+    let asked = spy.asked.lock().unwrap().clone();
+    assert_eq!(
+        asked.len(),
+        1,
+        "an unfiltered query needs one index call: {asked:?}"
+    );
+    assert!(
+        asked[0] <= 512,
+        "asked the index for {} candidates (k = 10)",
+        asked[0]
+    );
+}
+
+/// Guard: when the ACL drops the nearest candidates, the pool widens until
+/// k visible ones are found — the answer equals the exact ranking.
+#[test]
+fn vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive() {
+    let k = mk();
+    let (alice, bob) = (ctx("alice"), ctx("bob"));
+    let (spy, _owner) = spied(&k);
+    arc(&k, &spy, &bob, 2000, 0.0, 0.01); // the 2 000 nearest, all bob's
+    let mine = arc(&k, &spy, &alice, 20, 30.0, 1.0);
+    let hits = k.find_similar(vector_only(&alice, [1.0, 0.0], 5)).unwrap();
+    let got: Vec<KOID> = hits.iter().map(|h| h.ko.koid).collect();
+    assert_eq!(
+        got,
+        mine[..5].to_vec(),
+        "alice's own five nearest, in order"
+    );
+    assert!(spy.asked.lock().unwrap().len() > 1, "the pool widened");
+}
+
+/// RED pre-fix: `recall` asks VectorOnly but passes the question as text,
+/// and any text sent the query down the full-scan loop — the text is never
+/// scored under VectorOnly, so it must not cost the bounded pool.
+#[test]
+fn vs_scan_006_vector_only_with_text_still_asks_a_bounded_pool() {
+    let k = mk();
+    let alice = ctx("alice");
+    let (spy, _owner) = spied(&k);
+    arc(&k, &spy, &alice, 2000, 0.0, 0.17);
+    let q = vector_only(&alice, [1.0, 0.0], 10).with_text("what is nearest");
+    let hits = k.find_similar(q).unwrap();
+    assert_eq!(hits.len(), 10);
+    let asked = spy.asked.lock().unwrap().clone();
+    assert!(
+        asked.iter().all(|&n| n <= 512),
+        "VectorOnly + text asked the index for {asked:?} candidates"
+    );
+}
+
+/// RED pre-fix: RRF found each hit's rank by a linear search of both
+/// ranked lists — N^2 positions per query (10^12 at 1M objects). Ranking
+/// N candidates must examine O(N) positions.
+#[test]
+fn vs_scan_007_rrf_ranks_without_a_quadratic_search() {
+    let k = mk();
+    let alice = ctx("alice");
+    let n = 2000u64;
+    for i in 0..n {
+        let a = (i as f32 * 0.17).to_radians();
+        note(
+            &k,
+            &alice,
+            &format!("note {i} body"),
+            Some([a.cos(), a.sin()]),
+        );
+    }
+    let before = k.fusion_rank_probes();
+    let q = SimilarityQuery::new(alice.clone(), 10, Fusion::Rrf { k0: 60 })
+        .with_vector(vec![1.0, 0.0])
+        .with_text("note body");
+    assert_eq!(k.find_similar(q).unwrap().len(), 10);
+    let probes = k.fusion_rank_probes() - before;
+    assert!(
+        probes <= 4 * n,
+        "RRF examined {probes} list positions for {n} candidates"
+    );
+}
+
+// --- vs_scan_008/009 — AG-20: hybrid fusions score a bounded candidate union --
+
+/// Records every `k` the coordinator asks the text index for.
+struct SpyText {
+    inner: TokenTextIndex,
+    asked: std::sync::Mutex<Vec<usize>>,
+}
+
+impl aikoql_kernel::index::TextIndex for SpyText {
+    fn upsert(&self, koid: KOID, tokens: &std::collections::BTreeSet<String>) -> KResult<()> {
+        self.inner.upsert(koid, tokens)
+    }
+    fn remove(&self, koid: &KOID) -> KResult<()> {
+        self.inner.remove(koid)
+    }
+    fn search(
+        &self,
+        tokens: &std::collections::BTreeSet<String>,
+        k: usize,
+    ) -> KResult<Vec<(KOID, f32)>> {
+        self.asked.lock().unwrap().push(k);
+        self.inner.search(tokens, k)
+    }
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+fn words(s: &str) -> std::collections::BTreeSet<String> {
+    s.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// A note with body text and an embedding, in both indexes.
+fn indexed(
+    k: &Kernel,
+    (v, t): (&SpyIndex, &SpyText),
+    owner: &KnowledgeContext,
+    body: &str,
+    e: [f32; 2],
+) -> KOID {
+    let id = note(k, owner, body, Some(e));
+    v.upsert(id, "bge-m3", &e);
+    t.upsert(id, &words(body)).unwrap();
+    id
+}
+
+fn spied_both(k: &Kernel) -> (Arc<SpyIndex>, Arc<SpyText>, Arc<FakeMaintainer>) {
+    let v = Arc::new(SpyIndex {
+        inner: BruteForceVectorIndex::new(),
+        asked: Default::default(),
+    });
+    let t = Arc::new(SpyText {
+        inner: TokenTextIndex::new(),
+        asked: Default::default(),
+    });
+    let fake = Arc::new(FakeMaintainer {
+        vectors: v.clone(),
+        text: t.clone(),
+    });
+    k.attach_indexes(fake.clone());
+    (v, t, fake)
+}
+
+fn at(deg: f32) -> [f32; 2] {
+    let a = deg.to_radians();
+    [a.cos(), a.sin()]
+}
+
+/// RED pre-fix: an RRF query scored every head and asked both indexes for
+/// usize::MAX — hybrid search stayed a full scan after AG-20's vector fix.
+#[test]
+fn vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool() {
+    let k = mk();
+    let alice = ctx("alice");
+    let (v, t, _owner) = spied_both(&k);
+    for i in 0..2000 {
+        indexed(
+            &k,
+            (&v, &t),
+            &alice,
+            &format!("note {i}"),
+            at(i as f32 * 0.17),
+        );
+    }
+    let q = SimilarityQuery::new(alice.clone(), 10, Fusion::Rrf { k0: 60 })
+        .with_vector(vec![1.0, 0.0])
+        .with_text("note");
+    assert_eq!(k.find_similar(q).unwrap().len(), 10);
+    let (va, ta) = (
+        v.asked.lock().unwrap().clone(),
+        t.asked.lock().unwrap().clone(),
+    );
+    assert!(
+        va.iter().chain(&ta).all(|&n| n <= 512),
+        "asked vector {va:?}, text {ta:?}"
+    );
+}
+
+/// Guard: both legs feed the union, and the pools widen past what the ACL
+/// hides — a text-only match and alice's nearest vector both come back.
+#[test]
+fn vs_scan_009_hybrid_union_keeps_both_legs_and_widens() {
+    let k = mk();
+    let (alice, bob) = (ctx("alice"), ctx("bob"));
+    let (v, t, _owner) = spied_both(&k);
+    for i in 0..1500 {
+        indexed(&k, (&v, &t), &bob, "alpha", at(i as f32 * 0.01)); // nearest, all bob's
+    }
+    let zebra = indexed(&k, (&v, &t), &alice, "zebra", at(90.0)); // text only
+    let mine: Vec<KOID> = (0..20)
+        .map(|i| indexed(&k, (&v, &t), &alice, "plain", at(30.0 + i as f32)))
+        .collect();
+    let q = SimilarityQuery::new(alice.clone(), 3, Fusion::Rrf { k0: 60 })
+        .with_vector(vec![1.0, 0.0])
+        .with_text("zebra");
+    let got: Vec<KOID> = k
+        .find_similar(q)
+        .unwrap()
+        .iter()
+        .map(|h| h.ko.koid)
+        .collect();
+    assert_eq!(got.len(), 3, "{got:?}");
+    let mut top2 = got[..2].to_vec();
+    top2.sort();
+    let mut want = vec![zebra, mine[0]];
+    want.sort();
+    assert_eq!(
+        top2, want,
+        "the text match and the nearest visible vector tie first"
+    );
+    assert_eq!(got[2], mine[1], "then the next nearest");
+}
+
+/// RED pre-fix: an object committed after the index's position is not a
+/// candidate of either index leg, so a write is invisible until the
+/// maintainer catches up (the old full loop only padded it in at score 0).
+/// The fake lags by one event: the last commit is the unindexed tail, and
+/// it must be found — and scored exactly — by hybrid and vector search.
+#[test]
+fn vs_scan_010_the_unindexed_tail_is_scored_exactly() {
+    let k = mk();
+    let alice = ctx("alice");
+    let (v, t, _owner) = spied_both(&k);
+    for i in 0..100 {
+        indexed(&k, (&v, &t), &alice, "plain", at(40.0 + i as f32 * 0.1));
+    }
+    let fresh = note(&k, &alice, "fresh zebra", Some([1.0, 0.0])); // not indexed
+    let hybrid = SimilarityQuery::new(alice.clone(), 3, Fusion::Rrf { k0: 60 })
+        .with_vector(vec![1.0, 0.0])
+        .with_text("zebra");
+    let got = k.find_similar(hybrid).unwrap();
+    assert_eq!(
+        got.first().map(|h| h.ko.koid),
+        Some(fresh),
+        "hybrid: {got:?}"
+    );
+    let got = k.find_similar(vector_only(&alice, [1.0, 0.0], 3)).unwrap();
+    assert_eq!(got.first().map(|h| h.ko.koid), Some(fresh), "vector");
+    assert!((got[0].score - 1.0).abs() < 1e-5, "the committed cosine");
+}
+
+/// Guard: the tail keeps the index's model scope. A tail object embedded by
+/// another model matches the text only — RRF gives it one 1/61 (text rank
+/// 0), never a second one from a vector it was never scoped into.
+#[test]
+fn vs_scan_011_the_tail_keeps_the_model_scope() {
+    let k = mk();
+    let alice = ctx("alice");
+    let (v, t, _owner) = spied_both(&k);
+    for i in 0..50 {
+        indexed(&k, (&v, &t), &alice, "plain", at(40.0 + i as f32));
+    }
+    let mut req = RememberRequest::create(alice.clone(), meta("note"));
+    req.properties
+        .insert("body".into(), Value::Text("zebra".into()));
+    req.semantic = Some(SemanticBlock {
+        embedding_model: Some("other-model".into()),
+        embedding: Some(vec![1.0, 0.0]),
+        confidence: None,
+        source: None,
+        summary: None,
+    });
+    let zebra = k.remember(req).unwrap().koid; // the unindexed tail
+    let mut q = SimilarityQuery::new(alice.clone(), 5, Fusion::Rrf { k0: 60 })
+        .with_vector(vec![1.0, 0.0])
+        .with_text("zebra");
+    q.embedding_model = Some("bge-m3".into());
+    let hits = k.find_similar(q).unwrap();
+    let z = hits
+        .iter()
+        .find(|h| h.ko.koid == zebra)
+        .expect("the text leg finds it");
+    assert!(
+        (z.score - 1.0 / 61.0).abs() < 1e-6,
+        "text rank only, got {}",
+        z.score
+    );
+    let mut vq = vector_only(&alice, [1.0, 0.0], 5);
+    vq.embedding_model = Some("bge-m3".into());
+    assert!(
+        k.find_similar(vq)
+            .unwrap()
+            .iter()
+            .all(|h| h.ko.koid != zebra),
+        "vector-only never scores another model's tail"
+    );
+}
+
+/// A hit is something a leg matched: the exact (no-index) path used to pad
+/// k with every visible object at score 0, so it and the indexed path
+/// disagreed on how many hits a query has.
+#[test]
+fn vs_scan_012_no_zero_score_pads() {
+    let k = mk();
+    let alice = ctx("alice");
+    note(&k, &alice, "zebra crossing", None);
+    for i in 0..9 {
+        note(&k, &alice, &format!("plain {i}"), None);
+    }
+    for fusion in [Fusion::Rrf { k0: 60 }, Fusion::TextOnly] {
+        let q = SimilarityQuery::new(alice.clone(), 5, fusion).with_text("zebra");
+        let hits = k.find_similar(q).unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "{fusion:?}: only the match, got {}",
+            hits.len()
+        );
+    }
+}
+
 /// The P4-M7 fake from the index subsystem tests: indexes lag the kernel.
 struct FakeMaintainer {
     vectors: Arc<dyn aikoql_kernel::index::VectorIndex>,

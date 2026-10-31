@@ -1,0 +1,8 @@
+{
+  "id": "ag20-rrf-quadratic",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-kernel --test vs_scan vs_scan_007",
+  "captured_at": "2026-10-31T14:48:12Z",
+  "captured_head": "7bae5e712eda1cad700b04342f4a17738408f079",
+  "exit_code": 101
+}
