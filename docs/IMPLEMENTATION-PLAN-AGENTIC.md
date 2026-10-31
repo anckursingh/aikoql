@@ -290,7 +290,19 @@ SDK (TS), each as a memory/store provider over `recall`/`remember`.
 CI.
 
 **AG-61 (P0) Public agent-memory benchmark — measured, not claimed.**
-Run published long-term-memory benchmarks (e.g. LongMemEval, LoCoMo — the
+- *Status (2026-10-31): harnesses committed; the run stays open.*
+  `longmemeval.py` (LongMemEval-S, xiaowu0162/longmemeval at 2ec2a557,
+  session-level recall_any/recall_all/NDCG at k=5,10, no LLM judge) and
+  `memory_cells.py` (contradiction / provenance / time travel, n=100,
+  every rate 1.0 — `benchmarks/results/memory-cells.json`). The harness
+  is fence-aware (AG-33) and shardable (`--shards/--shard` +
+  `merge_lme_shards.py`, validated on a 2-question micro-run). The full
+  run is not yet done: the store path embeds per turn on scalar CPU
+  (~1.3 s/turn measured), so 115k turns is ~40 h single-process; AWS was
+  ruled out (the project's FREE plan caps instances at 2 vCPU). Next: run
+  it sharded (8 shards ≈ 5 h on the dev Mac mini), commit the result,
+  then LoCoMo and the comparison products.
+- Run published long-term-memory benchmarks (e.g. LongMemEval, LoCoMo — the
 choice recorded with versions) against aikoql and the agent-memory
 products at default settings; publish with the REPORT.md candor. Adds the
 cells the field does not measure: contradiction handling, provenance

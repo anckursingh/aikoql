@@ -35,6 +35,19 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   different keys**, leaving one object under a key that was never saved.
 - **The key-rotation job's shutdown hung**, and the job never rotated.
 
+### Added
+
+- **The agent-memory benchmark harnesses (AG-61)**: `longmemeval.py` runs
+  LongMemEval-S retrieval through the product path (`memory_store` /
+  `memory_search` over MCP stdio, per-question subjects, session-level
+  recall_any/recall_all/NDCG at k=5,10 — no LLM judge needed) and is
+  fence-aware for AG-33, with `--shards/--shard` and `merge_lme_shards.py`
+  to pool round-robin shards; `memory_cells.py` covers what the published
+  benchmarks do not — contradiction, provenance and time travel (n=100,
+  every rate 1.0, committed in `benchmarks/results/`). The full
+  LongMemEval run is not yet committed (the write path costs ~1.3 s/turn
+  on scalar-CPU embeddings, ~40 h single-process).
+
 ### Fixed
 
 - **A crashed server no longer rebuilds its search indexes (AG-20d)**:
