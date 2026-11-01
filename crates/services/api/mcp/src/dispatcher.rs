@@ -406,6 +406,31 @@ pub(crate) fn handle_message(
                 write_frame(&mut *out, frame);
             }
         }
+        "koql/subscribe" => {
+            drop(out); // release lock before subscription setup
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let params = inject_for_session(&params, session); // R9/PRR-2: session identity
+            let result = koql_subscribe(k, sub_ids, stdout, &params);
+            let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
+            }
+        }
+        "koql/unsubscribe" => {
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let result = koql_unsubscribe(k, sub_ids, &params);
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
+            }
+        }
         "prompts/list" => {
             if let Some(id) = id {
                 write_frame(
@@ -498,6 +523,78 @@ pub(crate) fn notification_unsubscribe(
     k.unsubscribe(&id).map_err(|e| (-32603, e.to_string()))?;
     sub_ids.remove(&id);
     Ok(json!({}))
+}
+
+/// AG-40: subscribe to a query's result set. The response carries the
+/// current results; each change arrives as `notifications/koql/updated`.
+/// The kernel-side core (live_query_stream) replays the durable backlog
+/// and ack-advances, so re-subscribing with the same sub_id misses nothing.
+pub(crate) fn koql_subscribe(
+    k: &Kernel,
+    sub_ids: &mut HashSet<String>,
+    stdout: &Arc<Mutex<impl Write + Send + 'static>>,
+    params: &J,
+) -> ToolResult {
+    let sub_id = params
+        .get("sub_id")
+        .and_then(|s| s.as_str())
+        .ok_or((-32602, "missing sub_id".to_string()))?
+        .to_string();
+    let query = params
+        .get("query")
+        .and_then(|q| q.as_str())
+        .ok_or((-32602, "missing query".to_string()))?;
+    let subject = params
+        .get("subject")
+        .and_then(|s| s.as_str())
+        .unwrap_or("query-user")
+        .to_string();
+    let caller = subject_of(params);
+    let ls = crate::tools::live_query::live_query_stream(
+        k,
+        &sub_id,
+        query,
+        &subject,
+        &caller.roles,
+        caller.tenant.as_deref(),
+    )
+    .map_err(|e| (-32603, e))?;
+
+    let out = stdout.clone();
+    let sub_id_owned = sub_id.clone();
+    std::thread::spawn(move || {
+        for (seq, results) in ls.rx {
+            let mut out = out.lock().unwrap(); // justified: Mutex poison is unrecoverable
+            write_frame(
+                &mut *out,
+                json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/koql/updated",
+                    "params": {"sub_id": sub_id_owned.clone(), "seq": seq, "results": results}
+                }),
+            );
+        }
+    });
+    // Store the full kernel key (koql: prefix), like resources does, so
+    // session teardown (HttpSession::close) unsubscribes it.
+    sub_ids.insert(format!("koql:{sub_id}"));
+    Ok(json!({"subscribed": true, "sub_id": sub_id, "results": ls.results}))
+}
+
+pub(crate) fn koql_unsubscribe(
+    k: &Kernel,
+    sub_ids: &mut HashSet<String>,
+    params: &J,
+) -> ToolResult {
+    let sub_id = params
+        .get("sub_id")
+        .and_then(|s| s.as_str())
+        .ok_or((-32602, "missing sub_id".to_string()))?
+        .to_string();
+    k.unsubscribe(&format!("koql:{sub_id}"))
+        .map_err(|e| (-32603, e.to_string()))?;
+    sub_ids.remove(&format!("koql:{sub_id}"));
+    Ok(json!({"unsubscribed": true, "sub_id": sub_id}))
 }
 pub(crate) fn notification_ack(k: &Kernel, params: &J) -> ToolResult {
     let id = params

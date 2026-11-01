@@ -22,7 +22,6 @@ pub(crate) use evaluation::*;
 pub(crate) use facts::*;
 pub(crate) use ingestion::*;
 pub(crate) use knowledge::*;
-pub(crate) use live_query::*;
 pub(crate) use memory::*;
 pub(crate) use query::*;
 pub(crate) use txn::*;
