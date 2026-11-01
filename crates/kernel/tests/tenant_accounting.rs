@@ -49,8 +49,14 @@ fn ag32_forget_decrements_its_tenant() {
     let first = remember(&k, Some("a"));
     remember(&k, Some("a"));
     assert_eq!(k.tenant_usage("a"), 2);
-    k.forget(Subject::new("alice"), &first, ForgetMode::Tombstone, None, None)
-        .unwrap();
+    k.forget(
+        Subject::new("alice"),
+        &first,
+        ForgetMode::Tombstone,
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(k.tenant_usage("a"), 1);
 }
 

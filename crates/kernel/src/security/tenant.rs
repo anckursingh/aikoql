@@ -56,10 +56,13 @@ impl TenantManager {
     }
 
     /// Rebuild usage counters from a full head scan. Called on startup.
+    /// AG-32: `tenant_resolver` returns each head's own `metadata.tenant` —
+    /// a tenant-less head counts under "default" (the same rule as
+    /// `check_create`/`record_create`).
     pub fn rebuild(
         &self,
         heads: &[(KOID, u64, u64, LifecycleState)],
-        type_resolver: impl Fn(&KOID) -> Option<String>,
+        tenant_resolver: impl Fn(&KOID) -> Option<String>,
     ) {
         // justified: RwLock poison is unrecoverable
         let mut usage = self.usage.write().unwrap();
@@ -68,14 +71,8 @@ impl TenantManager {
             if *state == LifecycleState::Deleted {
                 continue;
             }
-            // Determine tenant by loading the KO — ponytail: linear scan,
-            // amortized over startup. For hundreds of tenants, add a tenant
-            // index prefix when this becomes a bottleneck.
-            if let Some(_type_name) = type_resolver(koid) {
-                // ponytail: tenant stored in KO metadata; for now use "default".
-                let t = "default".to_string();
-                *usage.entry(t).or_insert(0) += 1;
-            }
+            let t = tenant_resolver(koid).unwrap_or_else(|| "default".to_string());
+            *usage.entry(t).or_insert(0) += 1;
         }
     }
 

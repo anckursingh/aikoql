@@ -2389,6 +2389,13 @@ impl Kernel {
             scoped_idem.as_deref(),
             head.as_ref().map(|h| h.relationships.as_slice()),
         )?;
+        if creating {
+            // AG-32: the live counter follows the stored metadata.tenant —
+            // the same value rebuild reads from the head. The idempotent
+            // replay path returned above, so a retried create never
+            // double-counts.
+            self.tenants.record_create(req.metadata.tenant.as_deref());
+        }
         if is_auth_meta {
             self.refresh_auth_cache()?;
         }
@@ -2570,8 +2577,14 @@ impl Kernel {
 
         // Phase 2: authorize, validate referential integrity, build object versions.
         let mut pending = Vec::with_capacity(resolved.len());
+        // AG-32: batch creates are all-or-nothing — tenants are recorded
+        // only after the batch write succeeds below.
+        let mut created_tenants: Vec<Option<String>> = Vec::new();
         for r in &resolved {
             let req = &r.op.request;
+            if r.creating {
+                created_tenants.push(req.metadata.tenant.clone());
+            }
             let security = if r.creating {
                 let s = req.security.clone().unwrap_or_else(|| SecurityDescriptor {
                     owner: r.op.context.subject.name.clone(),
@@ -2956,6 +2969,11 @@ impl Kernel {
                 .put_txn_record(&mut batch, tid, &txn::encode_txn_record(body, &results));
         }
         self.repo.write_batch(&batch)?;
+        // AG-32: only a landed batch counts — the recorded retry returned
+        // above, so a re-applied txn never double-records.
+        for t in &created_tenants {
+            self.tenants.record_create(t.as_deref());
+        }
         if txn_id.is_some() {
             txn::txn_park("post_commit");
         }
@@ -3225,6 +3243,8 @@ impl Kernel {
                     None,
                     Some(&head.relationships),
                 )?;
+                // AG-32: the forgotten KO leaves its tenant's live count.
+                self.tenants.record_delete(head.metadata.tenant.as_deref());
                 Ok(Forgotten {
                     koid: *koid,
                     version: cur_v + 1,
@@ -3283,6 +3303,9 @@ impl Kernel {
                     self.repo.delete_object_version(&mut batch, koid, ts);
                 }
                 self.repo.write_batch(&batch)?;
+                // AG-32: legal erasure removes the head — its tenant's
+                // live count follows.
+                self.tenants.record_delete(head.metadata.tenant.as_deref());
                 pipe.seq = seq;
                 pipe.audit = audit;
                 self.broadcast(&ke);
