@@ -2041,7 +2041,7 @@ impl Kernel {
     /// outcome nobody observed is not knowledge. Cross-agent reuse is opt-in
     /// via `shared_with` (Read Allow ACL entries); by default only the actor
     /// can match against it.
-    pub fn record_experience(&self, req: ExperienceRequest) -> KResult<Remembered> {
+    pub fn record_experience(&self, req: ExperienceRequest) -> KResult<ExperienceRecord> {
         require_evidence(&req.evidence)?;
         if req.goal.trim().is_empty()
             || req.action.trim().is_empty()
@@ -2092,6 +2092,9 @@ impl Kernel {
             confidence_to_value(&confidence),
         );
 
+        // AG-14: the lesson KO re-uses these after the moves below.
+        let (lesson_text, actor, goal) = (req.lesson.clone(), req.actor.clone(), req.goal.clone());
+
         let mut properties = PropertyMap::new();
         properties.insert("actor".into(), Value::Text(req.actor));
         properties.insert("goal".into(), Value::Text(req.goal));
@@ -2134,6 +2137,11 @@ impl Kernel {
             })
         };
 
+        // AG-14: the lesson KO carries the same provenance (extensions +
+        // ACL) as its experience.
+        let lesson_extensions = extensions.clone();
+        let lesson_security = security.clone();
+
         let rr = RememberRequest {
             context: req.context.clone(),
             koid: None,
@@ -2154,7 +2162,53 @@ impl Kernel {
             note: req.note,
             referential_policy: ReferentialPolicy::default(),
         };
-        self.remember_trusted(rr)
+        let remembered = self.remember_trusted(rr)?;
+        // AG-14: a carried lesson becomes a first-class `aikoql:lesson` KO
+        // with the same provenance — recallable, not a buried property.
+        // The experience commits first; a lesson failure would leave the
+        // experience behind (unreachable in practice — the same context
+        // and shape just succeeded).
+        let lesson = match lesson_text {
+            None => None,
+            Some(statement) => {
+                let mut props = PropertyMap::new();
+                props.insert("statement".into(), Value::Text(statement));
+                props.insert(
+                    "experience".into(),
+                    Value::Text(remembered.koid.to_hex()),
+                );
+                props.insert("actor".into(), Value::Text(actor));
+                props.insert("goal".into(), Value::Text(goal));
+                let lr = RememberRequest {
+                    context: req.context.clone(),
+                    koid: None,
+                    expected_version: Some(0),
+                    idempotency_key: None,
+                    metadata: Metadata {
+                        type_name: "aikoql:lesson".into(),
+                        tenant: req.context.tenant.clone(),
+                        schema_version: 1,
+                        tags: vec![],
+                    },
+                    properties: props,
+                    semantic: None,
+                    relationships: vec![],
+                    security: lesson_security,
+                    extensions: lesson_extensions,
+                    origin: Origin::Agent(req.context.subject.name.clone()),
+                    note: Some(format!(
+                        "distilled lesson from experience {}",
+                        remembered.koid.to_hex()
+                    )),
+                    referential_policy: ReferentialPolicy::default(),
+                };
+                Some(self.remember_trusted(lr)?)
+            }
+        };
+        Ok(ExperienceRecord {
+            experience: remembered,
+            lesson,
+        })
     }
 
     /// Summarize a conversation into a structured summary KO (G13 §38–39).
@@ -2402,7 +2456,9 @@ impl Kernel {
                 .confidence_context()
                 .map(|c| c.score.clamp(0.0, 1.0))
                 .unwrap_or(0.0);
-            let score = confidence * overlap;
+            // AG-14: outcome-weighted retrieval — successful procedures
+            // rank first, failures last, unclassified between.
+            let score = confidence * overlap * outcome_weight(ko.properties.get("outcome"));
             if score > 0.0 {
                 scored.push((ko, score));
             }
@@ -2410,6 +2466,30 @@ impl Kernel {
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         scored.truncate(limit);
         Ok(scored)
+    }
+}
+
+/// AG-14: the outcome class weight for experience ranking — a rank boost
+/// from the outcome text, not a correctness claim (keyword-classified;
+/// an unclassified outcome scores between success and failure).
+fn outcome_weight(outcome: Option<&Value>) -> f32 {
+    let text = match outcome {
+        Some(Value::Text(t)) => t.to_lowercase(),
+        _ => return 0.8,
+    };
+    const FAILURE: [&str; 10] = [
+        "failed", "failure", "error", "exception", "crashed", "denied", "rejected", "refused",
+        "unsuccessful", "did not",
+    ];
+    const SUCCESS: [&str; 7] = [
+        "success", "succeeded", "completed", "worked", "passed", "resolved", "fixed",
+    ];
+    if FAILURE.iter().any(|m| text.contains(m)) {
+        0.5
+    } else if SUCCESS.iter().any(|m| text.contains(m)) {
+        1.0
+    } else {
+        0.8
     }
 }
 
@@ -2465,6 +2545,14 @@ pub struct ExperienceRequest {
     /// Other principals allowed to read (and therefore reuse) this experience.
     pub shared_with: Vec<String>,
     pub note: Option<String>,
+}
+
+/// AG-14: a recorded experience and — when the capture carried a distilled
+/// lesson — its materialized `aikoql:lesson` KO.
+#[derive(Debug)]
+pub struct ExperienceRecord {
+    pub experience: Remembered,
+    pub lesson: Option<Remembered>,
 }
 
 impl ExperienceRequest {

@@ -34,7 +34,7 @@ fn record(
     req.ttl_seconds = ttl_seconds;
     req.confidence = confidence;
     req.shared_with = shared_with.iter().map(|s| s.to_string()).collect();
-    k.record_experience(req).unwrap().koid
+    k.record_experience(req).unwrap().experience.koid
 }
 
 // ---- capture ---------------------------------------------------------------
@@ -138,7 +138,7 @@ fn record_experience_stamps_agent_derived_provenance_and_ttl() {
     req.evidence = vec![ev("run-log")];
     req.ttl_seconds = Some(30 * 24 * 3600);
     let r = k.record_experience(req).unwrap();
-    let ko = k.get(Subject::new("alice"), &r.koid).unwrap();
+    let ko = k.get(Subject::new("alice"), &r.experience.koid).unwrap();
     assert_eq!(ko.metadata.type_name, "aikoql:experience");
     assert_eq!(ko.epistemic_status(), EpistemicStatus::Asserted);
     assert_eq!(

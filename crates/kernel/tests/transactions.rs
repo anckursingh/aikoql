@@ -1454,7 +1454,7 @@ fn knowledge_continuity_kafka_to_rabbitmq() {
     );
     er.reuse_conditions = vec!["message bus".into(), "migrate".into()];
     er.evidence = vec![ev("this-test-run")];
-    let exp = k.record_experience(er).unwrap().koid;
+    let exp = k.record_experience(er).unwrap().experience.koid;
     let m = k
         .match_experiences(
             &agent,

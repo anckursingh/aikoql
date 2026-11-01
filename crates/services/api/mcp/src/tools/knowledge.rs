@@ -845,9 +845,12 @@ pub(crate) fn tool_record_experience(k: &Kernel, args: &J) -> Result<J, String> 
     req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
     let r = k.record_experience(req).map_err(|e| e.to_string())?;
     Ok(json!({
-        "koid": r.koid.to_hex(),
-        "version": r.version,
-        "commit_ts": commit_ts_millis(r.commit_ts)
+        "koid": r.experience.koid.to_hex(),
+        "version": r.experience.version,
+        "commit_ts": commit_ts_millis(r.experience.commit_ts),
+        // AG-14: a carried lesson is also materialized as a first-class
+        // aikoql:lesson KO (recallable beside the experience).
+        "lesson_koid": r.lesson.map(|l| l.koid.to_hex())
     }))
 }
 
