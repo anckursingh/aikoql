@@ -30,8 +30,7 @@ fn remember_emb(k: &Kernel, ty: &str, emb: Vec<f32>) -> KOID {
             tags: vec![],
         },
     );
-    req.properties
-        .insert("body".into(), Value::Text(ty.into()));
+    req.properties.insert("body".into(), Value::Text(ty.into()));
     req.semantic = Some(SemanticBlock {
         embedding_model: None,
         embedding: Some(emb),
