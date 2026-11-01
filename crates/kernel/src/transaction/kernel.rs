@@ -707,6 +707,9 @@ pub struct Kernel {
     /// AG-20 — list positions RRF fusion examined to rank its hits (the
     /// vs_scan_007 probe seam). Kernel-lifetime, shared.
     pub(crate) fusion_rank_probes: Arc<AtomicU64>,
+    /// AG-20b — committed cosine scores the vector leg computed per query
+    /// (the filtered-ANN sublinearity probe seam). Kernel-lifetime, shared.
+    pub(crate) vector_distance_probes: Arc<AtomicU64>,
     /// P5-M17b — parsed statistics cache (type_name → Statistics). Populated
     /// by `analyze` and by first-read misses; reads never re-walk the heads
     /// (the default query path reads statistics per query). Freshness stays
@@ -838,6 +841,7 @@ impl Kernel {
             txn_metrics: Arc::new(txn::TxnMetrics::default()),
             similarity_materializations: Arc::new(AtomicU64::new(0)),
             fusion_rank_probes: Arc::new(AtomicU64::new(0)),
+            vector_distance_probes: Arc::new(AtomicU64::new(0)),
             statistics_cache: Arc::new(RwLock::new(HashMap::new())),
         };
         // P5-M7 — database catalog: bootstrap/migrate the catalog rows, or
@@ -1106,6 +1110,7 @@ impl Kernel {
             txn_metrics: self.txn_metrics.clone(),
             similarity_materializations: self.similarity_materializations.clone(),
             fusion_rank_probes: self.fusion_rank_probes.clone(),
+            vector_distance_probes: self.vector_distance_probes.clone(),
             statistics_cache: self.statistics_cache.clone(),
         }
     }
@@ -1477,6 +1482,12 @@ impl Kernel {
     /// AG-20 probe — list positions RRF fusion examined since open.
     pub fn fusion_rank_probes(&self) -> u64 {
         self.fusion_rank_probes.load(Ordering::Relaxed)
+    }
+
+    /// AG-20b probe — committed cosine scores the vector leg computed since
+    /// open (one per candidate distance).
+    pub fn vector_distance_probes(&self) -> u64 {
+        self.vector_distance_probes.load(Ordering::Relaxed)
     }
 
     pub(crate) fn accessible_objects(

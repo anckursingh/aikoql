@@ -163,6 +163,12 @@ impl IndexCoordinator {
             // nominates candidates, its own sim never becomes a published
             // score.
             let consider = |koid: &KOID, deleted: bool| -> KResult<Option<f32>> {
+                // AG-20b: one probe per candidate the leg examines (the
+                // scoring-record read below is the widening loop's real
+                // cost — the post-filter cosine is not).
+                kernel
+                    .vector_distance_probes
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if deleted {
                     return Ok(None);
                 }
