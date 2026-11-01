@@ -18,7 +18,9 @@ pub struct TenantQuota {
 impl Default for TenantQuota {
     fn default() -> Self {
         TenantQuota {
-            max_objects: 10_000, // generous default
+            // the default for an explicitly constructed quota; unconfigured
+            // tenants are unlimited (see check_create)
+            max_objects: 10_000,
         }
     }
 }
@@ -80,16 +82,12 @@ impl TenantManager {
     /// Returns `Ok(())` if allowed, `Err` with the limit otherwise.
     pub fn check_create(&self, _tenant: Option<&str>) -> KResult<()> {
         let t = _tenant.unwrap_or("default");
-        let quota = self
-            .quotas
-            .read()
-            // justified: RwLock poison is unrecoverable
-            .unwrap()
-            .get(t)
-            .cloned()
-            // justified: unset quota → TenantQuota::default()
-            // (policy: default quota applies to unconfigured tenants)
-            .unwrap_or_default();
+        // justified: RwLock poison is unrecoverable; unset quota → unlimited
+        // (a default cap on every tenant broke bulk loads: cbo_default_007
+        // seeds 10 001 objects on the default tenant)
+        let Some(quota) = self.quotas.read().unwrap().get(t).cloned() else {
+            return Ok(());
+        };
         // justified: RwLock poison is unrecoverable; absent usage count → 0
         let current = self.usage.read().unwrap().get(t).copied().unwrap_or(0);
         if current >= quota.max_objects {
@@ -159,5 +157,22 @@ mod tests {
         let heads = vec![(koid(1), 1, 1, LifecycleState::Active)];
         tm.rebuild(&heads, |_| None);
         assert_eq!(tm.usage("default"), 1);
+    }
+
+    /// Unconfigured tenants are unlimited (a default cap broke bulk loads:
+    /// cbo_default_007 seeds 10 001 objects); only an explicit set_quota
+    /// enforces.
+    #[test]
+    fn ag32_unconfigured_tenant_is_unlimited_until_a_quota_is_set() {
+        let tm = TenantManager::new();
+        for _ in 0..20_000 {
+            tm.record_create(None);
+        }
+        assert!(tm.check_create(None).is_ok(), "unlimited by default");
+        tm.set_quota("default", TenantQuota { max_objects: 5 });
+        assert!(
+            tm.check_create(None).is_err(),
+            "an explicit quota must be enforced"
+        );
     }
 }
