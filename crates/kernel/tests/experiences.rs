@@ -377,6 +377,77 @@ fn invalidated_experiences_are_not_matched() {
         .is_empty());
 }
 
+// ---- AG-14 procedural memory -------------------------------------------------
+
+// AG-14: outcome-weighted retrieval — the same procedure, captured once as
+// a success and once as a failure with equal confidence: the successful
+// procedure ranks first.
+#[test]
+fn ag14_outcome_weighting_ranks_success_first() {
+    let (k, _clock, _store) = mk_kernel();
+    let mut fail = ExperienceRequest::new(
+        Subject::new("alice"),
+        "restart the database",
+        "ran the plan",
+        "the restart failed with an error",
+    );
+    fail.evidence = vec![ev("run-log")];
+    fail.confidence = Some(1.0);
+    k.record_experience(fail).unwrap();
+    let mut ok = ExperienceRequest::new(
+        Subject::new("alice"),
+        "restart the database",
+        "ran the plan",
+        "the restart completed successfully",
+    );
+    ok.evidence = vec![ev("run-log")];
+    ok.confidence = Some(1.0);
+    k.record_experience(ok).unwrap();
+    let m = k
+        .match_experiences(Subject::new("alice"), "restart the database", 10)
+        .unwrap();
+    assert!(m.len() >= 2);
+    let first = m[0].0.properties.get("outcome").cloned();
+    let first = first.and_then(|v| match v {
+        Value::Text(t) => Some(t),
+        _ => None,
+    });
+    assert!(
+        first.as_deref().is_some_and(|t| t.contains("success")),
+        "the successful procedure must rank first, got {first:?}"
+    );
+}
+
+// AG-14: a distilled lesson becomes a first-class `aikoql:lesson` KO
+// beside the experience (the lesson text arrives on record_experience —
+// the agent distills it, with AG-12 sampling when the client supports it).
+#[test]
+fn ag14_lesson_is_materialized_as_a_ko() {
+    let (k, _clock, _store) = mk_kernel();
+    let mut req = ExperienceRequest::new(
+        Subject::new("alice"),
+        "migrate the schema",
+        "ran the plan",
+        "completed successfully",
+    );
+    req.evidence = vec![ev("run-log")];
+    req.lesson = Some("always take a backup before migrating".into());
+    let rec = k.record_experience(req).unwrap();
+    let lesson = rec.lesson.expect("the lesson KO");
+    let ko = k.get(Subject::new("alice"), &lesson.koid).unwrap();
+    assert_eq!(ko.metadata.type_name, "aikoql:lesson");
+    assert_eq!(
+        ko.properties.get("statement"),
+        Some(&Value::Text("always take a backup before migrating".into()))
+    );
+    assert_eq!(
+        ko.properties.get("experience"),
+        Some(&Value::Text(rec.experience.koid.to_hex()))
+    );
+    assert_eq!(ko.epistemic_status(), EpistemicStatus::Asserted);
+    assert!(ko.evidence().len() >= 1, "the lesson carries the provenance");
+}
+
 // ---- persistence ------------------------------------------------------------
 
 #[test]
