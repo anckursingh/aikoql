@@ -1346,7 +1346,8 @@ pub(crate) fn prometheus_metrics(
         uptime,
         metrics_error,
         storage_metrics
-    )
+    ) + &crate::observability::prometheus_tool_metrics()
+        + &crate::observability::prometheus_recall_metrics()
 }
 
 // ---------------------------------------------------------------------------

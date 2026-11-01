@@ -2,10 +2,12 @@
 //! Prometheus scrape carries per-tool counters, and recall quality outcomes
 //! are counted.
 //!
-//! The server runs in stdio (positional db) mode with `--metrics-addr` and
-//! `AIKOQL_OTEL_ENDPOINT` pointing at an in-test OTLP/HTTP collector; the
-//! exported protobuf is decoded with opentelemetry-proto, so the gate —
-//! a trace for every tool call — is asserted on the wire, not on logs.
+//! The server runs in metrics-only mode (S-12: no stdin reads) with
+//! `--metrics-addr` + `--tcp-token`, so the MCP session is Streamable HTTP
+//! on the metrics surface (like tests/mcp_http.rs); `AIKOQL_OTEL_ENDPOINT`
+//! points at an in-test OTLP/HTTP collector. The exported protobuf is
+//! decoded with opentelemetry-proto, so the gate — a trace for every tool
+//! call — is asserted on the wire, not on logs.
 
 use prost::Message;
 use serde_json::{json, Value as J};
@@ -14,7 +16,6 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -120,6 +121,119 @@ impl Collector {
     }
 }
 
+/// One HTTP response: status code, lower-cased headers, body (mcp_http.rs).
+struct Resp {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+impl Resp {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+    fn json(&self) -> J {
+        serde_json::from_str(&self.body)
+            .unwrap_or_else(|e| panic!("not JSON ({e}): {:?}", self.body))
+    }
+}
+
+fn parse(raw: &[u8]) -> Resp {
+    let text = String::from_utf8_lossy(raw);
+    let (head, body) = text
+        .split_once("\r\n\r\n")
+        .map(|(h, b)| (h.to_string(), b.to_string()))
+        .unwrap_or_else(|| (text.to_string(), String::new()));
+    let mut lines = head.lines();
+    let status = lines
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let headers = lines
+        .filter_map(|l| l.split_once(':'))
+        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        .collect();
+    Resp {
+        status,
+        headers,
+        body,
+    }
+}
+
+fn request(port: u16, headers: &[(&str, &str)], body: &str) -> Resp {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    let mut req = format!(
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json, text/event-stream\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    for (k, v) in headers {
+        req.push_str(&format!("{k}: {v}\r\n"));
+    }
+    req.push_str("\r\n");
+    s.write_all(req.as_bytes()).unwrap();
+    s.write_all(body.as_bytes()).unwrap();
+    s.flush().unwrap();
+    let mut raw = Vec::new();
+    let _ = s.read_to_end(&mut raw);
+    parse(&raw)
+}
+
+const BEARER: (&str, &str) = ("Authorization", "Bearer http-tok");
+
+fn rpc(id: u64, method: &str, params: J) -> String {
+    json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string()
+}
+
+/// POST /mcp initialize with the bearer; returns the session id.
+fn initialize(port: u16) -> String {
+    let r = request(
+        port,
+        &[BEARER],
+        &rpc(
+            1,
+            "initialize",
+            json!({"protocolVersion": "2025-06-18", "capabilities": {},
+             "clientInfo": {"name": "http-test", "version": "0"}}),
+        ),
+    );
+    assert_eq!(r.status, 200, "initialize: {}", r.body);
+    assert!(
+        r.json()["result"]["protocolVersion"].is_string(),
+        "{}",
+        r.body
+    );
+    let sid = r
+        .header("mcp-session-id")
+        .expect("initialize assigns Mcp-Session-Id")
+        .to_string();
+    assert!(
+        sid.len() >= 32 && sid.chars().all(|c| c.is_ascii_hexdigit()),
+        "session id {sid:?}"
+    );
+    sid
+}
+
+fn tool(port: u16, sid: &str, id: u64, name: &str, args: J) -> J {
+    let r = request(
+        port,
+        &[BEARER, ("Mcp-Session-Id", sid)],
+        &rpc(id, "tools/call", json!({"name": name, "arguments": args})),
+    );
+    assert_eq!(r.status, 200, "{name}: {}", r.body);
+    let text = r.json()["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    serde_json::from_str(&text).unwrap()
+}
+
+/// Raw GET, Connection: close (the scrape has no auth).
 fn http_get(port: u16, path: &str) -> String {
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
     write!(
@@ -132,89 +246,11 @@ fn http_get(port: u16, path: &str) -> String {
     buf.split("\r\n\r\n").nth(1).unwrap_or_default().to_string()
 }
 
-/// Stdio MCP client (pump thread), like tests/live_query.rs.
-struct Client {
+struct Server {
     child: Child,
-    stdin: std::process::ChildStdin,
-    frames: mpsc::Receiver<J>,
-    next: u64,
 }
 
-impl Client {
-    fn spawn(db: &PathBuf, otel_endpoint: &str, metrics_port: u16, home: &PathBuf) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
-            .args(["--metrics-addr", &format!("127.0.0.1:{metrics_port}")])
-            .env("AIKOQL_OTEL_ENDPOINT", otel_endpoint)
-            .env("HOME", home) // no embedding model dir: text-only recall
-            .arg(db)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn aikoql-mcp");
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut stdout = BufReader::new(stdout);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                if stdout.read_line(&mut line).unwrap() == 0 {
-                    break;
-                }
-                let frame: J = serde_json::from_str(line.trim())
-                    .unwrap_or_else(|_| panic!("bad frame: {line:?}"));
-                if tx.send(frame).is_err() {
-                    break;
-                }
-            }
-        });
-        let mut c = Client {
-            child,
-            stdin,
-            frames: rx,
-            next: 0,
-        };
-        c.call(
-            "initialize",
-            json!({"protocolVersion": "2025-06-18", "capabilities": {}}),
-        );
-        c
-    }
-
-    fn call(&mut self, method: &str, params: J) -> J {
-        self.next += 1;
-        let id = self.next;
-        writeln!(
-            self.stdin,
-            "{}",
-            json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
-        )
-        .unwrap();
-        self.stdin.flush().unwrap();
-        loop {
-            let frame = self
-                .frames
-                .recv_timeout(Duration::from_secs(30))
-                .expect("no frame before deadline");
-            if frame.get("id").is_none() {
-                continue;
-            }
-            if frame["id"].as_u64() == Some(id) {
-                return frame;
-            }
-        }
-    }
-
-    fn tool(&mut self, name: &str, args: J) -> J {
-        let res = self.call("tools/call", json!({"name": name, "arguments": args}));
-        let text = res["result"]["content"][0]["text"].as_str().unwrap().to_string();
-        serde_json::from_str(&text).expect("tool payload is json")
-    }
-}
-
-impl Drop for Client {
+impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -226,29 +262,49 @@ fn ag50_every_tool_call_leaves_a_trace_and_counts_on_the_scrape() {
     let collector = Collector::start();
     let root = tmp("obs");
     let metrics_port = free_port();
-    let mut c = Client::spawn(
-        &root.join("db"),
-        &format!("http://127.0.0.1:{}", collector.port),
-        metrics_port,
-        &root.join("home"),
-    );
+    let child = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+        .arg("serve")
+        .args(["--metrics-addr", &format!("127.0.0.1:{metrics_port}")])
+        .args(["--tcp-token", "http-tok::admin"])
+        .env(
+            "AIKOQL_OTEL_ENDPOINT",
+            format!("http://127.0.0.1:{}", collector.port),
+        )
+        .env("HOME", root.join("home")) // no embedding model dir: text-only recall
+        .arg(root.join("db"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn aikoql-mcp serve");
+    let _server = Server { child };
 
-    // Wait for the metrics listener before the first scrape.
+    // Wait for the metrics listener before the first request.
     let deadline = Instant::now() + Duration::from_secs(20);
     while TcpStream::connect(("127.0.0.1", metrics_port)).is_err() {
         assert!(Instant::now() < deadline, "metrics listener never came up");
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    let _ = c.tool(
+    let sid = initialize(metrics_port);
+    let _ = tool(
+        metrics_port,
+        &sid,
+        2,
         "remember",
         json!({"subject": "mcp-agent", "type_name": "ObsThing", "properties": {"tag": "alpha"}}),
     );
-    let _ = c.tool(
+    let _ = tool(
+        metrics_port,
+        &sid,
+        3,
         "remember",
         json!({"subject": "mcp-agent", "type_name": "ObsThing", "properties": {"tag": "beta"}}),
     );
-    let recall = c.tool(
+    let recall = tool(
+        metrics_port,
+        &sid,
+        4,
         "recall",
         json!({"subject": "mcp-agent", "query": "zzz-no-such-token"}),
     );

@@ -4,9 +4,9 @@
 use crate::helpers::*;
 use crate::session::*;
 use crate::{
-    json, ExtensionMap, FuseMode, IndexStatusKind, IrOp, IrPlan, KError, Kernel, Metadata,
-    Ordering, Origin, PropertyMap, ReferentialPolicy, RememberRequest, SimilarityQuery, Value, J,
-    STREAM_ID,
+    info_span, json, ExtensionMap, FuseMode, IndexStatusKind, IrOp, IrPlan, KError, Kernel,
+    Metadata, Ordering, Origin, PropertyMap, ReferentialPolicy, RememberRequest, SimilarityQuery,
+    Value, J, STREAM_ID,
 };
 use std::time::Duration;
 pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
@@ -74,7 +74,11 @@ pub(crate) fn execute_readonly(
     let raw = aikoql_compiler::parser::compile_scoped(source, subject, roles, tenant)
         .map_err(|e| e.to_string())?;
     let plan = aikoql_compiler::planner::Planner::optimize(&raw);
-    let result = aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
+    // AG-50: the kernel op as a child span of the tool_call span.
+    let result = {
+        let _span = info_span!("aikoql.execute").entered();
+        aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?
+    };
     Ok(rowset_to_results(result))
 }
 
@@ -485,6 +489,14 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
     // AG-13: the agent saw these — bump their access counts so the decay
     // job's salience refresh keeps hot memories alive.
     k.record_access(&seen);
+    // AG-50: recall quality — an empty result set and surfaced open
+    // conflicts are counted separately; one call can hit both.
+    if items.is_empty() {
+        crate::observability::record_recall(crate::observability::RecallOutcome::Empty);
+    }
+    if !open.is_empty() {
+        crate::observability::record_recall(crate::observability::RecallOutcome::Conflict);
+    }
     let mut out =
         json!({ "query": query, "semantic": semantic, "items": items, "truncated": truncated });
     // AG-33: the fence this response used, so a caller can strip it exactly

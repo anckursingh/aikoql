@@ -35,6 +35,12 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# AG-50: OTLP trace export when AIKOQL_OTEL_ENDPOINT is set (blocking HTTP
+# client — the binary carries no async runtime)
+tracing-opentelemetry = "0.34"
+opentelemetry = { version = "0.33", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
 # P3-M1 (§53): HTTP login credentials (argon2id, same crate/version the kernel
 # KMS uses) + 256-bit CSPRNG session tokens. Both already in Cargo.lock.
 argon2 = "0.5"

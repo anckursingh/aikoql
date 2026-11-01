@@ -305,8 +305,11 @@ pub(crate) fn handle_message(
             let args = inject_for_session(&args, session);
             let span = info_span!("tool_call", tool = %name);
             let groups_before = session.tool_groups.len();
+            let started = std::time::Instant::now();
             let result = span
                 .in_scope(|| call_tool(k, &name, &args, db_path.as_ref(), session, admin, txns));
+            // AG-50: one row per tool call on the scrape — calls, errors, latency.
+            crate::observability::record_tool_call(&name, result.is_err(), started.elapsed());
             if result.is_err() {
                 error!(tool = %name, "tool call failed");
             }
