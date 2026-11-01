@@ -32,7 +32,9 @@ from agents import Agent, Model, ModelResponse, Runner, Usage
 def _client(mcp_server) -> McpClient:
     host_port, _, token = mcp_server
     host, _, port = host_port.partition(":")
-    return McpClient(host, int(port), token).connect()
+    c = McpClient(host, int(port), token).connect()
+    c.initialize()  # the bearer rides in initialize
+    return c
 
 
 class _EchoModel(Model):
@@ -93,7 +95,7 @@ def test_llamaindex_memory_backs_the_chat_engine_example(mcp_server):
     # the whole history (the chat engine itself only calls put + get)
     again = AikoqlMemory(client=_client(mcp_server), subject=subject)
     hist = again.get_all()
-    roles = [str(m.role) for m in hist]
+    roles = [m.role.value for m in hist]
     assert roles == ["user", "assistant", "user", "assistant"], roles
     assert hist[0].content == "hello from the gate"
     assert isinstance(hist[0], ChatMessage)

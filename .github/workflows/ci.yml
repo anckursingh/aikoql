@@ -397,7 +397,10 @@ jobs:
         run: |
           set -euo pipefail
           python -m venv .venv
-          .venv/bin/pip install -q "maturin==1.14.1" pytest hypothesis
+          # AG-60: the adapter gates run the frameworks' own APIs against
+          # the live server, so the frameworks are part of the job's pins
+          .venv/bin/pip install -q "maturin==1.14.1" pytest hypothesis \
+            "llama-index-core==0.14.25" "openai-agents==0.24.0"
           export VIRTUAL_ENV="$PWD/.venv"
           cd crates/sdk/python
           "$VIRTUAL_ENV/bin/maturin" develop --release

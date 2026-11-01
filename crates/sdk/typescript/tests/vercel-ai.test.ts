@@ -97,17 +97,25 @@ async function liveServer(t: TestContext): Promise<Client> {
   throw last;
 }
 
+/** The ai v7 dispatch shape the test drives (ToolSet types execute's input
+ * as never, so the round-trip goes through this alias). */
+type AiTool = {
+  description?: unknown;
+  inputSchema?: unknown;
+  execute?: (input: Record<string, unknown>, options: unknown) => Promise<unknown>;
+};
+
 test("vercel ai: tools meet the ai contract and round-trip a live server", async (t) => {
   if (!MCP_BIN) {
     t.skip("AIKOQL_MCP_BIN / aikoql-mcp not built — live-server gate skipped");
     return;
   }
   const client = await liveServer(t);
-  const tools = createAikoqlTools(client, "vercel-ai-ag60");
+  const tools = createAikoqlTools(client, "vercel-ai-ag60") as unknown as Record<string, AiTool>;
 
   // the ai v7 tool contract (what generateText dispatches)
   for (const name of ["recall", "remember", "forget"]) {
-    const tk = (tools as Record<string, { description?: unknown; inputSchema?: unknown; execute?: unknown }>)[name];
+    const tk = tools[name];
     assert.ok(tk, `${name} tool present`);
     assert.equal(typeof tk.description, "string", `${name}.description`);
     assert.equal(typeof tk.inputSchema, "object", `${name}.inputSchema`);
@@ -115,27 +123,26 @@ test("vercel ai: tools meet the ai contract and round-trip a live server", async
   }
 
   // round-trip through execute() — the call shape the ai SDK uses
-  const remembered = await tools.remember.execute(
+  const remembered = (await tools.remember!.execute!(
     { type_name: "note", properties: { text: "gate note from the vercel test" } },
     { toolCallId: "c1", messages: [] },
-  );
+  )) as { koid: string };
   assert.ok(remembered.koid, `remember returned a koid: ${JSON.stringify(remembered)}`);
 
-  const hits = await tools.recall.execute(
+  const hits = (await tools.recall!.execute!(
     { query: "gate note" },
     { toolCallId: "c2", messages: [] },
-  );
-  assert.ok(Array.isArray(hits), `recall returns hits: ${JSON.stringify(hits)}`);
+  )) as unknown[];
   assert.ok(hits.length >= 1, `recall found the stored note: ${JSON.stringify(hits)}`);
 
-  await tools.forget.execute(
+  await tools.forget!.execute!(
     { koid: remembered.koid },
     { toolCallId: "c3", messages: [] },
   );
 
-  const after = await tools.recall.execute(
+  const after = (await tools.recall!.execute!(
     { query: "gate note" },
     { toolCallId: "c4", messages: [] },
-  );
+  )) as unknown[];
   assert.equal(after.length, 0, `forget tombstoned the note: ${JSON.stringify(after)}`);
 });
