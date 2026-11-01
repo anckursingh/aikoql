@@ -54,3 +54,6 @@ aikoql-storage-v2 = { path = "../../../storage/aikoql-v2" }
 postgres = "0.19"
 mongodb = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+# AG-50: decode the OTLP/HTTP export the observability e2e test receives
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14"

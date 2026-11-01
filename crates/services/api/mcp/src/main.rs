@@ -30,6 +30,7 @@ mod knowledge_runtime;
 mod mcp_http;
 mod model;
 mod native;
+mod observability;
 mod oauth;
 mod prompts;
 mod protocol;
