@@ -530,6 +530,70 @@ fn a_successful_sign_in_resets_the_backoff() {
     assert_eq!(auth.locked_for("admin"), None);
 }
 
+// AG-52: the login backoff survives a restart — the fail state is written
+// to a sidecar next to the database and reloaded by the next serve.
+#[test]
+fn ag52_login_backoff_survives_restart() {
+    let db = tmp_db("ag52-state");
+    let state = std::path::PathBuf::from(format!("{db}.login-backoff.json"));
+    let auth =
+        crate::http::AuthResolver::with_state(vec![], Some("pw"), 86400, Some(state.clone()));
+    for _ in 0..5 {
+        assert!(auth.verify("admin", "wrong").is_none());
+    }
+    assert_eq!(auth.locked_for("admin"), Some(1));
+    drop(auth);
+
+    // a fresh serve: the persisted state re-arms the backoff
+    let auth2 = crate::http::AuthResolver::with_state(vec![], Some("pw"), 86400, Some(state));
+    assert_eq!(
+        auth2.locked_for("admin"),
+        Some(1),
+        "backoff must survive a restart"
+    );
+    assert!(auth2.verify("admin", "pw").is_some(), "right password clears it");
+    assert_eq!(auth2.locked_for("admin"), None);
+}
+
+// AG-52: the per-IP layer — failures from one address lock the address
+// (a username spray can't dodge the per-login backoff), and X-Forwarded-For
+// is trusted only from the configured proxy.
+#[test]
+fn ag52_per_ip_backoff_behind_trusted_proxy() {
+    let mut auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86400);
+    auth.set_trusted_proxy(Some("10.0.0.1".parse().unwrap()));
+    let h = "X-Forwarded-For: 1.2.3.4, 5.6.7.8\r\n";
+    assert_eq!(
+        auth.client_ip("10.0.0.1".parse().unwrap(), h),
+        "5.6.7.8".parse().unwrap(),
+        "the trusted proxy's last XFF hop is the client"
+    );
+    assert_eq!(
+        auth.client_ip("9.9.9.9".parse().unwrap(), h),
+        "9.9.9.9".parse().unwrap(),
+        "XFF from a non-proxy peer is ignored"
+    );
+    assert_eq!(
+        auth.client_ip("10.0.0.1".parse().unwrap(), "X-Forwarded-For: garbage\r\n"),
+        "10.0.0.1".parse().unwrap(),
+        "an unparseable XFF falls back to the peer"
+    );
+
+    let ip: std::net::IpAddr = "6.6.6.6".parse().unwrap();
+    for _ in 0..crate::http::FREE_IP_FAILS {
+        assert!(auth.verify("ghost", "x").is_none(), "unknown login, counted per IP");
+        auth.ip_failure(ip);
+    }
+    assert!(auth.ip_wait(ip).is_some(), "the address is locked");
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let body = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
+    let err = crate::http::handle_login(&body, &sessions, &auth, ip).unwrap_err();
+    assert!(
+        err.0.starts_with("429"),
+        "a locked IP is refused even with the right password: {err:?}"
+    );
+}
+
 /// auth001 RED: login verifies CONFIGURED credentials (argon2id) — no
 /// hardcoded admin/admin. The resolver here bootstraps admin from the
 /// AIKOQL_ADMIN_PASSWORD path; the second half pins [auth].users hashes.
