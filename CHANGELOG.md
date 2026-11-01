@@ -37,6 +37,7 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Observability (AG-50)**: OTLP traces per tool call (`AIKOQL_OTEL_ENDPOINT`) and per-tool Prometheus counters + recall quality on the /metrics scrape
 - **Live queries (AG-40)**: `koql/subscribe` and `koql/unsubscribe` MCP
   methods built on the kernel's durable CDC (subscribe/replay/ack). A
   subscribe answers with the current result set of a read-only MATCH

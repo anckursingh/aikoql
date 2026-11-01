@@ -387,6 +387,19 @@ tool, kernel ops as children), per-tool latency/error metrics, a
 `recall` quality counter (empty results, conflict hits). *Gate:* a trace
 for every tool call in the e2e run.
 
+Status (2026-11-01): AG-50 done. Every tools/call emits a `tool_call`
+span with a `tool` attribute (kernel ops as child spans from the tool
+bodies); `AIKOQL_OTEL_ENDPOINT` turns on OTLP/HTTP export through a
+blocking client (no async runtime in the binary), batch exporter with
+no flush-on-shutdown (shortcut: process exit, gate test polls the
+collector). The /metrics scrape carries `aikoql_tool_calls_total`,
+`aikoql_tool_errors_total` and `aikoql_tool_latency_seconds_total`
+labeled by tool, plus `aikoql_recall_quality_total` (empty/conflict,
+always rendered). The e2e gate runs the server in metrics-only mode
+(stdio and metrics cannot coexist: `--metrics-addr` alone is the S-12
+metrics-only serve) with MCP over the metrics surface, decodes the
+exported OTLP protobuf on a fake collector, and asserts the scrape.
+
 **AG-51 (P1) Kubernetes.** Helm chart (leader + standby with the k8s lease,
 already apiserver-certified), the open "real k8s pod" item, PVC snapshot
 docs. *Gate:* kind-cluster failover e2e in CI (nightly).
