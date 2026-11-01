@@ -218,10 +218,19 @@ and a `lesson` KO type distilled by AG-12 sampling.
   recall path: VectorOnly with text (recall) takes the bounded leg; RRF
   ranks in N log N (was N^2); hybrid fusions score a bounded vector ∪
   text union (RRF 100k: 232 → 7.1 ms; 1M: 12.7 ms p50, p95 20.0); the unindexed tail is scored
-  exactly; no zero-score pads. Open: 20b filtered-ANN buckets, 20c
-  quantization. 20d: the HNSW already persisted in the maintainer
+  exactly; no zero-score pads. Open: 20c quantization.
+  20d: the HNSW already persisted in the maintainer
   checkpoint, but only replication leaders took one on a timer — every
   server does now (ck001); the embedded SDK still checkpoints on close only.
+- *Status (2026-11-01): AG-20b done.* A VectorOnly query whose filter is a
+  lone type now scores the repo type index directly when the type has
+  ≤ 4096 heads — candidates stay sublinear in the object count and recall
+  over the filtered set is exact (a 20/5020 split: 7580 → 20 scored
+  candidates; gate: `crates/kernel/tests/filtered_ann.rs`, 2 tests, incl.
+  a guard that the unfiltered path keeps the bounded pool). Property-pair
+  filters and bigger types keep the bounded ANN pool; ACORN-style filtered
+  graph traversal is the documented deep form (shortcut comment in
+  `coordinator.rs`).
 - *Problem:* 1M vector_recall 17.0 s, brute force (REPORT §Scale). An HNSW
   exists (`engines/vector`, attached to `find_similar` since M18) — the
   first step is to establish why the certified cell does not use it

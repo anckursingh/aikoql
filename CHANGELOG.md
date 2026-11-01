@@ -37,6 +37,14 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Filtered ANN via the type index (AG-20b)**: a `VectorOnly` query
+  whose filter is a lone type now scores the repo type index directly
+  when the type holds at most 4096 heads — candidates scored stay
+  sublinear in the object count and recall over the filtered set is
+  exact (a 20/5020 split: 7580 → 20 candidates). Property-pair filters
+  and larger types keep the bounded ANN pool (max(512, 16k), widened 4x
+  per round). Each candidate examination is observable via
+  `vector_distance_probes`.
 - **Tenant accounting from KO metadata (AG-32)**: usage counters follow
   the object store — `remember`/`transact` creates and both forget modes
   update the live per-tenant count, and a rebuild buckets every head
