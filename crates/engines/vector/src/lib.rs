@@ -80,10 +80,6 @@ impl QuantVec {
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.code.is_empty()
-    }
-
     fn from_f32(v: &[f32]) -> Self {
         let max_abs = v.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         if max_abs == 0.0 {
