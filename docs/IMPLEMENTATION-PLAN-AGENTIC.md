@@ -260,6 +260,13 @@ and a `lesson` KO type distilled by AG-12 sampling.
 stage (candle, local, installed like the embedding model — incl. the
 AIKOQL_MODEL_AUTO_INSTALL opt-in) + MMR for diverse results. *Gate:* nDCG@10
 improves on the agent eval set; latency budget ≤ 30 ms for 50 candidates.
+- *Status (2026-11-01): MMR done* — `memory_search` diversifies its
+  oversampled candidates (greedy MMR, relevance = score normalized to the
+  top hit, novelty = 1 − max token-Jaccard to the picked, λ=0.7) so
+  near-duplicate memories no longer crowd out distinct ones; the 50
+  candidate pass stays well inside the 30 ms budget. Open: the optional
+  cross-encoder rerank stage (candle) and the nDCG@10 gate until the
+  AG-61 eval run.
 
 **AG-23 (P1) Embedding model choice.** Per-collection model (multilingual
 and larger models via `model install`), a re-embed migration job

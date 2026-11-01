@@ -64,6 +64,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   degrades to the deterministic summary, whose response shape is
   unchanged.
 
+- **MMR-diversified memory search (AG-22)**: `memory_search` reranks its
+  oversampled candidates with greedy MMR before the cut — relevance
+  (score normalized to the top hit) against novelty (1 − max token
+  Jaccard to the already picked, λ 0.7) — so near-duplicate memories no
+  longer crowd out distinct ones. Scores are never invented; the
+  cross-encoder rerank stage stays open (optional, candle).
 - **Memory consolidation, salience and decay (AG-13)**: every remembered
   KO is stamped with a `salience` (recency × accesses × authority ×
   links; authority is the kernel-managed rank of the origin, not caller
