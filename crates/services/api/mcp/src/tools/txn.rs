@@ -51,15 +51,10 @@ pub(crate) fn txn_dispatch(
         }
         Err(e) => {
             audit_log(db_path, &session.agent_id, name, "error", &e);
-            let body = json!({
-                "ok": false,
-                "error": {
-                    "code": "INTERNAL",
-                    "message": e,
-                    "retryable": false,
-                    "suggestion": "An unexpected error occurred. Report this if it persists"
-                }
-            });
+            // AG-05: txn tool errors ride the shared envelope (code/hint/
+            // next) — a hardcoded INTERNAL here would be a bare string
+            // error and misclassify e.g. a fenced write as INTERNAL.
+            let body = crate::error_codes::wrap_result(Err(e));
             Ok(json!({
                 "content": [{"type": "text", "text": body.to_string()}],
                 "isError": true

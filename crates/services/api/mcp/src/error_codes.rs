@@ -66,6 +66,24 @@ impl ErrorCode {
         }
     }
 
+    /// AG-05: a short statement of what went wrong — the cause, where
+    /// `suggestion()`/`next` is the action. Every tool error carries both.
+    pub fn hint(&self) -> &str {
+        match self {
+            ErrorCode::AccessDenied => "The caller's identity lacks permission for this action",
+            ErrorCode::VersionConflict => "The object changed since it was last read (stale expected_version)",
+            ErrorCode::NotFound => "No live knowledge object matches this KOID",
+            ErrorCode::ValidationError => "Arguments failed validation",
+            ErrorCode::RateLimited => "Request rate exceeded the configured limit",
+            ErrorCode::Timeout => "The operation did not finish in time",
+            ErrorCode::Retryable => "The store is catching up after a recent write",
+            ErrorCode::Internal => "The server hit an unexpected condition",
+            ErrorCode::NotAProgram => "The KOID is not a deployed program",
+            ErrorCode::CompileError => "The aikoql query failed to parse",
+            ErrorCode::NotLeader => "This node is fenced; another node leads",
+        }
+    }
+
     /// Classify an error message string into an error code.
     pub fn classify(msg: &str) -> Self {
         let lower = msg.to_lowercase();
@@ -116,6 +134,9 @@ pub fn wrap_result(result: Result<J, String>) -> J {
         Ok(payload) => json!({"ok": true, "data": payload}),
         Err(msg) => {
             let code = ErrorCode::classify(&msg);
+            // AG-05: every tool error carries code + hint (what went wrong)
+            // + next (what to do) — agents act on the envelope, never on
+            // message text. `suggestion` stays for older clients.
             let mut out = json!({
                 "ok": false,
                 "error": {
@@ -123,6 +144,8 @@ pub fn wrap_result(result: Result<J, String>) -> J {
                     "message": msg,
                     "retryable": code.retryable(),
                     "suggestion": code.suggestion(),
+                    "hint": code.hint(),
+                    "next": code.suggestion(),
                 }
             });
             // R4d: the fence reason carries "(leader=ADDR)" when known
