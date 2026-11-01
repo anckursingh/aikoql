@@ -29,6 +29,7 @@ use crate::knowledge::codec::{self, Enc, ScoringRecord};
 use crate::knowledge::kom::*;
 use crate::knowledge::ontology::{Cardinality, OntologyRegistry};
 use crate::knowledge::scope::Scope;
+use crate::knowledge::scoring::{jaccard, ko_text, tokenize};
 use crate::lifecycle::constraint::{ConstraintEvalStats, ConstraintEvaluator, InferenceEngine};
 use crate::lifecycle::schema::SchemaRegistry;
 use crate::object::ObjectManager;
@@ -5102,6 +5103,46 @@ impl Kernel {
         );
         Ok(merged)
     }
+}
+
+/// AG-22: the default relevance/novelty split for [`mmr_rerank`].
+pub const MMR_LAMBDA: f64 = 0.7;
+
+/// AG-22: greedy MMR over an oversampled candidate list — pick at most
+/// `k` hits by the best trade-off between relevance (score, normalized
+/// to the top hit) and novelty (1 − max token-Jaccard to the already
+/// picked). Pure reorder: scores are never invented. `lambda` 1.0
+/// collapses to score order; 0.0 to pure novelty.
+pub fn mmr_rerank(hits: Vec<ScoredKO>, k: usize, lambda: f64) -> Vec<ScoredKO> {
+    // shortcut: the novelty signal is the index's own token view
+    // (Jaccard on ko_text), not embedding cosine — the vector index
+    // does not expose stored vectors; upgrade when the AG-61 eval
+    // shows diversity still lacking.
+    let lambda = lambda.clamp(0.0, 1.0);
+    if k == 0 || hits.is_empty() {
+        return Vec::new();
+    }
+    let top = hits.iter().map(|h| h.score as f64).fold(0.0f64, f64::max);
+    let mut remaining: Vec<ScoredKO> = hits;
+    let mut picked: Vec<ScoredKO> = Vec::new();
+    while picked.len() < k && !remaining.is_empty() {
+        let mut best = 0usize;
+        let mut best_v = f64::NEG_INFINITY;
+        for (i, h) in remaining.iter().enumerate() {
+            let rel = if top > 0.0 { h.score as f64 / top } else { 0.0 };
+            let novel = picked
+                .iter()
+                .map(|p| jaccard(&tokenize(&ko_text(&p.ko)), &tokenize(&ko_text(&h.ko))) as f64)
+                .fold(0.0f64, f64::max);
+            let v = lambda * rel - (1.0 - lambda) * novel;
+            if v > best_v {
+                best_v = v;
+                best = i;
+            }
+        }
+        picked.push(remaining.remove(best));
+    }
+    picked
 }
 
 /// An independently-verifiable proof bundle (MRFC-0011 §6.7).

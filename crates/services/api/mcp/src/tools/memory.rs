@@ -7,6 +7,7 @@ use crate::{
     json, ExtensionMap, Kernel, Metadata, Origin, PropertyMap, ReferentialPolicy, RememberRequest,
     SecurityDescriptor, Value, J, MEMORY_DIR,
 };
+use aikoql_kernel::kernel::{mmr_rerank, MMR_LAMBDA};
 pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> {
     let agent_id = args
         .get("agent_id")
@@ -508,15 +509,22 @@ pub(crate) fn tool_memory_search(k: &Kernel, args: &J) -> Result<J, String> {
     // AG-33: agents may filter by trust class; untrusted content is fenced
     let trust_want = args.get("trust").and_then(|v| v.as_str());
     let fence = Fence::new();
+    // AG-22: diversify the oversampled candidates before the cut — filter
+    // first (a dropped hit must not eat a diversity slot), then MMR.
+    let hits = mmr_rerank(
+        hits.into_iter()
+            .filter(|h| {
+                h.score > 0.0
+                    && h.ko.metadata.type_name == MEMORY_TYPE
+                    && in_this_session(&h.ko, args)
+                    && trust_want.is_none_or(|w| h.ko.trust_class() == w)
+            })
+            .collect(),
+        max_results,
+        MMR_LAMBDA,
+    );
     let results: Vec<J> = hits
         .iter()
-        .filter(|h| {
-            h.score > 0.0
-                && h.ko.metadata.type_name == MEMORY_TYPE
-                && in_this_session(&h.ko, args)
-                && trust_want.is_none_or(|w| h.ko.trust_class() == w)
-        })
-        .take(max_results)
         .map(|h| {
             let name = text_prop(&h.ko, "name");
             let content = text_prop(&h.ko, "content");
