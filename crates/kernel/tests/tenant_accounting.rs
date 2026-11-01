@@ -63,7 +63,7 @@ fn ag32_forget_decrements_its_tenant() {
 #[test]
 fn ag32_transact_creates_are_counted() {
     let (k, _clock) = mk_kernel();
-    let mut req = |tenant: Option<&str>| {
+    let req = |tenant: Option<&str>| {
         let mut ctx = KnowledgeContext::new(Subject::new("alice"));
         ctx.tenant = tenant.map(String::from);
         RememberRequest::create(

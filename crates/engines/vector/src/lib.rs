@@ -673,8 +673,7 @@ impl VectorIndex for ModelAwareVectorIndex {
             .read()
             .unwrap()
             .values()
-            .map(|s| s.maybe_rebuild())
-            .any(|b| b)
+            .any(|s| s.maybe_rebuild())
     }
 
     fn checkpoint(&self, dir: &std::path::Path) -> KResult<()> {
