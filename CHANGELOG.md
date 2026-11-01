@@ -46,6 +46,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   manifest plus one dir per shard; pre-AG-23 single-graph checkpoints
   still load (as the legacy "" shard). The service and the Python SDK
   construct the wrapper.
+- **Per-collection model bindings (AG-23b1)**: `catalog_set_type_model`
+  journals a "model" catalog row per type — persisted like every catalog
+  row and replaced in place; binding an undeclared type is inert, so a
+  typo can never corrupt enrichment. `catalog_type_model` reads it
+  fail-closed. The binding itself lands here; enrichment consumes it
+  with the re-embed migration job (AG-23b2).
 - **Int8 scalar quantization of the vector rebuild copy (AG-20c)**: the
   in-memory rebuild copy stores int8 codes + one uniform scale per
   vector (~4x smaller than the f32 copy). The HNSW graph keeps exact
