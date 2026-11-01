@@ -1195,4 +1195,60 @@ mod tests {
             );
         }
     }
+
+    // --- AG-23 — model choice must never serve mixed-dimension results.
+    // RED: the missing seam — ModelAwareVectorIndex does not exist (E0609);
+    // today one global dim drops every vector of a second model (P5-M27).
+
+    #[test]
+    fn ag23_different_dim_models_coexist() {
+        let idx = ModelAwareVectorIndex::new(100);
+        idx.upsert(kid(1), "small", &[1.0, 0.0]);
+        idx.upsert(kid(2), "large", &[1.0, 0.0, 0.0, 0.5]);
+        assert_eq!(idx.len(), 2, "the 4-d model must not be dropped");
+        let small = idx.search(&[1.0, 0.0], 5, Some("small"));
+        assert_eq!(small.len(), 1);
+        assert_eq!(small[0].0, kid(1), "model-scoped queries stay in their model");
+        let large = idx.search(&[1.0, 0.0, 0.0, 0.5], 5, Some("large"));
+        assert_eq!(large.len(), 1);
+        assert_eq!(large[0].0, kid(2));
+    }
+
+    #[test]
+    fn ag23_model_less_query_never_mixes_dims() {
+        let idx = ModelAwareVectorIndex::new(100);
+        idx.upsert(kid(1), "small", &[1.0, 0.0]);
+        idx.upsert(kid(3), "small2", &[0.9, 0.1]); // same dim, second model
+        idx.upsert(kid(2), "large", &[1.0, 0.0, 0.0, 0.5]);
+        let hits = idx.search(&[1.0, 0.0], 5, None);
+        assert!(
+            hits.iter().all(|(k, _)| *k != kid(2)),
+            "a 4-d entry must never rank a 2-d query"
+        );
+        assert!(
+            hits.iter().any(|(k, _)| *k == kid(3)),
+            "same-dim models merge for model-less queries"
+        );
+    }
+
+    #[test]
+    fn ag23_checkpoint_roundtrips_all_shards() {
+        // justified: test-thread names contain `::` (invalid on Windows paths)
+        let dir = std::env::temp_dir().join(format!("aikoql-ag23-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let idx = ModelAwareVectorIndex::new(100);
+            idx.upsert(kid(1), "small", &[1.0, 0.0]);
+            idx.upsert(kid(2), "large", &[1.0, 0.0, 0.0, 0.5]);
+            idx.checkpoint(&dir).unwrap();
+        }
+        let loaded = ModelAwareVectorIndex::load(&dir).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded.search(&[1.0, 0.0], 5, Some("small")).len(), 1);
+        assert_eq!(
+            loaded.search(&[1.0, 0.0, 0.0, 0.5], 5, Some("large")).len(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
