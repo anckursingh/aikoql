@@ -1004,6 +1004,63 @@ fn get_by_idem_tool_resolves_idempotency() {
     let _ = std::fs::remove_dir_all(&db);
 }
 
+// AG-05: the error-ergonomics hygiene leg — NO tool may surface a bare
+// string error. Every tool failure must carry code + hint + next so agents
+// can parse the failure and act on it. Drives every tool in the list with
+// empty args: successes pass untouched, any isError result must parse as
+// the structured envelope with all three fields.
+#[test]
+fn ag05_no_tool_returns_a_bare_string_error() {
+    let db = tmp_db("ag05");
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let mut session = crate::session::McpSession::default();
+    let txns: crate::tools::txn::TxnRegistry = Default::default();
+    let names: Vec<String> = crate::tool_registry::tools_list()["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    for name in names {
+        let r = crate::tool_registry::call_tool(
+            &k,
+            &name,
+            &crate::json!({}),
+            &db,
+            &mut session,
+            None,
+            &txns,
+        );
+        let frame = match r {
+            Ok(f) => f,
+            Err((code, msg)) => panic!("{name}: pre-dispatch error {code}: {msg}"),
+        };
+        if frame["isError"] != true {
+            continue;
+        }
+        let text = frame["content"][0]["text"].as_str().unwrap_or_default();
+        let env: crate::J = serde_json::from_str(text)
+            .unwrap_or_else(|_| panic!("{name}: isError result is not JSON: {text}"));
+        assert_eq!(env["ok"], false, "{name}: error envelope ok:false: {env}");
+        for field in ["code", "hint", "next"] {
+            assert!(
+                env["error"][field].is_string(),
+                "{name}: error.{field} missing (bare string error): {env}"
+            );
+        }
+    }
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+}
+
 // POC-4 S-3/S-6: the provenance + timeline panels render events[] — the
 // wire must carry the event's audit_hash and the version's asserted
 // event-time (valid_from) for that to be possible at all.
