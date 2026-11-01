@@ -9,6 +9,7 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Security
 
+- **Login backoff survives restarts + per-IP layer (AG-52)**: the fail state persists to `<db>.login-backoff.json` (wall-clock lock-until, reloaded at serve) so a restart keeps its login backoffs; a per-IP failure layer (20 free, same doubling) sits in front of the credential check on `/api/login` and the OAuth sign-in so a username spray is refused before argon2 runs. `--trusted-proxy IP` (`server.trusted_proxy` / `AIKOQL_TRUSTED_PROXY`) arms `X-Forwarded-For` — the client address is the last XFF hop only when the peer is the proxy, the peer otherwise.
 - **Stored content is fenced and trust-classed (AG-33)**: `remember` and
   `memory_store` accept a `trust` class of the content's source (`user`,
   `system`, `tool_output`, `web`, `document`; absent reads as

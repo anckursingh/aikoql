@@ -431,6 +431,18 @@ not yet: helm lint/render in PR CI (rendered only by the kind gate).
 **AG-52 (P2) Login backoff survives restarts** (in-memory today) and a
 per-IP layer behind proxies (`X-Forwarded-For` trusted only from a
 configured proxy).
+- *Status (2026-11-01): done.* The fail state persists to
+  `<db>.login-backoff.json` (wall-clock lock-until, written atomically on
+  change, reloaded at serve; a torn file reads as no state — fail open).
+  The per-IP layer mirrors the doubling shape (20 free failures — an
+  address is shared) and sits in front of the credential check on
+  `/api/login` and the OAuth sign-in, so a username spray is refused
+  before argon2 runs. `X-Forwarded-For` is trusted only from
+  `--trusted-proxy IP` (`server.trusted_proxy` / `AIKOQL_TRUSTED_PROXY`);
+  the client address is the last XFF hop when the peer is the proxy, the
+  peer otherwise. Per-IP state is in-memory (a restart resets it;
+  per-login state persists). Gates: `ag52_login_backoff_survives_restart`,
+  `ag52_per_ip_backoff_behind_trusted_proxy`.
 
 ### Phase E — ecosystem and proof
 
