@@ -477,7 +477,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fresh-100k-v2
-          path: artifacts/storage-engine-v2/result-fresh.json
+          # STORAGE_BACKEND=aikoql-v2 filters the run → the test writes the
+          # -aikoql-v2-fresh twin, not the canonical result-fresh name.
+          path: artifacts/storage-engine-v2/result-aikoql-v2-fresh.json
           if-no-files-found: error
 
   # P5-M26: the FULL competitor scale harness (100k + 1M + MCP column +
