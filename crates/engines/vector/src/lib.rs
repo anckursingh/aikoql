@@ -41,10 +41,10 @@ pub struct HnswVectorIndex {
     dim: AtomicUsize,
     capacity: usize,
     index: Mutex<hnsw::labeled::LabeledIndex<hnsw::distance::Cosine, String>>,
-    /// Live (KOID, model) pairs and their vectors (kept so a rebuild can
-    /// re-insert them; empty vectors mean a post-load entry not yet
-    /// re-upserted by the maintainer).
-    model_map: RwLock<BTreeMap<(KOID, String), Vec<f32>>>,
+    /// Live (KOID, model) pairs and their quantized vectors (kept so a
+    /// rebuild can re-insert them; empty codes mean a post-load entry not
+    /// yet re-upserted by the maintainer). AG-20c: int8 codes + scale.
+    model_map: RwLock<BTreeMap<(KOID, String), QuantVec>>,
     tombstones: RwLock<BTreeSet<KOID>>,
     /// Nodes physically in the graph (inserts; removes never shrink it).
     physical: AtomicU64,
@@ -57,6 +57,53 @@ pub struct HnswVectorIndex {
     /// publishes `manifest.json` last; `load` gates on manifest == meta —
     /// a pair torn across two checkpoints fails closed.
     gen: AtomicU64,
+}
+
+/// AG-20c: int8 scalar quantization of the rebuild copy. One uniform scale
+/// per vector — cosine is scale-invariant, so the dequantized copy
+/// reproduces exact cosine up to rounding (±scale/2 per dim). The graph
+/// keeps exact f32; this copy exists only so a rebuild can re-insert the
+/// live set.
+#[derive(Clone, Debug)]
+struct QuantVec {
+    code: Vec<i8>,
+    scale: f32,
+}
+
+impl QuantVec {
+    /// A post-load placeholder (checkpoints store labels, not vectors) —
+    /// the maintainer's catch-up re-upsert refills it.
+    fn empty() -> Self {
+        QuantVec {
+            code: Vec::new(),
+            scale: 1.0,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.code.is_empty()
+    }
+
+    fn from_f32(v: &[f32]) -> Self {
+        let max_abs = v.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        if max_abs == 0.0 {
+            return QuantVec {
+                code: vec![0; v.len()],
+                scale: 0.0,
+            };
+        }
+        let scale = max_abs / 127.0;
+        let code = v.iter().map(|x| (x / scale).round() as i8).collect();
+        QuantVec { code, scale }
+    }
+
+    fn to_f32(&self) -> Vec<f32> {
+        self.code.iter().map(|c| *c as f32 * self.scale).collect()
+    }
+
+    fn stored_bytes(&self) -> usize {
+        self.code.len() + 4
+    }
 }
 
 fn build_index(capacity: usize) -> hnsw::labeled::LabeledIndex<hnsw::distance::Cosine, String> {
@@ -120,7 +167,7 @@ impl HnswVectorIndex {
             .filter_map(|v| v.as_str().and_then(|s| KOID::from_hex(s).ok()))
             .collect();
         // R7: models stored as {koid_hex: [model1, model2, ...]}
-        let mut model_map: BTreeMap<(KOID, String), Vec<f32>> = BTreeMap::new();
+        let mut model_map: BTreeMap<(KOID, String), QuantVec> = BTreeMap::new();
         if let Some(models_obj) = meta["models"].as_object() {
             for (koid_hex, models_val) in models_obj {
                 let koid = KOID::from_hex(koid_hex)
@@ -128,12 +175,12 @@ impl HnswVectorIndex {
                 if let Some(models_arr) = models_val.as_array() {
                     for m in models_arr {
                         if let Some(model) = m.as_str() {
-                            model_map.insert((koid, model.to_string()), Vec::new());
+                            model_map.insert((koid, model.to_string()), QuantVec::empty());
                         }
                     }
                 } else if let Some(model) = models_val.as_str() {
                     // Backward-compat: old format had single model string.
-                    model_map.insert((koid, model.to_string()), Vec::new());
+                    model_map.insert((koid, model.to_string()), QuantVec::empty());
                 }
             }
         }
@@ -193,11 +240,11 @@ impl HnswVectorIndex {
             .read()
             .unwrap()
             .iter()
-            .map(|((koid, model), v)| (format!("{model}:{}", koid.to_hex()), v.clone()))
+            .map(|((koid, model), qv)| (format!("{model}:{}", koid.to_hex()), qv.to_f32()))
             .collect();
         if live.iter().any(|(_, v)| v.is_empty()) {
             // P5-M27 (IDX-P1-04): post-load state — checkpoints store labels,
-            // not vectors, and empty vectors are not a rebuild. Keep the
+            // not vectors, and empty codes are not a rebuild. Keep the
             // trigger armed and retry on a later tick (the catch-up re-upserts
             // refill the map). Clearing it here would lose the trigger
             // forever — no later delete crosses the ratio again.
@@ -216,15 +263,14 @@ impl HnswVectorIndex {
         true
     }
 
-    /// AG-20c gate — bytes the rebuild copy holds. Pre-quantization this is
-    /// the f32 footprint; the gate demands the int8 form (code + scale).
+    /// AG-20c gate — bytes the rebuild copy holds: int8 codes + scale.
     pub fn quantized_bytes(&self) -> usize {
         // justified: RwLock poison is unrecoverable
         self.model_map
             .read()
             .unwrap()
             .values()
-            .map(|v| v.len() * 4)
+            .map(QuantVec::stored_bytes)
             .sum()
     }
 }
@@ -288,7 +334,10 @@ impl VectorIndex for HnswVectorIndex {
         // stale graph node is deduped by the next rebuild.
         // justified: RwLock poison is unrecoverable
         let mut mm = self.model_map.write().unwrap();
-        if mm.insert((koid, model.to_string()), vec.to_vec()).is_none() {
+        if mm
+            .insert((koid, model.to_string()), QuantVec::from_f32(vec))
+            .is_none()
+        {
             self.physical.fetch_add(1, Ordering::Relaxed);
         }
         drop(mm);
