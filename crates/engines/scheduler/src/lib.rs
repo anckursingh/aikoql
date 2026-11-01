@@ -14,7 +14,10 @@ pub mod consolidation;
 pub mod key_rotation;
 
 pub use compaction::CompactionJob;
-pub use consolidation::{consolidate, ConsolidationJob, DEFAULT_INTERVAL, DEFAULT_THRESHOLD};
+pub use consolidation::{
+    consolidate, decay, ConsolidationJob, DEFAULT_INTERVAL, DEFAULT_THRESHOLD, DEMOTE_BELOW,
+    SESSION_TTL_MS,
+};
 pub use key_rotation::KeyRotationJob;
 
 use aikoql_kernel::knowledge::kom::*;

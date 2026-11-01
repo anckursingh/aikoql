@@ -13,7 +13,7 @@
 use aikoql_kernel::knowledge::kom::*;
 use aikoql_kernel::transaction::kernel::{Kernel, KnowledgeContext, Subject};
 use aikoql_kernel::{MergeRequest, MergeStrategy};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,6 +25,14 @@ pub const DEFAULT_THRESHOLD: f64 = 0.8;
 
 /// Default cadence. shortcut: no config knob — same tuning story.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// AG-13 decay: session-scoped memories past this age are demoted when
+/// their salience is below [`DEMOTE_BELOW`]. shortcut: only the session
+/// scope has a TTL — a per-scope map arrives with more scopes.
+pub const SESSION_TTL_MS: u64 = 86_400_000; // 24 h
+
+/// Salience below this demotes a TTL-expired session memory.
+pub const DEMOTE_BELOW: f64 = 0.5;
 
 /// AG-13: merge near-duplicate KOs type by type. Returns the KOIDs of the
 /// derived (merged) KOs. Idempotent across runs: merged sources carry
@@ -58,6 +66,63 @@ pub fn consolidate(k: &Kernel, subject: &Subject, threshold: f64) -> KResult<Vec
         }
     }
     Ok(merged)
+}
+
+/// AG-13 decay leg: flush the pending access counts into salience, then
+/// demote session-scoped Memory KOs that are past the TTL and low-salience
+/// (recency × accesses × authority × links below the threshold). Demotion
+/// is an epistemic Superseded transition — the memory stays readable and
+/// only `forget` deletes (AG-13c). Returns the number demoted.
+pub fn decay(
+    k: &Kernel,
+    subject: &Subject,
+    session_ttl_ms: u64,
+    demote_below: f64,
+) -> KResult<usize> {
+    let counts: HashMap<KOID, u64> = k.take_access_counts().into_iter().collect();
+    for (koid, n) in &counts {
+        k.refresh_salience(
+            KnowledgeContext::new(subject.clone()),
+            koid,
+            *n,
+            session_ttl_ms,
+        )?;
+    }
+    let now = k.clock_now();
+    let mut demoted = 0;
+    for ko in k.scan_by_type(subject, "Memory")? {
+        if ko.properties.get("scope") != Some(&Value::Text("session".into())) {
+            continue;
+        }
+        if !is_current(&ko) {
+            continue;
+        }
+        // HLC packs epoch_ms << 16 | counter — the raw clock compares in
+        // plain millis, so the age must decode the packed timestamp.
+        let age = now.saturating_sub(ko.commit_ts >> 16);
+        if age <= session_ttl_ms {
+            continue;
+        }
+        let recency = 0.5f64.powf(age as f64 / session_ttl_ms.max(1) as f64);
+        let accesses = counts.get(&ko.koid).copied().unwrap_or(0);
+        let links = 1.0
+            + (k.outbound_edges(&ko.koid, None)?.len() + k.inbound_edges(&ko.koid, None)?.len())
+                as f64;
+        let salience = recency * (1.0 + accesses as f64) * authority_factor(&ko.extensions) * links;
+        if salience < demote_below {
+            k.admin_transition_epistemic(
+                KnowledgeContext::new(subject.clone()),
+                &ko.koid,
+                EpistemicStatus::Superseded,
+                Origin::System,
+                None,
+                None,
+                Some("ag-13 decay: low-salience session memory past TTL".into()),
+            )?;
+            demoted += 1;
+        }
+    }
+    Ok(demoted)
 }
 
 /// Both sides must be current claims, same tenant, not already merge
@@ -166,14 +231,16 @@ impl ConsolidationJob {
                     continue;
                 }
                 last = std::time::Instant::now();
-                match consolidate(&k, &subject, DEFAULT_THRESHOLD) {
-                    Ok(merged) => {
+                match consolidate(&k, &subject, DEFAULT_THRESHOLD).and_then(|merged| {
+                    Ok((merged, decay(&k, &subject, SESSION_TTL_MS, DEMOTE_BELOW)?))
+                }) {
+                    Ok((merged, demoted)) => {
                         water_w.store(head, Ordering::Relaxed);
-                        if !merged.is_empty() {
+                        if !merged.is_empty() || demoted > 0 {
                             eprintln!(
-                                "ag-13: consolidated {} near-duplicate(s), latest {}",
+                                "ag-13: consolidated {} near-duplicate(s), demoted {} stale session memor(y/ies)",
                                 merged.len(),
-                                merged.last().unwrap().to_hex()
+                                demoted
                             );
                         }
                     }

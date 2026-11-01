@@ -406,7 +406,7 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
                                  // AG-33: agents may filter by trust class; untrusted content is fenced
     let trust_want = args.get("trust").and_then(J::as_str);
     let fence = Fence::new();
-    let (mut items, mut used, mut truncated) = (Vec::new(), 2usize, false);
+    let (mut items, mut used, mut truncated, mut seen) = (Vec::new(), 2usize, false, Vec::new());
     for hit in hits {
         let ko = &hit.ko;
         let status = ko.epistemic_status();
@@ -477,7 +477,11 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
         }
         used += size;
         items.push(item);
+        seen.push(ko.koid);
     }
+    // AG-13: the agent saw these — bump their access counts so the decay
+    // job's salience refresh keeps hot memories alive.
+    k.record_access(&seen);
     let mut out =
         json!({ "query": query, "semantic": semantic, "items": items, "truncated": truncated });
     // AG-33: the fence this response used, so a caller can strip it exactly
