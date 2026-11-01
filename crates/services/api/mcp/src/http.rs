@@ -11,6 +11,8 @@ use crate::{
     Origin, PropertyMap, Read, ReferentialPolicy, RememberRequest, SchemaRegistry, Subject,
     TcpListener, TcpStream, TraverseQuery, Value, Write, J, KOID, ONTOLOGY_TYPE, SERVER_START,
 };
+use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::RwLock;
 
 // ---- S-8 (POC-4): hot-reloadable compile-time ontology ----
@@ -127,9 +129,13 @@ pub(crate) fn serve_metrics(
                 let admin = admin.clone();
                 let tls = tls.clone();
                 let mcp = mcp.clone();
+                // AG-52: the peer for the login per-IP layer (before the
+                // TLS wrap consumes the stream).
+                let peer_ip = s.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
                 std::thread::spawn(move || match tls {
                     None => handle_http(
                         &mut s,
+                        peer_ip,
                         &k,
                         &sess,
                         &db,
@@ -145,6 +151,7 @@ pub(crate) fn serve_metrics(
                         };
                         handle_http(
                             &mut t,
+                            peer_ip,
                             &k,
                             &sess,
                             &db,
@@ -550,20 +557,59 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
 pub(crate) struct AuthResolver {
     users: Vec<crate::config::AuthUser>,
     ttl_secs: u64,
-    /// per configured login: (consecutive failures, locked until)
-    fails: Mutex<HashMap<String, (u32, Instant)>>,
+    /// per configured login: (consecutive failures, locked until unix ms)
+    fails: Mutex<HashMap<String, (u32, i64)>>,
+    /// AG-52: per source-IP failures, same doubling shape — a username
+    /// spray can't dodge the per-login backoff. In-memory only (a restart
+    /// resets it; the per-login state persists).
+    ips: Mutex<HashMap<IpAddr, (u32, i64)>>,
+    /// AG-52: X-Forwarded-For is trusted only from this peer.
+    trusted_proxy: Option<IpAddr>,
+    /// AG-52: the login-backoff state file (survives restarts). None = the
+    /// in-memory behavior (tests, embedded use).
+    state_path: Option<PathBuf>,
 }
 
 /// Wrong passwords a login gets before the backoff starts.
 const FREE_FAILS: u32 = 5;
+/// Wrong passwords one address gets before ITS backoff starts (an address
+/// is shared — NAT — so the free allowance is wider).
+pub(crate) const FREE_IP_FAILS: u32 = 20;
 /// The longest backoff, in seconds.
 const MAX_BACKOFF_SECS: u64 = 900;
+
+/// The doubling backoff the login and per-IP layers share: failure n
+/// (1-based, past the free allowance) waits 2^(n-free) s, capped.
+fn backoff_secs(n: u32, free: u32) -> u64 {
+    1u64
+        .checked_shl(n.saturating_sub(free))
+        .unwrap_or(u64::MAX)
+        .min(MAX_BACKOFF_SECS)
+}
+
+fn unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
 
 impl AuthResolver {
     pub(crate) fn new(
         users: Vec<crate::config::AuthUser>,
         admin_password: Option<&str>,
         ttl_secs: u64,
+    ) -> Self {
+        Self::with_state(users, admin_password, ttl_secs, None)
+    }
+
+    /// AG-52: `state_path` persists the fail map next to the database, so a
+    /// serve restart keeps its login backoffs; None keeps the in-memory
+    /// behavior.
+    pub(crate) fn with_state(
+        users: Vec<crate::config::AuthUser>,
+        admin_password: Option<&str>,
+        ttl_secs: u64,
+        state_path: Option<PathBuf>,
     ) -> Self {
         let mut users = users;
         if let Some(pw) = admin_password {
@@ -582,11 +628,28 @@ impl AuthResolver {
                 }
             }
         }
+        // AG-52: reload the persisted fail state; a torn or unreadable file
+        // reads as no state (the backoff restarts — fail open, login never
+        // blocked by a corrupted sidecar).
+        let fails = state_path
+            .as_deref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str::<HashMap<String, (u32, i64)>>(&s).ok())
+            .unwrap_or_default();
         AuthResolver {
             users,
             ttl_secs,
-            fails: Mutex::new(HashMap::new()),
+            fails: Mutex::new(fails),
+            ips: Mutex::new(HashMap::new()),
+            trusted_proxy: None,
+            state_path,
         }
+    }
+
+    /// AG-52: arm the proxy trust — set once at serve start, before the
+    /// resolver is shared.
+    pub(crate) fn set_trusted_proxy(&mut self, proxy: Option<IpAddr>) {
+        self.trusted_proxy = proxy;
     }
 
     pub(crate) fn is_configured(&self) -> bool {
@@ -608,15 +671,29 @@ impl AuthResolver {
             .map(|u| u.roles.clone())
     }
 
+    /// AG-52: the fail state as JSON (only live locks, so the file stays
+    /// small), written atomically — a crash mid-write keeps the last state.
+    fn save(&self) {
+        let Some(path) = &self.state_path else { return };
+        // justified: Mutex poison is unrecoverable
+        let fails = self.fails.lock().unwrap();
+        let now = unix_ms();
+        let live: HashMap<&String, &(u32, i64)> =
+            fails.iter().filter(|(_, (_, until))| *until > now).collect();
+        let Ok(json) = serde_json::to_string(&live) else { return };
+        let tmp = path.with_extension("login-backoff.tmp");
+        if std::fs::write(&tmp, json).is_err() {
+            return;
+        }
+        let _ = std::fs::rename(&tmp, path);
+    }
+
     /// Seconds `username` must wait before its next sign-in attempt.
     pub(crate) fn locked_for(&self, username: &str) -> Option<u64> {
         // justified: Mutex poison is unrecoverable
         let fails = self.fails.lock().unwrap();
-        let left = fails
-            .get(username)?
-            .1
-            .checked_duration_since(Instant::now())?;
-        Some(left.as_secs() + u64::from(left.subsec_nanos() > 0))
+        let left = fails.get(username)?.1 - unix_ms();
+        (left > 0).then_some((left as u64).div_ceil(1000))
     }
 
     /// Refused while `username` is backing off (locked_for); a wrong
@@ -636,20 +713,63 @@ impl AuthResolver {
         let mut fails = self.fails.lock().unwrap();
         if ok {
             fails.remove(username);
+            drop(fails);
+            self.save();
             return Some(u.roles.clone());
         }
         let (n, until) = fails
             .entry(username.to_string())
-            .or_insert((0, Instant::now()));
+            .or_insert((0, unix_ms()));
         *n += 1;
         if *n >= FREE_FAILS {
-            let wait = 1u64
-                .checked_shl(*n - FREE_FAILS)
-                .unwrap_or(u64::MAX)
-                .min(MAX_BACKOFF_SECS);
-            *until = Instant::now() + std::time::Duration::from_secs(wait);
+            *until = unix_ms() + (backoff_secs(*n, FREE_FAILS) * 1000) as i64;
         }
+        drop(fails);
+        self.save();
         None
+    }
+
+    /// AG-52: seconds `ip` must wait before its next login attempt.
+    pub(crate) fn ip_wait(&self, ip: IpAddr) -> Option<u64> {
+        // justified: Mutex poison is unrecoverable
+        let ips = self.ips.lock().unwrap();
+        let left = ips.get(&ip)?.1 - unix_ms();
+        (left > 0).then_some((left as u64).div_ceil(1000))
+    }
+
+    /// AG-52: record a failed login attempt from `ip` (callers count every
+    /// refusal — unknown usernames included).
+    pub(crate) fn ip_failure(&self, ip: IpAddr) {
+        // justified: Mutex poison is unrecoverable
+        let mut ips = self.ips.lock().unwrap();
+        let (n, until) = ips.entry(ip).or_insert((0, unix_ms()));
+        *n += 1;
+        if *n >= FREE_IP_FAILS {
+            *until = unix_ms() + (backoff_secs(*n, FREE_IP_FAILS) * 1000) as i64;
+        }
+    }
+
+    /// AG-52: the client address for login-rate purposes — the peer,
+    /// except when the peer is the configured trusted proxy, in which case
+    /// the last X-Forwarded-For hop (the one the proxy appended) is the
+    /// client. An unparseable entry falls back to the peer.
+    pub(crate) fn client_ip(&self, peer: IpAddr, headers: &str) -> IpAddr {
+        let Some(proxy) = self.trusted_proxy else { return peer };
+        if peer != proxy {
+            return peer;
+        }
+        for line in headers.lines() {
+            let Some((name, value)) = line.split_once(':') else { continue };
+            if name.trim().eq_ignore_ascii_case("x-forwarded-for") {
+                if let Some(last) = value.split(',').next_back().map(str::trim) {
+                    if let Ok(ip) = last.parse() {
+                        return ip;
+                    }
+                }
+                break;
+            }
+        }
+        peer
     }
 }
 
@@ -657,6 +777,7 @@ pub(crate) fn handle_login(
     body: &str,
     sessions: &Mutex<HashMap<String, HttpSession>>,
     auth: &AuthResolver,
+    client_ip: IpAddr,
 ) -> Result<String, (&'static str, String)> {
     let unauthorized = |e: String| ("401 Unauthorized", e);
     let creds: J =
@@ -670,9 +791,18 @@ pub(crate) fn handle_login(
             format!("too many failed sign-ins; retry in {wait} s"),
         ));
     }
-    let roles = auth
-        .verify(username, password)
-        .ok_or_else(|| unauthorized("invalid credentials".into()))?;
+    // AG-52: the per-IP layer sits in front of the credential check, so a
+    // spray across usernames is refused before argon2 even runs.
+    if let Some(wait) = auth.ip_wait(client_ip) {
+        return Err((
+            "429 Too Many Requests",
+            format!("too many failed sign-ins from your address; retry in {wait} s"),
+        ));
+    }
+    let roles = auth.verify(username, password).ok_or_else(|| {
+        auth.ip_failure(client_ip);
+        unauthorized("invalid credentials".into())
+    })?;
     // P3-M1 (auth002): 256-bit CSPRNG session token (64 hex chars). The old
     // time+pid token was predictable; sessions are bearer credentials now.
     let mut raw = [0u8; 32];
@@ -974,6 +1104,7 @@ pub(crate) fn explain_endpoint(query: &str, k: &Kernel) -> Result<String, String
 
 pub(crate) fn handle_http(
     stream: &mut (impl Read + Write),
+    peer_ip: IpAddr,
     k: &Kernel,
     sessions: &Mutex<HashMap<String, HttpSession>>,
     db_path: &Arc<String>,
@@ -1051,9 +1182,13 @@ pub(crate) fn handle_http(
         }
     }
 
+    // AG-52: the client address for login-rate purposes — XFF only when
+    // the peer is the configured trusted proxy (per-IP layer).
+    let client_ip = auth.client_ip(peer_ip, hdr_part);
+
     // the OAuth authorization server (discovery, registration, sign-in, tokens)
     if let Some(o) = mcp.and_then(|m| m.oauth()) {
-        if let Some(reply) = o.route(method, route, path, hdr_part, &body_str) {
+        if let Some(reply) = o.route(method, route, path, hdr_part, &body_str, client_ip) {
             crate::mcp_http::write_reply(stream, reply);
             return;
         }
@@ -1156,14 +1291,16 @@ pub(crate) fn handle_http(
             let body = prometheus_metrics(k, admin);
             ("200 OK", "text/plain; version=0.0.4", body)
         }
-        "/api/login" if method == "POST" => match handle_login(&body_str, sessions, auth) {
-            Ok(token) => (
-                "200 OK",
-                "application/json",
-                json!({"token": token}).to_string(),
-            ),
-            Err((status, e)) => (status, "application/json", json!({"error": e}).to_string()),
-        },
+        "/api/login" if method == "POST" => {
+            match handle_login(&body_str, sessions, auth, client_ip) {
+                Ok(token) => (
+                    "200 OK",
+                    "application/json",
+                    json!({"token": token}).to_string(),
+                ),
+                Err((status, e)) => (status, "application/json", json!({"error": e}).to_string()),
+            }
+        }
         // P3-M1 (auth005/auth006): the pre-v1 route aliases are part of the
         // same surface — session required, and graph runs as the session's
         // subject (never the old hardcoded graph-browser admin).

@@ -396,8 +396,8 @@ fn auth002_session_token_256bit_unpredictable() {
     let auth = crate::http::AuthResolver::new(vec![], Some("admin"), 86_400);
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let body = serde_json::json!({"username": "admin", "password": "admin"}).to_string();
-    let t1 = crate::http::handle_login(&body, &sessions, &auth).expect("login");
-    let t2 = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    let t1 = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
+    let t2 = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
     assert_eq!(t1.len(), 64, "token must be 256-bit hex (32 bytes)");
     assert!(
         t1.chars().all(|c| c.is_ascii_hexdigit()),
@@ -508,7 +508,7 @@ fn logins_back_off_after_five_failures() {
     );
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let ok = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
-    let err = crate::http::handle_login(&ok, &sessions, &auth).unwrap_err();
+    let err = crate::http::handle_login(&ok, &sessions, &auth, "127.0.0.1".parse().unwrap()).unwrap_err();
     assert!(err.0.starts_with("429"), "{err:?}");
     // a name that is not a login is never tracked (the map stays bounded)
     for _ in 0..10 {
@@ -551,6 +551,9 @@ fn ag52_login_backoff_survives_restart() {
         Some(1),
         "backoff must survive a restart"
     );
+    // the lock expires (wall clock, not process lifetime), then the right
+    // password clears the persisted state
+    std::thread::sleep(std::time::Duration::from_millis(1100));
     assert!(auth2.verify("admin", "pw").is_some(), "right password clears it");
     assert_eq!(auth2.locked_for("admin"), None);
 }
@@ -563,19 +566,20 @@ fn ag52_per_ip_backoff_behind_trusted_proxy() {
     let mut auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86400);
     auth.set_trusted_proxy(Some("10.0.0.1".parse().unwrap()));
     let h = "X-Forwarded-For: 1.2.3.4, 5.6.7.8\r\n";
+    let ip4 = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
     assert_eq!(
-        auth.client_ip("10.0.0.1".parse().unwrap(), h),
-        "5.6.7.8".parse().unwrap(),
+        auth.client_ip(ip4("10.0.0.1"), h),
+        ip4("5.6.7.8"),
         "the trusted proxy's last XFF hop is the client"
     );
     assert_eq!(
-        auth.client_ip("9.9.9.9".parse().unwrap(), h),
-        "9.9.9.9".parse().unwrap(),
+        auth.client_ip(ip4("9.9.9.9"), h),
+        ip4("9.9.9.9"),
         "XFF from a non-proxy peer is ignored"
     );
     assert_eq!(
-        auth.client_ip("10.0.0.1".parse().unwrap(), "X-Forwarded-For: garbage\r\n"),
-        "10.0.0.1".parse().unwrap(),
+        auth.client_ip(ip4("10.0.0.1"), "X-Forwarded-For: garbage\r\n"),
+        ip4("10.0.0.1"),
         "an unparseable XFF falls back to the peer"
     );
 
@@ -603,16 +607,16 @@ fn auth001_login_configured_creds_ok_wrong_401() {
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let ok = serde_json::json!({"username": "admin", "password": "s3cret-pw"}).to_string();
     assert!(
-        crate::http::handle_login(&ok, &sessions, &auth).is_ok(),
+        crate::http::handle_login(&ok, &sessions, &auth, "127.0.0.1".parse().unwrap()).is_ok(),
         "bootstrap admin must log in"
     );
     let wrong = serde_json::json!({"username": "admin", "password": "admin"}).to_string();
     assert!(
-        crate::http::handle_login(&wrong, &sessions, &auth).is_err(),
+        crate::http::handle_login(&wrong, &sessions, &auth, "127.0.0.1".parse().unwrap()).is_err(),
         "the old hardcoded admin/admin pair must be dead"
     );
     let nobody = serde_json::json!({"username": "user", "password": "user"}).to_string();
-    assert!(crate::http::handle_login(&nobody, &sessions, &auth).is_err());
+    assert!(crate::http::handle_login(&nobody, &sessions, &auth, "127.0.0.1".parse().unwrap()).is_err());
 
     // [auth].users path: a configured hash verifies and maps to its roles.
     use argon2::password_hash::PasswordHasher;
@@ -632,7 +636,7 @@ fn auth001_login_configured_creds_ok_wrong_401() {
         86400,
     );
     let ok = serde_json::json!({"username": "ops", "password": "cfg-pw"}).to_string();
-    let tok = crate::http::handle_login(&ok, &sessions, &auth).expect("configured login");
+    let tok = crate::http::handle_login(&ok, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("configured login");
     let subj = crate::http::validate_token(Some(&tok), &sessions).expect("valid session");
     assert_eq!(subj.name, "ops");
     assert_eq!(subj.roles, vec!["operator".to_string()]);
@@ -645,14 +649,14 @@ fn auth003_session_expiry_rejects_after_ttl() {
     let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 0);
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let body = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
-    let tok = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    let tok = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
     assert!(
         crate::http::validate_token(Some(&tok), &sessions).is_none(),
         "TTL 0 must expire immediately"
     );
 
     let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86_400);
-    let tok = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    let tok = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
     assert!(crate::http::validate_token(Some(&tok), &sessions).is_some());
 }
 
