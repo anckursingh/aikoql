@@ -215,6 +215,18 @@ impl HnswVectorIndex {
         self.tombstones.write().unwrap().clear();
         true
     }
+
+    /// AG-20c gate — bytes the rebuild copy holds. Pre-quantization this is
+    /// the f32 footprint; the gate demands the int8 form (code + scale).
+    pub fn quantized_bytes(&self) -> usize {
+        // justified: RwLock poison is unrecoverable
+        self.model_map
+            .read()
+            .unwrap()
+            .values()
+            .map(|v| v.len() * 4)
+            .sum()
+    }
 }
 
 impl Default for HnswVectorIndex {
@@ -1072,5 +1084,66 @@ mod tests {
             "mismatches are counted, never silently 'healthy'"
         );
         assert_eq!(h.live, 1, "only the adopted-dim vector is live");
+    }
+
+    // --- AG-20c — int8 scalar quantization of the rebuild copy. RED: the
+    // copy holds full-precision f32, ~4x the int8 code+scale budget. ---
+
+    fn koid64(n: u64) -> KOID {
+        let mut b = [0u8; KOID_LEN];
+        b[..8].copy_from_slice(&n.to_le_bytes());
+        KOID::from_bytes(b)
+    }
+
+    #[test]
+    fn ag20c_rebuild_copy_is_quantized() {
+        let idx = HnswVectorIndex::new(64, 10_000);
+        for i in 0..1_000u64 {
+            let v: Vec<f32> = (0..64)
+                .map(|d| ((i as f32 * 0.013) + d as f32 * 0.001).sin())
+                .collect();
+            idx.upsert(koid64(i), "m", &v);
+        }
+        assert!(
+            idx.quantized_bytes() <= 1_000 * (64 + 4),
+            "rebuild copy holds {} bytes for 1000 64-d vectors — expected int8 codes + scale",
+            idx.quantized_bytes()
+        );
+    }
+
+    /// Guard: post-rebuild navigation answers from the rebuilt graph alone;
+    /// every nomination score must stay within quantization tolerance of the
+    /// exact cosine (the kernel re-scores published hits from the store, so
+    /// this bounds the nomination error only).
+    #[test]
+    fn ag20c_rebuild_navigation_stays_within_tolerance() {
+        let idx = HnswVectorIndex::new(8, 10_000);
+        let mut originals: Vec<Vec<f32>> = Vec::new();
+        for i in 0..200u64 {
+            let v: Vec<f32> = (0..8)
+                .map(|d| ((i as f32 * 0.017) + d as f32 * 0.13).cos())
+                .collect();
+            idx.upsert(koid64(i), "m", &v);
+            originals.push(v);
+        }
+        let q: Vec<f32> = (0..8).map(|d| ((1.0 + d as f32) * 0.21).cos()).collect();
+        // cross the dead ratio and rebuild from the (to-be-quantized) copy
+        for i in 0..120u64 {
+            idx.remove(&koid64(i));
+        }
+        assert!(idx.maybe_rebuild(), "rebuild must run");
+        let exact = |a: &[f32], b: &[f32]| {
+            let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+            let na = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let nb = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+            dot / (na * nb)
+        };
+        for (koid, score) in idx.search(&q, 10, None) {
+            let n = u64::from_le_bytes(koid.0[..8].try_into().unwrap());
+            assert!(
+                (score - exact(&q, &originals[n as usize])).abs() < 2e-2,
+                "post-rebuild score {score} drifted from the exact cosine"
+            );
+        }
     }
 }
