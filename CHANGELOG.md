@@ -50,8 +50,16 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   journals a "model" catalog row per type — persisted like every catalog
   row and replaced in place; binding an undeclared type is inert, so a
   typo can never corrupt enrichment. `catalog_type_model` reads it
-  fail-closed. The binding itself lands here; enrichment consumes it
-  with the re-embed migration job (AG-23b2).
+  fail-closed.
+- **Bound models drive enrichment + migration (AG-23b2)**: the semantic
+  engine passes the collection's bound model to the provider (the binding
+  wins over the provider's configured default) and skips only a KO
+  already on its bound model — so setting or changing a binding
+  re-embeds the collection: live (the catalog row's own event triggers a
+  per-type rescan) and resumably (the start catch-up re-runs the
+  idempotent scan, so a kill mid-migration costs nothing). Dual-read
+  during migration is the per-model shards' same-dim merge; the old
+  model's vectors stay answerable until old-model queries stop.
 - **Int8 scalar quantization of the vector rebuild copy (AG-20c)**: the
   in-memory rebuild copy stores int8 codes + one uniform scale per
   vector (~4x smaller than the f32 copy). The HNSW graph keeps exact

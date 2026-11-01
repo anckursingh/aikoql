@@ -294,7 +294,7 @@ improves on the agent eval set; latency budget ≤ 30 ms for 50 candidates.
 and larger models via `model install`), a re-embed migration job
 (background, resumable, dual-read during migration). *Gate:* switching
 models never serves mixed-dimension results; migration survives a kill.
-- *Status (2026-11-01): AG-23a + AG-23b1 done — dim safety + catalog bindings.*
+- *Status (2026-11-01): AG-23 DONE — dim safety + catalog bindings + migration.*
   `ModelAwareVectorIndex` (`engines/vector`) shards one HNSW per model:
   each shard adopts its own dim (P5-M27's global drop becomes per-model),
   model-scoped queries answer from their shard, and model-less queries
@@ -308,9 +308,16 @@ models never serves mixed-dimension results; migration survives a kill.
   AG-23b1: `catalog_set_type_model` / `catalog_type_model` journal a
   "model" catalog row per type (persists, replaces in place; binding an
   undeclared type is inert). Gate: ct007.
-  Open (AG-23b2): consuming the binding at enrichment (per-collection
-  provider choice) and the resumable re-embed migration job — the shards
-  already give dual-read its index side.
+  AG-23b2: enrichment consumes the binding — `AiProvider::enrich` takes
+  the bound model (the binding wins over the provider's configured
+  default), and the engine skips only a KO already on its bound model, so
+  any binding change re-embeds the collection: live (the catalog row's own
+  event triggers a per-type rescan) and resumably (the start catch-up
+  re-runs the scan — idempotent skip, so a kill mid-migration costs
+  nothing). Dual-read during migration is the shards' same-dim merge, and
+  the old model's vectors stay answerable until old-model queries stop.
+  Gate: 4 semantic tests (bound-model use, catch-up migration, live
+  migration, kill-resume + idempotent re-scan).
 
 ### Phase T — trust debt (the moat's own credibility)
 
