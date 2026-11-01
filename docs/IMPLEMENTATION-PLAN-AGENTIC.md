@@ -213,6 +213,17 @@ string error (architecture hygiene leg).
 **AG-14 (P2) Procedural memory.** `record_experience`/`find_experiences`
 exist; add outcome-weighted retrieval (successful procedures rank first)
 and a `lesson` KO type distilled by AG-12 sampling.
+- *Status (2026-11-02): done.* `record_experience` returns an
+  `ExperienceRecord` and materializes a carried `lesson` as a first-class
+  `aikoql:lesson` KO (statement, `experience` koid backlink, same
+  provenance/ACL as its experience); `match_experiences` multiplies the
+  score by an outcome weight — keyword-classified success (1.0) / failure
+  (0.5) / unclassified (0.8). Gate:
+  `ag14_outcome_weighting_ranks_success_first` +
+  `ag14_lesson_is_materialized_as_a_ko` in `crates/kernel/tests/
+  experiences.rs`. The MCP `record_experience` tool also returns
+  `lesson_koid`. (The AG-12b sampling path stays open — the lesson text
+  arrives on the request; the caller distills it.)
 
 ### Phase R — retrieval at scale
 
