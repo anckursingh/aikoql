@@ -10,7 +10,7 @@ use crate::{json, Kernel, KnowledgeObject, Value, J};
 
 const FACT_TYPE: &str = "Fact";
 /// The most facts one call may carry.
-const MAX_FACTS: usize = 200;
+pub(crate) const MAX_FACTS: usize = 200;
 
 fn text(ko: &KnowledgeObject, key: &str) -> Option<String> {
     match ko.properties.get(key) {
@@ -40,6 +40,18 @@ pub(crate) fn tool_remember_facts(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(J::as_array)
         .filter(|f| !f.is_empty())
         .ok_or("missing argument: facts (a non-empty array)")?;
+    let results = judge_extracted(k, args, conversation, facts)?;
+    Ok(json!({ "conversation_id": conversation, "results": results }))
+}
+
+/// Judge a batch of extracted facts against the store — shared by
+/// remember_facts and the sampling path of summarize_conversation (AG-12b).
+pub(crate) fn judge_extracted(
+    k: &Kernel,
+    args: &J,
+    conversation: &str,
+    facts: &[J],
+) -> Result<Vec<J>, String> {
     if facts.len() > MAX_FACTS {
         return Err(format!(
             "at most {MAX_FACTS} facts per call, got {}",
@@ -55,7 +67,7 @@ pub(crate) fn tool_remember_facts(k: &Kernel, args: &J) -> Result<J, String> {
         .into_iter()
         .filter(|ko| ko.epistemic_status() != crate::EpistemicStatus::Superseded)
         .collect();
-    let results: Vec<J> = facts
+    Ok(facts
         .iter()
         .map(
             |fact| match judge(k, args, conversation, fact, &mut known) {
@@ -65,8 +77,7 @@ pub(crate) fn tool_remember_facts(k: &Kernel, args: &J) -> Result<J, String> {
                 }
             },
         )
-        .collect();
-    Ok(json!({ "conversation_id": conversation, "results": results }))
+        .collect())
 }
 
 /// Decide one fact: superseded, duplicate, conflict or created.

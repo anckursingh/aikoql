@@ -290,6 +290,31 @@ pub(crate) fn tool_summarize_conversation(k: &Kernel, args: &J) -> Result<J, Str
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    // AG-12b: with a sampling client the model proposes facts (a fixed JSON
+    // schema in the prompt) and the server judges them like remember_facts
+    // does; anything unusable degrades to the deterministic summary below.
+    let sampled = if crate::sampling::client_sampling() {
+        match crate::sampling::ask(args.get("messages").unwrap_or(&json!([])), SAMPLING_PROMPT) {
+            Ok(facts) if facts.len() <= crate::tools::facts::MAX_FACTS => {
+                let judged = crate::tools::facts::judge_extracted(k, args, conversation_id, &facts)
+                    .map_err(|e| e.to_string())?;
+                Some(judged)
+            }
+            Ok(facts) => {
+                tracing::warn!(
+                    facts = facts.len(),
+                    "sampled facts exceed MAX_FACTS — deterministic fallback"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!("sampling failed ({e}) — deterministic fallback");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let req = SummarizeConversationRequest {
         context: subject.into(),
         conversation_id: conversation_id.to_string(),
@@ -298,7 +323,7 @@ pub(crate) fn tool_summarize_conversation(k: &Kernel, args: &J) -> Result<J, Str
         note: args.get("note").and_then(|n| n.as_str()).map(String::from),
     };
     let r = k.summarize_conversation(req).map_err(|e| e.to_string())?;
-    Ok(json!({
+    let mut resp = json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
         "type_name": "aikoql:conversation_summary",
@@ -307,8 +332,20 @@ pub(crate) fn tool_summarize_conversation(k: &Kernel, args: &J) -> Result<J, Str
             .and_then(|m| m.as_array())
             .map(|a| a.len())
             .unwrap_or(0),
-    }))
+    });
+    if let Some(judged) = sampled {
+        resp["sampling"] = json!(true);
+        resp["facts"] = json!(judged);
+    }
+    Ok(resp)
 }
+
+/// AG-12b: the extraction contract the client's model is asked to follow.
+const SAMPLING_PROMPT: &str = "Extract every user-stated fact from this \
+conversation and answer with a JSON array only, no prose. Each fact: \
+{\"statement\": \"what was said\", \"key\": \"person.<name>.<attribute>\", \
+\"value\": \"...\", \"speaker\": \"user|assistant\", \"messages\": [first, last]} \
+— the 1-based numbers of the messages the fact rests on.";
 
 pub(crate) fn tool_forget(k: &Kernel, args: &J) -> Result<J, String> {
     let mode = match args

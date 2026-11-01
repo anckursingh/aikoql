@@ -391,33 +391,55 @@ pub(crate) fn run_stdio(
          for an interactive prompt run: aikoql-mcp shell)"
     );
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
+    // AG-12b: server-initiated frames (sampling) leave via this stdout.
+    crate::sampling::register_sink(stdout.clone());
     let mut sub_ids: HashSet<String> = HashSet::new();
     let mut session = McpSession::default();
     // P5-M11: the stdio connection gets its own txn handle registry.
     let txns: TxnRegistry = Mutex::new(HashMap::new());
     let stdin = std::io::stdin();
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(e) => {
-                info!("stdio loop ended: read error: {e}");
-                break;
-            }
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let msg: J = match serde_json::from_str(line.trim()) {
-            Ok(v) => v,
-            Err(e) => {
-                let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
-                write_frame(
-                    &mut *out,
-                    err_frame(&J::Null, -32700, &format!("parse error: {}", e)),
-                );
+    // AG-12b: a reader thread owns stdin, so replies to server-initiated
+    // requests (sampling) reach their waiter while a tool is still running.
+    let (tx, rx) = std::sync::mpsc::channel::<J>();
+    let read_stdout = stdout.clone();
+    std::thread::spawn(move || {
+        for line in stdin.lock().lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(e) => {
+                    info!("stdio loop ended: read error: {e}");
+                    break;
+                }
+            };
+            if line.trim().is_empty() {
                 continue;
             }
-        };
+            let msg: J = match serde_json::from_str(line.trim()) {
+                Ok(v) => v,
+                Err(e) => {
+                    let mut out = read_stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
+                    write_frame(
+                        &mut *out,
+                        err_frame(&J::Null, -32700, &format!("parse error: {}", e)),
+                    );
+                    continue;
+                }
+            };
+            // a frame with an id but no method is a reply to a
+            // server-initiated request (sampling): deliver it, not dispatch
+            if msg.get("method").is_none() {
+                if let Some(id) = msg.get("id").and_then(|i| i.as_u64()) {
+                    if crate::sampling::deliver(id, msg.clone()) {
+                        continue;
+                    }
+                }
+            }
+            if tx.send(msg).is_err() {
+                break; // the main loop is gone
+            }
+        }
+    });
+    while let Ok(msg) = rx.recv() {
         handle_message(
             kernel,
             &mut sub_ids,

@@ -88,6 +88,18 @@ pub(crate) fn handle_message(
     let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
     match method {
         "initialize" => {
+            // AG-12b: stdio initialize records whether the client can
+            // sample. The flag is stdio-only process state (the sink is the
+            // stdio stdout); HTTP sessions never flip it, so a sampling
+            // client over HTTP deterministically degrades (h019 pins it).
+            if session.trust_mode == TrustMode::Stdio {
+                crate::sampling::set_client_sampling(
+                    msg.get("params")
+                        .and_then(|p| p.get("capabilities"))
+                        .and_then(|c| c.get("sampling"))
+                        .is_some(),
+                );
+            }
             if let Some(id) = id {
                 write_frame(
                     &mut *out,
@@ -100,7 +112,12 @@ pub(crate) fn handle_message(
                                     .and_then(|p| p.get("protocolVersion"))
                                     .and_then(|v| v.as_str()),
                             ),
-                            "capabilities": {"tools": if crate::tool_registry::core_profile() { json!({"listChanged": true}) } else { json!({}) }},
+                            "capabilities": {
+                                "tools": if crate::tool_registry::core_profile() { json!({"listChanged": true}) } else { json!({}) },
+                                // AG-03: resources (subscribable) and prompts
+                                "resources": {"subscribe": true},
+                                "prompts": {}
+                            },
                             "serverInfo": {"name": "aikoql-mcp", "version": env!("CARGO_PKG_VERSION")}
                         }
                     }),
@@ -338,6 +355,68 @@ pub(crate) fn handle_message(
         "notifications/ack" => {
             let params = msg.get("params").cloned().unwrap_or(J::Null);
             let result = notification_ack(k, &params);
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
+            }
+        }
+        "resources/list" => {
+            if let Some(id) = id {
+                write_frame(
+                    &mut *out,
+                    json!({"jsonrpc":"2.0","id":id,"result":crate::resources::resources_list()}),
+                );
+            }
+        }
+        "resources/read" => {
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let result = crate::resources::resources_read(k, session, &params);
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
+            }
+        }
+        "resources/subscribe" => {
+            drop(out); // release lock before subscription setup
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let result = crate::resources::resources_subscribe(k, sub_ids, stdout, &params);
+            let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
+            }
+        }
+        "resources/unsubscribe" => {
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let result = crate::resources::resources_unsubscribe(k, sub_ids, &params);
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
+            }
+        }
+        "prompts/list" => {
+            if let Some(id) = id {
+                write_frame(
+                    &mut *out,
+                    json!({"jsonrpc":"2.0","id":id,"result":crate::prompts::prompts_list()}),
+                );
+            }
+        }
+        "prompts/get" => {
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let result = crate::prompts::prompts_get(k, session, &params);
             if let Some(id) = id {
                 let frame = match result {
                     Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),

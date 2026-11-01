@@ -93,10 +93,23 @@ jobs:
       # CI-05: cargo cache in every build job (default key = OS + rust
       # version + Cargo.lock).
       - uses: Swatinem/rust-cache@v2
+      # CI-14: free runner disk before building — the debug workspace plus
+      # the restored cargo cache exceeds the ~14 GB free on ubuntu-latest
+      # (main's run died ENOSPC, the next run's linker SIGBUS was the same
+      # full disk; the toolchains below are unused here and ~17 GB).
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/share/powershell /usr/share/swift 2>/dev/null || true
+          df -h /
       # sfm009_large_wal_snapshot_has_bounded_rss (PR6-R3-003): same RSS-cell
       # gating as the Windows job — local-suite test, skipped on CI runners.
       # Skip list derived from tests/gated.toml (PR6-F2 / P0-2).
       - run: cargo test --workspace -- $(bash scripts/skip-list.sh)
+        env:
+          # CI-14: incremental debug artifacts roughly triple target/; a
+          # cold CI build gains nothing from them.
+          CARGO_INCREMENTAL: 0
         # Fast regression net. Only pure measurement is skipped (SE-06
         # classification — the same skip list as the Windows check job's
         # table, so the regression net is identical on both OSes); every

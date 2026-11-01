@@ -89,7 +89,17 @@ function assert(cond, msg) {
   assert(fetched.properties.body === 'volume restart proof',
     `restored KO content must match, got ${fetched.properties.body}`);
   const found = await b.call('memory_search', { query: 'memory survives the restart' });
-  assert(found.count >= 1 && found.results.some((r) => r.name === 'dep003-memory'),
+  // AG-33: untrusted output arrives inside a per-response nonce fence —
+  // compare the unfenced name, using the response's own markers (an
+  // unfenced server leaves the name untouched).
+  const unfence = (s) => {
+    const f = found.fence || {};
+    if (f.open && f.close && s.startsWith(f.open) && s.endsWith(f.close)) {
+      return s.slice(f.open.length, s.length - f.close.length).trim();
+    }
+    return s;
+  };
+  assert(found.count >= 1 && found.results.some((r) => unfence(r.name) === 'dep003-memory'),
     `the memory must survive the restart, got ${JSON.stringify(found)}`);
   b.end();
   sh('docker stop -t 1 aikoql-vol-b');

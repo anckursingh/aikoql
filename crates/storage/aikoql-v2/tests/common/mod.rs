@@ -208,7 +208,39 @@ pub fn self_rss_kb() -> u64 {
     }
 }
 
-#[cfg(all(not(windows), unix))]
+#[cfg(target_os = "macos")]
+pub fn self_rss_kb() -> u64 {
+    // macOS: no /proc — ask Mach (task_info, TASK_BASIC_INFO_64); the
+    // resident_size is bytes, same as the Windows arm.
+    #[repr(C)]
+    struct TaskBasicInfo64 {
+        _virtual_size: u64,
+        resident_size: u64,
+        _resident_size_max: u64,
+        _user_time_secs: i32,
+        _user_time_usecs: i32,
+        _system_time_secs: i32,
+        _system_time_usecs: i32,
+        _policy: i32,
+        _suspend_count: i32,
+    }
+    extern "C" {
+        fn mach_task_self() -> u32;
+        fn task_info(task: u32, flavor: u32, info: *mut TaskBasicInfo64, count: *mut u32) -> i32;
+    }
+    const TASK_BASIC_INFO_64: u32 = 5;
+    const KERN_SUCCESS: i32 = 0;
+    unsafe {
+        let mut info = std::mem::zeroed::<TaskBasicInfo64>();
+        let mut count = (std::mem::size_of::<TaskBasicInfo64>() / 4) as u32;
+        if task_info(mach_task_self(), TASK_BASIC_INFO_64, &mut info, &mut count) != KERN_SUCCESS {
+            return 0;
+        }
+        info.resident_size / 1024
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
 pub fn self_rss_kb() -> u64 {
     std::fs::read_to_string("/proc/self/status")
         .ok()

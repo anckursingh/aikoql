@@ -235,7 +235,8 @@ fn cb004_child_kill_between_accept_and_complete_marks_failed_on_reopen() {
         jobs[0].error
     );
 
-    let _ = std::fs::remove_file(&path);
+    // storage-v2 opens a directory at `path`; remove_file can't remove it.
+    let _ = std::fs::remove_dir_all(&path).or_else(|_| std::fs::remove_file(&path));
     let _ = std::fs::remove_file(&progress);
 }
 

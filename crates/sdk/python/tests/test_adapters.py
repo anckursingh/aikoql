@@ -48,12 +48,16 @@ def test_crewai_memory_save_search_reset(tmp_aikoql):
     mem.save("dogs are mammals", {"source": "biology"})
     mem.save("fish live underwater", {"source": "biology"})
 
-    hits = mem.search("pets", limit=2)
+    # "mammals", not "pets": the adapter searches text_only, and a query
+    # that matches nothing must find nothing (the old "pets" query passed
+    # only because pre-AG-20 search padded score-0 objects, CI has no
+    # embedding model).
+    hits = mem.search("mammals", limit=2)
     assert len(hits) == 2
     assert all("mammals" in h for h in hits)
 
     mem.reset()
-    assert mem.search("pets", limit=5) == []
+    assert mem.search("mammals", limit=5) == []
 
     mem.close()
 

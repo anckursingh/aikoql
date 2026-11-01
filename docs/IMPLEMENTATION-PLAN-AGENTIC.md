@@ -98,11 +98,31 @@ to win head-to-head evaluations; **P2** = differentiation / polish.
   `aikoql-context` (compile context for a task), `aikoql-review-conflicts`.
 - *Gate:* the official SDK lists/reads/subscribes (extends
   `scripts/e2e-mcp-http.py`).
+- *Status (2026-11-01):* **done** (branch `feature/agentic-wave-4`).
+  Both transports share `handle_message`, so the three resources, the
+  two prompts and `resources/subscribe` serve over stdio and HTTP alike.
+  Reads compile fresh state; a subscription emits
+  `notifications/resources/updated` on kernel events the uri could
+  reflect (shortcut: the kernel's EventFilter has no type dimension, so a
+  `conflicts/open` subscription hints on any write under the subject).
+  Tests `tests/mcp_resources_prompts.rs` (r001–r006, incl. the wire-level
+  resources/updated frame); the e2e gate lists/reads/subscribes through
+  the official SDK (the venv's SDK predates Client.listen, so the
+  notification frame itself stays pinned at the wire level).
 
 **AG-04 (P1) Structured tool output.**
 - *Design:* `outputSchema` + `structuredContent` (MCP 2025-06-18) for the
   core tools; text content stays for older clients.
 - *Gate:* SDK validates structured results against the schema.
+- *Status (2026-11-01):* **done** (branch `feature/agentic-wave-4`).
+  The 13 core tools' defs carry `outputSchema` — real schemas for
+  remember/get/recall, the honest `{"type":"object"}` for the rest —
+  and a successful `tools/call` result carries `structuredContent`
+  beside the text (errors carry none; older clients ignore the extra
+  field — the spec's own migration story). Tests
+  `tests/mcp_structured_output.rs` (s001–s004); the e2e gate validates
+  remember/get/recall structured results against their declared schemas
+  with jsonschema through the official SDK.
 
 **AG-05 (P2) Error ergonomics for agents.** Every tool error carries
 `code`, `hint`, and a `next` suggestion (an existing pattern in
@@ -143,6 +163,28 @@ string error (architecture hygiene leg).
 - *Gate:* on the agent eval set's conversations, extraction F1 ≥ the deterministic
   path; zero facts without a message-range provenance; every contradiction
   with an existing fact becomes a Conflict KO (never an overwrite).
+
+- *Status (2026-10-31):* **AG-12b done** (branch
+  `feature/agentic-wave-4`). With a client that advertises `sampling`,
+  `summarize_conversation` sends `sampling/createMessage` (the
+  conversation plus a fixed JSON schema for the facts), judges the model's
+  candidate facts with `remember_facts`'s shared `judge_extracted` — the
+  same scan and dedupe/conflict/supersede logic — and reports the judged
+  statuses in the response. Any failure (no capability, garbage answer,
+  a 30 s timeout, no stdio sink) degrades to the deterministic summary;
+  its response shape is unchanged, and s002 pins that byte-for-byte.
+  Tests `tests/mcp_memory_sampling.rs` (s001 judged created+conflict with
+  message-range provenance, s002 guard, s003 fallback). The stdio loop
+  gained a reader thread so replies reach their waiter while a tool is
+  still running; requests still dispatch one at a time. **HTTP leg
+  (2026-11-01):** closed as consciously unsupported — `serve
+  --metrics-addr` never starts the stdio loop (S-12), the sampling state
+  is stdio-only, and HTTP initialize no longer touches it (h019 guards
+  the contract: the deterministic summary answers, the stdio stream
+  stays silent); server-initiated requests over Streamable HTTP would
+  ride the GET stream, which nothing consumes sampling replies on
+  today. Remaining open: the gate's eval measurement (needs the
+  AG-61 run).
 
 **AG-13 (P1) Consolidation, salience and decay.**
 - *Design:* per-KO `salience` (recency × access × authority × links),

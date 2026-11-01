@@ -1,0 +1,34 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s
+     Running tests/mcp_memory_sampling.rs (target/debug/deps/mcp_memory_sampling-24752fd05015100f)
+
+running 3 tests
+test s002_without_sampling_the_deterministic_shape_is_unchanged ... ok
+test s003_an_unusable_sampled_answer_falls_back_to_deterministic ... FAILED
+test s001_a_sampling_client_is_asked_then_its_facts_are_judged ... FAILED
+
+failures:
+
+---- s003_an_unusable_sampled_answer_falls_back_to_deterministic stdout ----
+
+thread 's003_an_unusable_sampled_answer_falls_back_to_deterministic' (4553868) panicked at crates/services/api/mcp/tests/mcp_memory_sampling.rs:219:5:
+assertion `left == right` failed: sampling was attempted
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- s001_a_sampling_client_is_asked_then_its_facts_are_judged stdout ----
+
+thread 's001_a_sampling_client_is_asked_then_its_facts_are_judged' (4553866) panicked at crates/services/api/mcp/tests/mcp_memory_sampling.rs:164:5:
+assertion `left == right` failed: the server must ask exactly once — RED: it never asks
+  left: 0
+ right: 1
+
+
+failures:
+    s001_a_sampling_client_is_asked_then_its_facts_are_judged
+    s003_an_unusable_sampled_answer_falls_back_to_deterministic
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.37s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_memory_sampling`
+EXIT=101

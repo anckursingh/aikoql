@@ -18,6 +18,7 @@ import tempfile
 import time
 
 import httpx2
+import jsonschema
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -49,6 +50,58 @@ async def run(url):
                 via = json.loads(got.content[0].text)["properties"]["via"]
                 assert via == "mcp-sdk", got
                 print(f"remember + get: {koid} round-trips")
+
+                # AG-04: structured output — the SDK's CallToolResult exposes
+                # structuredContent, validated against the declared outputSchema.
+                rem_def = next(t for t in tools.tools if t.name == "remember")
+                assert rem_def.output_schema is not None, "remember declares outputSchema"
+                jsonschema.validate(put.structured_content, rem_def.output_schema)
+                got_def = next(t for t in tools.tools if t.name == "get")
+                jsonschema.validate(got.structured_content, got_def.output_schema)
+                rec = await session.call_tool("recall", {"subject": "admin", "query": "mcp-sdk"})
+                rec_def = next(t for t in tools.tools if t.name == "recall")
+                jsonschema.validate(rec.structured_content, rec_def.output_schema)
+                print("structured output: remember + get + recall validate against outputSchema")
+
+                # AG-03: resources and prompts through the official SDK.
+                resources = await session.list_resources()
+                uris = [r.uri for r in resources.resources]
+                assert "aikoql://ko/{koid}" in uris, uris
+                assert "aikoql://conflicts/open" in uris, uris
+                assert "aikoql://session/{id}/context" in uris, uris
+                print(f"resources/list: {uris}")
+                ko = await session.read_resource(f"aikoql://ko/{koid}")
+                assert koid in ko.contents[0].text, ko
+                openc = await session.read_resource("aikoql://conflicts/open")
+                assert json.loads(openc.contents[0].text) == [], openc.contents[0].text
+                print("resources/read: ko + open conflicts")
+
+                prompts = await session.list_prompts()
+                names = [p.name for p in prompts.prompts]
+                assert names == ["aikoql-context", "aikoql-review-conflicts"], names
+                ctx = await session.get_prompt("aikoql-context", {"task": "verify the SDK"})
+                assert "verify the SDK" in ctx.messages[0].content.text, ctx
+                print("prompts: list + get")
+
+                # AG-03: resources/subscribe — the request round-trips through
+                # the SDK, and the conflict write is visible on re-read. The
+                # resources/updated FRAME itself is pinned at the wire level
+                # by the rust r006 test (the venv's mcp SDK predates
+                # Client.listen, where this build would surface server
+                # notifications to the caller).
+                await session.subscribe_resource("aikoql://conflicts/open")
+                claim = await session.call_tool(
+                    "remember", {"subject": "admin", "type_name": "Claim",
+                                 "properties": {"key": "sdk", "value": "a"}})
+                ck = json.loads(claim.content[0].text)["koid"]
+                await session.call_tool(
+                    "contradict", {"subject": "admin", "claim": ck, "counter_type": "Claim",
+                                   "properties": {"key": "sdk", "value": "b"},
+                                   "evidence": [{"source_artifact": "e2e", "method": "llm_inference"}]})
+                openc = await session.read_resource("aikoql://conflicts/open")
+                listed = json.loads(openc.contents[0].text)
+                assert any(c["status"] == "open" and c["claim_a"] == ck for c in listed), listed
+                print("resources/subscribe: answered; the conflict lists on re-read")
 
 
 def main():

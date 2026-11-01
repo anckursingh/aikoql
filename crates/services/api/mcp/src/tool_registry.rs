@@ -66,6 +66,30 @@ pub(crate) const TOOL_GROUPS: &[(&str, &str, &[&str])] = &[
 /// AG-01: set once at serve start from `--tool-profile` (unset = full).
 pub(crate) static CORE_PROFILE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
+/// AG-04: outputSchema for the core tools. The three stable-object shapes
+/// get real schemas; the rest of the core surface declares the honest
+/// `{"type": "object"}` (their result shape varies with the arguments).
+/// None for tools outside the core surface.
+pub(crate) fn output_schema(name: &str) -> Option<J> {
+    if !CORE_TOOLS.contains(&name) {
+        return None;
+    }
+    Some(match name {
+        "remember" => json!({"type": "object", "properties": {
+            "koid": {"type": "string"}, "version": {"type": "integer"},
+            "commit_ts": {"type": "integer"}, "state": {"type": "string"}
+        }, "required": ["koid", "version"]}),
+        "get" => json!({"type": "object", "properties": {
+            "koid": {"type": "string"}
+        }, "required": ["koid"]}),
+        "recall" => json!({"type": "object", "properties": {
+            "query": {"type": "string"}, "semantic": {"type": "boolean"},
+            "items": {"type": "array"}, "truncated": {"type": "boolean"}
+        }, "required": ["query", "items", "truncated"]}),
+        _ => json!({"type": "object"}),
+    })
+}
+
 pub(crate) fn core_profile() -> bool {
     CORE_PROFILE.get().copied().unwrap_or(false)
 }
@@ -139,7 +163,7 @@ pub(crate) fn tools_list() -> J {
     // fenced (delimited, marked as data); absence reads as undeclared.
     let trust_prop = json!({"type": "string", "enum": ["user", "tool_output", "web", "document", "system"], "description": "The trust class of this content's source: user/system (trusted, returned unfenced) or tool_output/web/document (returned fenced as data). Omit when you cannot vouch for the source — undeclared is treated as untrusted."});
     let trust_filter = json!({"type": "string", "description": "Only items whose trust class equals this (user, system, tool_output, web, document, undeclared)"});
-    json!({
+    let mut all = json!({
         "tools": [
             {"name": "remember", "description": "Commit a knowledge object (or new version) with provenance. Set embed:true for auto-embedding via SemanticEngine (MRFC-0040). Returns KOID+version.", "inputSchema": {"type": "object", "properties": {"subject": subj, "type_name": {"type": "string"}, "koid": koid, "properties": {"type": "object"}, "semantic": {"type": "object"}, "embed": {"type": "boolean", "description": "Request auto-embedding via configured AI provider (MRFC-0040)"}, "expected_version": {"type": "integer"}, "idempotency_key": {"type": "string"}, "note": {"type": "string"}, "trust": trust_prop, "visibility": {"type": "string", "enum": ["private", "shared"], "description": "private: only you (the default for new objects); shared: everyone in your tenant may read, only you write. Omit to keep the current visibility"}, "retention_ms": {"type": "integer", "description": "Declare automatic expiry: the kernel stamps valid_to = now + retention_ms (ms). Expired memory drops out of default-time retrieval but stays readable via get/lineage."}, "valid_from": {"type": "integer", "description": "Validity start (epoch millis) of the claim in the world (T-60): same surface as extensions.valid_from, which wins when both are given"}}, "required": ["type_name"]}},
             {"name": "forget", "description": "Tombstone or legally erase a knowledge object (audit-preserving).", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "mode": {"type": "string", "enum": ["tombstone", "erase"]}}, "required": ["koid"]}},
@@ -247,7 +271,15 @@ pub(crate) fn tools_list() -> J {
         {"name": "record_experience", "description": "Record an agent execution outcome as an aikoql:experience Knowledge Object — agent_derived authority, evidence required, TTL-bounded validity, confidence context. shared_with grants other agents read (reuse) access. (v0.3 K5)", "inputSchema": {"type": "object", "properties": {"subject": subj, "goal": {"type": "string", "description": "What the run was trying to achieve"}, "action": {"type": "string", "description": "What the agent did"}, "outcome": {"type": "string", "description": "What happened"}, "actor": {"type": "string", "description": "Defaults to the calling subject"}, "preconditions": {"type": "array", "items": {"type": "string"}}, "causal_explanation": {"type": "string"}, "lesson": {"type": "string"}, "reuse_conditions": {"type": "array", "items": {"type": "string"}, "description": "Tokens that must ALL appear in a future task before this experience is reused; empty = reuse on goal overlap"}, "evidence": {"type": "array", "items": {"type": "object", "properties": {"source_artifact": {"type": "string"}, "method": {"type": "string"}, "location": {"type": "string"}, "revision": {"type": "string"}, "confidence": {"type": "number"}}, "required": ["source_artifact", "method"]}}, "confidence": {"type": "number", "description": "0..1, default 0.5"}, "ttl_seconds": {"type": "integer", "description": "Default 30 days"}, "shared_with": {"type": "array", "items": {"type": "string"}, "description": "Principals allowed to read and reuse this experience"}, "note": {"type": "string"}}, "required": ["goal", "action", "outcome", "evidence"]}},
         {"name": "find_experiences", "description": "Match recorded agent experiences for reuse against a task description — reuse-condition gating, confidence-weighted ranking, expired/invalidated experiences filtered, ACL-scoped to what the caller may read. (v0.3 K5)", "inputSchema": {"type": "object", "properties": {"subject": subj, "task": {"type": "string", "description": "Natural language task description"}, "limit": {"type": "integer", "default": 5}}, "required": ["task"]}}
         ]
-    })
+    });
+    // AG-04: attach the core tools' outputSchema to their defs.
+    for t in all["tools"].as_array_mut().into_iter().flatten() {
+        let name = t["name"].as_str().unwrap_or("");
+        if let Some(schema) = output_schema(name) {
+            t["outputSchema"] = schema;
+        }
+    }
+    all
 }
 pub(crate) fn tool_batch(k: &Kernel, args: &J) -> Result<J, String> {
     let ops = args
@@ -473,10 +505,16 @@ pub(crate) fn call_tool(
             "ok",
             &tool_detail(name, args),
         );
-        Ok(json!({
+        let mut res = json!({
             "content": [{"type": "text", "text": wrapped["data"].to_string()}],
             "isError": false
-        }))
+        });
+        // AG-04: structuredContent beside the text for the core tools —
+        // older clients ignore the extra field, newer read the structure
+        if output_schema(name).is_some() {
+            res["structuredContent"] = wrapped["data"].clone();
+        }
+        Ok(res)
     } else {
         let err_detail = wrapped["error"].as_str().unwrap_or("unknown error");
         audit_log(db_path, &session.agent_id, name, "error", err_detail);

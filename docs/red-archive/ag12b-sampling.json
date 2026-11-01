@@ -1,0 +1,8 @@
+{
+  "id": "ag12b-sampling",
+  "pre_fix_commit": "7f0943b9c472000fca886930884fcb8f95f52ab0",
+  "command": "cargo test -p aikoql-mcp --test mcp_memory_sampling",
+  "captured_at": "2026-10-31T20:54:33Z",
+  "captured_head": "7f0943b9c472000fca886930884fcb8f95f52ab0",
+  "exit_code": 101
+}
