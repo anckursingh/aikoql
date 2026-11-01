@@ -1,0 +1,39 @@
+# R5a: the server needs get/create/update on the lease it contends for —
+# and nothing else. The pre-install TLS hook shares this ServiceAccount
+# and additionally writes the <fullname>-repl-tls Secret
+# (secrets: create/update).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "aikoql.fullname" . }}
+  labels:
+    {{- include "aikoql.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aikoql.fullname" . }}
+  labels:
+    {{- include "aikoql.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "update"]
+    resourceNames: ["{{ include "aikoql.fullname" . }}-repl-tls"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aikoql.fullname" . }}
+  labels:
+    {{- include "aikoql.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "aikoql.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aikoql.fullname" . }}

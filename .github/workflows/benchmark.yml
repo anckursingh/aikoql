@@ -543,3 +543,27 @@ jobs:
           name: scale-result
           path: scale-result.json
           if-no-files-found: error
+
+  # AG-51: the kind failover gate — helm chart on a kind cluster, kill the
+  # leader pod, the standby serves writes, an OAuth sign-in survives.
+  # Nightly/weekly only (kind + docker build are too slow for PR CI).
+  kind-failover:
+    name: Kind cluster failover (AG-51)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: engineerd/setup-kind@v0.5.0
+        with:
+          version: v0.25.0
+      - name: Run the failover gate
+        run: |
+          set -euo pipefail
+          KEEP_KIND=1 scripts/kind-failover-e2e.sh
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl -n aikoql describe pods || true
+          kubectl -n aikoql logs -l app.kubernetes.io/name=aikoql --tail=100 || true

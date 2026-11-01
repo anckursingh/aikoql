@@ -1,0 +1,19 @@
+# Headless: pod DNS (<pod>.<svc>.<ns>.svc) is what --replicate-advertise
+# records in the lease and what standbys dial.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aikoql.fullname" . }}-headless
+  labels:
+    {{- include "aikoql.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "aikoql.labels" . | nindent 4 }}
+  ports:
+    - name: mcp
+      port: {{ .Values.mcpPort }}
+      targetPort: mcp
+    - name: repl
+      port: {{ .Values.replPort }}
+      targetPort: repl

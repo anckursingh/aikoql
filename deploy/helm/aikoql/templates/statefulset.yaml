@@ -1,0 +1,118 @@
+# Leader + standby: two replicas of the same binary. The k8s lease decides
+# who serves writes; the other follows the holder's replication stream
+# (TLS) and serves reads. Storage is per-pod (aikoql replication, not
+# shared storage); see the README for PVC snapshots.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "aikoql.fullname" . }}
+  labels:
+    {{- include "aikoql.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "aikoql.fullname" . }}-headless
+  # leader + standby — two, not a knob
+  replicas: 2
+  selector:
+    matchLabels:
+      {{- include "aikoql.labels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aikoql.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "aikoql.fullname" . }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: aikoql
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --metrics-addr
+            - 0.0.0.0:{{ .Values.mcpPort }}
+            # the MCP bearer AND the replication token (admin role)
+            - --tcp-token
+            - $(AUTH_TOKEN)::admin
+            - --ha-lease
+            - k8s://{{ .Release.Namespace }}/{{ .Values.leaseName }}
+            - --ha-node
+            - $(POD_NAME)
+            - --replicate-listen
+            - 0.0.0.0:{{ .Values.replPort }}
+            # the address standbys dial: pod DNS via the headless service
+            - --replicate-advertise
+            - $(POD_NAME).{{ include "aikoql.fullname" . }}-headless.{{ .Release.Namespace }}.svc:{{ .Values.replPort }}
+            - --replicate-tls-cert
+            - /tls/tls.crt
+            - --replicate-tls-key
+            - /tls/tls.key
+            - --replicate-tls-ca
+            - /tls/ca.crt
+            - /data/db
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.tokenKey }}
+            # the non-loopback metrics+MCP bind is fail-closed without this
+            - name: AIKOQL_ALLOW_REMOTE_HTTP
+              value: "1"
+            {{- if .Values.auth.adminPasswordKey }}
+            - name: AIKOQL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.adminPasswordKey }}
+            {{- end }}
+          ports:
+            - name: mcp
+              containerPort: {{ .Values.mcpPort }}
+            - name: repl
+              containerPort: {{ .Values.replPort }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: repl-tls
+              mountPath: /tls
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: mcp
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: mcp
+            periodSeconds: 10
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: repl-tls
+          secret:
+            secretName: {{ include "aikoql.fullname" . }}-repl-tls
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.storage.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.size }}

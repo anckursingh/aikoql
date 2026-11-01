@@ -1,0 +1,8 @@
+apiVersion: v2
+name: aikoql
+description: Aikoql leader + standby on the Kubernetes lease (AG-51), with per-pod PVCs and replication TLS from a pre-install hook
+type: application
+version: 0.1.0
+# the shipped appVersion tracks the workspace version — scripts/bump-version.py
+# bumps this too (tests/helm_chart.rs pins it)
+appVersion: "0.3.0"

@@ -14,29 +14,28 @@ fn root() -> PathBuf {
 }
 
 fn read(p: &PathBuf) -> String {
-    std::fs::read_to_string(p)
-        .unwrap_or_else(|e| panic!("{} missing: {e}", p.display()))
+    std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{} missing: {e}", p.display()))
 }
 
 #[test]
 fn ag51_chart_exists_at_the_mandated_path_with_metadata() {
     let chart = root().join("deploy/helm/aikoql");
-    assert!(chart.is_dir(), "deploy/helm/aikoql/ missing — the AG-51 chart");
+    assert!(
+        chart.is_dir(),
+        "deploy/helm/aikoql/ missing — the AG-51 chart"
+    );
     let chart_yaml = read(&chart.join("Chart.yaml"));
     assert!(chart_yaml.contains("apiVersion: v2"), "helm apiVersion v2");
     assert!(chart_yaml.contains("name: aikoql"), "chart name");
     // the shipped appVersion tracks the workspace version (the bump script
     // must bump the chart too — see the chart README)
     let app = format!("appVersion: \"{}\"", env!("CARGO_PKG_VERSION"));
-    assert!(chart_yaml.contains(&app), "appVersion must match {app}: {chart_yaml}");
     assert!(
-        chart.join("values.yaml").is_file(),
-        "values.yaml missing"
+        chart_yaml.contains(&app),
+        "appVersion must match {app}: {chart_yaml}"
     );
-    assert!(
-        chart.join("templates").is_dir(),
-        "templates/ missing"
-    );
+    assert!(chart.join("values.yaml").is_file(), "values.yaml missing");
+    assert!(chart.join("templates").is_dir(), "templates/ missing");
 }
 
 #[test]
@@ -76,10 +75,11 @@ fn ag51_statefulset_wires_leader_standby_on_the_k8s_lease() {
 #[test]
 fn ag51_rbac_grants_only_the_lease_verbs() {
     let rbac = read(&root().join("deploy/helm/aikoql/templates/rbac.yaml"));
+    assert!(
+        rbac.contains("verbs: [\"get\", \"create\", \"update\"]"),
+        "leases get/create/update: {rbac}"
+    );
     assert!(rbac.contains("leases"), "leases resource");
-    for verb in ["get", "create", "update"] {
-        assert!(rbac.contains(&format!("- {verb}")), "missing verb {verb}");
-    }
     // R5a: nothing but the lease
     assert!(!rbac.contains("pods"), "no pod access needed");
 }
