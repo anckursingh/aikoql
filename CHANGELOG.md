@@ -37,6 +37,18 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Live queries (AG-40)**: `koql/subscribe` and `koql/unsubscribe` MCP
+  methods built on the kernel's durable CDC (subscribe/replay/ack). A
+  subscribe answers with the current result set of a read-only MATCH
+  query and streams each change as a `notifications/koql/updated` frame
+  with a strictly increasing `seq`; the durable per-subscription ack
+  means re-subscribing the same `sub_id` after a drop resumes without
+  missing an event. Subscribing before the first evaluation closes the
+  race where a commit landing mid-setup was neither backlog nor live;
+  the snapshot diff absorbs replay/live boundary double-evaluations, so
+  each changed result set emits exactly once (intermediate states
+  coalesce into the final-state emission). Write statements are rejected
+  at subscribe time.
 - **Per-model vector shards (AG-23)**: `ModelAwareVectorIndex` gives
   each embedding model its own HNSW shard with its own adopted dim, so
   switching models never serves mixed-dimension results — model-scoped

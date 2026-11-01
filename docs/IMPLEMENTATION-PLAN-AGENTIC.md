@@ -362,6 +362,18 @@ read-scoped token cannot write (every write tool).
 **AG-40 (P1) Live queries.** `subscribe {aikoql query}` → events when the
 result set changes (built on the existing commit stream + event outbox).
 *Gate:* no missed and no duplicate events under concurrent writers.
+- *Status (2026-11-01): AG-40 done* — `koql/subscribe`/`koql/unsubscribe`
+  MCP methods over the kernel's durable CDC (subscribe/replay/ack): the
+  response carries the current set, each change streams as a
+  `notifications/koql/updated` frame with a strictly increasing seq, and
+  re-subscribing the same id resumes from the acked seq. Subscribe-before-
+  eval closes the last_seq window (a commit landing mid-setup would be
+  neither backlog nor live); the snapshot diff absorbs replay/live
+  boundary double-evaluations. Gates: the in-process test pins no
+  missed/no duplicate under 4 concurrent writers; the wire test pins the
+  frames and the durable resume. shortcut: every commit re-evaluates (no
+  type-narrowed EventFilter) and intermediate states coalesce into the
+  final-state emission.
 
 **AG-41 (P2) Coordination primitives.** Leases/claims on KOs (task
 claiming among agents) on top of `txn_*` CAS; handoff KO type with
