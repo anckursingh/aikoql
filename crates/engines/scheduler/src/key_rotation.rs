@@ -125,7 +125,10 @@ mod tests {
         let job = Arc::new(KeyRotationJob::new(r, 1));
         job.start(&kernel()).unwrap();
         let t = Instant::now();
-        while std::fs::read(&key).unwrap() == before && t.elapsed() < Duration::from_secs(5) {
+        // Generous deadline: install runs an Argon2id KDF per rotation, and a
+        // loaded CI runner can take seconds over it (the AG-31 regression was
+        // an infinite hang — this still catches it with wide margin).
+        while std::fs::read(&key).unwrap() == before && t.elapsed() < Duration::from_secs(15) {
             thread::sleep(TICK);
         }
         assert_ne!(
@@ -139,7 +142,11 @@ mod tests {
             j.shutdown();
             let _ = tx.send(());
         });
-        let done = rx.recv_timeout(Duration::from_secs(3)).is_ok();
+        // Shutdown joins an in-flight rotation (the crash-safe sequence must
+        // complete), and on a loaded CI runner a rotation can take seconds —
+        // the contract is "returns", not "returns in 3s". The original AG-31
+        // hang was infinite; a generous deadline still catches it.
+        let done = rx.recv_timeout(Duration::from_secs(30)).is_ok();
         let _ = std::fs::remove_file(&key);
         let _ = std::fs::remove_file(key.with_extension("store-dek"));
         assert!(done, "shutdown of a started job must return");

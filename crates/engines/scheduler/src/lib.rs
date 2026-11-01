@@ -10,9 +10,14 @@
 //! It is a service *around* the kernel, never on the commit path.
 
 pub mod compaction;
+pub mod consolidation;
 pub mod key_rotation;
 
 pub use compaction::CompactionJob;
+pub use consolidation::{
+    consolidate, decay, ConsolidationJob, DEFAULT_INTERVAL, DEFAULT_THRESHOLD, DEMOTE_BELOW,
+    SESSION_TTL_MS,
+};
 pub use key_rotation::KeyRotationJob;
 
 use aikoql_kernel::knowledge::kom::*;

@@ -770,6 +770,21 @@ fn main() {
         });
     }
 
+    // AG-13: the consolidation job runs beside the maintainer, off the
+    // commit path. The thread detaches and dies with the process, exactly
+    // like the maintainer's (serve never joins background jobs).
+    {
+        let kernel_work = kernel.clone();
+        thread::spawn(move || {
+            if let Err(e) = aikoql_scheduler::ConsolidationJob::start(
+                &kernel_work,
+                aikoql_scheduler::DEFAULT_INTERVAL,
+            ) {
+                warn!("ag-13 consolidation job failed to start: {e}");
+            }
+        });
+    }
+
     let db_path = Arc::new(db_path);
     SERVER_START.set(Instant::now()).ok();
 

@@ -64,6 +64,22 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   degrades to the deterministic summary, whose response shape is
   unchanged.
 
+- **MMR-diversified memory search (AG-22)**: `memory_search` reranks its
+  oversampled candidates with greedy MMR before the cut — relevance
+  (score normalized to the top hit) against novelty (1 − max token
+  Jaccard to the already picked, λ 0.7) — so near-duplicate memories no
+  longer crowd out distinct ones. Scores are never invented; the
+  cross-encoder rerank stage stays open (optional, candle).
+- **Memory consolidation, salience and decay (AG-13)**: every remembered
+  KO is stamped with a `salience` (recency × accesses × authority ×
+  links; authority is the kernel-managed rank of the origin, not caller
+  settable) and `recall` refreshes it by recording access counts. A
+  cadence job merges near-duplicate KOs (existing `merge`, so every
+  merged KO keeps `derived_from` lineage to its sources) and demotes
+  session-scoped memories past a 24 h TTL whose salience dropped below
+  0.5 — demotion is an epistemic Superseded, nothing is deleted and
+  `forget` stays the only deletion path (AG-13c).
+>>>>>>> e5b8f5a (docs: AG-13 status + changelog — salience/consolidation/decay done, recall@10 gate open)
 - **The agent-memory benchmark harnesses (AG-61)**: `longmemeval.py` runs
   LongMemEval-S retrieval through the product path (`memory_store` /
   `memory_search` over MCP stdio, per-question subjects, session-level

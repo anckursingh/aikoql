@@ -48,6 +48,20 @@ impl ReferentialPolicy {
     }
 }
 
+/// AG-13: the authority factor of the salience product — the declared
+/// authority rank normalized to 0–1 (HumanApproved = 1.0, UntrustedExternal
+/// = 0.0).
+pub fn authority_factor(extensions: &ExtensionMap) -> f64 {
+    extensions
+        .get("authority")
+        .and_then(|v| match v {
+            Value::Text(s) => crate::knowledge::authority::Authority::from_str(s),
+            _ => None,
+        })
+        .map(|a| a.rank() as f64 / 10.0)
+        .unwrap_or(0.0)
+}
+
 // ---------------------------------------------------------------------------
 // Identity (MRFC-0001 §3: KOID = immutable global identifier)
 // ---------------------------------------------------------------------------
@@ -1200,6 +1214,9 @@ impl KnowledgeObject {
     pub const EXT_DERIVATION: &str = "derivation";
     /// Extension key for the ConfidenceContext record (Map).
     pub const EXT_CONFIDENCE: &str = "confidence";
+    /// AG-13: salience snapshot (recency × access × authority × links) —
+    /// stamped by remember, refreshed by the decay job on access.
+    pub const EXT_SALIENCE: &str = "salience";
 
     /// The first-class derivation record, if this KO was derived from others.
     /// Answers WHY (reason) / FROM WHAT (sources) / DERIVED HOW (operation,

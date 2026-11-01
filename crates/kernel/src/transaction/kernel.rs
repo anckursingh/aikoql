@@ -29,6 +29,7 @@ use crate::knowledge::codec::{self, Enc, ScoringRecord};
 use crate::knowledge::kom::*;
 use crate::knowledge::ontology::{Cardinality, OntologyRegistry};
 use crate::knowledge::scope::Scope;
+use crate::knowledge::scoring::{jaccard, ko_text, tokenize};
 use crate::lifecycle::constraint::{ConstraintEvalStats, ConstraintEvaluator, InferenceEngine};
 use crate::lifecycle::schema::SchemaRegistry;
 use crate::object::ObjectManager;
@@ -687,6 +688,10 @@ pub struct Kernel {
     tenants: Arc<TenantManager>,
     /// Optional field-level encryption (MRFC-0020 Phase 3).
     field_crypto: Option<Arc<FieldCrypto>>,
+    /// AG-13: pending recall-access counts (KOID → count since the last
+    /// decay flush). Process-local by design — a restart forgets them, and
+    /// salience underestimates until the next accesses (heuristic input).
+    access_counts: Arc<Mutex<HashMap<KOID, u64>>>,
     /// Per-type encryption policies: type_name → which fields to encrypt.
     encryption_policies: Arc<RwLock<HashMap<String, EncryptionPolicy>>>,
     /// Optional embedding provider for query-time ANN search (USING EMBEDDING).
@@ -823,6 +828,7 @@ impl Kernel {
             constraint_caps,
             relationships,
             objects,
+            access_counts: Arc::new(Mutex::new(HashMap::new())),
             signing_key: None,
             tenants: Arc::new(TenantManager::new()),
             field_crypto: None,
@@ -1090,6 +1096,7 @@ impl Kernel {
             constraint_caps: self.constraint_caps,
             relationships: self.relationships.clone(),
             objects: self.objects.clone(),
+            access_counts: self.access_counts.clone(),
             signing_key: self.signing_key,
             tenants: self.tenants.clone(),
             field_crypto: self.field_crypto.clone(),
@@ -1704,6 +1711,7 @@ impl Kernel {
         KnowledgeObject::EXT_VERIFIED_EVENT,
         KnowledgeObject::EXT_VALID_TO,
         KnowledgeObject::EXT_CONTENT_TRUST,
+        KnowledgeObject::EXT_SALIENCE,
         "authority",
         "scope",
     ];
@@ -1722,6 +1730,75 @@ impl Kernel {
             }
         }
         self.remember_trusted(req)
+    }
+
+    /// AG-13: recall records which KOs the agent saw. Counts are
+    /// process-local and in-memory — a restart forgets them, so salience
+    /// underestimates until the next accesses (heuristic input, not data).
+    pub fn record_access(&self, koids: &[KOID]) {
+        let mut counts = self.access_counts.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        for koid in koids {
+            *counts.entry(*koid).or_insert(0) += 1;
+        }
+    }
+
+    /// Drain the pending access counts (the decay job flushes them).
+    pub fn take_access_counts(&self) -> Vec<(KOID, u64)> {
+        std::mem::take(&mut *self.access_counts.lock().unwrap())
+            .into_iter()
+            .collect()
+    }
+
+    /// AG-13: recompute and store salience = recency × (1 + accesses) ×
+    /// authority × links. Recency is 0.5^(age/TTL); an access bumps the
+    /// version, which resets the age — recently used memories stay alive.
+    /// Returns the new value, or None when nothing changed (no write, no
+    /// version churn).
+    pub fn refresh_salience(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+        access_count: u64,
+        ttl_ms: u64,
+    ) -> KResult<Option<f64>> {
+        let ctx = ctx.into();
+        let mut pipe = self.pipe.lock().unwrap();
+        let head = self.head_object(koid)?.ok_or(KError::NotFound(*koid))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &head, Action::Write)?;
+        // HLC packs epoch_ms << 16 | counter — the raw clock compares in
+        // plain millis, so the age must decode the packed timestamp.
+        let age_ms = self.clock_now().saturating_sub(head.commit_ts >> 16);
+        let recency = 0.5f64.powf(age_ms as f64 / ttl_ms.max(1) as f64);
+        let links = 1.0
+            + (self.outbound_edges(koid, None)?.len() + self.inbound_edges(koid, None)?.len())
+                as f64;
+        let salience =
+            recency * (1.0 + access_count as f64) * authority_factor(&head.extensions) * links;
+        // The epsilon absorbs recency float drift between clock ticks —
+        // without it every refresh would churn a version.
+        if let Some(Value::Float(stored)) = head.extensions.get(KnowledgeObject::EXT_SALIENCE) {
+            if (salience - stored).abs() < 1e-3 {
+                return Ok(None);
+            }
+        }
+        let mut ko = head.clone();
+        ko.version += 1;
+        ko.extensions
+            .insert(KnowledgeObject::EXT_SALIENCE.into(), Value::Float(salience));
+        self.commit_version(
+            &mut pipe,
+            ko,
+            EventKind::Updated,
+            Origin::System,
+            &ctx.subject.name,
+            Some("ag-13 salience refresh".into()),
+            None,
+            Some(&head.relationships),
+        )?;
+        Ok(Some(salience))
     }
 
     /// Attach a semantic block to an existing KO, mutating ONLY the semantic
@@ -2078,6 +2155,12 @@ impl Kernel {
                 }
             }
         }
+        // AG-13: salience = recency × access × links × authority, stamped at
+        // write time with the first three factors at 1.0 — refresh_salience
+        // and the decay job update the snapshot as time passes and recall
+        // records accesses.
+        let salience = authority_factor(&extensions);
+        extensions.insert(KnowledgeObject::EXT_SALIENCE.into(), Value::Float(salience));
         let mut ko = KnowledgeObject {
             koid,
             version: cur_v + 1,
@@ -5022,6 +5105,46 @@ impl Kernel {
     }
 }
 
+/// AG-22: the default relevance/novelty split for [`mmr_rerank`].
+pub const MMR_LAMBDA: f64 = 0.7;
+
+/// AG-22: greedy MMR over an oversampled candidate list — pick at most
+/// `k` hits by the best trade-off between relevance (score, normalized
+/// to the top hit) and novelty (1 − max token-Jaccard to the already
+/// picked). Pure reorder: scores are never invented. `lambda` 1.0
+/// collapses to score order; 0.0 to pure novelty.
+pub fn mmr_rerank(hits: Vec<ScoredKO>, k: usize, lambda: f64) -> Vec<ScoredKO> {
+    // shortcut: the novelty signal is the index's own token view
+    // (Jaccard on ko_text), not embedding cosine — the vector index
+    // does not expose stored vectors; upgrade when the AG-61 eval
+    // shows diversity still lacking.
+    let lambda = lambda.clamp(0.0, 1.0);
+    if k == 0 || hits.is_empty() {
+        return Vec::new();
+    }
+    let top = hits.iter().map(|h| h.score as f64).fold(0.0f64, f64::max);
+    let mut remaining: Vec<ScoredKO> = hits;
+    let mut picked: Vec<ScoredKO> = Vec::new();
+    while picked.len() < k && !remaining.is_empty() {
+        let mut best = 0usize;
+        let mut best_v = f64::NEG_INFINITY;
+        for (i, h) in remaining.iter().enumerate() {
+            let rel = if top > 0.0 { h.score as f64 / top } else { 0.0 };
+            let novel = picked
+                .iter()
+                .map(|p| jaccard(&tokenize(&ko_text(&p.ko)), &tokenize(&ko_text(&h.ko))) as f64)
+                .fold(0.0f64, f64::max);
+            let v = lambda * rel - (1.0 - lambda) * novel;
+            if v > best_v {
+                best_v = v;
+                best = i;
+            }
+        }
+        picked.push(remaining.remove(best));
+    }
+    picked
+}
+
 /// An independently-verifiable proof bundle (MRFC-0011 §6.7).
 #[derive(Clone, Debug)]
 pub struct OfflineProof {
@@ -5037,7 +5160,7 @@ pub struct OfflineProof {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-pub(crate) use crate::knowledge::scoring::{cosine, jaccard, tokenize};
+pub(crate) use crate::knowledge::scoring::cosine; // jaccard/tokenize: file-scope import (line 32)
 
 // ---------------------------------------------------------------------------
 // Unit tests
