@@ -291,8 +291,7 @@ unusable.
   hanging shutdown. Open: cloud KMS `install` (AWS/Azure/GCP return
   unsupported), passphrase change, data-key (DEK) re-encryption.
 
-**AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). *Gate:*
-usage per tenant matches the oracle count.
+**AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). — **DONE 2026-11-01** (rebuild buckets each head under its own `metadata.tenant`, tenant-less → "default"; remember/transact creates and both forget modes keep the live counters in sync; gate: 5 tests — tenant unit tests + `tenant_accounting.rs`). Shortcut: no startup head scan wires `rebuild` yet, so counters restart empty and re-learn as writes land. *Gate:* usage per tenant matches the oracle count.
 
 **AG-33 (P1) Prompt-injection provenance.** Every KO carries a trust class
 of its source (`user`, `tool_output`, `web`, `document`, `system`);

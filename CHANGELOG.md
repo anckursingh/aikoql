@@ -37,6 +37,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Tenant accounting from KO metadata (AG-32)**: usage counters follow
+  the object store — `remember`/`transact` creates and both forget modes
+  update the live per-tenant count, and a rebuild buckets every head
+  under its own `metadata.tenant` (tenant-less heads count as
+  "default"). Before, rebuild hard-coded every object to the "default"
+  tenant and the live counters never moved (every quota check read 0).
 - **MCP resources, subscriptions and prompts (AG-03)**: the three spec
   resources (`aikoql://ko/{koid}`, `aikoql://conflicts/open`,
   `aikoql://session/{id}/context`) answer as text over `resources/read`
