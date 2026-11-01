@@ -565,8 +565,10 @@ RED: `r5b-k8s-lease`, `r5b-sdk-hint-{go,rust,python,ts}`.
 R5b limits:
 - ~~Java SDK not done~~ — done (`LeaderHintTest`; RED `r5b-sdk-hint-java`).
 - ~~The Kubernetes store is verified against a fake API only~~ — certified
-  on a real kube-apiserver (envtest), including the in-cluster path; not
-  yet run inside a real cluster's pod (see "Kubernetes lease certs").
+  on a real kube-apiserver (envtest), including the in-cluster path, and
+  now in a real cluster's pod: the AG-51 kind gate runs the Helm chart
+  and fails a leader pod over to its standby on the k8s lease (nightly,
+  benchmark.yml; see "Kubernetes lease certs").
 - `session_init` identity (run_id) is not replayed on the new
   connection; stdio and native-protocol clients do not follow hints.
 - The client trusts the hint its server sends (the token goes to the
@@ -856,9 +858,12 @@ unless `AIKOQL_TEST_K8S_API` / `_TOKEN` / `_CA` are set):
 `AIKOQL_K8S_SA_DIR` points the in-cluster path at a token + `ca.crt`
 outside a pod (default: the pod mount). Green on kube-apiserver v1.37.0
 (`ENVTEST_K8S_VERSION` pins it). CI: `k8s-lease` gates (setup-envtest
-pinned to v0.25.2). Not covered: a real cluster's pod
-(service-account projection, RBAC scoped to `leases` — the certs run as
-`system:masters`). RED: `k8s-lease-e2e`.
+pinned to v0.25.2). The real-cluster pod path (service-account
+projection, RBAC scoped to `leases`) is now covered by the AG-51 kind
+failover gate (`scripts/kind-failover-e2e.sh`, nightly): the Helm chart
+runs the binary in a pod with the chart's lease-only Role, the leader
+pod is killed, and the standby wins the Lease and serves. RED:
+`k8s-lease-e2e`.
 
 ## R1 known limits (shortcut comments in `db.rs`)
 

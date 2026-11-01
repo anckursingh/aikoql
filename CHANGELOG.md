@@ -37,6 +37,7 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Helm chart + kind failover (AG-51)**: leader+standby on the k8s lease with replication TLS, per-pod PVCs, PVC snapshot docs, and a nightly kind failover e2e (kill the leader, the standby serves writes, OAuth sign-ins survive)
 - **Observability (AG-50)**: OTLP traces per tool call (`AIKOQL_OTEL_ENDPOINT`) and per-tool Prometheus counters + recall quality on the /metrics scrape
 - **Live queries (AG-40)**: `koql/subscribe` and `koql/unsubscribe` MCP
   methods built on the kernel's durable CDC (subscribe/replay/ack). A

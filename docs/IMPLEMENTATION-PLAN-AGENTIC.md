@@ -404,6 +404,23 @@ exported OTLP protobuf on a fake collector, and asserts the scrape.
 already apiserver-certified), the open "real k8s pod" item, PVC snapshot
 docs. *Gate:* kind-cluster failover e2e in CI (nightly).
 
+Status (2026-11-01): AG-51 done. `deploy/helm/aikoql`: two replicas of
+one binary — the lease decides who serves writes, the other follows
+over replication TLS (plaintext replication is loopback-only by
+policy, so a pre-install hook Job generates a CA + one shared serving
+cert whose SANs cover both pods' DNS names). Per-pod PVCs, lease-only
+RBAC (get/create/update), probes on /metrics, Streamable HTTP MCP with
+the auth Secret's token, OAuth armed by an optional admin-password key.
+The README carries the PVC snapshot playbook (snapshot the leader's
+PVC; restore = PVC from snapshot + a one-off pod). The gate
+`scripts/kind-failover-e2e.sh` (nightly, benchmark.yml): kind cluster,
+chart install, remember through the leader, kill the leader pod, the
+standby promotes and serves the writes, and an OAuth sign-in issued
+before the kill keeps authorizing the new leader — this closes the
+"real k8s pod" open item (the MRFC-0080 certs covered a real
+apiserver via envtest, not a pod). Laws pinned by tests/helm_chart.rs;
+not yet: helm lint/render in PR CI (rendered only by the kind gate).
+
 **AG-52 (P2) Login backoff survives restarts** (in-memory today) and a
 per-IP layer behind proxies (`X-Forwarded-For` trusted only from a
 configured proxy).
