@@ -37,6 +37,7 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Framework adapters (AG-60)**: LlamaIndex chat memory (`AikoqlMemory`), an OpenAI Agents SDK session (`AikoqlSession`), and Vercel AI SDK tools (`createAikoqlTools`) over remember/recall/forget — each gate-tested by its framework's upstream example against a live server (SimpleChatEngine + MockLLM, Runner.run, ai v7 tool contract)
 - **Helm chart + kind failover (AG-51)**: leader+standby on the k8s lease with replication TLS, per-pod PVCs, PVC snapshot docs, and a nightly kind failover e2e (kill the leader, the standby serves writes, OAuth sign-ins survive)
 - **Observability (AG-50)**: OTLP traces per tool call (`AIKOQL_OTEL_ENDPOINT`) and per-tool Prometheus counters + recall quality on the /metrics scrape
 - **Live queries (AG-40)**: `koql/subscribe` and `koql/unsubscribe` MCP

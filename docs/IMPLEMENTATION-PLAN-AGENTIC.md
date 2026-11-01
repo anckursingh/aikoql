@@ -433,6 +433,30 @@ SDK (TS), each as a memory/store provider over `recall`/`remember`.
 *Gate:* each adapter's upstream example passes against a live server in
 CI.
 
+Status (2026-11-01): AG-60 done. Three adapters, each gate-shaped as
+its framework's upstream example against a live server:
+`python/aikoql/adapters/llamaindex.py` (AikoqlMemory, a BaseMemory —
+each ChatMessage is one KO as model_dump JSON; `get()` recalls the
+most relevant prior messages by text; the gate drives
+`SimpleChatEngine.from_defaults(memory=...)` with a MockLLM and
+re-reads the whole history through a fresh instance), `openai_agents.py`
+(AikoqlSession, the SDK's Session protocol — one KO per conversation
+item, latest-N `get_items`; the gate runs `Runner.run` twice with an
+offline Model stub and asserts turn 2 saw turn 1), and the TS
+`src/vercel-ai.ts` (`createAikoqlTools` — remember/recall/forget as ai
+v7 tools; the gate asserts the tool contract and round-trips
+`execute()` against the live server). Both python adapters duck-type
+the two client shapes via `adapters/_client.py` (embedded positional vs
+MCP kwargs, the `{"results": ...}` unwrap, the `text_only` vs `text`
+fusion spellings); their re-exports are lazy (PEP 562) so
+`import aikoql` never drags the frameworks in. CI pins:
+llama-index-core 0.14.25 + openai-agents 0.24.0 (python-sdk job), ai
+7.0.159 (ts-sdk devDependency, peer >=7). Not yet: embedded-client
+gates for the two python adapters (the gates ride the MCP client; the
+embedded path shares the crewai/langgraph precedent), and
+asyncio.to_thread wrappers for the sync client I/O in the async
+session methods.
+
 **AG-61 (P0) Public agent-memory benchmark — measured, not claimed.**
 - *Status (2026-10-31): harnesses committed; the run stays open.*
   `longmemeval.py` (LongMemEval-S, xiaowu0162/longmemeval at 2ec2a557,
