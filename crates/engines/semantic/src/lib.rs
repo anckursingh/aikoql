@@ -369,4 +369,262 @@ mod tests {
             Some("existing-model")
         );
     }
+
+    // ---- AG-23b2: per-collection model bindings drive enrichment ----
+
+    /// Records the model hints the engine passes to the provider, and echoes
+    /// the requested model back as the stored `embedding_model` so tests can
+    /// see which model was actually used.
+    struct RecordingProvider {
+        requested: std::sync::Mutex<Vec<Option<String>>>,
+    }
+
+    impl RecordingProvider {
+        fn new() -> Self {
+            RecordingProvider {
+                requested: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn requested(&self) -> Vec<Option<String>> {
+            // justified: Mutex poison is unrecoverable
+            self.requested.lock().unwrap().clone()
+        }
+    }
+
+    impl AiProvider for RecordingProvider {
+        fn enrich(
+            &self,
+            ko: &KnowledgeObject,
+            model: Option<&str>,
+        ) -> KResult<EnrichmentResult> {
+            // justified: Mutex poison is unrecoverable
+            self.requested
+                .lock()
+                .unwrap()
+                .push(model.map(String::from));
+            let _ = ko;
+            Ok(EnrichmentResult {
+                embedding_model: Some(
+                    model
+                        .map(String::from)
+                        .unwrap_or_else(|| "default-model".into()),
+                ),
+                embedding: Some(vec![0.1, 0.2, 0.3]),
+                summary: None,
+                confidence: None,
+            })
+        }
+    }
+
+    fn remember_body(k: &Kernel, subj: &Subject, body: &str) -> KOID {
+        let mut props = PropertyMap::new();
+        props.insert("body".into(), Value::Text(body.into()));
+        k.remember(RememberRequest {
+            context: subj.into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "fact".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap()
+        .koid
+    }
+
+    /// A bound collection enriches with its bound model; an unbound one keeps
+    /// the provider's default (hint None).
+    #[test]
+    fn ag23b2_bound_model_is_used_at_enrichment() {
+        let k = mk();
+        let subj = Subject::new("semantic-engine");
+        k.catalog_set_type_model("fact", "big-model").unwrap();
+
+        let bound_koid = remember_body(&k, &subj, "bound body");
+        k.catalog_set_type_model("note", "ignored-model").unwrap(); // other type — inert here
+        let unbound_koid = remember_body(&k, &subj, "unbound body");
+
+        let provider = Arc::new(RecordingProvider::new());
+        let engine = Arc::new(SemanticEngine::new(provider.clone()));
+        let sched = Scheduler::new();
+        sched.register(engine);
+        sched.start_all(&k).unwrap(); // catch-up runs in start()
+
+        let bound_ko = k.get(&subj, &bound_koid).unwrap();
+        assert_eq!(
+            bound_ko
+                .semantic
+                .as_ref()
+                .and_then(|s| s.embedding_model.as_deref()),
+            Some("big-model"),
+            "a bound collection must be embedded with its bound model"
+        );
+        let unbound_ko = k.get(&subj, &unbound_koid).unwrap();
+        assert_eq!(
+            unbound_ko
+                .semantic
+                .as_ref()
+                .and_then(|s| s.embedding_model.as_deref()),
+            Some("default-model"),
+            "an unbound collection keeps the provider's default"
+        );
+        assert!(
+            provider.requested().contains(&Some("big-model".into())),
+            "the provider must have been asked for the bound model: {:?}",
+            provider.requested()
+        );
+    }
+
+    /// Binding (or re-binding) a type migrates its existing KOs: the catch-up
+    /// re-embeds anything whose stored model is not the bound one.
+    #[test]
+    fn ag23b2_binding_change_reembeds_existing_kos() {
+        let k = mk();
+        let subj = Subject::new("semantic-engine");
+
+        // Pre-existing KO enriched under the old model.
+        let koid = remember_body(&k, &subj, "already there");
+        k.attach_semantic(
+            subj.clone(),
+            koid,
+            SemanticBlock {
+                embedding_model: Some("old-model".into()),
+                embedding: Some(vec![0.5; 8]),
+                confidence: None,
+                source: Some("test".into()),
+                summary: None,
+            },
+            Some(1),
+        )
+        .unwrap();
+
+        k.catalog_set_type_model("fact", "new-model").unwrap();
+        let provider = Arc::new(RecordingProvider::new());
+        let engine = Arc::new(SemanticEngine::new(provider.clone()));
+        let sched = Scheduler::new();
+        sched.register(engine);
+        sched.start_all(&k).unwrap();
+
+        let ko = k.get(&subj, &koid).unwrap();
+        assert_eq!(
+            ko.semantic
+                .as_ref()
+                .and_then(|s| s.embedding_model.as_deref()),
+            Some("new-model"),
+            "the catch-up must migrate a KO whose stored model is not the bound one"
+        );
+    }
+
+    /// A binding change migrates live, without a restart: the catalog row's
+    /// own event triggers a rescan of the bound collection.
+    #[test]
+    fn ag23b2_live_binding_change_migrates_without_restart() {
+        let k = mk();
+        let subj = Subject::new("semantic-engine");
+
+        let provider = Arc::new(RecordingProvider::new());
+        let engine = Arc::new(SemanticEngine::new(provider.clone()));
+        let sched = Scheduler::new();
+        sched.register(engine);
+        sched.start_all(&k).unwrap();
+
+        let koid = remember_body(&k, &subj, "live body"); // enriched under default
+        k.catalog_set_type_model("fact", "live-model").unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let ko = k.get(&subj, &koid).unwrap();
+            if ko.semantic
+                .as_ref()
+                .and_then(|s| s.embedding_model.as_deref())
+                == Some("live-model")
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the live binding change must migrate the collection without a restart"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    /// Migration survives a kill: the catch-up re-runs on the next start and
+    /// only finishes the remainder — already-migrated KOs stay untouched.
+    #[test]
+    fn ag23b2_migration_survives_a_kill() {
+        let engine_handle: Arc<dyn aikoql_kernel::StorageEngine> =
+            Arc::new(MemoryEngine::new());
+        let k = Kernel::open(
+            engine_handle.clone(),
+            Arc::new(ManualClock::new(10_000)),
+            0xC0FFEE,
+        )
+        .unwrap();
+        let subj = Subject::new("semantic-engine");
+
+        // Two KOs under the old model; the process "dies" before any
+        // migration runs (no engine was ever started on this kernel).
+        let koid_a = remember_body(&k, &subj, "a");
+        let koid_b = remember_body(&k, &subj, "b");
+        for koid in [koid_a, koid_b] {
+            k.attach_semantic(
+                subj.clone(),
+                koid,
+                SemanticBlock {
+                    embedding_model: Some("old-model".into()),
+                    embedding: Some(vec![0.5; 8]),
+                    confidence: None,
+                    source: Some("test".into()),
+                    summary: None,
+                },
+                Some(1),
+            )
+            .unwrap();
+        }
+        k.catalog_set_type_model("fact", "new-model").unwrap();
+
+        // Restart: a fresh kernel over the same engine + a fresh engine job.
+        let k2 = Kernel::open(
+            engine_handle,
+            Arc::new(ManualClock::new(20_000)),
+            0xC0FFEE,
+        )
+        .unwrap();
+        let provider = Arc::new(RecordingProvider::new());
+        let sched = Scheduler::new();
+        sched.register(Arc::new(SemanticEngine::new(provider.clone())));
+        sched.start_all(&k2).unwrap();
+
+        for koid in [koid_a, koid_b] {
+            let ko = k2.get(&subj, &koid).unwrap();
+            assert_eq!(
+                ko.semantic
+                    .as_ref()
+                    .and_then(|s| s.embedding_model.as_deref()),
+                Some("new-model"),
+                "restart must finish the interrupted migration"
+            );
+        }
+
+        // A second engine on the same kernel must not re-migrate: versions
+        // stay put (idempotent skip).
+        let sched2 = Scheduler::new();
+        sched2.register(Arc::new(SemanticEngine::new(provider)));
+        sched2.start_all(&k2).unwrap();
+        let ko = k2.get(&subj, &koid_a).unwrap();
+        assert_eq!(ko.version, 3, "migrated KOs must not be re-embedded");
+    }
 }
