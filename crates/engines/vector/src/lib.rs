@@ -13,7 +13,7 @@ use aikoql_kernel::knowledge::kom::*;
 use aikoql_kernel::{TextIndex, VectorHealth, VectorIndex};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tantivy::collector::TopDocs;
 use tantivy::query::BooleanQuery;
 use tantivy::schema::Value as TantivyValue;
@@ -211,8 +211,15 @@ impl HnswVectorIndex {
         })
     }
 
-    fn dim(&self) -> usize {
+    /// The adopted dim (0 = nothing upserted yet). AG-23: the per-model
+    /// wrapper scopes model-less queries by it — never mixing dims.
+    pub fn dim(&self) -> usize {
         self.dim.load(Ordering::Relaxed)
+    }
+
+    /// The allocator-hint capacity (AG-23: carried into newly created shards).
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     fn dead_ratio(&self) -> f64 {
@@ -496,6 +503,200 @@ impl VectorIndex for HnswVectorIndex {
         let manifest = serde_json::json!({ "generation": generation });
         std::fs::write(dir.join("manifest.json"), manifest.to_string())
             .map_err(|e| KError::Store(format!("write hnsw manifest: {}", e)))?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ModelAwareVectorIndex — per-model shards (AG-23)
+// ---------------------------------------------------------------------------
+
+/// AG-23: model choice must never serve mixed-dimension results. One
+/// `HnswVectorIndex` shard per embedding model — each shard adopts its own
+/// dim (P5-M27's global drop becomes a per-model drop) — and searches scope
+/// by model, or by the query vector's dim when no model is named.
+///
+/// shortcut: a legacy single-graph checkpoint (pre-AG-23) loads as the ""
+/// shard; its entries stay reachable through the inner label filter. The
+/// deep form — per-collection model assignment and the resumable re-embed
+/// migration job — is AG-23b.
+pub struct ModelAwareVectorIndex {
+    capacity: usize,
+    shards: RwLock<BTreeMap<String, Arc<HnswVectorIndex>>>,
+}
+
+/// The shard's checkpoint dir name: hex-encoded model id ("" → "default"),
+/// so no model string can collide or break a path.
+fn shard_dir(model: &str) -> String {
+    if model.is_empty() {
+        "default".to_string()
+    } else {
+        model
+            .as_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+}
+
+impl ModelAwareVectorIndex {
+    pub fn new(capacity: usize) -> Self {
+        ModelAwareVectorIndex {
+            capacity,
+            shards: RwLock::new(BTreeMap::new()),
+        }
+    }
+
+    pub fn load(dir: &std::path::Path) -> KResult<Self> {
+        let mut shards: BTreeMap<String, Arc<HnswVectorIndex>> = BTreeMap::new();
+        if dir.join("models.json").exists() {
+            let models_str = std::fs::read_to_string(dir.join("models.json"))
+                .map_err(|e| KError::Store(format!("read models.json: {e}")))?;
+            let models: serde_json::Value = serde_json::from_str(&models_str)
+                .map_err(|e| KError::Store(format!("parse models.json: {e}")))?;
+            for (model, d) in models["models"]
+                .as_object()
+                .ok_or_else(|| KError::Store("models.json models map".into()))?
+            {
+                let d = d
+                    .as_str()
+                    .ok_or_else(|| KError::Store("models.json shard dir".into()))?;
+                // a shard named by the manifest but missing on disk is a
+                // torn pair — fail closed, never serve a partial set
+                shards.insert(
+                    model.clone(),
+                    Arc::new(HnswVectorIndex::load(&dir.join(d))?),
+                );
+            }
+        } else {
+            // legacy single-graph checkpoint: several models under one
+            // global dim — the "" shard keeps them, label-filtered
+            shards.insert(String::new(), Arc::new(HnswVectorIndex::load(dir)?));
+        }
+        Ok(ModelAwareVectorIndex {
+            capacity: shards.values().next().map_or(10_000, |s| s.capacity()),
+            shards: RwLock::new(shards),
+        })
+    }
+}
+
+impl VectorIndex for ModelAwareVectorIndex {
+    fn upsert(&self, koid: KOID, model: &str, vec: &[f32]) {
+        // justified: RwLock poison is unrecoverable
+        let shard = self
+            .shards
+            .write()
+            .unwrap()
+            .entry(model.to_string())
+            .or_insert_with(|| Arc::new(HnswVectorIndex::new(0, self.capacity)))
+            .clone();
+        shard.upsert(koid, model, vec);
+    }
+
+    fn remove(&self, koid: &KOID) {
+        // justified: RwLock poison is unrecoverable
+        for s in self.shards.read().unwrap().values() {
+            s.remove(koid);
+        }
+    }
+
+    fn search(&self, qv: &[f32], k: usize, model: Option<&str>) -> Vec<(KOID, f32)> {
+        // Candidates come only from shards whose adopted dim equals the
+        // query's — a mixed-dimension ranking is impossible by
+        // construction. Same-dim shards merge (dual-read during migration).
+        // justified: RwLock poison is unrecoverable
+        let shards = self.shards.read().unwrap();
+        let mut best: BTreeMap<KOID, f32> = BTreeMap::new();
+        let mut consider = |s: &HnswVectorIndex, m: Option<&str>| {
+            if s.dim() == qv.len() {
+                for (ko, sc) in s.search(qv, k, m) {
+                    best.entry(ko).and_modify(|e| *e = e.max(sc)).or_insert(sc);
+                }
+            }
+        };
+        match model {
+            Some(m) => {
+                if let Some(s) = shards.get(m) {
+                    consider(s, Some(m));
+                }
+                // the legacy "" shard may still hold this model's entries
+                if let Some(s) = shards.get("") {
+                    consider(s, Some(m));
+                }
+            }
+            None => {
+                for s in shards.values() {
+                    consider(s, None);
+                }
+            }
+        }
+        let mut out: Vec<(KOID, f32)> = best.into_iter().collect();
+        out.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        out.truncate(k);
+        out
+    }
+
+    fn len(&self) -> usize {
+        // justified: RwLock poison is unrecoverable
+        self.shards.read().unwrap().values().map(|s| s.len()).sum()
+    }
+
+    fn health(&self) -> Option<VectorHealth> {
+        // justified: RwLock poison is unrecoverable
+        let shards = self.shards.read().unwrap();
+        let mut it = shards.values();
+        let mut h = it.next()?.health()?;
+        let mut dim = h.dim;
+        for s in it {
+            let sh = s.health()?;
+            h.live += sh.live;
+            h.physical += sh.physical;
+            h.tombstones += sh.tombstones;
+            h.dropped_dim_mismatch += sh.dropped_dim_mismatch;
+            if sh.dim != dim {
+                dim = 0; // shards disagree — no single dim to report
+            }
+        }
+        h.dim = dim;
+        h.capacity = self.capacity;
+        h.dead_ratio = if h.physical == 0 {
+            0.0
+        } else {
+            h.tombstones as f64 / h.physical as f64
+        };
+        Some(h)
+    }
+
+    fn maybe_rebuild(&self) -> bool {
+        // justified: RwLock poison is unrecoverable
+        self.shards
+            .read()
+            .unwrap()
+            .values()
+            .map(|s| s.maybe_rebuild())
+            .any(|b| b)
+    }
+
+    fn checkpoint(&self, dir: &std::path::Path) -> KResult<()> {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| KError::Store(format!("create vectors ckpt dir: {e}")))?;
+        // justified: RwLock poison is unrecoverable
+        let shards = self.shards.read().unwrap();
+        let models_json: BTreeMap<String, String> =
+            shards.keys().map(|m| (m.clone(), shard_dir(m))).collect();
+        // models.json FIRST — a load that sees it but misses a shard fails
+        // closed (torn pair), matching the single-graph discipline; a crash
+        // before it leaves orphan shard dirs the next manifest never names.
+        let models = serde_json::json!({ "models": models_json });
+        std::fs::write(dir.join("models.json"), models.to_string())
+            .map_err(|e| KError::Store(format!("write models.json: {e}")))?;
+        for (model, shard) in shards.iter() {
+            shard.checkpoint(&dir.join(shard_dir(model)))?;
+        }
         Ok(())
     }
 }
@@ -1208,7 +1409,11 @@ mod tests {
         assert_eq!(idx.len(), 2, "the 4-d model must not be dropped");
         let small = idx.search(&[1.0, 0.0], 5, Some("small"));
         assert_eq!(small.len(), 1);
-        assert_eq!(small[0].0, kid(1), "model-scoped queries stay in their model");
+        assert_eq!(
+            small[0].0,
+            kid(1),
+            "model-scoped queries stay in their model"
+        );
         let large = idx.search(&[1.0, 0.0, 0.0, 0.5], 5, Some("large"));
         assert_eq!(large.len(), 1);
         assert_eq!(large[0].0, kid(2));

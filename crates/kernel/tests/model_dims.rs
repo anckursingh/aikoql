@@ -79,7 +79,9 @@ fn ag23_switching_models_never_serves_mixed_dimensions() {
     k.attach_indexes(m.clone());
     m.wait_caught_up(&k, Duration::from_secs(10)).unwrap();
 
-    let scoped = k.find_similar(query(Some("small"), vec![1.0, 0.0])).unwrap();
+    let scoped = k
+        .find_similar(query(Some("small"), vec![1.0, 0.0]))
+        .unwrap();
     assert_eq!(scoped.len(), 10);
     assert!(
         scoped.iter().all(|h| small.contains(&h.ko.koid)),

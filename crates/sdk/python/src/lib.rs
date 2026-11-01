@@ -13,7 +13,7 @@ use aikoql_kernel::{
     Value, VectorIndex, KOID,
 };
 use aikoql_scheduler::IndexMaintainer;
-use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};
+use aikoql_vector::{ModelAwareVectorIndex, TantivyTextIndex};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -171,7 +171,7 @@ fn start_maintainer(
 ) -> aikoql_kernel::KResult<Arc<IndexMaintainer>> {
     if let Some(water) = IndexMaintainer::checkpoint_water(ckpt_dir)? {
         if let (Ok(v), Ok(t)) = (
-            HnswVectorIndex::load(&ckpt_dir.join("vectors")),
+            ModelAwareVectorIndex::load(&ckpt_dir.join("vectors")),
             TantivyTextIndex::load(&ckpt_dir.join("text")),
         ) {
             let vectors: Arc<dyn VectorIndex> = Arc::new(v);
@@ -185,7 +185,7 @@ fn start_maintainer(
     }
     IndexMaintainer::start(
         kernel,
-        Arc::new(HnswVectorIndex::new(0, 10_000)),
+        Arc::new(ModelAwareVectorIndex::new(10_000)),
         Arc::new(TantivyTextIndex::new()?),
     )
 }

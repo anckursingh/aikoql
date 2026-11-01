@@ -75,7 +75,7 @@ pub(crate) use aikoql_scheduler::Scheduler;
 #[cfg(feature = "embedding-openai")]
 pub(crate) use aikoql_semantic::provider::OpenAiEmbeddingProvider;
 pub(crate) use aikoql_semantic::{EmbeddingEnricher, SemanticEngine};
-pub(crate) use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};
+pub(crate) use aikoql_vector::{ModelAwareVectorIndex, TantivyTextIndex};
 pub(crate) use serde_json::{json, Value as J};
 pub(crate) use std::collections::{HashMap, HashSet};
 pub(crate) use std::io::{BufRead, BufReader, Read, Write};
@@ -1131,7 +1131,7 @@ fn resume_or_start_maintainer(
     if let Some(water) = aikoql_scheduler::IndexMaintainer::checkpoint_water(ckpt_dir)? {
         // the reason rides the warning — an operator must see WHY a
         // promotion fell back to a full replay
-        let resumed = HnswVectorIndex::load(&ckpt_dir.join("vectors"))
+        let resumed = ModelAwareVectorIndex::load(&ckpt_dir.join("vectors"))
             .map_err(|e| format!("vectors: {e}"))
             .and_then(|v| {
                 let t = TantivyTextIndex::load(&ckpt_dir.join("text"))
@@ -1165,7 +1165,7 @@ fn resume_or_start_maintainer(
     }
     let m = aikoql_scheduler::IndexMaintainer::start(
         kernel,
-        Arc::new(HnswVectorIndex::new(0, 10_000)),
+        Arc::new(ModelAwareVectorIndex::new(10_000)),
         Arc::new(TantivyTextIndex::new()?),
     )?;
     let (head, _) = kernel.journal_head()?;
