@@ -218,7 +218,7 @@ and a `lesson` KO type distilled by AG-12 sampling.
   recall path: VectorOnly with text (recall) takes the bounded leg; RRF
   ranks in N log N (was N^2); hybrid fusions score a bounded vector ∪
   text union (RRF 100k: 232 → 7.1 ms; 1M: 12.7 ms p50, p95 20.0); the unindexed tail is scored
-  exactly; no zero-score pads. Open: 20c quantization.
+  exactly; no zero-score pads. Open: nothing on 20 — b and c below.
   20d: the HNSW already persisted in the maintainer
   checkpoint, but only replication leaders took one on a timer — every
   server does now (ck001); the embedded SDK still checkpoints on close only.
@@ -231,6 +231,19 @@ and a `lesson` KO type distilled by AG-12 sampling.
   filters and bigger types keep the bounded ANN pool; ACORN-style filtered
   graph traversal is the documented deep form (shortcut comment in
   `coordinator.rs`).
+- *Status (2026-11-01): AG-20c done.* The rebuild copy (`model_map`) stores
+  int8 scalar quantization — codes + one uniform scale per vector — ~4x
+  smaller than the f32 copy. The graph keeps exact f32 (navigation
+  unchanged), rebuilds dequantize for re-insert, and cosine is
+  scale-invariant so the round-trip error is bounded by scale/2 per dim
+  (guard: post-rebuild scores within 2e-2 of exact; gate:
+  `quantized_bytes` ≤ dim+4 per vector + the tolerance guard in
+  `engines/vector`). Published hits are re-scored from the store by the
+  kernel, so quantization error never reaches a published score — the
+  exact top-k re-score is the coordinator's existing committed-cosine
+  chain, now documented as such. Checkpoint format unchanged (vectors
+  were never persisted). The RSS gate (≤ 1005 MB at 1M) is verified by
+  the next 1M bench run, not by a unit test.
 - *Problem:* 1M vector_recall 17.0 s, brute force (REPORT §Scale). An HNSW
   exists (`engines/vector`, attached to `find_similar` since M18) — the
   first step is to establish why the certified cell does not use it

@@ -37,6 +37,14 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Int8 scalar quantization of the vector rebuild copy (AG-20c)**: the
+  in-memory rebuild copy stores int8 codes + one uniform scale per
+  vector (~4x smaller than the f32 copy). The HNSW graph keeps exact
+  f32, so navigation is unchanged; rebuilds dequantize for re-insert,
+  and cosine is scale-invariant so the error stays bounded (guard:
+  post-rebuild scores within 2e-2 of exact). Published hits are
+  re-scored from the store by the kernel, so quantization error never
+  reaches a published score. Checkpoint format unchanged.
 - **Filtered ANN via the type index (AG-20b)**: a `VectorOnly` query
   whose filter is a lone type now scores the repo type index directly
   when the type holds at most 4096 heads — candidates scored stay
