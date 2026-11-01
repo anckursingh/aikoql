@@ -5160,7 +5160,7 @@ pub struct OfflineProof {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-pub(crate) use crate::knowledge::scoring::{cosine, jaccard, tokenize};
+pub(crate) use crate::knowledge::scoring::cosine; // jaccard/tokenize: file-scope import (line 32)
 
 // ---------------------------------------------------------------------------
 // Unit tests
