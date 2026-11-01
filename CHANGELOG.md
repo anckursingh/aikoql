@@ -37,6 +37,7 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Error ergonomics (AG-05)**: every tool error now carries `hint` (what went wrong) and `next` (what to do) beside `code`/`message`/`retryable`/`suggestion`; the txn tools route through the shared envelope instead of a hardcoded INTERNAL. A hygiene gate drives every tool with empty args and asserts no isError result is a bare string.
 - **Framework adapters (AG-60)**: LlamaIndex chat memory (`AikoqlMemory`), an OpenAI Agents SDK session (`AikoqlSession`), and Vercel AI SDK tools (`createAikoqlTools`) over remember/recall/forget — each gate-tested by its framework's upstream example against a live server (SimpleChatEngine + MockLLM, Runner.run, ai v7 tool contract)
 - **Helm chart + kind failover (AG-51)**: leader+standby on the k8s lease with replication TLS, per-pod PVCs, PVC snapshot docs, and a nightly kind failover e2e (kill the leader, the standby serves writes, OAuth sign-ins survive)
 - **Observability (AG-50)**: OTLP traces per tool call (`AIKOQL_OTEL_ENDPOINT`) and per-tool Prometheus counters + recall quality on the /metrics scrape

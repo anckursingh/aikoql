@@ -31,7 +31,10 @@ JSON-RPC 2.0 `error.code` on TCP/stdio frames. All server-produced.
 
 MRFC-0040 structured errors: the `error.code` string inside a tool result
 (`wrap_result`), classified from the message text by
-`ErrorCode::classify`. Retryable codes carry `retryable: true`.
+`ErrorCode::classify`. Retryable codes carry `retryable: true`. Every
+envelope error carries `hint` (what went wrong) and `next` (what to do)
+beside `code`/`message`/`retryable` (AG-05); `suggestion` stays for older
+clients and duplicates `next`.
 
 | Code | Retryable | Classifier keywords | Produced by |
 |------|-----------|---------------------|-------------|

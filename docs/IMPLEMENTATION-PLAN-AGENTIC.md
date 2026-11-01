@@ -128,6 +128,13 @@ to win head-to-head evaluations; **P2** = differentiation / polish.
 `code`, `hint`, and a `next` suggestion (an existing pattern in
 `error_codes.rs`, extended to all tools). *Gate:* no tool returns a bare
 string error (architecture hygiene leg).
+- *Status (2026-11-01): done.* `wrap_result` errors carry `hint` (what
+  went wrong) + `next` (what to do) beside `code`/`message`/`retryable`/
+  `suggestion` (kept for older clients). `txn_dispatch` now routes through
+  the shared envelope — its hardcoded INTERNAL misclassified e.g. a fenced
+  write. Gate: `ag05_no_tool_returns_a_bare_string_error` drives every
+  tool in the list with empty args and asserts every isError result
+  parses as the envelope with all three fields.
 
 ### Phase M — memory that manages itself
 
