@@ -294,6 +294,20 @@ improves on the agent eval set; latency budget ≤ 30 ms for 50 candidates.
 and larger models via `model install`), a re-embed migration job
 (background, resumable, dual-read during migration). *Gate:* switching
 models never serves mixed-dimension results; migration survives a kill.
+- *Status (2026-11-01): AG-23a done — the dim-safety core.*
+  `ModelAwareVectorIndex` (`engines/vector`) shards one HNSW per model:
+  each shard adopts its own dim (P5-M27's global drop becomes per-model),
+  model-scoped queries answer from their shard, and model-less queries
+  merge only shards whose dim equals the query vector's — a
+  mixed-dimension ranking is impossible by construction; same-dim models
+  merge (dual-read). Checkpoints: `models.json` first (fail-closed load)
+  + one dir per shard; legacy single-graph checkpoints load as the ""
+  shard, still label-filtered. The service and the Python SDK construct
+  the wrapper. Gate: 3 unit tests + `crates/kernel/tests/model_dims.rs`
+  (model-scoped and dim-scoped queries never mix; checkpoint round-trip).
+  Open (AG-23b): per-collection model assignment and the resumable
+  re-embed migration job — the shards already give dual-read its index
+  side.
 
 ### Phase T — trust debt (the moat's own credibility)
 
