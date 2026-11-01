@@ -120,3 +120,47 @@ impl TenantManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn koid(b: u8) -> KOID {
+        KOID::from_bytes([b; KOID_LEN])
+    }
+
+    /// AG-32 gate: rebuild counts each head under its OWN metadata tenant,
+    /// not the hard-coded "default".
+    #[test]
+    fn ag32_rebuild_counts_per_metadata_tenant() {
+        let tm = TenantManager::new();
+        let heads = vec![
+            (koid(1), 1, 1, LifecycleState::Active),
+            (koid(2), 1, 1, LifecycleState::Active),
+            (koid(3), 1, 1, LifecycleState::Active),
+            (koid(4), 1, 1, LifecycleState::Deleted), // deleted: never counted
+            (koid(5), 1, 1, LifecycleState::Active),
+        ];
+        let tenants = HashMap::from([
+            (koid(1), "a".to_string()),
+            (koid(2), "a".to_string()),
+            (koid(3), "b".to_string()),
+            (koid(5), "b".to_string()),
+        ]);
+        tm.rebuild(&heads, |k| tenants.get(k).cloned());
+        assert_eq!(tm.usage("a"), 2);
+        assert_eq!(tm.usage("b"), 2);
+        assert_eq!(tm.usage("default"), 0);
+        assert_eq!(tm.usage("other"), 0);
+    }
+
+    /// AG-32: a tenant-less head counts under the default tenant.
+    #[test]
+    fn ag32_rebuild_tenantless_counts_default() {
+        let tm = TenantManager::new();
+        let heads = vec![(koid(1), 1, 1, LifecycleState::Active)];
+        tm.rebuild(&heads, |_| None);
+        assert_eq!(tm.usage("default"), 1);
+    }
+}

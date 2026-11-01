@@ -1716,6 +1716,13 @@ impl Kernel {
         "scope",
     ];
 
+    /// AG-32: the live per-tenant object count the quota check enforces —
+    /// the observation window for the accounting gate (create/forget/rebuild
+    /// keep it in sync with the store).
+    pub fn tenant_usage(&self, tenant: &str) -> usize {
+        self.tenants.usage(tenant)
+    }
+
     /// Public entry point: the epistemic-metadata boundary. Kernel-managed
     /// extension keys are rejected here so no external caller can mint a
     /// Verified claim, a forged authority, or a fabricated evidence trail.
