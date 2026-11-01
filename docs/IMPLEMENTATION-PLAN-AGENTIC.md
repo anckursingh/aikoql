@@ -194,6 +194,14 @@ string error (architecture hygiene leg).
   `forget` stays the only deletion, and stays GDPR-audited).
 - *Gate:* consolidation is lineage-preserving (every merged KO traces to
   its sources); recall@10 does not drop after consolidation on the agent eval set.
+- *Status (2026-11-01): done* — salience (recency × accesses × authority ×
+  links) stamped at `remember` (authority = kernel-managed origin rank),
+  refreshed on access (recall bumps counts; refresh skips unchanged
+  values), a cadence job merges near-duplicates (existing `merge`,
+  `derived_from` lineage kept — AG-13a) and demotes session-scoped
+  memories past the 24 h TTL below salience 0.5 (epistemic Superseded;
+  nothing deleted — AG-13c). The recall@10 gate (AG-13b) stays open
+  until the AG-61 eval run.
 
 **AG-14 (P2) Procedural memory.** `record_experience`/`find_experiences`
 exist; add outcome-weighted retrieval (successful procedures rank first)
