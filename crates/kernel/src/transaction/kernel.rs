@@ -783,6 +783,21 @@ impl Kernel {
                 eprintln!("type index: backfilled {indexed} objects");
             }
         }
+        // AG-32: rebuild per-tenant usage from the store on every open —
+        // counters must not restart empty and re-learn as writes land.
+        // shortcut: full KO decode per head on each open; switch to a
+        // persistent per-tenant watermark KV prefix when tenants number in
+        // the hundreds (see the tenant.rs module doc).
+        let tenants = Arc::new(TenantManager::new());
+        if !standby {
+            let heads = repo.scan_heads()?;
+            tenants.rebuild(&heads, |koid, ts| {
+                repo.get_object_version(koid, ts)
+                    .ok()
+                    .flatten()
+                    .and_then(|ko| ko.metadata.tenant)
+            });
+        }
         let (seq, audit, last_ts) = match repo.journal_head()? {
             Some((s, a, t)) => (s, a, t),
             None => (0, [0u8; 32], 0),
@@ -833,7 +848,7 @@ impl Kernel {
             objects,
             access_counts: Arc::new(Mutex::new(HashMap::new())),
             signing_key: None,
-            tenants: Arc::new(TenantManager::new()),
+            tenants,
             field_crypto: None,
             encryption_policies: Arc::new(RwLock::new(HashMap::new())),
             embedding_provider: None,

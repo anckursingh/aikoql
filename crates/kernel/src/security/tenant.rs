@@ -64,16 +64,18 @@ impl TenantManager {
     pub fn rebuild(
         &self,
         heads: &[(KOID, u64, u64, LifecycleState)],
-        tenant_resolver: impl Fn(&KOID) -> Option<String>,
+        // (koid, commit_ts) — the resolver reads the head's metadata, which
+        // needs the version timestamp (get_object_version)
+        tenant_resolver: impl Fn(&KOID, u64) -> Option<String>,
     ) {
         // justified: RwLock poison is unrecoverable
         let mut usage = self.usage.write().unwrap();
         usage.clear();
-        for (koid, _, _, state) in heads {
+        for (koid, _version, ts, state) in heads {
             if *state == LifecycleState::Deleted {
                 continue;
             }
-            let t = tenant_resolver(koid).unwrap_or_else(|| "default".to_string());
+            let t = tenant_resolver(koid, *ts).unwrap_or_else(|| "default".to_string());
             *usage.entry(t).or_insert(0) += 1;
         }
     }
@@ -143,7 +145,7 @@ mod tests {
             (koid(3), "b".to_string()),
             (koid(5), "b".to_string()),
         ]);
-        tm.rebuild(&heads, |k| tenants.get(k).cloned());
+        tm.rebuild(&heads, |k, _ts| tenants.get(k).cloned());
         assert_eq!(tm.usage("a"), 2);
         assert_eq!(tm.usage("b"), 2);
         assert_eq!(tm.usage("default"), 0);
@@ -155,7 +157,7 @@ mod tests {
     fn ag32_rebuild_tenantless_counts_default() {
         let tm = TenantManager::new();
         let heads = vec![(koid(1), 1, 1, LifecycleState::Active)];
-        tm.rebuild(&heads, |_| None);
+        tm.rebuild(&heads, |_, _| None);
         assert_eq!(tm.usage("default"), 1);
     }
 
