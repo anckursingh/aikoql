@@ -112,6 +112,13 @@ pub trait Index: Send + Sync {
     fn covers(&self, _type_name: &str, _property: &str) -> bool {
         false
     }
+    /// AG-21d: whether this index answers a RANGE over `property` — for a
+    /// composite index that is the FIRST property only (a prefix range over
+    /// the ordered tuple keys). Default: same as `covers` (single-property
+    /// indexes).
+    fn covers_range(&self, type_name: &str, property: &str) -> bool {
+        self.covers(type_name, property)
+    }
     /// P1-04 — the index's consistency class (P5-M19 idx3-005). The default
     /// is CandidateOnly: an index that does not declare a freshness story
     /// is never allowed to answer an exact scan (fail closed).

@@ -75,11 +75,35 @@ fn put_value(out: &mut Vec<u8>, v: &Value) {
     }
 }
 
-fn encode(values: &[&Value]) -> Vec<u8> {
+/// The order-preserving encoding of one value (the same bytes the index
+/// keys carry) — pub(crate) so `statistics` builds range histograms over
+/// the SAME order the range scans serve.
+pub(crate) fn encode(values: &[&Value]) -> Vec<u8> {
     let mut out = Vec::new();
     for v in values {
         put_value(&mut out, v);
     }
+    out
+}
+
+/// AG-21d: the smallest key greater than every key that carries `bytes`
+/// as a prefix — increment the last byte, carrying away trailing 0xFFs.
+/// This is the exclusive upper bound of a prefix range: any `bytes ++
+/// suffix` key sorts below it (the first differing byte is the incremented
+/// one, still inside the prefix's span), and any key with a larger prefix
+/// sorts at or past it. A value key never ends in all-0xFF (the tag byte
+/// is ≤ 5), so the increment always lands.
+fn successor(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    while let Some(last) = out.last_mut() {
+        if *last == 0xFF {
+            out.pop();
+        } else {
+            *last += 1;
+            return out;
+        }
+    }
+    out.push(0);
     out
 }
 
@@ -237,9 +261,9 @@ impl Index for PropertyIndex {
     }
 
     fn scan_range(&self, lo: Option<&Value>, hi: Option<&Value>) -> KResult<Option<Vec<KOID>>> {
-        if self.properties.len() != 1 {
-            return Ok(None);
-        }
+        // AG-21d: any tuple arity — the bounds are prefixes over the FIRST
+        // property (a range on a later property is not prefix-servable;
+        // the caller's covers_range gate keeps those out).
         let domain = |v: &Value| -> Option<u8> {
             match v {
                 Value::Int(_) | Value::Float(_) => Some(TAG_NUM),
@@ -261,12 +285,17 @@ impl Index for PropertyIndex {
         let start = lo.map_or(Bound::Included(vec![tag]), |v| {
             Bound::Included(encode(&[v]))
         });
+        // AG-21d: the upper bound is the exclusive SUCCESSOR of hi's key —
+        // tuple keys carry suffixes, so hi's own key covers only the bare
+        // [hi] tuple; every [hi, suffix] key sorts past it. For a
+        // single-property index the successor form answers the same set
+        // (no valid key sits between a value key and its successor).
         let end = hi.map_or(Bound::Excluded(vec![tag + 1]), |v| {
-            Bound::Included(encode(&[v]))
+            Bound::Excluded(successor(&encode(&[v])))
         });
-        if let (Bound::Included(a), Bound::Included(b)) = (&start, &end) {
-            if a > b {
-                return Ok(Some(Vec::new()));
+        if let (Bound::Included(a), Bound::Excluded(b)) = (&start, &end) {
+            if a >= b {
+                return Ok(Some(Vec::new())); // lo > hi: nothing compares
             }
         }
         // justified: RwLock poison is unrecoverable
@@ -282,6 +311,14 @@ impl Index for PropertyIndex {
 
     fn covers(&self, type_name: &str, property: &str) -> bool {
         self.type_name == type_name && self.properties.len() == 1 && self.properties[0] == property
+    }
+
+    /// AG-21d: a range may ride the FIRST property of any tuple — a prefix
+    /// range over the ordered keys. Eq still needs the full tuple
+    /// (`covers`).
+    fn covers_range(&self, type_name: &str, property: &str) -> bool {
+        self.type_name == type_name
+            && self.properties.first().is_some_and(|p| p == property)
     }
 
     fn len(&self) -> usize {
