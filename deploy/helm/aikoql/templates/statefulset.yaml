@@ -37,6 +37,13 @@ spec:
             - serve
             - --metrics-addr
             - 0.0.0.0:{{ .Values.mcpPort }}
+            # the fail-closed HTTP surface: a non-loopback bind must be
+            # TLS (logins and session tokens ride it) — same mounted
+            # secret as replication
+            - --tls-cert
+            - /tls/tls.crt
+            - --tls-key
+            - /tls/tls.key
             # the MCP bearer AND the replication token (admin role)
             - --tcp-token
             - $(AUTH_TOKEN)::admin
@@ -69,6 +76,7 @@ spec:
             # the non-loopback metrics+MCP bind is fail-closed without this
             - name: AIKOQL_ALLOW_REMOTE_HTTP
               value: "1"
+            {{- $_ := required "auth.adminPasswordKey is required — the fail-closed surface has no credentials without it" .Values.auth.adminPasswordKey }}
             {{- if .Values.auth.adminPasswordKey }}
             - name: AIKOQL_ADMIN_PASSWORD
               valueFrom:
@@ -91,11 +99,13 @@ spec:
             httpGet:
               path: /metrics
               port: mcp
+              scheme: HTTPS
             periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /metrics
               port: mcp
+              scheme: HTTPS
             periodSeconds: 10
           {{- with .Values.resources }}
           resources:

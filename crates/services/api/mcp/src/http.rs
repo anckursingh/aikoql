@@ -594,6 +594,9 @@ fn unix_ms() -> i64 {
 }
 
 impl AuthResolver {
+    // tests-only constructor (production goes through with_state); the bin
+    // build would flag it dead otherwise
+    #[cfg(test)]
     pub(crate) fn new(
         users: Vec<crate::config::AuthUser>,
         admin_password: Option<&str>,

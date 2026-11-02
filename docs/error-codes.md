@@ -67,6 +67,7 @@ above (e.g. `NOT_FOUND: <koid>` → NOT_FOUND via the "not_found" keyword).
 | INVALID_SCHEMA | schema constraint violation |
 | INVALID_QUERY | aikoql parse or semantic error |
 | VERSION_CONFLICT | OCC expected/found version mismatch |
+| CLAIM_CONFLICT | task claim/handoff refused — held by another agent or already released (AG-41) |
 | ACCESS_DENIED | owner-default ACL refusal |
 | INVALID_STATE | illegal state transition |
 | INVALID_EPISTEMIC | illegal epistemic transition |

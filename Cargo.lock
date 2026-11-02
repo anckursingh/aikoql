@@ -270,6 +270,7 @@ dependencies = [
  "aikoql-storage-v2",
  "aikoql-vector",
  "pyo3",
+ "pyo3-build-config",
 ]
 
 [[package]]

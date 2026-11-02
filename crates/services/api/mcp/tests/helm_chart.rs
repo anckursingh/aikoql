@@ -82,6 +82,9 @@ fn ag51_rbac_grants_only_the_lease_verbs() {
     assert!(rbac.contains("leases"), "leases resource");
     // R5a: nothing but the lease
     assert!(!rbac.contains("pods"), "no pod access needed");
+    // the first real kind run caught a secrets rule sneaking past this law:
+    // the TLS hook wrote the repl-tls Secret — helm renders it now
+    assert!(!rbac.contains("secrets"), "lease-only: {rbac}");
 }
 
 #[test]
@@ -101,5 +104,83 @@ fn ag51_kind_failover_e2e_is_wired_into_the_nightly_owner() {
     assert!(
         owner.contains("kind-failover-e2e.sh"),
         "benchmark.yml must run the kind failover e2e"
+    );
+}
+
+#[test]
+fn ag51_repl_tls_is_a_helm_managed_secret_with_a_stable_ca() {
+    // the first real kind run died in the pre-install Job: alpine/openssl
+    // has no kubectl, and kubectl apply needed secret verbs the RBAC never
+    // granted. Helm renders the CA instead — no Job, no kubectl-in-a-pod,
+    // lease-only RBAC — and lookup keeps the CA stable across upgrades.
+    let hook = root().join("deploy/helm/aikoql/templates/tls-hook.yaml");
+    assert!(!hook.exists(), "no hook Job: {}", hook.display());
+    let secret = read(&root().join("deploy/helm/aikoql/templates/repl-tls.yaml"));
+    assert!(secret.contains("lookup"), "the CA must survive upgrades: {secret}");
+    assert!(
+        secret.contains("genCA") && secret.contains("genSignedCert"),
+        "a fresh install generates a CA + serving cert: {secret}"
+    );
+    // the statefulset mount contract: /tls/{ca.crt,tls.crt,tls.key}
+    assert!(secret.contains("ca.crt"), "ca.crt key: {secret}");
+    assert!(secret.contains("tls.crt"), "tls.crt key (server chain): {secret}");
+    assert!(secret.contains("tls.key"), "tls.key key: {secret}");
+}
+
+#[test]
+fn ag51_arms_the_admin_password_that_the_surface_fails_closed_on() {
+    // first real run, second crash: AIKOQL_ALLOW_REMOTE_HTTP=1 without
+    // credentials — the server refuses to start. The chart must demand
+    // auth.adminPasswordKey at render time, and the gate must set it.
+    let sts = read(&root().join("deploy/helm/aikoql/templates/statefulset.yaml"));
+    assert!(
+        sts.contains("required") && sts.contains(".Values.auth.adminPasswordKey"),
+        "adminPasswordKey must be required at render: {sts}"
+    );
+    let script = read(&root().join("scripts/kind-failover-e2e.sh"));
+    assert!(
+        script.contains("adminPasswordKey") && script.contains("admin-password"),
+        "the gate must arm the admin password: {script}"
+    );
+}
+
+#[test]
+fn ag51_surface_is_tls_and_the_gate_speaks_https() {
+    // first real run, third crash: --metrics-addr on 0.0.0.0 serves
+    // logins and session tokens — the server refuses plaintext there
+    // (fail-closed). The chart must arm the surface TLS from the same
+    // mounted secret, probes must probe HTTPS, and the gate must curl it.
+    let sts = read(&root().join("deploy/helm/aikoql/templates/statefulset.yaml"));
+    assert!(
+        sts.contains("scheme: HTTPS"),
+        "probes must probe the TLS surface: {sts}"
+    );
+    let script = read(&root().join("scripts/kind-failover-e2e.sh"));
+    assert!(
+        script.contains("https://127.0.0.1:4318"),
+        "the gate must curl the TLS surface: {script}"
+    );
+    // the server requires the session header on every post-initialize MCP
+    // call (pinned by the claude.ai tunnel run) — the gate's tools/call
+    // must send it or remember dies with a 400. The -H form, not the
+    // comment in session().
+    assert!(
+        script.contains("-H \"Mcp-Session-Id: $"),
+        "post-initialize MCP calls need the session header: {script}"
+    );
+    // a StatefulSet resurrects a killed pod, and the recreated pod
+    // reclaims its own pre-restart lease (same --ha-node) before the
+    // standby's staleness window — the standby promotion this gate proves
+    // requires the controller to be orphaned first
+    assert!(
+        script.contains("cascade=orphan"),
+        "the gate must orphan the StatefulSet before the kill: {script}"
+    );
+    // MCP sessions are process-local — the promoted leader knows nothing
+    // of the pre-kill session ids. What survives is the grant (the token)
+    // and the writes; the gate must re-initialize both sessions.
+    assert!(
+        script.contains("SID2=\"$(session \"$TOKEN\")\""),
+        "the gate must re-initialize the static-token session after failover: {script}"
     );
 }

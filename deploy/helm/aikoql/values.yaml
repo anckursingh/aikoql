@@ -16,7 +16,8 @@ image:
 auth:
   existingSecret: aikoql-auth
   tokenKey: token
-  # optional: arms the OAuth surface (RFC 9728) when this key holds the
+  # required: the server fails closed (refuses to start) without HTTP
+  # credentials — this key arms the OAuth surface (RFC 9728) with the
   # admin bootstrap password (AIKOQL_ADMIN_PASSWORD)
   adminPasswordKey: ""
 
@@ -28,11 +29,10 @@ replPort: 7071
 leaseName: primary
 
 tls:
-  # pre-install Job generates a CA + serving cert for the pod DNS names and
-  # stores them in <fullname>-repl-tls; false = bring-your-own Secret of the
-  # same name with keys ca.crt, tls.crt (chain), tls.key
+  # helm renders a CA + serving cert for the pod DNS names into
+  # <fullname>-repl-tls (reused across upgrades); false = bring-your-own
+  # Secret of the same name with keys ca.crt, tls.crt (chain), tls.key
   auto: true
-  hookImage: alpine/openssl:3.3.3
 
 storage:
   size: 5Gi
