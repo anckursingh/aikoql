@@ -416,3 +416,38 @@ fn cbo_default_009_a_range_filter_is_served_by_the_index() {
     let plan = plan_of(&k, "MATCH Person WHERE points > 995 RETURN *");
     assert!(exec_ids(&Interpreter::execute(&k, &plan).unwrap()).contains(&half));
 }
+
+/// RED pre-fix: a range on the FIRST property of a composite index was
+/// refused (scan_range + covers demanded a single property) — the query
+/// full-scanned. A byte-prefix range now serves it; the Filter re-checks.
+#[test]
+fn cbo_default_010_a_prefix_range_on_a_composite_index_is_served() {
+    let k = mk();
+    k.catalog_create_index("by_dept_name", "Person", &["dept", "name"])
+        .unwrap();
+    for t in 0..20 {
+        for i in 0..10 {
+            person(&k, &format!("P{t:02}-{i}"), &format!("D{t:02}"));
+        }
+    }
+    catch_up_indexes(&k);
+    k.analyze("Person").unwrap();
+    // the maintainer's freshness stamp (no scheduler in runtime tests) —
+    // an unstamped index reads the whole journal as its unapplied tail and
+    // the exact-count fallback turns conservative
+    for idx in k.property_indexes().unwrap() {
+        idx.set_applied_seq(k.journal_head().unwrap().0);
+    }
+    let plan = plan_of(
+        &k,
+        "MATCH Person WHERE dept >= \"D10\" AND dept < \"D15\" RETURN *",
+    );
+    let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
+    assert_eq!(report.index_used.as_deref(), Some("by_dept_name"));
+    let mut got = exec_ids(&rows);
+    got.sort();
+    let mut want = rule_based(&k, &plan);
+    want.sort();
+    assert_eq!(got, want, "exactly the scan's answer");
+    assert_eq!(got.len(), 50, "D10..D14 × 10");
+}

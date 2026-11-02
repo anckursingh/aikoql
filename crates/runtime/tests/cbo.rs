@@ -860,3 +860,36 @@ fn ann006_cost_rows_use_the_live_ann_dim() {
         "no live ANN → the 768 model default"
     );
 }
+
+// --- AG-21d — a range Filter prices from the property histogram when no
+// Eq conjunct covers it; without one it prices 1.0 (no information).
+// RED pre-fix: the Filter row ignores ranges entirely.
+#[test]
+fn cbo_range_filter_prices_from_the_histogram() {
+    let k = mk();
+    for i in 0..1000 {
+        let mut req = RememberRequest::create(alice(), meta("Person"));
+        req.properties.insert("points".into(), Value::Int(i));
+        req.properties
+            .insert("name".into(), Value::Text(format!("P{i}")));
+        k.remember(req).unwrap();
+    }
+    k.analyze("Person").unwrap();
+    let plan = plan_of(&k, "MATCH Person WHERE points > 300 AND points < 700 RETURN *");
+    let report = cost_optimize(&k, &plan).unwrap();
+    // No index declared → the Scan stays FullScan; the Filter row is the
+    // histogram fraction × scan rows ≈ 0.40 × 1000.
+    assert_eq!(scan_strategy(&report), Strategy::FullScan);
+    let rows = report.costs[1].rows as f64;
+    assert!((rows - 400.0).abs() < 40.0, "{rows}");
+
+    // The CBO range DECISION rides the same histogram: with an index and
+    // the fraction below 0.5 the scan flips to the index without probing.
+    k.catalog_create_index("by_points", "Person", &["points"])
+        .unwrap();
+    catch_up_indexes(&k);
+    k.analyze("Person").unwrap();
+    let report = cost_optimize(&k, &plan).unwrap();
+    assert_eq!(scan_strategy(&report), Strategy::PropertyIndex);
+    assert_eq!(report.index_used.as_deref(), Some("by_points"));
+}

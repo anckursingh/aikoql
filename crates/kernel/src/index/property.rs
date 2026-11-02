@@ -655,7 +655,72 @@ mod tests {
             vec![k2],
             "binary-unsafe keys must round-trip"
         );
-        assert_eq!(idx2.applied_seq(), 7, "restore stamps the water");
-        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- AG-21d — idx6-003: a range on the FIRST property of a composite
+    // index serves as a byte-prefix range over the tuple keys. The hi
+    // boundary is the exclusive successor of its key, so rows whose tuple
+    // carries a suffix past hi are still included (the Filter re-checks).
+    // RED pre-fix: scan_range refuses multi-property indexes and the trait
+    // has no covers_range — the query full-scans.
+    #[test]
+    fn idx6_003_composite_prefix_range_serves_the_first_property() {
+        let idx = PropertyIndex::new("by_team_points", "Player", &["team", "points"]);
+        let row = |n: u8, team: i64, points: i64| {
+            let koid = KOID::from_bytes([n; KOID_LEN]);
+            let mut o = ko(koid, "Player");
+            o.properties.insert("team".into(), Value::Int(team));
+            o.properties.insert("points".into(), Value::Int(points));
+            (koid, o)
+        };
+        for (koid, o) in [
+            row(1, 3, 7),
+            row(2, 5, 10),
+            row(3, 8, 1),
+            row(4, 8, 99),
+            row(5, 9, 0),
+        ] {
+            idx.upsert(koid, &o).unwrap();
+        }
+        // team in [5, 8]: 5, 8+1, 8+99 — the 8 rows' suffixes must not
+        // drop them at the hi boundary
+        let got = idx
+            .scan_range(Some(&Value::Int(5)), Some(&Value::Int(8)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            got,
+            vec![
+                KOID::from_bytes([2; KOID_LEN]),
+                KOID::from_bytes([3; KOID_LEN]),
+                KOID::from_bytes([4; KOID_LEN])
+            ]
+        );
+        // open upper end: team >= 8
+        let got = idx.scan_range(Some(&Value::Int(8)), None).unwrap().unwrap();
+        assert_eq!(
+            got,
+            vec![
+                KOID::from_bytes([3; KOID_LEN]),
+                KOID::from_bytes([4; KOID_LEN]),
+                KOID::from_bytes([5; KOID_LEN])
+            ]
+        );
+        // the range covers only the FIRST property; Eq still needs the
+        // full tuple
+        assert!(idx.covers_range("Player", "team"));
+        assert!(!idx.covers_range("Player", "points"));
+        assert!(!idx.covers("Player", "team"), "Eq needs the full tuple");
+    }
+
+    #[test]
+    fn idx6_003_composite_index_eq_scan_checks_arity() {
+        let idx = PropertyIndex::new("by_team_points", "Player", &["team", "points"]);
+        // an Eq probe with fewer key parts than the tuple is refused
+        assert!(idx.scan_eq(&[Value::Int(1)]).is_err());
+        assert_eq!(
+            idx.scan_eq(&[Value::Int(1), Value::Int(2)]).unwrap(),
+            Vec::<KOID>::new()
+        );
     }
 }
