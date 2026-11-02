@@ -143,3 +143,21 @@ fn ag51_arms_the_admin_password_that_the_surface_fails_closed_on() {
         "the gate must arm the admin password: {script}"
     );
 }
+
+#[test]
+fn ag51_surface_is_tls_and_the_gate_speaks_https() {
+    // first real run, third crash: --metrics-addr on 0.0.0.0 serves
+    // logins and session tokens — the server refuses plaintext there
+    // (fail-closed). The chart must arm the surface TLS from the same
+    // mounted secret, probes must probe HTTPS, and the gate must curl it.
+    let sts = read(&root().join("deploy/helm/aikoql/templates/statefulset.yaml"));
+    assert!(
+        sts.contains("scheme: HTTPS"),
+        "probes must probe the TLS surface: {sts}"
+    );
+    let script = read(&root().join("scripts/kind-failover-e2e.sh"));
+    assert!(
+        script.contains("https://127.0.0.1:4318"),
+        "the gate must curl the TLS surface: {script}"
+    );
+}
