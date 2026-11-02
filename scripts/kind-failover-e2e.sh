@@ -124,6 +124,11 @@ OKOID="$(tool "$OAUTH_TOKEN" "$OSID" "remember" '{"subject":"agent","type_name":
 echo "OAuth sign-in issued and served a write ($OKOID)"
 
 # --- failover: kill the leader pod -----------------------------------------
+# Orphan the StatefulSet first: a recreated pod would reclaim its own
+# pre-restart lease (same --ha-node) and renew it before the standby's
+# staleness window — the standby promotion this gate proves needs the
+# leader to stay dead.
+kubectl -n "$NS" delete sts "$RELEASE" --cascade=orphan >/dev/null
 kubectl -n "$NS" delete pod "$LEADER" --grace-period=1 >/dev/null
 NEW_LEADER=""
 for _ in $(seq 90); do
