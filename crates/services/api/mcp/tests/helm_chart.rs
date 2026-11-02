@@ -168,4 +168,12 @@ fn ag51_surface_is_tls_and_the_gate_speaks_https() {
         script.contains("-H \"Mcp-Session-Id: $"),
         "post-initialize MCP calls need the session header: {script}"
     );
+    // a StatefulSet resurrects a killed pod, and the recreated pod
+    // reclaims its own pre-restart lease (same --ha-node) before the
+    // standby's staleness window — the standby promotion this gate proves
+    // requires the controller to be orphaned first
+    assert!(
+        script.contains("cascade=orphan"),
+        "the gate must orphan the StatefulSet before the kill: {script}"
+    );
 }
