@@ -143,11 +143,17 @@ echo "standby $NEW_LEADER won the lease"
 
 # --- the pre-failover writes and sign-in survive ---------------------------
 pf "$NEW_LEADER"
-GOT="$(tool "$TOKEN" "$SID" "get" "{\"subject\":\"agent\",\"koid\":\"$KOID\"}" | jsonfield '["properties"]["n"]')"
+# sessions are process-local and died with the old leader; the tokens
+# (and the writes they made) live in the replicated db — re-initialize
+SID2="$(session "$TOKEN")"
+[ -n "$SID2" ] || die "re-initialize with the static token failed"
+GOT="$(tool "$TOKEN" "$SID2" "get" "{\"subject\":\"agent\",\"koid\":\"$KOID\"}" | jsonfield '["properties"]["n"]')"
 [ "$GOT" = "7" ] || die "leader write lost after failover (got $GOT)"
-GOT8="$(tool "$TOKEN" "$SID" "get" "{\"subject\":\"agent\",\"koid\":\"$OKOID\"}" | jsonfield '["properties"]["n"]')"
+GOT8="$(tool "$TOKEN" "$SID2" "get" "{\"subject\":\"agent\",\"koid\":\"$OKOID\"}" | jsonfield '["properties"]["n"]')"
 [ "$GOT8" = "8" ] || die "OAuth write lost after failover (got $GOT8)"
 # the OAuth sign-in from before the kill still authorizes the new leader
-NEW_KOID="$(tool "$OAUTH_TOKEN" "$OSID" "remember" '{"subject":"agent","type_name":"note","properties":{"n":9}}' | jsonfield '["koid"]')"
+OSID2="$(session "$OAUTH_TOKEN")"
+[ -n "$OSID2" ] || die "re-initialize with the pre-failover OAuth token failed"
+NEW_KOID="$(tool "$OAUTH_TOKEN" "$OSID2" "remember" '{"subject":"agent","type_name":"note","properties":{"n":9}}' | jsonfield '["koid"]')"
 [ -n "$NEW_KOID" ] || die "the pre-failover OAuth token no longer works"
 echo "PASS: failover served both writes; the OAuth sign-in survived ($NEW_KOID)"
