@@ -4,6 +4,7 @@
 pub(crate) mod admin;
 pub(crate) mod agent_knowledge;
 pub(crate) mod constraints;
+pub(crate) mod coordination;
 pub(crate) mod deployment;
 pub(crate) mod evaluation;
 pub(crate) mod facts;
@@ -17,6 +18,7 @@ pub(crate) mod txn;
 pub(crate) use admin::*;
 pub(crate) use agent_knowledge::*;
 pub(crate) use constraints::*;
+pub(crate) use coordination::*;
 pub(crate) use deployment::*;
 pub(crate) use evaluation::*;
 pub(crate) use facts::*;

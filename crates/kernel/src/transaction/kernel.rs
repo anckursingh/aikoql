@@ -1725,6 +1725,10 @@ impl Kernel {
         KnowledgeObject::EXT_SALIENCE,
         "authority",
         "scope",
+        // AG-41: coordination claims are kernel-owned — only the claim/
+        // release/handoff ops write them, so no caller can forge a holder.
+        "claim_holder",
+        "claim_until",
     ];
 
     /// AG-32: the live per-tenant object count the quota check enforces —
@@ -2035,11 +2039,23 @@ impl Kernel {
                 KnowledgeObject::EXT_CONFIDENCE,
                 "authority",
                 "scope",
+                // AG-41: a generic update of a claimed KO must not silently
+                // drop the coordination claim.
+                "claim_holder",
+                "claim_until",
             ] {
                 if !extensions.contains_key(key) {
                     if let Some(v) = head.extensions.get(key) {
                         extensions.insert(key.into(), v.clone());
                     }
+                }
+            }
+            // AG-41: a Null claim key is a deliberate removal (the
+            // release op) — strip it after carry-forward so the claim is
+            // not silently re-added.
+            for key in ["claim_holder", "claim_until"] {
+                if matches!(extensions.get(key), Some(Value::Null)) {
+                    extensions.remove(key);
                 }
             }
             // Authority is monotonic-up on ordinary updates; a downgrade

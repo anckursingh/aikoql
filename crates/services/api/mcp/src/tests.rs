@@ -396,8 +396,8 @@ fn auth002_session_token_256bit_unpredictable() {
     let auth = crate::http::AuthResolver::new(vec![], Some("admin"), 86_400);
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let body = serde_json::json!({"username": "admin", "password": "admin"}).to_string();
-    let t1 = crate::http::handle_login(&body, &sessions, &auth).expect("login");
-    let t2 = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    let t1 = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
+    let t2 = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
     assert_eq!(t1.len(), 64, "token must be 256-bit hex (32 bytes)");
     assert!(
         t1.chars().all(|c| c.is_ascii_hexdigit()),
@@ -508,7 +508,7 @@ fn logins_back_off_after_five_failures() {
     );
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let ok = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
-    let err = crate::http::handle_login(&ok, &sessions, &auth).unwrap_err();
+    let err = crate::http::handle_login(&ok, &sessions, &auth, "127.0.0.1".parse().unwrap()).unwrap_err();
     assert!(err.0.starts_with("429"), "{err:?}");
     // a name that is not a login is never tracked (the map stays bounded)
     for _ in 0..10 {
@@ -530,6 +530,74 @@ fn a_successful_sign_in_resets_the_backoff() {
     assert_eq!(auth.locked_for("admin"), None);
 }
 
+// AG-52: the login backoff survives a restart — the fail state is written
+// to a sidecar next to the database and reloaded by the next serve.
+#[test]
+fn ag52_login_backoff_survives_restart() {
+    let db = tmp_db("ag52-state");
+    let state = std::path::PathBuf::from(format!("{db}.login-backoff.json"));
+    let auth =
+        crate::http::AuthResolver::with_state(vec![], Some("pw"), 86400, Some(state.clone()));
+    for _ in 0..5 {
+        assert!(auth.verify("admin", "wrong").is_none());
+    }
+    assert_eq!(auth.locked_for("admin"), Some(1));
+    drop(auth);
+
+    // a fresh serve: the persisted state re-arms the backoff
+    let auth2 = crate::http::AuthResolver::with_state(vec![], Some("pw"), 86400, Some(state));
+    assert_eq!(
+        auth2.locked_for("admin"),
+        Some(1),
+        "backoff must survive a restart"
+    );
+    // the lock expires (wall clock, not process lifetime), then the right
+    // password clears the persisted state
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert!(auth2.verify("admin", "pw").is_some(), "right password clears it");
+    assert_eq!(auth2.locked_for("admin"), None);
+}
+
+// AG-52: the per-IP layer — failures from one address lock the address
+// (a username spray can't dodge the per-login backoff), and X-Forwarded-For
+// is trusted only from the configured proxy.
+#[test]
+fn ag52_per_ip_backoff_behind_trusted_proxy() {
+    let mut auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86400);
+    auth.set_trusted_proxy(Some("10.0.0.1".parse().unwrap()));
+    let h = "X-Forwarded-For: 1.2.3.4, 5.6.7.8\r\n";
+    let ip4 = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+    assert_eq!(
+        auth.client_ip(ip4("10.0.0.1"), h),
+        ip4("5.6.7.8"),
+        "the trusted proxy's last XFF hop is the client"
+    );
+    assert_eq!(
+        auth.client_ip(ip4("9.9.9.9"), h),
+        ip4("9.9.9.9"),
+        "XFF from a non-proxy peer is ignored"
+    );
+    assert_eq!(
+        auth.client_ip(ip4("10.0.0.1"), "X-Forwarded-For: garbage\r\n"),
+        ip4("10.0.0.1"),
+        "an unparseable XFF falls back to the peer"
+    );
+
+    let ip: std::net::IpAddr = "6.6.6.6".parse().unwrap();
+    for _ in 0..crate::http::FREE_IP_FAILS {
+        assert!(auth.verify("ghost", "x").is_none(), "unknown login, counted per IP");
+        auth.ip_failure(ip);
+    }
+    assert!(auth.ip_wait(ip).is_some(), "the address is locked");
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let body = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
+    let err = crate::http::handle_login(&body, &sessions, &auth, ip).unwrap_err();
+    assert!(
+        err.0.starts_with("429"),
+        "a locked IP is refused even with the right password: {err:?}"
+    );
+}
+
 /// auth001 RED: login verifies CONFIGURED credentials (argon2id) — no
 /// hardcoded admin/admin. The resolver here bootstraps admin from the
 /// AIKOQL_ADMIN_PASSWORD path; the second half pins [auth].users hashes.
@@ -539,16 +607,16 @@ fn auth001_login_configured_creds_ok_wrong_401() {
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let ok = serde_json::json!({"username": "admin", "password": "s3cret-pw"}).to_string();
     assert!(
-        crate::http::handle_login(&ok, &sessions, &auth).is_ok(),
+        crate::http::handle_login(&ok, &sessions, &auth, "127.0.0.1".parse().unwrap()).is_ok(),
         "bootstrap admin must log in"
     );
     let wrong = serde_json::json!({"username": "admin", "password": "admin"}).to_string();
     assert!(
-        crate::http::handle_login(&wrong, &sessions, &auth).is_err(),
+        crate::http::handle_login(&wrong, &sessions, &auth, "127.0.0.1".parse().unwrap()).is_err(),
         "the old hardcoded admin/admin pair must be dead"
     );
     let nobody = serde_json::json!({"username": "user", "password": "user"}).to_string();
-    assert!(crate::http::handle_login(&nobody, &sessions, &auth).is_err());
+    assert!(crate::http::handle_login(&nobody, &sessions, &auth, "127.0.0.1".parse().unwrap()).is_err());
 
     // [auth].users path: a configured hash verifies and maps to its roles.
     use argon2::password_hash::PasswordHasher;
@@ -568,7 +636,7 @@ fn auth001_login_configured_creds_ok_wrong_401() {
         86400,
     );
     let ok = serde_json::json!({"username": "ops", "password": "cfg-pw"}).to_string();
-    let tok = crate::http::handle_login(&ok, &sessions, &auth).expect("configured login");
+    let tok = crate::http::handle_login(&ok, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("configured login");
     let subj = crate::http::validate_token(Some(&tok), &sessions).expect("valid session");
     assert_eq!(subj.name, "ops");
     assert_eq!(subj.roles, vec!["operator".to_string()]);
@@ -581,14 +649,14 @@ fn auth003_session_expiry_rejects_after_ttl() {
     let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 0);
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let body = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
-    let tok = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    let tok = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
     assert!(
         crate::http::validate_token(Some(&tok), &sessions).is_none(),
         "TTL 0 must expire immediately"
     );
 
     let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86_400);
-    let tok = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    let tok = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
     assert!(crate::http::validate_token(Some(&tok), &sessions).is_some());
 }
 
@@ -1000,6 +1068,151 @@ fn get_by_idem_tool_resolves_idempotency() {
     let wrapped = crate::error_codes::wrap_result(Err::<crate::J, _>(miss));
     assert_eq!(wrapped["error"]["code"], crate::json!("NOT_FOUND"));
 
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// AG-05: the error-ergonomics hygiene leg — NO tool may surface a bare
+// string error. Every tool failure must carry code + hint + next so agents
+// can parse the failure and act on it. Drives every tool in the list with
+// empty args: successes pass untouched, any isError result must parse as
+// the structured envelope with all three fields.
+#[test]
+fn ag05_no_tool_returns_a_bare_string_error() {
+    let db = tmp_db("ag05");
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let mut session = crate::session::McpSession::default();
+    let txns: crate::tools::txn::TxnRegistry = Default::default();
+    let names: Vec<String> = crate::tool_registry::tools_list()["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    for name in names {
+        let r = crate::tool_registry::call_tool(
+            &k,
+            &name,
+            &crate::json!({}),
+            &db,
+            &mut session,
+            None,
+            &txns,
+        );
+        let frame = match r {
+            Ok(f) => f,
+            Err((code, msg)) => panic!("{name}: pre-dispatch error {code}: {msg}"),
+        };
+        if frame["isError"] != true {
+            continue;
+        }
+        let text = frame["content"][0]["text"].as_str().unwrap_or_default();
+        let env: crate::J = serde_json::from_str(text)
+            .unwrap_or_else(|_| panic!("{name}: isError result is not JSON: {text}"));
+        assert_eq!(env["ok"], false, "{name}: error envelope ok:false: {env}");
+        for field in ["code", "hint", "next"] {
+            assert!(
+                env["error"][field].is_string(),
+                "{name}: error.{field} missing (bare string error): {env}"
+            );
+        }
+    }
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// AG-41: claim_task/release_task ride the kernel claim ops — the claim
+// lands once, the loser gets the structured CLAIM_CONFLICT envelope, and
+// release frees the task for the next agent.
+#[test]
+fn ag41_claim_tool_claims_once_and_releases() {
+    let db = tmp_db("ag41");
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let mut session = crate::session::McpSession::default();
+    let txns: crate::tools::txn::TxnRegistry = Default::default();
+    let task = {
+        let mut rr = crate::RememberRequest::create(
+            crate::Subject::new("mcp-agent"),
+            crate::Metadata {
+                type_name: "aikoql:task".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+        );
+        rr.properties
+            .insert("task".into(), aikoql_kernel::Value::Text("claim-me".into()));
+        rr.security = Some(aikoql_kernel::SecurityDescriptor {
+            owner: "mcp-agent".into(),
+            acl: vec![aikoql_kernel::AclEntry {
+                principal: "other-agent".into(),
+                action: aikoql_kernel::Action::Write,
+                effect: aikoql_kernel::Effect::Allow,
+            }],
+            classification: None,
+        });
+        k.remember(rr).unwrap().koid
+    };
+    let hex = task.to_hex();
+    let call = |args: &crate::J, session: &mut crate::session::McpSession| {
+        crate::tool_registry::call_tool(&k, "claim_task", args, &db, session, None, &txns)
+    };
+    let ok = call(&crate::json!({"task": hex, "lease_seconds": 60}), &mut session).unwrap();
+    assert_eq!(ok["isError"], false);
+    let data: crate::J =
+        serde_json::from_str(ok["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(data["task"], hex);
+    assert_eq!(data["holder"], "mcp-agent");
+    assert!(data["claim_until"].is_u64());
+    assert_eq!(data["renewed"], false);
+    // A second claim by ANOTHER agent loses: the shared envelope carries
+    // CLAIM_CONFLICT. (A same-holder reclaim would renew instead.)
+    let conflict = call(
+        &crate::json!({"task": hex, "subject": "other-agent"}),
+        &mut session,
+    )
+    .unwrap();
+    assert_eq!(conflict["isError"], true);
+    let env: crate::J =
+        serde_json::from_str(conflict["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert!(
+        env["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("CLAIM_CONFLICT"),
+        "the losing claim must say CLAIM_CONFLICT: {env}"
+    );
+    // Release frees the task for the next claim.
+    let rel = crate::tool_registry::call_tool(
+        &k,
+        "release_task",
+        &crate::json!({"task": hex}),
+        &db,
+        &mut session,
+        None,
+        &txns,
+    )
+    .unwrap();
+    assert_eq!(rel["isError"], false);
+    let again = call(&crate::json!({"task": hex}), &mut session).unwrap();
+    assert_eq!(again["isError"], false);
     drop(k);
     let _ = std::fs::remove_dir_all(&db);
 }

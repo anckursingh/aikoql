@@ -1,0 +1,38 @@
+# AG-62: the container template for common PaaS — one `docker compose up`
+# (or any Docker-capable PaaS that takes a compose file) runs aikoql with a
+# Cloudflare quick-tunnel sidecar; `docker compose logs tunnel` prints the
+# trycloudflare URL and the connector is https://<url>/mcp on claude.ai.
+#
+# The tunnel shares the aikoql container's network namespace
+# (network_mode: service:) so the image's loopback-only serve surface is
+# reachable without TLS keys — logins are armed by AIKOQL_ADMIN_PASSWORD,
+# and cloudflared front-ends HTTPS, so credentials never cross the network
+# in plaintext. The URL changes whenever the tunnel restarts (quick-tunnel
+# property); a named tunnel is the static-URL upgrade.
+#
+# Hosted on a PaaS instead: build the image, push it to a registry, and
+# point `build:` at it — everything mutable lives under the /data volume
+# (db, memory dir, model store; see the Dockerfile contract).
+
+services:
+  aikoql:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    volumes:
+      - aikoql-data:/data
+    environment:
+      # The trial's sign-in password. Generate one and pass it here:
+      #   AIKOQL_ADMIN_PASSWORD=$(openssl rand -hex 12) docker compose up
+      AIKOQL_ADMIN_PASSWORD: ${AIKOQL_ADMIN_PASSWORD:?set AIKOQL_ADMIN_PASSWORD for the trial}
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --url http://127.0.0.1:9091 --no-autoupdate
+    network_mode: service:aikoql
+    depends_on:
+      - aikoql
+    restart: unless-stopped
+
+volumes:
+  aikoql-data: {}

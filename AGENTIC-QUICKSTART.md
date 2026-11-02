@@ -198,6 +198,10 @@ AIKOQL_ADMIN_PASSWORD=… AIKOQL_PUBLIC_URL=https://<random>.trycloudflare.com \
 then add the custom connector `https://<random>.trycloudflare.com/mcp` in
 claude.ai. The URL changes whenever `cloudflared` restarts.
 
+One command instead (AG-62): `scripts/public-trial.sh /tmp/kb` starts the
+tunnel, the server under it, and prints the connector URL + a generated
+admin password.
+
 ## First 10 minutes (validated flow)
 
 Raw MCP calls shown as JSON; your harness's MCP client wraps them as

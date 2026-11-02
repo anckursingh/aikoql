@@ -44,6 +44,7 @@ pub(crate) fn print_usage() {
         "                         (dev-only: tokens hit the process list — set AIKOQL_TCP_TOKEN or\n",
         "                         AIKOQL_TCP_TOKEN_FILE in production instead; env replaces flags)\n",
         "  --metrics-addr ADDR    HTTP metrics + health endpoint (e.g., 127.0.0.1:9091)\n",
+        "  --trusted-proxy IP     Trust X-Forwarded-For from this proxy IP (per-IP login layer, AG-52)\n",
         "  --replicate-listen ADDR  Replication stream for standbys (admin --tcp-token; loopback-only without TLS)\n",
         "  --replicate-tls-cert PEM --replicate-tls-key PEM  TLS for the replication stream (any interface)\n",
         "  --replicate-tls-ca PEM   Trust for the leader's replication cert (HA standbys)\n",

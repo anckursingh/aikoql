@@ -128,6 +128,13 @@ to win head-to-head evaluations; **P2** = differentiation / polish.
 `code`, `hint`, and a `next` suggestion (an existing pattern in
 `error_codes.rs`, extended to all tools). *Gate:* no tool returns a bare
 string error (architecture hygiene leg).
+- *Status (2026-11-01): done.* `wrap_result` errors carry `hint` (what
+  went wrong) + `next` (what to do) beside `code`/`message`/`retryable`/
+  `suggestion` (kept for older clients). `txn_dispatch` now routes through
+  the shared envelope — its hardcoded INTERNAL misclassified e.g. a fenced
+  write. Gate: `ag05_no_tool_returns_a_bare_string_error` drives every
+  tool in the list with empty args and asserts every isError result
+  parses as the envelope with all three fields.
 
 ### Phase M — memory that manages itself
 
@@ -206,6 +213,17 @@ string error (architecture hygiene leg).
 **AG-14 (P2) Procedural memory.** `record_experience`/`find_experiences`
 exist; add outcome-weighted retrieval (successful procedures rank first)
 and a `lesson` KO type distilled by AG-12 sampling.
+- *Status (2026-11-02): done.* `record_experience` returns an
+  `ExperienceRecord` and materializes a carried `lesson` as a first-class
+  `aikoql:lesson` KO (statement, `experience` koid backlink, same
+  provenance/ACL as its experience); `match_experiences` multiplies the
+  score by an outcome weight — keyword-classified success (1.0) / failure
+  (0.5) / unclassified (0.8). Gate:
+  `ag14_outcome_weighting_ranks_success_first` +
+  `ag14_lesson_is_materialized_as_a_ko` in `crates/kernel/tests/
+  experiences.rs`. The MCP `record_experience` tool also returns
+  `lesson_koid`. (The AG-12b sampling path stays open — the lesson text
+  arrives on the request; the caller distills it.)
 
 ### Phase R — retrieval at scale
 
@@ -379,6 +397,19 @@ result set changes (built on the existing commit stream + event outbox).
 claiming among agents) on top of `txn_*` CAS; handoff KO type with
 provenance. *Gate:* N agents, M tasks: each task claimed exactly once,
 claims expire on agent death.
+- *Status (2026-11-02): done.* Kernel ops `claim_task` / `release_task` /
+  `handoff_task` (MCP tools of the same names): a claim is an
+  `expected_version` CAS under the pipe lock with kernel-managed
+  `claim_holder` / `claim_until` extensions (a generic update carries the
+  claim forward; only the ops clear it), so exactly one claimant wins and
+  the loser gets `ClaimConflict`. Leases are wall-clock — an agent's death
+  frees its tasks; the holder re-claiming renews. Handoff requires the
+  holder: the claim moves to `to` (same lease end) and an
+  `aikoql:handoff` KO records task/from/to with evidence, Asserted and
+  agent-derived, readable by the recipient. Gate:
+  `crates/kernel/tests/coordination.rs` (5 tests: 4 agents × 6 tasks
+  claimed exactly once under threads, expiry, renew/release, ACL, handoff
+  provenance) + the claim tool round-trip in the MCP suite.
 
 ### Phase P — platform
 
@@ -424,6 +455,18 @@ not yet: helm lint/render in PR CI (rendered only by the kind gate).
 **AG-52 (P2) Login backoff survives restarts** (in-memory today) and a
 per-IP layer behind proxies (`X-Forwarded-For` trusted only from a
 configured proxy).
+- *Status (2026-11-01): done.* The fail state persists to
+  `<db>.login-backoff.json` (wall-clock lock-until, written atomically on
+  change, reloaded at serve; a torn file reads as no state — fail open).
+  The per-IP layer mirrors the doubling shape (20 free failures — an
+  address is shared) and sits in front of the credential check on
+  `/api/login` and the OAuth sign-in, so a username spray is refused
+  before argon2 runs. `X-Forwarded-For` is trusted only from
+  `--trusted-proxy IP` (`server.trusted_proxy` / `AIKOQL_TRUSTED_PROXY`);
+  the client address is the last XFF hop when the peer is the proxy, the
+  peer otherwise. Per-IP state is in-memory (a restart resets it;
+  per-login state persists). Gates: `ag52_login_backoff_survives_restart`,
+  `ag52_per_ip_backoff_behind_trusted_proxy`.
 
 ### Phase E — ecosystem and proof
 
@@ -480,6 +523,18 @@ completeness, time-travel correctness. *Gate:* reproducible harness in
 **AG-62 (P2) Hosted trial path.** One-command public trial (the verified
 Cloudflare-tunnel recipe, AGENTIC-QUICKSTART) plus a container template
 for common PaaS — the prerequisite for any hosted offering.
+- *Status (2026-11-02): done.* `scripts/public-trial.sh <db>` is the
+  AGENTIC-QUICKSTART tunnel recipe in one command: cloudflared quick
+  tunnel to the loopback serve surface, `AIKOQL_PUBLIC_URL` = the tunnel
+  URL, a generated admin password when none is set, connector URL printed,
+  both processes torn down on exit (gate: `scripts/e2e-public-trial.js`,
+  shimmed cloudflared/aikoql-mcp asserting the wiring — the real-tunnel
+  path was claude.ai-verified in the OAuth work). The PaaS template is
+  `deploy/docker-compose.yml`: the existing image plus a cloudflared
+  sidecar sharing its network namespace (`network_mode: service:` — the
+  loopback-only HTTP surface stays reachable without TLS keys, and the
+  tunnel front-ends HTTPS so logins never cross in plaintext); the file
+  passes `docker compose config -q` (Docker Desktop).
 
 ## 3. Sequencing
 

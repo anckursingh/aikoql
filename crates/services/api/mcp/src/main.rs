@@ -298,11 +298,26 @@ fn main() {
     // verified per login, bootstrap admin hashed here (the plaintext then
     // drops out of scope) — and fail closed on an armed-but-credentialless
     // remote HTTP surface (auth004) and on non-loopback metrics binds.
-    let http_auth = Arc::new(crate::http::AuthResolver::new(
+    // AG-52: the login-backoff state persists next to the database, and
+    // X-Forwarded-For is armed only behind the configured trusted proxy.
+    let mut http_auth = crate::http::AuthResolver::with_state(
         cfg.auth_users,
         cfg.admin_password.as_deref(),
         cfg.auth_session_ttl_secs,
-    ));
+        Some(std::path::PathBuf::from(format!(
+            "{db_path}.login-backoff.json"
+        ))),
+    );
+    if let Some(p) = cfg.trusted_proxy.as_deref() {
+        match p.parse::<std::net::IpAddr>() {
+            Ok(ip) => http_auth.set_trusted_proxy(Some(ip)),
+            Err(e) => {
+                eprintln!("--trusted-proxy {p}: not an IP address: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
+    let http_auth = Arc::new(http_auth);
     if let Err(msg) = remote_http_requires_auth(cfg.allow_remote_http, http_auth.is_configured()) {
         eprintln!("{msg}");
         std::process::exit(2);

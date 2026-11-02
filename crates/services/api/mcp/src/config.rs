@@ -71,6 +71,9 @@ pub(crate) struct RuntimeConfig {
     /// P3-M1 (auth004): non-loopback HTTP/metrics bind (loopback stays the
     /// default); refused at serve without configured credentials.
     pub allow_remote_http: bool,
+    /// AG-52: X-Forwarded-For is trusted only from this proxy IP — the
+    /// per-IP login layer's client address behind a reverse proxy.
+    pub trusted_proxy: Option<String>,
     pub memory_dir: String,
     /// None = default (candle); Some("openai") = OpenAI-compatible HTTP endpoint.
     /// Canonical config names: "candle" | "http" | "ollama" (alias of http).
@@ -173,6 +176,8 @@ struct TomlServer {
     // P3-M1 (auth004): the HTTP surface is loopback-only unless explicitly
     // armed — and arming it requires [auth] credentials (fail-closed).
     allow_remote_http: Option<bool>,
+    /// AG-52: trust X-Forwarded-For from this proxy IP only.
+    trusted_proxy: Option<String>,
     /// AG-01: "core" | "full"
     tool_profile: Option<String>,
 }
@@ -339,6 +344,7 @@ pub(crate) fn load(
         admin_password: None,
         auth_session_ttl_secs: 86_400,
         allow_remote_http: false,
+        trusted_proxy: None,
         memory_dir: "./memory".into(),
         embedding_provider: None,
         embedding_base_url: "http://localhost:11434".into(),
@@ -397,6 +403,9 @@ pub(crate) fn load(
             }
             if let Some(v) = s.allow_remote_http {
                 cfg.allow_remote_http = v;
+            }
+            if let Some(v) = s.trusted_proxy {
+                cfg.trusted_proxy = Some(v);
             }
             if let Some(v) = s.tool_profile {
                 cfg.tool_profile =
@@ -531,6 +540,9 @@ pub(crate) fn load(
     // the AuthResolver — it is never logged and never persisted).
     if let Some(v) = env_opt("AIKOQL_ALLOW_REMOTE_HTTP") {
         cfg.allow_remote_http = v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    if let Some(v) = env_opt("AIKOQL_TRUSTED_PROXY") {
+        cfg.trusted_proxy = Some(v);
     }
     if let Some(v) = env_opt("AIKOQL_ADMIN_PASSWORD") {
         cfg.admin_password = Some(v);
@@ -700,6 +712,13 @@ pub(crate) fn load(
                         .cloned()
                         .unwrap_or_else(|| "127.0.0.1:9091".into()),
                 );
+                i += 2;
+            }
+            "--trusted-proxy" => {
+                let Some(v) = args.get(i + 1) else {
+                    return Err("--trusted-proxy requires an IP address".into());
+                };
+                cfg.trusted_proxy = Some(v.clone());
                 i += 2;
             }
             "--memory-dir" => {

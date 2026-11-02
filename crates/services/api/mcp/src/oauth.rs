@@ -18,6 +18,7 @@ use crate::{json, Arc, HashMap, Mutex, J};
 use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
 use base64::Engine as _;
 use sha2::Digest as _;
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 const CODE_TTL: Duration = Duration::from_secs(600);
@@ -290,7 +291,8 @@ impl OAuth {
         )
     }
 
-    /// One of the OAuth routes, or None if `route` is not one.
+    /// One of the OAuth routes, or None if `route` is not one. `client_ip`
+    /// is the resolved client address (AG-52 per-IP layer).
     pub(crate) fn route(
         &self,
         method: &str,
@@ -298,6 +300,7 @@ impl OAuth {
         path: &str,
         headers: &str,
         body: &str,
+        client_ip: IpAddr,
     ) -> Option<Reply> {
         Some(match (method, route) {
             (
@@ -334,7 +337,9 @@ impl OAuth {
                 let q = parse_form(path.split_once('?').map_or("", |(_, q)| q));
                 self.authorize_page(&q, headers, None)
             }
-            ("POST", "/oauth/authorize") => self.authorize(&parse_form(body), headers),
+            ("POST", "/oauth/authorize") => {
+                self.authorize(&parse_form(body), headers, client_ip)
+            }
             ("POST", "/oauth/token") => self.token(&parse_form(body), headers),
             _ => return None,
         })
@@ -583,7 +588,7 @@ impl OAuth {
     }
 
     /// POST /oauth/authorize: the login; a code back to the client.
-    fn authorize(&self, f: &HashMap<String, String>, headers: &str) -> Reply {
+    fn authorize(&self, f: &HashMap<String, String>, headers: &str, client_ip: IpAddr) -> Reply {
         let (_, resource) = match self.check_request(f, headers) {
             Ok(c) => c,
             Err(r) => return r,
@@ -605,7 +610,15 @@ impl OAuth {
             h.push(("Retry-After", wait.to_string()));
             return ("429 Too Many Requests", h, ctype, body);
         }
+        // AG-52: the per-IP layer, in front of the credential check.
+        if let Some(wait) = self.logins.ip_wait(client_ip) {
+            let msg = format!("Too many failed sign-ins from your address. Try again in {wait} s.");
+            let (_, mut h, ctype, body) = self.authorize_page(f, headers, Some(&msg));
+            h.push(("Retry-After", wait.to_string()));
+            return ("429 Too Many Requests", h, ctype, body);
+        }
         if self.logins.verify(user, get("password")).is_none() {
+            self.logins.ip_failure(client_ip);
             return self.authorize_page(f, headers, Some("The username or password is wrong."));
         }
         let code = random_token();
@@ -1064,7 +1077,7 @@ mod tests {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-        let r = o.authorize(&form, h);
+        let r = o.authorize(&form, h, "127.0.0.1".parse().unwrap());
         let loc =
             r.1.iter()
                 .find(|(k, _)| *k == "Location")
@@ -1228,9 +1241,9 @@ mod tests {
             .collect()
         };
         for _ in 0..5 {
-            assert_eq!(o.authorize(&form("wrong"), H).0, "401 Unauthorized");
+            assert_eq!(o.authorize(&form("wrong"), H, "127.0.0.1".parse().unwrap()).0, "401 Unauthorized");
         }
-        let r = o.authorize(&form("pw"), H);
+        let r = o.authorize(&form("pw"), H, "127.0.0.1".parse().unwrap());
         assert_eq!(r.0, "429 Too Many Requests");
         assert_eq!(
             r.1.iter()
@@ -1339,7 +1352,7 @@ mod tests {
             "only the document's redirect URIs"
         );
         let meta = o
-            .route("GET", "/.well-known/oauth-authorization-server", "", H, "")
+            .route("GET", "/.well-known/oauth-authorization-server", "", H, "", "127.0.0.1".parse().unwrap())
             .unwrap();
         let meta: J = serde_json::from_str(&meta.3).unwrap();
         assert_eq!(meta["client_id_metadata_document_supported"], json!(true));

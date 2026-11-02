@@ -50,6 +50,7 @@ pub(crate) const TOOL_GROUPS: &[(&str, &str, &[&str])] = &[
         "eval_recall", "eval_staleness", "eval_contradictions", "deploy_benchmark", "list_benchmarks",
     ]),
     ("txn", "multi-operation knowledge transactions", &["txn_begin", "txn_stage", "txn_commit", "txn_rollback"]),
+    ("coordination", "task claiming, leases and handoffs between agents (AG-41)", &["claim_task", "release_task", "handoff_task"]),
     ("compliance", "audit, compliance and evidence-pack reports", &["audit_report", "compliance_report", "evidence_pack"]),
     ("admin", "backups, storage, indexes, schemas, metrics, jobs", &[
         "backup", "restore", "list_backups", "verify_backup", "storage_stats", "storage_compact", "storage_checkpoint",
@@ -218,6 +219,9 @@ pub(crate) fn tools_list() -> J {
             {"name": "txn_stage", "description": "Stage one write into an open transaction handle (create: {action, type_name, properties}; update: {action, koid, properties}). Nothing is visible before commit.", "inputSchema": {"type": "object", "properties": {"txn_id": {"type": "string"}, "op": {"type": "object"}}, "required": ["txn_id", "op"]}},
             {"name": "txn_commit", "description": "Commit an open transaction: staged writes land atomically with the outcome record; a retry of a committed txn_id returns the recorded outcome with deduped=true.", "inputSchema": {"type": "object", "properties": {"txn_id": {"type": "string"}}, "required": ["txn_id"]}},
             {"name": "txn_rollback", "description": "Roll back an open transaction: staged writes are discarded, storage is untouched.", "inputSchema": {"type": "object", "properties": {"txn_id": {"type": "string"}}, "required": ["txn_id"]}},
+            {"name": "claim_task", "description": "Claim a task KO for this agent with a wall-clock lease (AG-41): exactly one claimant wins; the holder re-claiming renews; the lease expires on agent death. Requires write access to the task.", "inputSchema": {"type": "object", "properties": {"subject": subj, "task": koid, "lease_seconds": {"type": "integer", "description": "How long this agent holds the task (default 300)"}}, "required": ["task"]}},
+            {"name": "release_task", "description": "Release a claim this agent holds (AG-41): frees the task for the next claimant. Only the live holder releases.", "inputSchema": {"type": "object", "properties": {"subject": subj, "task": koid}, "required": ["task"]}},
+            {"name": "handoff_task", "description": "Hand a claimed task to another agent (AG-41): the claim moves to `to` with the same lease end and an aikoql:handoff KO records who/what/why with evidence. Only the live holder hands off.", "inputSchema": {"type": "object", "properties": {"subject": subj, "task": koid, "to": {"type": "string", "description": "The receiving principal"}, "evidence": {"type": "array", "items": {"type": "object", "properties": {"source_artifact": {"type": "string"}, "method": {"type": "string"}, "location": {"type": "string"}, "revision": {"type": "string"}, "confidence": {"type": "number"}}, "required": ["source_artifact", "method"]}}, "note": {"type": "string"}}, "required": ["task", "to", "evidence"]}},
             {"name": "approve_job", "description": "Commit a completed reason job's claims into the knowledge store (MRFC-0011 §7 Determinism Law: Class-B outputs enter Class A only as approved claims). Stamps origin=reason, epistemic=inferred. Re-approval is exact-once.", "inputSchema": {"type": "object", "properties": {"job_id": {"type": "integer"}}, "required": ["job_id"]}},
             {"name": "abi_version", "description": "Return ABI version and exportable audit chain for offline verification.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "deploy_program", "description": "Deploy an aikoql program as a versioned Knowledge Object (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "body": {"type": "string"}, "language": {"type": "string"}}, "required": ["name", "body"]}},
@@ -481,6 +485,10 @@ pub(crate) fn call_tool(
         "txn_begin" | "txn_stage" | "txn_commit" | "txn_rollback" => {
             return txn_dispatch(k, name, args, db_path, session, txns);
         }
+        // AG-41: coordination tools — CAS claims with wall-clock leases.
+        "claim_task" => tool_claim_task(k, args),
+        "release_task" => tool_release_task(k, args),
+        "handoff_task" => tool_handoff_task(k, args),
         "session_init" => tool_session_init(args, session),
         "tools_more" => tool_tools_more(args, session),
         "recall" => tool_recall(k, args),

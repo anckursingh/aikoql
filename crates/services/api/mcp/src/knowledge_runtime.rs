@@ -285,7 +285,10 @@ fn capture_outcome(
     )];
     req.ttl_seconds = Some(30 * 24 * 3600);
     match kernel.record_experience(req) {
-        Ok(r) => logs.push(format!("  experience captured: {}", r.koid.to_hex())),
+        Ok(r) => logs.push(format!(
+            "  experience captured: {}",
+            r.experience.koid.to_hex()
+        )),
         Err(e) => logs.push(format!("  experience capture failed (non-fatal): {}", e)),
     }
 }

@@ -3259,6 +3259,13 @@ pub enum KError {
         expected: u64,
         found: u64,
     },
+    /// AG-41: a task claim lost — the KO is held by another agent until
+    /// `until` (wall-clock millis).
+    ClaimConflict {
+        koid: KOID,
+        holder: String,
+        until: u64,
+    },
     AccessDenied {
         subject: String,
         action: Action,
@@ -3304,6 +3311,11 @@ impl fmt::Display for KError {
                 f,
                 "VERSION_CONFLICT: {} expected version {} found {}",
                 koid, expected, found
+            ),
+            KError::ClaimConflict { koid, holder, until } => write!(
+                f,
+                "CLAIM_CONFLICT: {} is claimed by {} until {}",
+                koid, holder, until
             ),
             KError::AccessDenied {
                 subject,
