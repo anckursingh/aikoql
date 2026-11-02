@@ -147,6 +147,18 @@ jobs:
           node-version: 22
       - run: node npm-publish/validate-plugin.js
 
+  # AG-51: lint + render the chart on every PR — a broken template must not
+  # wait for the nightly kind gate to be found (kind + docker build are too
+  # slow for PR CI, so that gate only renders on schedule).
+  helm:
+    name: Helm lint + render (AG-51)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint deploy/helm/aikoql
+      - run: helm template aikoql deploy/helm/aikoql
+
   docker:
     name: Docker build + health (Linux)
     runs-on: ubuntu-latest
