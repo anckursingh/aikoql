@@ -382,8 +382,21 @@ unusable.
   rewraps the previous generation too so history stays readable (kr006).
   shortcut: a roll can be re-run but not repeated — a second roll is a
   no-op walk (returns 0); forcing a fresh roll needs a manual reset of
-  the DEK rows, which nothing offers yet. Open: cloud KMS `install`
-  (AWS/Azure/GCP return unsupported).
+  the DEK rows, which nothing offers yet. Closed 2026-11-02: cloud KMS
+  `install` — `aikoql-mcp key install [DB] [--kms-region R]` wraps the
+  master key under a new AWS KMS CMK (`alias/aikoql/<db>`, envelope
+  Encrypt/Decrypt through the kernel's SDK-free `KmsOps` seam; the serve
+  binary supplies the aws-sdk-kms implementation) and replaces the key
+  file with a pointer (`AIKOQL-KMS1` magic + ARN + SHA-256 of the key +
+  ciphertext) — the KEK itself never changes (no data key moves), AWS
+  IAM gates every later open instead of the passphrase, and the pointer's
+  key hash fails a torn file closed. `key rotate` re-wraps a fresh KEK
+  under the same CMK (aws03); a pointer file is detected at open so no
+  config flag is needed (kr007 guards: no encryption config, no key
+  file, or an already-KMS-held file all refuse before any AWS call).
+  shortcut: ImportKeyMaterial (the CMK holds OUR key, not a wrap of it)
+  is the upgrade path for full BYOK control; Azure/GCP still return
+  unsupported.
 
 **AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). — **DONE 2026-11-01** (rebuild buckets each head under its own `metadata.tenant`, tenant-less → "default"; remember/transact creates and both forget modes keep the live counters in sync; gate: 5 tests — tenant unit tests + `tenant_accounting.rs`). Shortcut closed 2026-11-02: `open_with` scans the heads on every non-standby open and rebuilds the counters from each head's `metadata.tenant` (RED `ag32_reopen_rebuilds_usage_from_store`). Remaining shortcut closed 2026-11-02 (AG-32b): each tenant's live count persists as an 8-byte LE row under `__tenants/usage/<tenant>` and a `(seq, ts)` head watermark rides every commit batch atomically with the rows — a clean open loads the rows when the watermark matches the journal head, anything else (older database, crash) rebuilds from the heads and re-persists both (RED `ag32_usage_persists_under_a_watermark_and_rebuilds_when_missing`). *Gate:* usage per tenant matches the oracle count.
 

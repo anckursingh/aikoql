@@ -9,6 +9,17 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Security
 
+- **Cloud KMS `install` (AG-31)**: `aikoql-mcp key install [DB]
+  [--kms-region R]` wraps the master key under a new AWS KMS CMK
+  (`alias/aikoql/<db>`) and replaces the key file with a pointer
+  (`AIKOQL-KMS1` + ARN + key hash + ciphertext) — the KEK itself never
+  changes, and AWS IAM gates every later open instead of the passphrase
+  (a pointer file is detected at open, no config flag). The install
+  verifies the unwrap through KMS before touching the local file, and
+  the pointer's key hash fails a torn file closed. `key rotate` re-wraps
+  a fresh key under the same CMK. Azure/GCP still return unsupported;
+  ImportKeyMaterial (the CMK holding the key itself) is the BYOK
+  upgrade path.
 - **Login backoff survives restarts + per-IP layer (AG-52)**: the fail state persists to `<db>.login-backoff.json` (wall-clock lock-until, reloaded at serve) so a restart keeps its login backoffs; a per-IP failure layer (20 free, same doubling) sits in front of the credential check on `/api/login` and the OAuth sign-in so a username spray is refused before argon2 runs. `--trusted-proxy IP` (`server.trusted_proxy` / `AIKOQL_TRUSTED_PROXY`) arms `X-Forwarded-For` — the client address is the last XFF hop only when the peer is the proxy, the peer otherwise.
 - **Stored content is fenced and trust-classed (AG-33)**: `remember` and
   `memory_store` accept a `trust` class of the content's source (`user`,
