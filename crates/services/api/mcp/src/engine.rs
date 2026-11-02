@@ -459,4 +459,42 @@ mod tests {
         }
         read_all(&dir, &enc, &want);
     }
+
+    /// AG-31 — kr005: a passphrase change re-wraps the master key file (the
+    /// key itself never changes: every object — field ciphertext included —
+    /// stays readable), the old passphrase stops opening the database, and a
+    /// later KEK rotation wraps under the new passphrase.
+    #[test]
+    fn kr005_passphrase_change_retires_the_old_passphrase_and_keeps_everything_readable() {
+        let dir = scratch("kr005");
+        let enc = secret_enc(&dir);
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(enc.key_path.clone().into()));
+        let want = {
+            let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
+            vec![
+                put_secret(&k, Some("t1"), "alpha"),
+                put_secret(&k, None, "beta"),
+            ]
+        };
+        let key_file = std::fs::read(&enc.key_path).unwrap();
+
+        super::change_passphrase(&dir, &enc, "pw-new").unwrap();
+        assert_ne!(
+            std::fs::read(&enc.key_path).unwrap(),
+            key_file,
+            "the envelope is rewrapped"
+        );
+
+        let enc_new =
+            super::RuntimeEncryption { passphrase: Some("pw-new".into()), ..enc.clone() };
+        read_all(&dir, &enc_new, &want);
+
+        // The old passphrase no longer opens the database.
+        assert!(super::open_kernel(&dir, &enc, false, None).is_err());
+
+        // A later KEK rotation wraps under the NEW passphrase (the ring's
+        // copy must stay in sync, or the rotated key file is unreadable).
+        super::rotate_keys(&dir, &enc_new).unwrap();
+        read_all(&dir, &enc_new, &want);
+    }
 }

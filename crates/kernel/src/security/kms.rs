@@ -772,6 +772,35 @@ mod tests {
     }
 
     #[test]
+    fn local_kms_change_passphrase_keeps_the_key_and_retires_the_old_passphrase() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("aikoql-test-kms-chpw-{}", std::process::id()));
+        let kms = LocalKms::new(tmp.to_str().unwrap());
+        let key = kms.master_key("old-pw").unwrap();
+
+        // A wrong old passphrase fails the change and leaves the file as it was.
+        let before = fs::read(&tmp).unwrap();
+        assert!(kms.change_passphrase("wrong-pw", "x").is_err());
+        assert_eq!(fs::read(&tmp).unwrap(), before);
+
+        kms.change_passphrase("old-pw", "new-pw").unwrap();
+
+        // The key itself never changes — nothing downstream needs re-encrypting.
+        let kms2 = LocalKms::new(tmp.to_str().unwrap());
+        assert_eq!(kms2.master_key("new-pw").unwrap(), key);
+
+        let kms3 = LocalKms::new(tmp.to_str().unwrap());
+        let err = kms3.master_key("old-pw").unwrap_err();
+        assert!(
+            err.contains("InvalidPassphrase"),
+            "expected InvalidPassphrase, got: {}",
+            err
+        );
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
     fn corrupted_envelope_size_rejected() {
         let _lock = TEST_MUTEX.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("aikoql-test-kms-corr-{}", std::process::id()));
