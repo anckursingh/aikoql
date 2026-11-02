@@ -294,7 +294,7 @@ improves on the agent eval set; latency budget ≤ 30 ms for 50 candidates.
 and larger models via `model install`), a re-embed migration job
 (background, resumable, dual-read during migration). *Gate:* switching
 models never serves mixed-dimension results; migration survives a kill.
-- *Status (2026-11-01): AG-23a + AG-23b1 done — dim safety + catalog bindings.*
+- *Status (2026-11-01): AG-23 DONE — dim safety + catalog bindings + migration.*
   `ModelAwareVectorIndex` (`engines/vector`) shards one HNSW per model:
   each shard adopts its own dim (P5-M27's global drop becomes per-model),
   model-scoped queries answer from their shard, and model-less queries
@@ -308,9 +308,16 @@ models never serves mixed-dimension results; migration survives a kill.
   AG-23b1: `catalog_set_type_model` / `catalog_type_model` journal a
   "model" catalog row per type (persists, replaces in place; binding an
   undeclared type is inert). Gate: ct007.
-  Open (AG-23b2): consuming the binding at enrichment (per-collection
-  provider choice) and the resumable re-embed migration job — the shards
-  already give dual-read its index side.
+  AG-23b2: enrichment consumes the binding — `AiProvider::enrich` takes
+  the bound model (the binding wins over the provider's configured
+  default), and the engine skips only a KO already on its bound model, so
+  any binding change re-embeds the collection: live (the catalog row's own
+  event triggers a per-type rescan) and resumably (the start catch-up
+  re-runs the scan — idempotent skip, so a kill mid-migration costs
+  nothing). Dual-read during migration is the shards' same-dim merge, and
+  the old model's vectors stay answerable until old-model queries stop.
+  Gate: 4 semantic tests (bound-model use, catch-up migration, live
+  migration, kill-resume + idempotent re-scan).
 
 ### Phase T — trust debt (the moat's own credibility)
 
@@ -355,6 +362,18 @@ read-scoped token cannot write (every write tool).
 **AG-40 (P1) Live queries.** `subscribe {aikoql query}` → events when the
 result set changes (built on the existing commit stream + event outbox).
 *Gate:* no missed and no duplicate events under concurrent writers.
+- *Status (2026-11-01): AG-40 done* — `koql/subscribe`/`koql/unsubscribe`
+  MCP methods over the kernel's durable CDC (subscribe/replay/ack): the
+  response carries the current set, each change streams as a
+  `notifications/koql/updated` frame with a strictly increasing seq, and
+  re-subscribing the same id resumes from the acked seq. Subscribe-before-
+  eval closes the last_seq window (a commit landing mid-setup would be
+  neither backlog nor live); the snapshot diff absorbs replay/live
+  boundary double-evaluations. Gates: the in-process test pins no
+  missed/no duplicate under 4 concurrent writers; the wire test pins the
+  frames and the durable resume. shortcut: every commit re-evaluates (no
+  type-narrowed EventFilter) and intermediate states coalesce into the
+  final-state emission.
 
 **AG-41 (P2) Coordination primitives.** Leases/claims on KOs (task
 claiming among agents) on top of `txn_*` CAS; handoff KO type with
@@ -368,9 +387,39 @@ tool, kernel ops as children), per-tool latency/error metrics, a
 `recall` quality counter (empty results, conflict hits). *Gate:* a trace
 for every tool call in the e2e run.
 
+Status (2026-11-01): AG-50 done. Every tools/call emits a `tool_call`
+span with a `tool` attribute (kernel ops as child spans from the tool
+bodies); `AIKOQL_OTEL_ENDPOINT` turns on OTLP/HTTP export through a
+blocking client (no async runtime in the binary), batch exporter with
+no flush-on-shutdown (shortcut: process exit, gate test polls the
+collector). The /metrics scrape carries `aikoql_tool_calls_total`,
+`aikoql_tool_errors_total` and `aikoql_tool_latency_seconds_total`
+labeled by tool, plus `aikoql_recall_quality_total` (empty/conflict,
+always rendered). The e2e gate runs the server in metrics-only mode
+(stdio and metrics cannot coexist: `--metrics-addr` alone is the S-12
+metrics-only serve) with MCP over the metrics surface, decodes the
+exported OTLP protobuf on a fake collector, and asserts the scrape.
+
 **AG-51 (P1) Kubernetes.** Helm chart (leader + standby with the k8s lease,
 already apiserver-certified), the open "real k8s pod" item, PVC snapshot
 docs. *Gate:* kind-cluster failover e2e in CI (nightly).
+
+Status (2026-11-01): AG-51 done. `deploy/helm/aikoql`: two replicas of
+one binary — the lease decides who serves writes, the other follows
+over replication TLS (plaintext replication is loopback-only by
+policy, so a pre-install hook Job generates a CA + one shared serving
+cert whose SANs cover both pods' DNS names). Per-pod PVCs, lease-only
+RBAC (get/create/update), probes on /metrics, Streamable HTTP MCP with
+the auth Secret's token, OAuth armed by an optional admin-password key.
+The README carries the PVC snapshot playbook (snapshot the leader's
+PVC; restore = PVC from snapshot + a one-off pod). The gate
+`scripts/kind-failover-e2e.sh` (nightly, benchmark.yml): kind cluster,
+chart install, remember through the leader, kill the leader pod, the
+standby promotes and serves the writes, and an OAuth sign-in issued
+before the kill keeps authorizing the new leader — this closes the
+"real k8s pod" open item (the MRFC-0080 certs covered a real
+apiserver via envtest, not a pod). Laws pinned by tests/helm_chart.rs;
+not yet: helm lint/render in PR CI (rendered only by the kind gate).
 
 **AG-52 (P2) Login backoff survives restarts** (in-memory today) and a
 per-IP layer behind proxies (`X-Forwarded-For` trusted only from a
@@ -383,6 +432,30 @@ configured proxy).
 SDK (TS), each as a memory/store provider over `recall`/`remember`.
 *Gate:* each adapter's upstream example passes against a live server in
 CI.
+
+Status (2026-11-01): AG-60 done. Three adapters, each gate-shaped as
+its framework's upstream example against a live server:
+`python/aikoql/adapters/llamaindex.py` (AikoqlMemory, a BaseMemory —
+each ChatMessage is one KO as model_dump JSON; `get()` recalls the
+most relevant prior messages by text; the gate drives
+`SimpleChatEngine.from_defaults(memory=...)` with a MockLLM and
+re-reads the whole history through a fresh instance), `openai_agents.py`
+(AikoqlSession, the SDK's Session protocol — one KO per conversation
+item, latest-N `get_items`; the gate runs `Runner.run` twice with an
+offline Model stub and asserts turn 2 saw turn 1), and the TS
+`src/vercel-ai.ts` (`createAikoqlTools` — remember/recall/forget as ai
+v7 tools; the gate asserts the tool contract and round-trips
+`execute()` against the live server). Both python adapters duck-type
+the two client shapes via `adapters/_client.py` (embedded positional vs
+MCP kwargs, the `{"results": ...}` unwrap, the `text_only` vs `text`
+fusion spellings); their re-exports are lazy (PEP 562) so
+`import aikoql` never drags the frameworks in. CI pins:
+llama-index-core 0.14.25 + openai-agents 0.24.0 (python-sdk job), ai
+7.0.159 (ts-sdk devDependency, peer >=7). Not yet: embedded-client
+gates for the two python adapters (the gates ride the MCP client; the
+embedded path shares the crewai/langgraph precedent), and
+asyncio.to_thread wrappers for the sync client I/O in the async
+session methods.
 
 **AG-61 (P0) Public agent-memory benchmark — measured, not claimed.**
 - *Status (2026-10-31): harnesses committed; the run stays open.*

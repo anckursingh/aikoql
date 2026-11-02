@@ -9,6 +9,7 @@ pub(crate) mod evaluation;
 pub(crate) mod facts;
 pub(crate) mod ingestion;
 pub(crate) mod knowledge;
+pub(crate) mod live_query;
 pub(crate) mod memory;
 pub(crate) mod query;
 pub(crate) mod txn;

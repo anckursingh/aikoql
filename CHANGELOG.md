@@ -37,6 +37,21 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Framework adapters (AG-60)**: LlamaIndex chat memory (`AikoqlMemory`), an OpenAI Agents SDK session (`AikoqlSession`), and Vercel AI SDK tools (`createAikoqlTools`) over remember/recall/forget — each gate-tested by its framework's upstream example against a live server (SimpleChatEngine + MockLLM, Runner.run, ai v7 tool contract)
+- **Helm chart + kind failover (AG-51)**: leader+standby on the k8s lease with replication TLS, per-pod PVCs, PVC snapshot docs, and a nightly kind failover e2e (kill the leader, the standby serves writes, OAuth sign-ins survive)
+- **Observability (AG-50)**: OTLP traces per tool call (`AIKOQL_OTEL_ENDPOINT`) and per-tool Prometheus counters + recall quality on the /metrics scrape
+- **Live queries (AG-40)**: `koql/subscribe` and `koql/unsubscribe` MCP
+  methods built on the kernel's durable CDC (subscribe/replay/ack). A
+  subscribe answers with the current result set of a read-only MATCH
+  query and streams each change as a `notifications/koql/updated` frame
+  with a strictly increasing `seq`; the durable per-subscription ack
+  means re-subscribing the same `sub_id` after a drop resumes without
+  missing an event. Subscribing before the first evaluation closes the
+  race where a commit landing mid-setup was neither backlog nor live;
+  the snapshot diff absorbs replay/live boundary double-evaluations, so
+  each changed result set emits exactly once (intermediate states
+  coalesce into the final-state emission). Write statements are rejected
+  at subscribe time.
 - **Per-model vector shards (AG-23)**: `ModelAwareVectorIndex` gives
   each embedding model its own HNSW shard with its own adopted dim, so
   switching models never serves mixed-dimension results — model-scoped
@@ -50,8 +65,16 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   journals a "model" catalog row per type — persisted like every catalog
   row and replaced in place; binding an undeclared type is inert, so a
   typo can never corrupt enrichment. `catalog_type_model` reads it
-  fail-closed. The binding itself lands here; enrichment consumes it
-  with the re-embed migration job (AG-23b2).
+  fail-closed.
+- **Bound models drive enrichment + migration (AG-23b2)**: the semantic
+  engine passes the collection's bound model to the provider (the binding
+  wins over the provider's configured default) and skips only a KO
+  already on its bound model — so setting or changing a binding
+  re-embeds the collection: live (the catalog row's own event triggers a
+  per-type rescan) and resumably (the start catch-up re-runs the
+  idempotent scan, so a kill mid-migration costs nothing). Dual-read
+  during migration is the per-model shards' same-dim merge; the old
+  model's vectors stay answerable until old-model queries stop.
 - **Int8 scalar quantization of the vector rebuild copy (AG-20c)**: the
   in-memory rebuild copy stores int8 codes + one uniform scale per
   vector (~4x smaller than the f32 copy). The HNSW graph keeps exact

@@ -33,7 +33,11 @@ impl EmbeddingEnricher {
 }
 
 impl crate::AiProvider for EmbeddingEnricher {
-    fn enrich(&self, ko: &KnowledgeObject) -> KResult<crate::EnrichmentResult> {
+    fn enrich(
+        &self,
+        ko: &KnowledgeObject,
+        model: Option<&str>,
+    ) -> KResult<crate::EnrichmentResult> {
         let text: String = ko
             .properties
             .values()
@@ -51,9 +55,11 @@ impl crate::AiProvider for EmbeddingEnricher {
                 confidence: None,
             });
         }
-        let embedding = self.provider.embed(&text, Some(&self.model))?;
+        // The catalog binding wins over the configured default model.
+        let model_id = model.unwrap_or(&self.model);
+        let embedding = self.provider.embed(&text, Some(model_id))?;
         Ok(crate::EnrichmentResult {
-            embedding_model: Some(self.model.clone()),
+            embedding_model: Some(model_id.to_string()),
             embedding: Some(embedding),
             summary: None,
             confidence: None,
@@ -745,7 +751,7 @@ mod tests {
         props.insert("body".into(), Value::Text("hello world".into()));
         let ko = test_ko(props);
 
-        let result = enricher.enrich(&ko).unwrap();
+        let result = enricher.enrich(&ko, None).unwrap();
         assert_eq!(result.embedding_model.as_deref(), Some("mock-model"));
         assert_eq!(result.embedding, Some(vec![0.1, 0.1, 0.1]));
         assert!(result.summary.is_none());
@@ -758,7 +764,7 @@ mod tests {
 
         let ko = test_ko(PropertyMap::new());
 
-        let result = enricher.enrich(&ko).unwrap();
+        let result = enricher.enrich(&ko, None).unwrap();
         // No text properties → no embedding.
         assert!(result.embedding.is_none());
         assert!(result.embedding_model.is_none());

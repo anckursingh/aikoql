@@ -4,9 +4,9 @@
 use crate::helpers::*;
 use crate::session::*;
 use crate::{
-    json, ExtensionMap, FuseMode, IndexStatusKind, IrOp, IrPlan, KError, Kernel, Metadata,
-    Ordering, Origin, PropertyMap, ReferentialPolicy, RememberRequest, SimilarityQuery, Value, J,
-    STREAM_ID,
+    info_span, json, ExtensionMap, FuseMode, IndexStatusKind, IrOp, IrPlan, KError, Kernel,
+    Metadata, Ordering, Origin, PropertyMap, ReferentialPolicy, RememberRequest, SimilarityQuery,
+    Value, J, STREAM_ID,
 };
 use std::time::Duration;
 pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
@@ -57,69 +57,76 @@ pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
     }
 
     // R9: compile scoped — the Scan carries the caller's roles + tenant.
-    let raw = aikoql_compiler::parser::compile_scoped(
-        source,
-        subject,
-        &caller.roles,
-        caller.tenant.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
+    let results = execute_readonly(k, source, subject, &caller.roles, caller.tenant.as_deref())?;
+    Ok(json!({ "results": results }))
+}
+
+/// Compile + execute a read statement and return the results JSON array
+/// (the rows without the `{"results": ...}` wrapper). Shared by
+/// `tool_aikoql` and the AG-40 live-query evaluation loop.
+pub(crate) fn execute_readonly(
+    k: &Kernel,
+    source: &str,
+    subject: &str,
+    roles: &[String],
+    tenant: Option<&str>,
+) -> Result<J, String> {
+    let raw = aikoql_compiler::parser::compile_scoped(source, subject, roles, tenant)
+        .map_err(|e| e.to_string())?;
     let plan = aikoql_compiler::planner::Planner::optimize(&raw);
-    let result = aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
+    // AG-50: the kernel op as a child span of the tool_call span.
+    let result = {
+        let _span = info_span!("aikoql.execute").entered();
+        aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?
+    };
+    Ok(rowset_to_results(result))
+}
+
+pub(crate) fn rowset_to_results(result: aikoql_runtime::RowSet) -> J {
     match result {
-        aikoql_runtime::RowSet::Objects(kos) => Ok(json!({
-            "results": kos.iter().map(|ko| json!({
-                "koid": ko.koid.to_hex(),
-                "type_name": ko.metadata.type_name,
-                "version": ko.version,
-                // T-69 (POC T-67 follow-up): every row carries its tenant
-                // (null for a tenantless row) so one unscoped call assembles
-                // tenant-prefixed results without per-tenant scoped calls.
-                "tenant": ko.metadata.tenant,
-                "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
-                // v0.3 K1: epistemic metadata must survive the QL query
-                // boundary too — no silent drops.
-                "extensions": ko.extensions.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
-            })).collect::<Vec<_>>()
-        })),
-        aikoql_runtime::RowSet::Scored(scored) => Ok(json!({
-            "results": scored.iter().map(|(koid, score, tn, ver)| json!({
-                "koid": koid.to_hex(),
-                "score": score,
-                "type_name": tn,
-                "version": ver
-            })).collect::<Vec<_>>()
-        })),
-        aikoql_runtime::RowSet::Traversal(hits) => Ok(json!({
-            "results": hits.iter().map(|(koid, rt, depth)| json!({
-                "koid": koid.to_hex(),
-                "rel_type": rt,
-                "depth": depth
-            })).collect::<Vec<_>>()
-        })),
+        aikoql_runtime::RowSet::Objects(kos) => kos.iter().map(|ko| json!({
+            "koid": ko.koid.to_hex(),
+            "type_name": ko.metadata.type_name,
+            "version": ko.version,
+            // T-69 (POC T-67 follow-up): every row carries its tenant
+            // (null for a tenantless row) so one unscoped call assembles
+            // tenant-prefixed results without per-tenant scoped calls.
+            "tenant": ko.metadata.tenant,
+            "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+            // v0.3 K1: epistemic metadata must survive the QL query
+            // boundary too — no silent drops.
+            "extensions": ko.extensions.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+        })).collect::<Vec<_>>().into(),
+        aikoql_runtime::RowSet::Scored(scored) => scored.iter().map(|(koid, score, tn, ver)| json!({
+            "koid": koid.to_hex(),
+            "score": score,
+            "type_name": tn,
+            "version": ver
+        })).collect::<Vec<_>>().into(),
+        aikoql_runtime::RowSet::Traversal(hits) => hits.iter().map(|(koid, rt, depth)| json!({
+            "koid": koid.to_hex(),
+            "rel_type": rt,
+            "depth": depth
+        })).collect::<Vec<_>>().into(),
         // T-32: group rows carry properties only (no KO identity) — the tool
         // must surface them, not empty out.
-        aikoql_runtime::RowSet::Grouped(groups) => Ok(json!({
-            "results": groups.iter().map(|g| json!({
-                "properties": g.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
-            })).collect::<Vec<_>>()
-        })),
+        aikoql_runtime::RowSet::Grouped(groups) => groups.iter().map(|g| json!({
+            "properties": g.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+        })).collect::<Vec<_>>().into(),
         // T-32: one row per join pair — left object plus the right match
         // (or null on an unmatched LEFT row).
-        aikoql_runtime::RowSet::Joined(pairs) => Ok(json!({
-            "results": pairs.iter().map(|(l, r)| json!({
-                "koid": l.koid.to_hex(),
-                "type_name": l.metadata.type_name,
-                "version": l.version,
-                "properties": l.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
-                "joined": r.as_ref().map(|ro| json!({
-                    "koid": ro.koid.to_hex(),
-                    "type_name": ro.metadata.type_name,
-                    "version": ro.version,
-                    "properties": ro.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
-                }))
-            })).collect::<Vec<_>>()
-        })),
+        aikoql_runtime::RowSet::Joined(pairs) => pairs.iter().map(|(l, r)| json!({
+            "koid": l.koid.to_hex(),
+            "type_name": l.metadata.type_name,
+            "version": l.version,
+            "properties": l.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+            "joined": r.as_ref().map(|ro| json!({
+                "koid": ro.koid.to_hex(),
+                "type_name": ro.metadata.type_name,
+                "version": ro.version,
+                "properties": ro.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+            }))
+        })).collect::<Vec<_>>().into(),
     }
 }
 
@@ -482,6 +489,14 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
     // AG-13: the agent saw these — bump their access counts so the decay
     // job's salience refresh keeps hot memories alive.
     k.record_access(&seen);
+    // AG-50: recall quality — an empty result set and surfaced open
+    // conflicts are counted separately; one call can hit both.
+    if items.is_empty() {
+        crate::observability::record_recall(crate::observability::RecallOutcome::Empty);
+    }
+    if !open.is_empty() {
+        crate::observability::record_recall(crate::observability::RecallOutcome::Conflict);
+    }
     let mut out =
         json!({ "query": query, "semantic": semantic, "items": items, "truncated": truncated });
     // AG-33: the fence this response used, so a caller can strip it exactly

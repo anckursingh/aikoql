@@ -31,6 +31,7 @@ mod mcp_http;
 mod model;
 mod native;
 mod oauth;
+mod observability;
 mod prompts;
 mod protocol;
 mod rate_limiter;
@@ -236,18 +237,8 @@ fn main() {
         }
     };
 
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&cfg.log_level)),
-        )
-        .with_writer(std::io::stderr)
-        .with_ansi(use_ansi());
-    if cfg.log_format == "json" {
-        subscriber.json().init();
-    } else {
-        subscriber.init();
-    }
+    // AG-50: fmt (plain/json) + the OTLP layer when AIKOQL_OTEL_ENDPOINT is set.
+    crate::observability::init_tracing(&cfg.log_level, cfg.log_format == "json", use_ansi());
     if let Some(path) = &cfg.config_path {
         info!(config = %path, "configuration loaded");
     }

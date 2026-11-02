@@ -9,6 +9,7 @@ export { McpError } from "./error.ts";
 export { TcpTransport, type Transport } from "./tcp.ts";
 export { Pool, PooledConn, type PoolConfig, type PoolStats } from "./pool.ts";
 export { Tx, type StagedOp, type CommitResult } from "./tx.ts";
+export { createAikoqlTools } from "./vercel-ai.ts";
 export type {
   FindSimilarParams,
   KnowledgeObject,

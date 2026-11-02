@@ -26,7 +26,11 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "ai": "7.0.159",
     "fast-check": "^4.10.2",
     "typescript": "^5.8.0"
+  },
+  "peerDependencies": {
+    "ai": ">=7"
   }
 }
