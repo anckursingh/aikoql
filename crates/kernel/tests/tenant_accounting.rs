@@ -61,6 +61,22 @@ fn ag32_forget_decrements_its_tenant() {
 }
 
 #[test]
+fn ag32_reopen_rebuilds_usage_from_store() {
+    let clock = Arc::new(ManualClock::new(10_000));
+    let store = Arc::new(MemoryEngine::new());
+    let k = Kernel::open(store.clone(), clock.clone(), 0xE915).unwrap();
+    remember(&k, Some("a"));
+    remember(&k, Some("a"));
+    remember(&k, None);
+    drop(k);
+    // a fresh kernel over the same store must rebuild usage from the
+    // heads instead of starting at zero and re-learning as writes land
+    let k2 = Kernel::open(store.clone(), clock, 0xE915).unwrap();
+    assert_eq!(k2.tenant_usage("a"), 2);
+    assert_eq!(k2.tenant_usage("default"), 1);
+}
+
+#[test]
 fn ag32_transact_creates_are_counted() {
     let (k, _clock) = mk_kernel();
     let req = |tenant: Option<&str>| {
