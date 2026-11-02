@@ -20,6 +20,6 @@ pub use auth::AuthManager;
 pub use crypto::{Aes256Gcm, ChaCha20Poly1305, Crypto, CryptoProvider};
 pub use envelope::Envelope;
 pub use field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
-pub use kms::{KeyManager, LocalKms};
+pub use kms::{AwsKms, KeyManager, KmsOps, LocalKms};
 pub use signing::{Signer, SigningKey};
 pub use tenant::{TenantManager, TenantQuota};

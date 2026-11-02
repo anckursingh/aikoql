@@ -33,6 +33,7 @@ pub(crate) fn print_usage() {
         "  key rotate [DB]        Rotate the master key of an encrypted database (offline; rewraps, no re-encryption)\n",
         "  key change-passphrase NEW [DB]  Re-wrap the master key under a new passphrase (offline; the key itself does not change)\n",
         "  key roll-deks [DB]    Mint fresh tenant data keys and re-encrypt every encrypted field (offline)\n",
+        "  key install [DB]      Wrap the master key under a new AWS KMS CMK (offline; IAM gates later opens)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
         "  pitr --archive URL --to DIR [--until-seq N | --until-ms MS]  Restore from the archive\n",
         "  archive-prune --archive URL --keep N  Keep the newest N archived snapshots\n",
@@ -314,16 +315,47 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 }
                 true
             }
+            Some("install") => {
+                // AG-31 cloud KMS: aikoql-mcp key install [DB] [--kms-region R]
+                // (i+3: past "key install" — arg_after2's slot, like rotate)
+                let tail: Vec<&str> = subcmd_idx
+                    .map(|i| args.iter().skip(i + 3).map(String::as_str).collect())
+                    .unwrap_or_default();
+                let (mut db, mut region) = (None, None);
+                let mut it = tail.iter();
+                while let Some(a) = it.next() {
+                    match *a {
+                        "--kms-region" => region = it.next().map(|s| s.to_string()),
+                        other => db = Some(other.to_string()),
+                    }
+                }
+                let db = db.unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
+                let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                if let Err(e) =
+                    crate::engine::install_to_kms(&cfg.encryption, region.as_deref())
+                {
+                    eprintln!("key install: {e}");
+                    std::process::exit(1);
+                }
+                println!("{}", serde_json::json!({"installed": true, "db": db}));
+                true
+            }
             _ => {
                 eprintln!("Usage: aikoql-mcp key rotate [DB_PATH]");
                 eprintln!("       aikoql-mcp key change-passphrase NEW_PASSPHRASE [DB_PATH]");
                 eprintln!("       aikoql-mcp key roll-deks [DB_PATH]");
+                eprintln!("       aikoql-mcp key install [DB_PATH] [--kms-region REGION]");
                 eprintln!("rotate rewraps every data key under a new master key — no data is");
                 eprintln!("re-encrypted — and the old key file no longer opens the database.");
                 eprintln!("change-passphrase re-wraps the master key file under a new passphrase");
                 eprintln!("(the master key itself does not change).");
                 eprintln!("roll-deks mints fresh tenant data keys and re-encrypts every encrypted");
                 eprintln!("field under them (one committed version per object). Stop the server first.");
+                eprintln!("install wraps the master key under a new AWS KMS CMK (aikoql/<db>) —");
+                eprintln!("AWS IAM gates every later open, the passphrase stops gating.");
                 std::process::exit(2);
             }
         },

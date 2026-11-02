@@ -9,7 +9,7 @@ use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto};
 use aikoql_kernel::security::envelope::Envelope;
 use aikoql_kernel::security::field_crypto::EncryptionPolicy;
 use aikoql_kernel::security::keyring::KeyRing;
-use aikoql_kernel::security::kms::LocalKms;
+use aikoql_kernel::security::kms::{AwsKms, KeyManager, LocalKms};
 use aikoql_kernel::storage::encrypted::EncryptedStore;
 use aikoql_kernel::storage::store::StorageEngine;
 use aikoql_kernel::{KError, KResult, Kernel, SystemClock};
@@ -70,13 +70,30 @@ pub(crate) fn open_kernel_with_ring(
         let k = open(engine)?;
         return Ok((k, admin, None));
     }
-    let Some(pass) = enc.passphrase.as_deref() else {
-        return Err(KError::Store(
-            "encryption enabled but no passphrase: set AIKOQL_PASSPHRASE or encryption.passphrase"
-                .into(),
-        ));
+    // AG-31: a KMS pointer key file opens through AWS KMS — AWS IAM gates
+    // the KEK, the passphrase is vestigial from there on.
+    let key_path = std::path::Path::new(&enc.key_path);
+    let pointer = AwsKms::is_pointer(key_path);
+    let kms: Arc<dyn KeyManager> = if pointer {
+        Arc::new(AwsKms::with_ops(
+            "",
+            key_path.to_path_buf(),
+            Arc::new(crate::aws_kms::SdkKmsOps::new(None).map_err(KError::Store)?),
+        ))
+    } else {
+        Arc::new(LocalKms::new(&enc.key_path))
     };
-    let kms = Arc::new(LocalKms::new(&enc.key_path));
+    let pass = if pointer {
+        ""
+    } else {
+        let Some(p) = enc.passphrase.as_deref() else {
+            return Err(KError::Store(
+                "encryption enabled but no passphrase: set AIKOQL_PASSPHRASE or encryption.passphrase"
+                    .into(),
+            ));
+        };
+        p
+    };
     let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
     // AG-31: the store key is a data key WRAPPED by the KEK (a pre-AG-31
     // database keeps its HKDF(KEK, store) value as that key), so the KEK
@@ -155,6 +172,45 @@ pub(crate) fn roll_deks(db_path: &str, enc: &RuntimeEncryption) -> KResult<usize
     }
     let (kernel, _admin, _ring) = open_kernel_with_ring(db_path, enc, false, None)?;
     kernel.roll_field_deks()
+}
+
+/// AG-31 — move the master KEK of an encrypted database into AWS KMS
+/// (offline: the database must not be open elsewhere). The KEK itself does
+/// not change — no data key moves — it is wrapped under a new CMK into the
+/// key file, and AWS IAM gates every later open instead of the passphrase.
+/// shortcut: ImportKeyMaterial (the CMK holds OUR key, not a wrap of it) is
+/// the upgrade path for full BYOK control.
+pub(crate) fn install_to_kms(
+    enc: &RuntimeEncryption,
+    region: Option<&str>,
+) -> KResult<()> {
+    if !enc.enabled {
+        return Err(KError::Store("key install needs [encryption] enabled".into()));
+    }
+    let key_path = std::path::Path::new(&enc.key_path);
+    if !key_path.exists() {
+        return Err(KError::Store(format!(
+            "no master key file at {} — open the database once first",
+            enc.key_path
+        )));
+    }
+    if AwsKms::is_pointer(key_path) {
+        return Err(KError::Store("the master key is already held by AWS KMS".into()));
+    }
+    let Some(pass) = enc.passphrase.as_deref() else {
+        return Err(KError::Store("key install needs a current passphrase".into()));
+    };
+    let kek = LocalKms::new(&enc.key_path)
+        .master_key(pass)
+        .map_err(KError::Store)?;
+    let ops = Arc::new(
+        crate::aws_kms::SdkKmsOps::new(region.map(String::from)).map_err(KError::Store)?,
+    );
+    // install verifies the unwrap through the seam BEFORE replacing the
+    // local file, so a wrong region or permission set cannot strand the DB.
+    AwsKms::with_ops("", key_path.to_path_buf(), ops)
+        .install(&kek, pass)
+        .map_err(KError::Store)
 }
 
 #[cfg(test)]
@@ -579,5 +635,40 @@ mod tests {
             let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
             assert_eq!(k.field_envelope().unwrap().prev_key("t1"), Some(old_dek));
         }
+    }
+
+    /// AG-31 — kr007: the install guards fail closed BEFORE any AWS call:
+    /// no encryption config, a missing key file, and a key file that is
+    /// already a KMS pointer.
+    #[test]
+    fn kr007_install_guards_fail_before_touching_aws() {
+        let dir = scratch("kr007");
+        let enc = secret_enc(&dir);
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(enc.key_path.clone().into()));
+
+        let plain = super::RuntimeEncryption { enabled: false, ..enc.clone() };
+        assert!(super::install_to_kms(&plain, None).is_err(), "needs encryption");
+
+        let missing = super::RuntimeEncryption {
+            key_path: format!("{dir}.never-created.key"),
+            ..enc.clone()
+        };
+        assert!(
+            super::install_to_kms(&missing, None).is_err(),
+            "no key file, no install"
+        );
+
+        // A pointer file (written through the seam's mock-free format) is
+        // already KMS-held — a second install refuses.
+        let pointer = format!("{dir}.pointer.key");
+        let mut raw = Vec::new();
+        raw.extend_from_slice(b"AIKOQL-KMS1");
+        std::fs::write(&pointer, &raw).unwrap();
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(pointer.clone().into()));
+        let already = super::RuntimeEncryption { key_path: pointer, ..enc };
+        assert!(
+            super::install_to_kms(&already, None).is_err(),
+            "a pointer file is already KMS-held"
+        );
     }
 }

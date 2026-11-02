@@ -129,7 +129,8 @@ fn aws02_a_tampered_pointer_file_fails_closed() {
 
     let raw = std::fs::read(&path).unwrap();
     let mut torn = raw.clone();
-    torn[torn.len() - 1] ^= 0x01;
+    let last = torn.len() - 1;
+    torn[last] ^= 0x01;
     std::fs::write(&path, &torn).unwrap();
     assert!(kms.master_key("pw").is_err(), "a flipped byte must not yield a key");
     assert!(kms.master_key("pw").is_err(), "and never caches the bad read");

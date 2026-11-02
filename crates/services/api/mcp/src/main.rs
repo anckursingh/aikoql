@@ -15,6 +15,7 @@ mod api_rest;
 mod archive;
 mod audit;
 mod authz;
+mod aws_kms;
 mod cli;
 mod config;
 mod dispatcher;
