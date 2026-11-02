@@ -52,8 +52,10 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   the chain's tail is the signed audit head. `evidence_pack` emits the
   `journal_signatures` stream, and `scripts/e2e-audit-verify.py` (run in
   CI's e2e-dogfood job) replays the chain with Python `cryptography` and
-  rejects tampering. Events committed before the signer is attached (the
-  fresh-open catalog bootstrap) stay outside the signed stream.
+  rejects tampering. With `open_signed` (the serve path) the whole
+  journal is in the stream — the catalog bootstrap signs from seq 1,
+  anchored at zeros (a restart re-anchors the chain; recovering the
+  anchor across restarts is the remaining shortcut).
 - **Passphrase change (AG-31)**: `aikoql-mcp key change-passphrase NEW [DB]`
   re-wraps the master key file under a new passphrase — the master key
   itself never changes, so no data key moves and every object stays
