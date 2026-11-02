@@ -7,10 +7,10 @@
 //! tail IS the signed journal head (the evidence pack's audit_chain), so
 //! the per-commit stream and the head signature attest the same journal.
 //!
-//! shortcut: events committed BEFORE the signer is attached (the catalog
-//! bootstrap on a fresh open) are outside the stream — every commit after
-//! the first signed one must sign, or the chain has a hole; tighten when a
-//! signer is plumbed into `Kernel::open` itself.
+//! shortcut: a restart re-anchors the chain at zeros (`open` does not
+//! recover `prev_sig` from the journal head) — every commit after the
+//! first signed one must sign, or the chain has a hole; tighten when the
+//! verifier runs against restarted databases.
 
 use aikoql_kernel::security::{Signer, SigningKey};
 use aikoql_kernel::transaction::kernel::{KnowledgeContext, RememberRequest, Subject};

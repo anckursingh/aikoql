@@ -46,7 +46,17 @@ pub(crate) fn open_kernel_with_ring(
     // NOT_LEADER; the replication stream still applies.
     let open = |store: Arc<dyn StorageEngine>| match &standby {
         Some(_) => Kernel::open_standby(store, Arc::new(SystemClock), 0xA9C9),
-        None => Kernel::open(store, Arc::new(SystemClock), 0xA9C9),
+        // AG-30: a signing server attaches the signer at open so the
+        // catalog bootstrap commits are inside the signed stream.
+        None => match crate::AUDIT_SIGNER.get() {
+            Some(signer) => Kernel::open_signed(
+                store,
+                Arc::new(SystemClock),
+                0xA9C9,
+                std::sync::Arc::clone(signer),
+            ),
+            None => Kernel::open(store, Arc::new(SystemClock), 0xA9C9),
+        },
     };
     if let Some(why) = standby.clone() {
         let Some(a) = admin.as_ref() else {
@@ -58,17 +68,7 @@ pub(crate) fn open_kernel_with_ring(
     }
     if !enc.enabled {
         let k = open(engine)?;
-        return Ok((
-            match crate::AUDIT_SIGNER.get() {
-                // AG-30: a signing server chains an Ed25519 signature onto
-                // every committed journal event (the evidence-pack head
-                // signature is computed from the same key at export time).
-                Some(signer) => k.with_audit_signer(std::sync::Arc::clone(signer)),
-                None => k,
-            },
-            admin,
-            None,
-        ));
+        return Ok((k, admin, None));
     }
     let Some(pass) = enc.passphrase.as_deref() else {
         return Err(KError::Store(
@@ -95,11 +95,6 @@ pub(crate) fn open_kernel_with_ring(
         ring.store_key(),
     ));
     let kernel = open(store)?.with_field_encryption(crypto, envelope)?;
-    let kernel = match crate::AUDIT_SIGNER.get() {
-        // AG-30: per-commit journal signing on encrypted databases too.
-        Some(signer) => kernel.with_audit_signer(std::sync::Arc::clone(signer)),
-        None => kernel,
-    };
     for (type_name, fields) in &enc.policies {
         kernel.set_encryption_policy(type_name, EncryptionPolicy::new(fields.clone()));
     }

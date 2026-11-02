@@ -749,7 +749,22 @@ impl Kernel {
         clock: Arc<dyn Clock>,
         id_seed: u64,
     ) -> KResult<Self> {
-        Self::open_with(store, clock, id_seed, false)
+        Self::open_with(store, clock, id_seed, false, None)
+    }
+
+    /// AG-30: open with the audit signer attached from the start — the
+    /// catalog bootstrap commits are inside the signed stream (every event
+    /// from seq 1 carries a chained signature, anchored at zeros).
+    /// shortcut: a restart re-anchors the chain at zeros (`prev_sig` is not
+    /// recovered from the journal head) — tighten when the verifier runs
+    /// against restarted databases.
+    pub fn open_signed(
+        store: Arc<dyn StorageEngine>,
+        clock: Arc<dyn Clock>,
+        id_seed: u64,
+        signer: Arc<Signer>,
+    ) -> KResult<Self> {
+        Self::open_with(store, clock, id_seed, false, Some(signer))
     }
 
     /// MRFC-0080 standby reads — open over a store the replication stream
@@ -761,7 +776,7 @@ impl Kernel {
         clock: Arc<dyn Clock>,
         id_seed: u64,
     ) -> KResult<Self> {
-        Self::open_with(store, clock, id_seed, true)
+        Self::open_with(store, clock, id_seed, true, None)
     }
 
     fn open_with(
@@ -769,6 +784,7 @@ impl Kernel {
         clock: Arc<dyn Clock>,
         id_seed: u64,
         standby: bool,
+        signer: Option<Arc<Signer>>,
     ) -> KResult<Self> {
         let repo = Arc::new(KnowledgeRepository::new(store.clone()));
         // R9: one-time backfill of the type index for databases created before
@@ -890,7 +906,9 @@ impl Kernel {
             objects,
             access_counts: Arc::new(Mutex::new(HashMap::new())),
             signing_key: None,
-            audit_signer: Arc::new(Signer::new()),
+            // AG-30: a signer plumbed into open signs the catalog bootstrap
+            // (it commits right after this literal is built).
+            audit_signer: signer.unwrap_or_default(),
             tenants,
             field_crypto: None,
             encryption_policies: Arc::new(RwLock::new(HashMap::new())),
