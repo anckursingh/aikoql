@@ -60,10 +60,10 @@ trap cleanup EXIT
 mcp_call() { # $1 = bearer; $2 = method; $3 = params json; echoes the response body
   local bearer="$1" method="$2" params="$3" id
   id=$((RANDOM))
-  curl -fsS -H "Authorization: Bearer $bearer" \
+  curl -kfsS -H "Authorization: Bearer $bearer" \
     -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
     -d "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"$method\",\"params\":$params}" \
-    http://127.0.0.1:4318/mcp
+    https://127.0.0.1:4318/mcp
 }
 
 tool() { # $1 = bearer; $2 = session; $3 = tool; $4 = args json; echoes the tool payload
@@ -72,10 +72,10 @@ tool() { # $1 = bearer; $2 = session; $3 = tool; $4 = args json; echoes the tool
 }
 
 session() { # $1 = bearer; initialize and echo the Mcp-Session-Id
-  curl -fsS -D- -o /dev/null -H "Authorization: Bearer $1" \
+  curl -kfsS -D- -o /dev/null -H "Authorization: Bearer $1" \
     -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"kind-e2e","version":"0"}}}' \
-    http://127.0.0.1:4318/mcp |
+    https://127.0.0.1:4318/mcp |
     awk 'tolower($1)=="mcp-session-id:" {print $2}' | tr -d '\r'
 }
 
@@ -94,28 +94,28 @@ KOID="$(tool "$TOKEN" "$SID" "remember" '{"subject":"agent","type_name":"note","
 echo "leader $LEADER remembered $KOID"
 
 # --- an OAuth sign-in (RFC 9728) against the leader ------------------------
-CLIENT="$(curl -fsS -H 'Content-Type: application/json' \
+CLIENT="$(curl -kfsS -H 'Content-Type: application/json' \
   -d '{"redirect_uris":["http://127.0.0.1:9/callback"],"client_name":"kind-e2e","token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}' \
-  http://127.0.0.1:4318/oauth/register | jsonfield '["client_id"]')"
+  https://127.0.0.1:4318/oauth/register | jsonfield '["client_id"]')"
 [ -n "$CLIENT" ] || die "RFC 7591 registration failed"
 VERIFIER="$(openssl rand -hex 32)"
 CHALLENGE="$(printf %s "$VERIFIER" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=')"
-CODE="$(curl -fsS -D- -o /dev/null -H 'Content-Type: application/x-www-form-urlencoded' \
+CODE="$(curl -kfsS -D- -o /dev/null -H 'Content-Type: application/x-www-form-urlencoded' \
   --data-urlencode "response_type=code" --data-urlencode "client_id=$CLIENT" \
   --data-urlencode "redirect_uri=http://127.0.0.1:9/callback" \
   --data-urlencode "code_challenge=$CHALLENGE" --data-urlencode "code_challenge_method=S256" \
   --data-urlencode "state=st-1" --data-urlencode "scope=mcp" \
-  --data-urlencode "resource=http://127.0.0.1:4318/mcp" \
+  --data-urlencode "resource=https://127.0.0.1:4318/mcp" \
   --data-urlencode "username=admin" --data-urlencode "password=$ADMIN_PW" \
-  --data-urlencode "approve=1" http://127.0.0.1:4318/oauth/authorize |
+  --data-urlencode "approve=1" https://127.0.0.1:4318/oauth/authorize |
   awk 'tolower($1)=="location:" {print $2}' | tr -d '\r' |
   python3 -c 'import sys,urllib.parse; print(dict(urllib.parse.parse_qsl(urllib.parse.urlparse(sys.stdin.read()).query))["code"])')"
 [ -n "$CODE" ] || die "authorization code not issued"
-OAUTH_TOKEN="$(curl -fsS -H 'Content-Type: application/x-www-form-urlencoded' \
+OAUTH_TOKEN="$(curl -kfsS -H 'Content-Type: application/x-www-form-urlencoded' \
   --data-urlencode "grant_type=authorization_code" --data-urlencode "code=$CODE" \
   --data-urlencode "redirect_uri=http://127.0.0.1:9/callback" \
   --data-urlencode "client_id=$CLIENT" --data-urlencode "code_verifier=$VERIFIER" \
-  http://127.0.0.1:4318/oauth/token | jsonfield '["access_token"]')"
+  https://127.0.0.1:4318/oauth/token | jsonfield '["access_token"]')"
 [ -n "$OAUTH_TOKEN" ] || die "token exchange failed"
 OSID="$(session "$OAUTH_TOKEN")"
 [ -n "$OSID" ] || die "initialize with the OAuth token failed"
