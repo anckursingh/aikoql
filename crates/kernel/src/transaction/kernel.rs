@@ -41,7 +41,7 @@ use crate::security::envelope::{
     DEKS_PREV_NEXT_KEY, DEKS_STORAGE_KEY,
 };
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
-use crate::security::tenant::TenantManager;
+use crate::security::tenant::{usage_head, usage_row_key, TenantManager, USAGE_HEAD_KEY, USAGE_PREFIX};
 use crate::security::Signer;
 use crate::statistics::Statistics;
 pub use crate::storage::repository::DerivedIndexRebuild;
@@ -791,20 +791,53 @@ impl Kernel {
                 eprintln!("type index: backfilled {indexed} objects");
             }
         }
-        // AG-32: rebuild per-tenant usage from the store on every open —
-        // counters must not restart empty and re-learn as writes land.
-        // shortcut: full KO decode per head on each open; switch to a
-        // persistent per-tenant watermark KV prefix when tenants number in
-        // the hundreds (see the tenant.rs module doc).
+        // AG-32: per-tenant usage comes from the store. AG-32b: a clean
+        // reopen loads the persisted usage rows instead of decoding every
+        // head — the watermark rides every commit batch atomically with
+        // the rows, so a match means the rows are exact. Missing or stale
+        // (an older binary's database, a torn row) falls back to the full
+        // rebuild, which re-persists both.
         let tenants = Arc::new(TenantManager::new());
         if !standby {
-            let heads = repo.scan_heads()?;
-            tenants.rebuild(&heads, |koid, ts| {
-                repo.get_object_version(koid, ts)
-                    .ok()
-                    .flatten()
-                    .and_then(|ko| ko.metadata.tenant)
-            });
+            let mut rows: Option<Vec<(String, usize)>> = None;
+            if let Some((s, _a, t)) = repo.journal_head()? {
+                if store.get(USAGE_HEAD_KEY)?.as_deref() == Some(usage_head(s, t).as_slice()) {
+                    let mut r = Vec::new();
+                    let mut ok = true;
+                    for (k, v) in store.scan(USAGE_PREFIX)? {
+                        if k.len() <= USAGE_PREFIX.len() || v.len() != 8 {
+                            ok = false;
+                            break;
+                        }
+                        let tenant =
+                            String::from_utf8_lossy(&k[USAGE_PREFIX.len()..]).into_owned();
+                        r.push((tenant, usize::from_le_bytes(v.as_slice().try_into().unwrap())));
+                    }
+                    if ok {
+                        rows = Some(r);
+                    }
+                }
+            }
+            match rows {
+                Some(r) => tenants.load(r),
+                None => {
+                    let heads = repo.scan_heads()?;
+                    tenants.rebuild(&heads, |koid, ts| {
+                        repo.get_object_version(koid, ts)
+                            .ok()
+                            .flatten()
+                            .and_then(|ko| ko.metadata.tenant)
+                    });
+                    let mut b = WriteBatch::new();
+                    for (t, n) in tenants.usage_rows() {
+                        b.put(usage_row_key(&t), n.to_le_bytes().to_vec());
+                    }
+                    if let Some((s, _a, t)) = repo.journal_head()? {
+                        b.put(USAGE_HEAD_KEY.to_vec(), usage_head(s, t));
+                    }
+                    store.write_batch(&b)?;
+                }
+            }
         }
         let (seq, audit, last_ts) = match repo.journal_head()? {
             Some((s, a, t)) => (s, a, t),
@@ -1159,6 +1192,7 @@ impl Kernel {
                 Some("ag-31 dek re-encryption".into()),
                 None,
                 Some(&rels),
+                None,
             )?;
             migrated += 1;
         }
@@ -1743,6 +1777,10 @@ impl Kernel {
         note: Option<String>,
         idem: Option<&str>,
         prev_rels: Option<&[RelationshipRef]>,
+        // AG-32b — a count-changing commit passes the tenant and its
+        // post-change count; the row rides this batch (atomic with the
+        // watermark and the event).
+        usage: Option<(&str, usize)>,
     ) -> KResult<(u64, u64)> {
         ko.validate()?;
         // T-47: a composite op may pin one instant for all its events —
@@ -1836,6 +1874,14 @@ impl Kernel {
             .write_type_index(&mut batch, &ko.metadata.type_name, &ko.koid);
         self.repo.put_event(&mut batch, seq, &ke);
         self.repo.put_journal(&mut batch, seq, audit, commit_ts);
+        // AG-32b: the usage head watermark rides every commit so a clean
+        // reopen can trust the persisted usage rows; a count change rides
+        // its row in the same batch (atomic — a crash can leave a stale
+        // watermark, never a stale row behind a fresh one).
+        batch.put(USAGE_HEAD_KEY.to_vec(), usage_head(seq, commit_ts));
+        if let Some((tenant, count)) = usage {
+            batch.put(usage_row_key(tenant), count.to_le_bytes().to_vec());
+        }
         if let Some(k) = idem {
             self.repo.put_idem(
                 &mut batch,
@@ -1979,6 +2025,7 @@ impl Kernel {
             Some("ag-13 salience refresh".into()),
             None,
             Some(&head.relationships),
+            None,
         )?;
         Ok(Some(salience))
     }
@@ -2035,6 +2082,7 @@ impl Kernel {
             Some("semantic enrichment".into()),
             None,
             Some(&head.relationships),
+            None,
         )?;
         Ok(Remembered {
             koid,
@@ -2566,6 +2614,18 @@ impl Kernel {
         };
         let is_auth_meta =
             req.metadata.type_name == ROLE_TYPE || req.metadata.type_name == POLICY_TYPE;
+        // AG-32b: the create's post-count rides the commit batch (computed
+        // under pipe — the same value record_create adds below).
+        let usage_row = if creating {
+            let t = req
+                .metadata
+                .tenant
+                .clone()
+                .unwrap_or_else(|| "default".into());
+            Some((t.clone(), self.tenants.usage(&t) + 1))
+        } else {
+            None
+        };
         let (commit_ts, seq) = self.commit_version(
             pipe,
             ko,
@@ -2575,6 +2635,7 @@ impl Kernel {
             req.note.clone(),
             scoped_idem.as_deref(),
             head.as_ref().map(|h| h.relationships.as_slice()),
+            usage_row.as_ref().map(|(t, n)| (t.as_str(), *n)),
         )?;
         if creating {
             // AG-32: the live counter follows the stored metadata.tenant —
@@ -3149,6 +3210,20 @@ impl Kernel {
         let final_seq = start_seq + events.len() as u64;
         self.repo
             .put_journal(&mut batch, final_seq, prev_audit, commit_ts);
+        // AG-32b: the head watermark and the created tenants' usage rows
+        // ride this batch (atomic with the events and the live counts).
+        batch.put(USAGE_HEAD_KEY.to_vec(), usage_head(final_seq, commit_ts));
+        let mut created_counts: HashMap<String, usize> = HashMap::new();
+        for t in &created_tenants {
+            let key = t.clone().unwrap_or_else(|| "default".into());
+            *created_counts.entry(key).or_insert(0) += 1;
+        }
+        for (t, n) in created_counts {
+            batch.put(
+                usage_row_key(&t),
+                (self.tenants.usage(&t) + n).to_le_bytes().to_vec(),
+            );
+        }
         if let Some(schema) = schema_row {
             let bytes = crate::knowledge::codec::encode_schema(schema);
             self.repo
@@ -3240,6 +3315,7 @@ impl Kernel {
             note,
             None,
             Some(&head.relationships),
+            None,
         )?;
         Ok(Evolved {
             koid: *koid,
@@ -3381,6 +3457,7 @@ impl Kernel {
             reason,
             None,
             Some(&head.relationships),
+            None,
         )?;
         Ok(EpistemicChanged {
             koid: *koid,
@@ -3425,6 +3502,15 @@ impl Kernel {
                     state: LifecycleState::Deleted,
                     origin: Origin::System,
                 };
+                // AG-32b: the delete's post-count rides the commit batch.
+                let usage_row = {
+                    let t = head
+                        .metadata
+                        .tenant
+                        .clone()
+                        .unwrap_or_else(|| "default".into());
+                    Some((t.clone(), self.tenants.usage(&t).saturating_sub(1)))
+                };
                 let (commit_ts, _) = self.commit_version(
                     &mut pipe,
                     ko,
@@ -3434,6 +3520,7 @@ impl Kernel {
                     note,
                     None,
                     Some(&head.relationships),
+                    usage_row.as_ref().map(|(t, n)| (t.as_str(), *n)),
                 )?;
                 // AG-32: the forgotten KO leaves its tenant's live count.
                 self.tenants.record_delete(head.metadata.tenant.as_deref());
@@ -3488,6 +3575,20 @@ impl Kernel {
                 let mut batch = WriteBatch::new();
                 self.repo.put_event(&mut batch, seq, &ke);
                 self.repo.put_journal(&mut batch, seq, audit, commit_ts);
+                // AG-32b: the watermark and the erased tenant's post-count
+                // ride this batch.
+                batch.put(USAGE_HEAD_KEY.to_vec(), usage_head(seq, commit_ts));
+                let t = head
+                    .metadata
+                    .tenant
+                    .clone()
+                    .unwrap_or_else(|| "default".into());
+                batch.put(
+                    usage_row_key(&t),
+                    (self.tenants.usage(&t).saturating_sub(1))
+                        .to_le_bytes()
+                        .to_vec(),
+                );
                 self.repo.put_tombstone(&mut batch, koid, head_hash, seq);
                 self.repo.delete_head(&mut batch, koid);
                 // R9: the head is gone — drop the type-index entry with it.
@@ -5031,6 +5132,8 @@ impl Kernel {
         let mut batch = WriteBatch::new();
         self.repo.put_event(&mut batch, seq, &ke);
         self.repo.put_journal(&mut batch, seq, audit, commit_ts);
+        // AG-32b: the watermark rides this batch too — every head advance.
+        batch.put(USAGE_HEAD_KEY.to_vec(), usage_head(seq, commit_ts));
         self.repo.write_batch(&batch)?;
         pipe.seq = seq;
         pipe.audit = audit;

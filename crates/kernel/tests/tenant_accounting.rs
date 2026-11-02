@@ -128,8 +128,14 @@ fn ag32_usage_persists_under_a_watermark_and_rebuilds_when_missing() {
         Some(8),
         "tenant a's row persisted"
     );
+    // a, default — plus the catalog bootstrap's own tenant
     let rows = store.scan(PREFIX).unwrap();
-    assert_eq!(rows.len(), 2, "one row per tenant, nothing more");
+    assert_eq!(rows.len(), 3, "one row per tenant, nothing more");
+    assert_eq!(
+        store.get(b"__tenants/usage/aikoql:catalog").unwrap().map(|v| v.len()),
+        Some(8),
+        "the catalog object counts on its own tenant"
+    );
 
     // a clean reopen loads the rows — counts identical to a rebuild
     let k2 = Kernel::open(store.clone(), clock.clone(), 0xE915).unwrap();
@@ -148,6 +154,10 @@ fn ag32_usage_persists_under_a_watermark_and_rebuilds_when_missing() {
     assert_eq!(k3.tenant_usage("a"), 2);
     assert_eq!(k3.tenant_usage("default"), 1);
     drop(k3);
-    assert_eq!(store.scan(PREFIX).unwrap().len(), 2, "rows re-persisted");
+    assert_eq!(
+        store.scan(PREFIX).unwrap().len(),
+        3,
+        "rows re-persisted (catalog included)"
+    );
     assert!(store.get(HEAD).unwrap().is_some(), "watermark re-persisted");
 }
