@@ -57,17 +57,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mcp_call() { # $1 = bearer; $2 = method; $3 = params json; echoes the response body
-  local bearer="$1" method="$2" params="$3" id
+mcp_call() { # $1 = bearer; $2 = session; $3 = method; $4 = params json; echoes the response body
+  local bearer="$1" sid="$2" method="$3" params="$4" id
   id=$((RANDOM))
-  curl -kfsS -H "Authorization: Bearer $bearer" \
+  curl -kfsS -H "Authorization: Bearer $bearer" -H "Mcp-Session-Id: $sid" \
     -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
     -d "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"$method\",\"params\":$params}" \
     https://127.0.0.1:4318/mcp
 }
 
 tool() { # $1 = bearer; $2 = session; $3 = tool; $4 = args json; echoes the tool payload
-  mcp_call "$1" "tools/call" "{\"name\":\"$3\",\"arguments\":$4}" |
+  mcp_call "$1" "$2" "tools/call" "{\"name\":\"$3\",\"arguments\":$4}" |
     python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["result"]["content"][0]["text"])'
 }
 
