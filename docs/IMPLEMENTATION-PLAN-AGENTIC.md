@@ -397,6 +397,19 @@ result set changes (built on the existing commit stream + event outbox).
 claiming among agents) on top of `txn_*` CAS; handoff KO type with
 provenance. *Gate:* N agents, M tasks: each task claimed exactly once,
 claims expire on agent death.
+- *Status (2026-11-02): done.* Kernel ops `claim_task` / `release_task` /
+  `handoff_task` (MCP tools of the same names): a claim is an
+  `expected_version` CAS under the pipe lock with kernel-managed
+  `claim_holder` / `claim_until` extensions (a generic update carries the
+  claim forward; only the ops clear it), so exactly one claimant wins and
+  the loser gets `ClaimConflict`. Leases are wall-clock — an agent's death
+  frees its tasks; the holder re-claiming renews. Handoff requires the
+  holder: the claim moves to `to` (same lease end) and an
+  `aikoql:handoff` KO records task/from/to with evidence, Asserted and
+  agent-derived, readable by the recipient. Gate:
+  `crates/kernel/tests/coordination.rs` (5 tests: 4 agents × 6 tasks
+  claimed exactly once under threads, expiry, renew/release, ACL, handoff
+  provenance) + the claim tool round-trip in the MCP suite.
 
 ### Phase P — platform
 
