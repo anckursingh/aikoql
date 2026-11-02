@@ -126,3 +126,20 @@ fn ag51_repl_tls_is_a_helm_managed_secret_with_a_stable_ca() {
     assert!(secret.contains("tls.crt"), "tls.crt key (server chain): {secret}");
     assert!(secret.contains("tls.key"), "tls.key key: {secret}");
 }
+
+#[test]
+fn ag51_arms_the_admin_password_that_the_surface_fails_closed_on() {
+    // first real run, second crash: AIKOQL_ALLOW_REMOTE_HTTP=1 without
+    // credentials — the server refuses to start. The chart must demand
+    // auth.adminPasswordKey at render time, and the gate must set it.
+    let sts = read(&root().join("deploy/helm/aikoql/templates/statefulset.yaml"));
+    assert!(
+        sts.contains("required") && sts.contains(".Values.auth.adminPasswordKey"),
+        "adminPasswordKey must be required at render: {sts}"
+    );
+    let script = read(&root().join("scripts/kind-failover-e2e.sh"));
+    assert!(
+        script.contains("adminPasswordKey") && script.contains("admin-password"),
+        "the gate must arm the admin password: {script}"
+    );
+}
