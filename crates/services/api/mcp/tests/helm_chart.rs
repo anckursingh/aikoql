@@ -160,4 +160,12 @@ fn ag51_surface_is_tls_and_the_gate_speaks_https() {
         script.contains("https://127.0.0.1:4318"),
         "the gate must curl the TLS surface: {script}"
     );
+    // the server requires the session header on every post-initialize MCP
+    // call (pinned by the claude.ai tunnel run) — the gate's tools/call
+    // must send it or remember dies with a 400. The -H form, not the
+    // comment in session().
+    assert!(
+        script.contains("-H \"Mcp-Session-Id: $"),
+        "post-initialize MCP calls need the session header: {script}"
+    );
 }
