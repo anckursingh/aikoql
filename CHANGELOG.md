@@ -38,6 +38,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Helm lint + render on every PR (AG-51)**: a new `ci.yml` job runs
+  `helm lint deploy/helm/aikoql` and `helm template aikoql
+  deploy/helm/aikoql` per push, so a broken chart template fails at PR
+  time instead of waiting for the nightly kind gate (which only renders
+  on schedule).
 - **Framework-adapter async offload (AG-60)**: the async OpenAI Agents
   session methods now run their sync aikoql I/O on a worker thread via
   `asyncio.to_thread` (the langgraph.py shape), and both python adapters

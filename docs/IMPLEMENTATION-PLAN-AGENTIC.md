@@ -449,8 +449,16 @@ chart install, remember through the leader, kill the leader pod, the
 standby promotes and serves the writes, and an OAuth sign-in issued
 before the kill keeps authorizing the new leader — this closes the
 "real k8s pod" open item (the MRFC-0080 certs covered a real
-apiserver via envtest, not a pod). Laws pinned by tests/helm_chart.rs;
-not yet: helm lint/render in PR CI (rendered only by the kind gate).
+apiserver via envtest, not a pod). Laws pinned by tests/helm_chart.rs.
+
+Status (2026-11-02): the last "not yet" landed — a PR-CI job
+(`ci.yml` `helm`, ubuntu-latest, azure/setup-helm@v4) runs
+`helm lint deploy/helm/aikoql` + `helm template aikoql
+deploy/helm/aikoql` on every PR, so a broken template fails at push
+instead of waiting for the nightly kind gate (which now only
+re-renders on schedule). Pinned by RED
+`ag51_helm_lint_render_is_wired_into_pr_ci`; the real lint/render
+verified against alpine/helm (0 failures, 239 rendered lines).
 
 **AG-52 (P2) Login backoff survives restarts** (in-memory today) and a
 per-IP layer behind proxies (`X-Forwarded-For` trusted only from a
