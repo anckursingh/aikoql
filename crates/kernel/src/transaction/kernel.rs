@@ -37,7 +37,8 @@ use crate::relationship::RelationshipManager;
 use crate::security::auth::{AuthManager, POLICY_TYPE, ROLE_TYPE};
 use crate::security::crypto::Crypto;
 use crate::security::envelope::{
-    Envelope, WrappedDek, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_NEXT_KEY, DEKS_STORAGE_KEY,
+    Envelope, WrappedDek, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_NEXT_KEY, DEKS_PREV_KEY,
+    DEKS_PREV_NEXT_KEY, DEKS_STORAGE_KEY,
 };
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
 use crate::security::tenant::TenantManager;
@@ -996,15 +997,20 @@ impl Kernel {
             Some(raw) => Some(decode(&raw)?),
             None => None,
         };
+        let prev_next = match self.store.get(DEKS_PREV_NEXT_KEY)? {
+            Some(raw) => decode(&raw)?,
+            None => Vec::new(),
+        };
         let deks = match next {
             Some(n) if envelope.unwraps_all(&n) => {
-                self.promote_next_deks(&n)?;
+                self.promote_next_deks(&n, &prev_next)?;
                 n
             }
             stale => {
                 if stale.is_some() {
                     let mut b = WriteBatch::new();
                     b.del(DEKS_NEXT_KEY.to_vec());
+                    b.del(DEKS_PREV_NEXT_KEY.to_vec());
                     self.store.write_batch(&b)?;
                 }
                 match self.store.get(DEKS_STORAGE_KEY)? {
@@ -1018,6 +1024,15 @@ impl Kernel {
                 .load_dek(d)
                 .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
         }
+        // AG-31: the previous generation (a DEK roll's decrypt fallback)
+        // loads too — an unwrap failure fails closed like the current set.
+        if let Some(raw) = self.store.get(DEKS_PREV_KEY)? {
+            for d in decode(&raw)? {
+                envelope
+                    .load_prev_dek(&d)
+                    .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
+            }
+        }
         self.field_crypto = Some(Arc::new(FieldCrypto::new(crypto, envelope)));
         Ok(self)
     }
@@ -1028,26 +1043,126 @@ impl Kernel {
     }
 
     /// AG-31 rotation step 3 — the next generation's wraps, durable before
-    /// the KMS commits the new KEK.
-    pub fn persist_next_deks(&self, wraps: &[WrappedDek]) -> KResult<()> {
+    /// the KMS commits the new KEK (the previous generation rides the same
+    /// batch, so both switch at the commit point).
+    pub fn persist_next_deks(&self, wraps: &[WrappedDek], prev: &[WrappedDek]) -> KResult<()> {
         let mut b = WriteBatch::new();
         b.put(DEKS_NEXT_KEY.to_vec(), Envelope::encode_wrapped_deks(wraps));
+        if prev.is_empty() {
+            b.del(DEKS_PREV_NEXT_KEY.to_vec());
+        } else {
+            b.put(
+                DEKS_PREV_NEXT_KEY.to_vec(),
+                Envelope::encode_wrapped_deks(prev),
+            );
+        }
         self.store
             .write_batch(&b)
             .map_err(|e| KError::Store(format!("DEK persist: {e}")))
     }
 
-    /// AG-31 rotation step 5 — the next generation becomes the current one.
-    pub fn promote_next_deks(&self, wraps: &[WrappedDek]) -> KResult<()> {
+    /// AG-31 rotation step 5 — the next generation becomes the current one
+    /// (and the previous generation, if any, rides the same batch).
+    pub fn promote_next_deks(&self, wraps: &[WrappedDek], prev: &[WrappedDek]) -> KResult<()> {
         let mut b = WriteBatch::new();
         b.put(
             DEKS_STORAGE_KEY.to_vec(),
             Envelope::encode_wrapped_deks(wraps),
         );
+        if prev.is_empty() {
+            b.del(DEKS_PREV_KEY.to_vec());
+        } else {
+            b.put(DEKS_PREV_KEY.to_vec(), Envelope::encode_wrapped_deks(prev));
+        }
         b.del(DEKS_NEXT_KEY.to_vec());
+        b.del(DEKS_PREV_NEXT_KEY.to_vec());
         self.store
             .write_batch(&b)
             .map_err(|e| KError::Store(format!("DEK persist: {e}")))
+    }
+
+    /// AG-31 — re-encrypt every encrypted field under fresh data keys, one
+    /// committed version per object (the journal hashes the ciphertext, so
+    /// re-encryption is a commit, not a rewrite). Offline: stop the server
+    /// first. Idempotent: a re-run after a crash migrates nothing that was
+    /// already done. Returns the number of objects re-encrypted.
+    pub fn roll_field_deks(&self) -> KResult<usize> {
+        let fc = self.field_crypto.clone().ok_or_else(|| {
+            KError::Store("DEK roll needs field encryption enabled".into())
+        })?;
+        let e = fc.envelope();
+        // The guard covers the snapshot + swap + persist only: a tenant
+        // minted after the batch already encrypts under the new generation
+        // (nothing of theirs to walk), and the walk takes `pipe` — holding
+        // `creation` across it would invert the write path's pipe→creation
+        // order.
+        {
+            let _guard = e.creation_guard();
+            let old_wraps = e.wrapped_deks();
+            if old_wraps.is_empty() {
+                return Ok(0); // no tenant has an encrypted field yet
+            }
+            // A DEKS_PREV_KEY row means a roll already committed: this is a
+            // crash re-run (or a later invocation) — walk with the loaded
+            // generations instead of swapping again, or fields still under
+            // the retired generation lose their fallback. shortcut: a roll
+            // can be re-run but not repeated; forcing a fresh roll needs a
+            // manual reset of the DEK rows, which nothing offers yet.
+            if self.store.get(DEKS_PREV_KEY)?.is_none() {
+                let new_wraps = e
+                    .roll_deks()
+                    .map_err(|x| KError::Store(format!("DEK roll: {x}")))?;
+                // Both generations durable BEFORE the walk: a crash anywhere
+                // leaves readers with current=new, previous=old (fallback
+                // decrypt), and the walk resumes by re-running this command.
+                let mut b = WriteBatch::new();
+                b.put(
+                    DEKS_PREV_KEY.to_vec(),
+                    Envelope::encode_wrapped_deks(&old_wraps),
+                );
+                b.put(
+                    DEKS_STORAGE_KEY.to_vec(),
+                    Envelope::encode_wrapped_deks(&new_wraps),
+                );
+                self.store
+                    .write_batch(&b)
+                    .map_err(|x| KError::Store(format!("DEK persist: {x}")))?;
+            }
+        }
+
+        let mut migrated = 0usize;
+        let policies = self.encryption_policies.read().unwrap().clone();
+        for (koid, _version, ts, _state) in self.scan_heads()? {
+            let Some(mut ko) = self.repo.get_object_version(&koid, ts)? else {
+                continue;
+            };
+            let Some(policy) = policies.get(&ko.metadata.type_name) else {
+                continue;
+            };
+            let tenant = ko.metadata.tenant.clone().unwrap_or_else(|| "default".into());
+            let changed = fc
+                .reencrypt_fields(&tenant, &ko.metadata.type_name, &mut ko.properties, policy)
+                .map_err(|x| KError::Store(format!("DEK roll: {x}")))?;
+            if changed == 0 {
+                continue;
+            }
+            // justified: Mutex poison is unrecoverable
+            let mut pipe = self.pipe.lock().unwrap();
+            ko.version += 1;
+            let rels = ko.relationships.clone(); // untouched by the walk
+            self.commit_version(
+                &mut pipe,
+                ko,
+                EventKind::Updated,
+                Origin::System,
+                "system",
+                Some("ag-31 dek re-encryption".into()),
+                None,
+                Some(&rels),
+            )?;
+            migrated += 1;
+        }
+        Ok(migrated)
     }
 
     /// Register an encryption policy for a schema type. Fields listed in the

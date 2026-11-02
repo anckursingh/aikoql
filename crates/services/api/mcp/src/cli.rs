@@ -32,6 +32,7 @@ pub(crate) fn print_usage() {
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
         "  key rotate [DB]        Rotate the master key of an encrypted database (offline; rewraps, no re-encryption)\n",
         "  key change-passphrase NEW [DB]  Re-wrap the master key under a new passphrase (offline; the key itself does not change)\n",
+        "  key roll-deks [DB]    Mint fresh tenant data keys and re-encrypt every encrypted field (offline)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
         "  pitr --archive URL --to DIR [--until-seq N | --until-ms MS]  Restore from the archive\n",
         "  archive-prune --archive URL --keep N  Keep the newest N archived snapshots\n",
@@ -298,13 +299,31 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 println!("{}", serde_json::json!({"changed": true, "db": db}));
                 true
             }
+            Some("roll-deks") => {
+                let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
+                let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                match crate::engine::roll_deks(db, &cfg.encryption) {
+                    Ok(n) => println!("{}", serde_json::json!({"rolled": true, "objects": n, "db": db})),
+                    Err(e) => {
+                        eprintln!("key roll-deks: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                true
+            }
             _ => {
                 eprintln!("Usage: aikoql-mcp key rotate [DB_PATH]");
                 eprintln!("       aikoql-mcp key change-passphrase NEW_PASSPHRASE [DB_PATH]");
+                eprintln!("       aikoql-mcp key roll-deks [DB_PATH]");
                 eprintln!("rotate rewraps every data key under a new master key — no data is");
                 eprintln!("re-encrypted — and the old key file no longer opens the database.");
                 eprintln!("change-passphrase re-wraps the master key file under a new passphrase");
-                eprintln!("(the master key itself does not change). Stop the server first.");
+                eprintln!("(the master key itself does not change).");
+                eprintln!("roll-deks mints fresh tenant data keys and re-encrypts every encrypted");
+                eprintln!("field under them (one committed version per object). Stop the server first.");
                 std::process::exit(2);
             }
         },

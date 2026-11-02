@@ -184,8 +184,15 @@ impl KeyRing {
             Some(e) => Some(e.rewrapped(&new_kek).map_err(err)?),
             None => None,
         };
-        if let Some(w) = &wraps {
-            kernel.persist_next_deks(w)?; // 3
+        // AG-31: the previous generation (a DEK roll's decrypt fallback)
+        // rewraps in the same batch — under the new KEK it commits only
+        // with step 4, so an uncommitted rotation never breaks it.
+        let prev_wraps = match &envelope {
+            Some(e) => Some(e.rewrapped_prev(&new_kek).map_err(err)?),
+            None => None,
+        };
+        if let (Some(w), Some(pw)) = (&wraps, &prev_wraps) {
+            kernel.persist_next_deks(w, pw)?; // 3
         }
         stop(3)?;
         // justified: Mutex poison is unrecoverable
@@ -193,8 +200,8 @@ impl KeyRing {
             .install(&new_kek, &self.passphrase.lock().unwrap())
             .map_err(err)?; // 4: commit
         stop(4)?;
-        if let (Some(e), Some(w)) = (&envelope, wraps) {
-            kernel.promote_next_deks(&w)?; // 5
+        if let (Some(e), Some(w), Some(pw)) = (&envelope, wraps, prev_wraps) {
+            kernel.promote_next_deks(&w, &pw)?; // 5
             e.adopt(new_kek, w);
         }
         stop(5)?;

@@ -150,6 +150,18 @@ pub(crate) fn change_passphrase(db_path: &str, enc: &RuntimeEncryption, new: &st
         .change_passphrase(old, new)
 }
 
+/// AG-31 — roll every tenant data key (DEK) and re-encrypt the encrypted
+/// fields under the fresh keys, one committed journal version per object
+/// (offline: the database must not be open elsewhere). The previous
+/// generation stays as decrypt fallback for historical versions.
+pub(crate) fn roll_deks(db_path: &str, enc: &RuntimeEncryption) -> KResult<usize> {
+    if !enc.enabled {
+        return Err(KError::Store("DEK roll needs [encryption] enabled".into()));
+    }
+    let (kernel, _admin, _ring) = open_kernel_with_ring(db_path, enc, false, None)?;
+    kernel.roll_field_deks()
+}
+
 #[cfg(test)]
 mod tests {
     use super::open_kernel_auto;
@@ -544,17 +556,26 @@ mod tests {
         {
             let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
             let alice = Subject::new("alice");
-            for (koid, _, pin) in &want {
-                let ko = k.get(alice.clone(), koid).unwrap();
+            for (koid, tenant, pin) in &want {
+                // T-55: a tenant-less subject cannot read a tenant's rows —
+                // mirror ctx_of's in_tenant qualification per object.
+                let subj = match tenant {
+                    Some(t) => alice.clone().in_tenant(t),
+                    None => alice.clone(),
+                };
+                let ko = k.get(subj, koid).unwrap();
                 assert_eq!(ko.properties.get("pin"), Some(&aikoql_kernel::Value::Text(pin.clone())));
                 assert_eq!(ko.version, 2, "the roll committed one new version");
             }
             let e = k.field_envelope().unwrap();
             assert_ne!(e.tenant_key("t1").unwrap(), old_dek, "fresh DEK in place");
             assert_eq!(e.prev_key("t1"), Some(old_dek), "the old generation stays decryptable");
-            // Idempotent: a second roll finds nothing to migrate.
-            assert_eq!(super::roll_deks(&dir, &enc).unwrap(), 0);
         }
+
+        // Idempotent: a second roll finds nothing to migrate. Fresh open —
+        // the kernel above must be dropped first (the database lock is
+        // exclusive).
+        assert_eq!(super::roll_deks(&dir, &enc).unwrap(), 0);
 
         // A KEK rotation after the roll rewraps the previous generation too
         // (or historical versions are unreadable under the new KEK).
