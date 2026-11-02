@@ -38,6 +38,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Usage counts persist under a head watermark (AG-32)**: each tenant's
+  live object count is one 8-byte row under `__tenants/usage/<tenant>`,
+  and a `(seq, ts)` head watermark rides every commit batch atomically
+  with the rows, so a clean open loads the counts instead of decoding
+  every head; a database without the watermark (an older binary) still
+  rebuilds from the heads and writes both back.
 - **Per-commit journal signatures (AG-30)**: when a server runs with
   `AIKOQL_AUDIT_SIGNING_KEY`, every journal event carries an Ed25519
   signature over (the previous event's signature ‖ its audit hash) — a
