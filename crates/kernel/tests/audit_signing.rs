@@ -99,7 +99,12 @@ fn au30_001_each_committed_event_carries_a_chained_signature() {
     );
 
     // A tampered event hash breaks that event's signature.
-    let ke = &k.journal().unwrap()[0];
+    let ke = k
+        .journal()
+        .unwrap()
+        .into_iter()
+        .find(|ke| ke.audit_signature.is_some())
+        .expect("a signed event");
     let sig = ke.audit_signature.unwrap();
     let mut msg = Vec::with_capacity(96);
     msg.extend_from_slice(&[0u8; 64]);
