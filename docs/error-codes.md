@@ -79,6 +79,7 @@ above (e.g. `NOT_FOUND: <koid>` → NOT_FOUND via the "not_found" keyword).
 | STORE | storage engine error |
 | CODEC | serialization error |
 | RETRYABLE | similarity arm: query embedded but no in-scope KO carries an embedding yet |
+| CLAIM_CONFLICT | AG-41: a task claim lost — the KO is held by another agent until `until` |
 
 ## SDK-side codes
 

@@ -436,14 +436,34 @@ pub(crate) fn tool_evidence_pack(k: &Kernel, args: &J) -> Result<J, String> {
         "encryption": encryption,
     });
     // AG-30: signed with the server's Ed25519 key — checkable with the public
-    // key alone (the message is the 32 audit-chain bytes)
-    if let Some(key) = crate::AUDIT_SIGNER.get() {
-        pack["audit_signature"] = json!({
-            "algorithm": "ed25519",
-            "public_key": hex(&key.public_key()),
-            "signature": hex(&key.sign(&audit)),
-            "signed": "audit_chain",
-        });
+    // key alone (the message is the 32 audit-chain bytes). A signing server
+    // also chains a signature onto every committed journal event — the
+    // per-commit stream the auditor replays against the same public key.
+    if let Some(signer) = crate::AUDIT_SIGNER.get() {
+        if let Some(sig) = signer.sign(&audit).map_err(|e| e.to_string())? {
+            pack["audit_signature"] = json!({
+                "algorithm": "ed25519",
+                "public_key": hex(&signer.public_key().unwrap_or_default()),
+                "signature": hex(&sig),
+                "signed": "audit_chain",
+            });
+        }
+        let events = k.journal().map_err(|e| e.to_string())?;
+        let chain: Vec<J> = events
+            .iter()
+            .filter_map(|ke| {
+                ke.audit_signature.map(|sig| {
+                    json!({
+                        "seq": ke.seq,
+                        "audit_hash": hex(&ke.audit_hash),
+                        "signature": hex(&sig),
+                    })
+                })
+            })
+            .collect();
+        if !chain.is_empty() {
+            pack["journal_signatures"] = json!(chain);
+        }
     }
     Ok(pack)
 }

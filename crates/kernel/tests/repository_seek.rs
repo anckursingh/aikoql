@@ -60,6 +60,7 @@ fn ke(seq: u64) -> KnowledgeEvent {
         prev_audit_hash: [0u8; 32],
         audit_hash: [0u8; 32],
         signature: None,
+        audit_signature: None,
         note: None,
     }
 }

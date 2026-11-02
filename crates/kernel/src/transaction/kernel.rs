@@ -41,6 +41,7 @@ use crate::security::envelope::{
 };
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
 use crate::security::tenant::TenantManager;
+use crate::security::Signer;
 use crate::statistics::Statistics;
 pub use crate::storage::repository::DerivedIndexRebuild;
 use crate::storage::repository::KnowledgeRepository;
@@ -650,6 +651,9 @@ pub use crate::knowledge::notify::{EventFilter, SubscriptionRecord};
 pub(crate) struct Pipeline {
     seq: u64,
     audit: [u8; 32],
+    /// AG-30: the last committed event's Ed25519 audit signature — the
+    /// link the next event's signature chains through.
+    prev_sig: [u8; 64],
     /// T-47 atomic-pair pin: while set, every commit in this pipe reuses the
     /// pinned instant so a composite op's events share one commit time.
     /// Armed and cleared by the wrapping op before the lock releases —
@@ -684,6 +688,9 @@ pub struct Kernel {
     objects: Arc<ObjectManager>,
     /// Optional 32-byte HMAC-SHA256 key for at-rest version signatures.
     signing_key: Option<[u8; 32]>,
+    /// AG-30: the Ed25519 signer that chains a signature onto every
+    /// committed journal event (empty = no per-commit signatures).
+    audit_signer: Arc<Signer>,
     /// Per-tenant quota tracking and enforcement.
     tenants: Arc<TenantManager>,
     /// Optional field-level encryption (MRFC-0020 Phase 3).
@@ -833,6 +840,7 @@ impl Kernel {
             pipe: Arc::new(Mutex::new(Pipeline {
                 seq,
                 audit,
+                prev_sig: [0u8; 64],
                 pair_pin: None,
             })),
             events: Arc::new(Mutex::new(events)),
@@ -848,6 +856,7 @@ impl Kernel {
             objects,
             access_counts: Arc::new(Mutex::new(HashMap::new())),
             signing_key: None,
+            audit_signer: Arc::new(Signer::new()),
             tenants,
             field_crypto: None,
             encryption_policies: Arc::new(RwLock::new(HashMap::new())),
@@ -911,6 +920,23 @@ impl Kernel {
     pub fn with_signing_key(mut self, key: [u8; 32]) -> Self {
         self.signing_key = Some(key);
         self
+    }
+
+    /// AG-30: attach the Ed25519 audit signer — every event committed from
+    /// now on carries a signature chaining to the previous one. Events
+    /// committed before this call are outside the signed stream.
+    pub fn with_audit_signer(mut self, signer: Arc<Signer>) -> Self {
+        self.audit_signer = signer;
+        self
+    }
+
+    /// AG-30: the per-commit chain link — Sign(prev event's signature ||
+    /// this event's audit hash), None when no signer is attached.
+    fn sign_audit_event(&self, prev_sig: &[u8; 64], audit: &[u8; 32]) -> KResult<Option<[u8; 64]>> {
+        let mut msg = Vec::with_capacity(96);
+        msg.extend_from_slice(prev_sig);
+        msg.extend_from_slice(audit);
+        self.audit_signer.sign(&msg)
     }
 
     /// Enable an in-memory LRU cache for heads and object versions.
@@ -1117,6 +1143,7 @@ impl Kernel {
             objects: self.objects.clone(),
             access_counts: self.access_counts.clone(),
             signing_key: self.signing_key,
+            audit_signer: self.audit_signer.clone(),
             tenants: self.tenants.clone(),
             field_crypto: self.field_crypto.clone(),
             encryption_policies: self.encryption_policies.clone(),
@@ -1630,6 +1657,7 @@ impl Kernel {
             actor,
             note.as_deref(),
         );
+        let audit_signature = self.sign_audit_event(&pipe.prev_sig, &audit)?;
         let ke = KnowledgeEvent {
             seq,
             koid: ko.koid,
@@ -1642,6 +1670,7 @@ impl Kernel {
             prev_audit_hash: pipe.audit,
             audit_hash: audit,
             signature,
+            audit_signature,
             note,
         };
         let mut batch = WriteBatch::new();
@@ -1705,6 +1734,7 @@ impl Kernel {
         self.repo.write_batch(&batch)?;
         pipe.seq = seq;
         pipe.audit = audit;
+        pipe.prev_sig = audit_signature.unwrap_or([0u8; 64]);
         self.broadcast(&ke);
         Ok((commit_ts, seq))
     }
@@ -2914,6 +2944,7 @@ impl Kernel {
         let mut events: Vec<KnowledgeEvent> = Vec::with_capacity(pending.len());
         let mut results = Vec::with_capacity(pending.len());
         let mut prev_audit = pipe.audit;
+        let mut prev_sig = pipe.prev_sig;
         let start_seq = pipe.seq;
         for (idx, (koid, cur_v, mut ko, kind, origin, actor, note, prev_rels)) in
             pending.into_iter().enumerate()
@@ -2941,6 +2972,7 @@ impl Kernel {
                 &actor,
                 note.as_deref(),
             );
+            let audit_signature = self.sign_audit_event(&prev_sig, &audit)?;
             let ke = KnowledgeEvent {
                 seq,
                 koid,
@@ -2953,6 +2985,7 @@ impl Kernel {
                 prev_audit_hash: prev_audit,
                 audit_hash: audit,
                 signature,
+                audit_signature,
                 note,
             };
             self.repo
@@ -2990,6 +3023,7 @@ impl Kernel {
             self.repo.put_event(&mut batch, seq, &ke);
             events.push(ke);
             prev_audit = audit;
+            prev_sig = audit_signature.unwrap_or([0u8; 64]);
             results.push(Remembered {
                 koid,
                 version: cur_v + 1,
@@ -3021,6 +3055,7 @@ impl Kernel {
         }
         pipe.seq = final_seq;
         pipe.audit = prev_audit;
+        pipe.prev_sig = prev_sig;
         for ke in events {
             self.broadcast(&ke);
         }
@@ -3319,6 +3354,7 @@ impl Kernel {
                     &ctx.subject.name,
                     note.as_deref(),
                 );
+                let audit_signature = self.sign_audit_event(&pipe.prev_sig, &audit)?;
                 let ke = KnowledgeEvent {
                     seq,
                     koid: *koid,
@@ -3331,6 +3367,7 @@ impl Kernel {
                     prev_audit_hash: pipe.audit,
                     audit_hash: audit,
                     signature,
+                    audit_signature,
                     note,
                 };
                 let mut batch = WriteBatch::new();
@@ -3350,6 +3387,7 @@ impl Kernel {
                 self.tenants.record_delete(head.metadata.tenant.as_deref());
                 pipe.seq = seq;
                 pipe.audit = audit;
+                pipe.prev_sig = audit_signature.unwrap_or([0u8; 64]);
                 self.broadcast(&ke);
                 Ok(Forgotten {
                     koid: *koid,
@@ -4859,6 +4897,7 @@ impl Kernel {
             "kernel",
             Some(note),
         );
+        let audit_signature = self.sign_audit_event(&pipe.prev_sig, &audit)?;
         let ke = KnowledgeEvent {
             seq,
             koid: KOID::ZERO,
@@ -4871,6 +4910,7 @@ impl Kernel {
             prev_audit_hash: pipe.audit,
             audit_hash: audit,
             signature: None,
+            audit_signature,
             note: Some(note.into()),
         };
         let mut batch = WriteBatch::new();
@@ -4879,6 +4919,7 @@ impl Kernel {
         self.repo.write_batch(&batch)?;
         pipe.seq = seq;
         pipe.audit = audit;
+        pipe.prev_sig = audit_signature.unwrap_or([0u8; 64]);
         self.broadcast(&ke);
         Ok(())
     }

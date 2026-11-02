@@ -77,6 +77,15 @@ impl Enc {
             }
         }
     }
+    pub fn opt_sig64(&mut self, s: Option<&[u8; 64]>) {
+        match s {
+            None => self.u8(0),
+            Some(v) => {
+                self.u8(1);
+                self.raw(v);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +185,16 @@ impl<'a> Dec<'a> {
         match self.u8()? {
             0 => Ok(None),
             1 => Ok(Some(self.hash256()?)),
+            t => Err(KError::Codec(format!("invalid option tag {}", t))),
+        }
+    }
+    pub fn opt_sig64(&mut self) -> KResult<Option<[u8; 64]>> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => {
+                let b = self.take(64, "signature")?;
+                Ok(Some(b.try_into().expect("64 bytes")))
+            }
             t => Err(KError::Codec(format!("invalid option tag {}", t))),
         }
     }
@@ -723,6 +742,7 @@ pub fn encode_ke(ke: &KnowledgeEvent) -> Vec<u8> {
     e.hash256(&ke.audit_hash);
     e.opt_hash256(ke.signature.as_ref());
     e.opt_str(ke.note.as_deref());
+    e.opt_sig64(ke.audit_signature.as_ref());
     e.buf
 }
 
@@ -741,6 +761,9 @@ pub fn decode_ke(buf: &[u8]) -> KResult<KnowledgeEvent> {
         audit_hash: d.hash256()?,
         signature: d.opt_hash256()?,
         note: d.opt_str()?,
+        // AG-30: appended after `note` — rows written before the field
+        // existed decode leniently as None (the P5-M20 pattern).
+        audit_signature: if d.remaining() > 0 { d.opt_sig64()? } else { None },
     };
     d.finish()?;
     Ok(ke)
@@ -1413,10 +1436,16 @@ mod tests {
             prev_audit_hash: [2u8; 32],
             audit_hash: [1u8; 32],
             signature: Some([4u8; 32]),
+            audit_signature: Some([5u8; 64]),
             note: Some("active -> verified".into()),
         };
         let bytes = encode_ke(&ke);
         assert_eq!(ke, decode_ke(&bytes).expect("decode"));
+        // A row written before the appended field (AG-30) decodes leniently.
+        let legacy = &bytes[..bytes.len() - 65];
+        let old = decode_ke(legacy).expect("legacy row decodes");
+        assert_eq!(old.audit_signature, None, "no signature in a legacy row");
+        assert_eq!(old.audit_hash, ke.audit_hash, "everything else survives");
     }
 
     #[test]

@@ -57,7 +57,18 @@ pub(crate) fn open_kernel_with_ring(
         a.fence(why);
     }
     if !enc.enabled {
-        return Ok((open(engine)?, admin, None));
+        let k = open(engine)?;
+        return Ok((
+            match crate::AUDIT_SIGNER.get() {
+                // AG-30: a signing server chains an Ed25519 signature onto
+                // every committed journal event (the evidence-pack head
+                // signature is computed from the same key at export time).
+                Some(signer) => k.with_audit_signer(std::sync::Arc::clone(signer)),
+                None => k,
+            },
+            admin,
+            None,
+        ));
     }
     let Some(pass) = enc.passphrase.as_deref() else {
         return Err(KError::Store(
@@ -84,6 +95,11 @@ pub(crate) fn open_kernel_with_ring(
         ring.store_key(),
     ));
     let kernel = open(store)?.with_field_encryption(crypto, envelope)?;
+    let kernel = match crate::AUDIT_SIGNER.get() {
+        // AG-30: per-commit journal signing on encrypted databases too.
+        Some(signer) => kernel.with_audit_signer(std::sync::Arc::clone(signer)),
+        None => kernel,
+    };
     for (type_name, fields) in &enc.policies {
         kernel.set_encryption_policy(type_name, EncryptionPolicy::new(fields.clone()));
     }
