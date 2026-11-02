@@ -372,8 +372,18 @@ unusable.
   file under a new passphrase — the master key itself never changes (no
   data key moves), the old passphrase stops opening the database, and
   the ring keeps its passphrase copy in sync so a later rotation still
-  wraps under the new one (kr005). Open: cloud KMS `install`
-  (AWS/Azure/GCP return unsupported), data-key (DEK) re-encryption.
+  wraps under the new one (kr005). DEK re-encryption landed 2026-11-02:
+  `aikoql-mcp key roll-deks [DB]` mints fresh tenant data keys and
+  re-encrypts every encrypted field through the journal (one committed
+  version per object — the journal hashes the ciphertext, so this is a
+  commit, not a rewrite); both generations persist before the walk
+  (crash-safe), readers fall back to the previous generation, a re-run
+  resumes without swapping generations again, and a later `key rotate`
+  rewraps the previous generation too so history stays readable (kr006).
+  shortcut: a roll can be re-run but not repeated — a second roll is a
+  no-op walk (returns 0); forcing a fresh roll needs a manual reset of
+  the DEK rows, which nothing offers yet. Open: cloud KMS `install`
+  (AWS/Azure/GCP return unsupported).
 
 **AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). — **DONE 2026-11-01** (rebuild buckets each head under its own `metadata.tenant`, tenant-less → "default"; remember/transact creates and both forget modes keep the live counters in sync; gate: 5 tests — tenant unit tests + `tenant_accounting.rs`). Shortcut closed 2026-11-02: `open_with` scans the heads on every non-standby open and rebuilds the counters from each head's `metadata.tenant` (RED `ag32_reopen_rebuilds_usage_from_store`). Remaining shortcut: the rebuild decodes every head on each open — switch to a persistent per-tenant watermark KV prefix when tenants number in the hundreds (the `tenant.rs` module doc names the same upgrade point). *Gate:* usage per tenant matches the oracle count.
 

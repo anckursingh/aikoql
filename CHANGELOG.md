@@ -53,6 +53,15 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   itself never changes, so no data key moves and every object stays
   readable; the old passphrase no longer opens the database, and a later
   `key rotate` wraps under the new passphrase.
+- **Data-key (DEK) re-encryption (AG-31)**: `aikoql-mcp key roll-deks [DB]`
+  mints a fresh data key per tenant and re-encrypts every encrypted field
+  through the journal (one committed version per object — the journal
+  hashes the ciphertext, so a rewrite is a commit, not an edit). Both
+  generations are persisted before the walk, a crash mid-walk resumes on
+  re-run without swapping generations again, readers fall back to the
+  previous generation, and a later `key rotate` rewraps the previous
+  generation too so historical versions stay readable. A second roll is a
+  no-op walk (returns 0) — a roll can be re-run but not repeated.
 - **Composite range indexes + CBO range histograms (AG-21)**: a range
   over the FIRST property of a composite index now serves as a
   byte-prefix scan over the ordered tuple keys (the exclusive-successor
