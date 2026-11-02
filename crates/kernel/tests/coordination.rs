@@ -150,15 +150,14 @@ fn ag41_renew_and_release() {
         .unwrap();
     assert_eq!(rel.koid, task);
     let ko = k.get(Subject::new("alice"), &task).unwrap();
-    assert!(ko.extensions.get("claim_holder").is_none());
+    assert!(!ko.extensions.contains_key("claim_holder"));
     // Released → claimable by anyone in the pool; unclaimed → release errors.
     assert!(k
         .claim_task(ClaimRequest::new(Subject::new("bob"), task, 5))
         .is_ok());
-    assert!(matches!(
-        k.release_task(ReleaseRequest::new(Subject::new("bob"), task)),
-        Ok(_)
-    ));
+    assert!(k
+        .release_task(ReleaseRequest::new(Subject::new("bob"), task))
+        .is_ok());
     assert!(matches!(
         k.release_task(ReleaseRequest::new(Subject::new("bob"), task)),
         Err(KError::InvalidObject(_))
@@ -214,7 +213,7 @@ fn ag41_handoff_transfers_the_claim_and_records_provenance() {
         Some(&Value::Text(task.to_hex()))
     );
     assert_eq!(hko.epistemic_status(), EpistemicStatus::Asserted);
-    assert!(hko.evidence().len() >= 1, "the handoff carries its evidence");
+    assert!(!hko.evidence().is_empty(), "the handoff carries its evidence");
     // A non-holder cannot hand the task off (evidence present so the
     // failure is the claim, not the evidence gate).
     let mut rogue = HandoffRequest::new(Subject::new("alice"), task, "alice".into());

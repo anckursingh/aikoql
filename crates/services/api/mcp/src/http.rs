@@ -594,6 +594,8 @@ fn unix_ms() -> i64 {
 }
 
 impl AuthResolver {
+    /// Test-only convenience (AG-52's `with_state` is the serve path).
+    #[cfg(test)]
     pub(crate) fn new(
         users: Vec<crate::config::AuthUser>,
         admin_password: Option<&str>,
