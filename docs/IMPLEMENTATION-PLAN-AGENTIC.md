@@ -494,11 +494,15 @@ MCP kwargs, the `{"results": ...}` unwrap, the `text_only` vs `text`
 fusion spellings); their re-exports are lazy (PEP 562) so
 `import aikoql` never drags the frameworks in. CI pins:
 llama-index-core 0.14.25 + openai-agents 0.24.0 (python-sdk job), ai
-7.0.159 (ts-sdk devDependency, peer >=7). Not yet: embedded-client
-gates for the two python adapters (the gates ride the MCP client; the
-embedded path shares the crewai/langgraph precedent), and
-asyncio.to_thread wrappers for the sync client I/O in the async
-session methods.
+7.0.159 (ts-sdk devDependency, peer >=7).
+
+Status (2026-11-02): the two "not yet" items landed. Embedded-client
+gates (tmp_aikoql) drive both python adapters over the positional
+client, and the async session methods offload their sync client I/O via
+`asyncio.to_thread` (the langgraph.py shape) — RED
+`test_async_session_io_runs_off_the_event_loop` pins every
+remember/enumerate_rows/forget call to a worker thread, so the Runner
+never blocks the loop on local I/O.
 
 **AG-61 (P0) Public agent-memory benchmark — measured, not claimed.**
 - *Status (2026-10-31): harnesses committed; the run stays open.*

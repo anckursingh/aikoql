@@ -38,6 +38,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Framework-adapter async offload (AG-60)**: the async OpenAI Agents
+  session methods now run their sync aikoql I/O on a worker thread via
+  `asyncio.to_thread` (the langgraph.py shape), and both python adapters
+  gained embedded-client gates over the positional client. Before, the
+  Runner's awaits executed the client round trips on the event-loop
+  thread.
 - **Tenant usage rebuilds on open (AG-32)**: opening a kernel scans the
   heads and rebuilds per-tenant counters from each head's own
   `metadata.tenant` (tenant-less heads count under `default`) — a
