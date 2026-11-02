@@ -1,7 +1,7 @@
 # R5a: the server needs get/create/update on the lease it contends for —
-# and nothing else. The pre-install TLS hook shares this ServiceAccount
-# and additionally writes the <fullname>-repl-tls Secret
-# (secrets: create/update).
+# and nothing else. The repl-tls Secret is rendered by helm, so no pod
+# writes Secrets — a kubectl-in-a-pod hook needs verbs (and images)
+# nothing else in the chart uses.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -19,10 +19,6 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "create", "update"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["create", "update"]
-    resourceNames: ["{{ include "aikoql.fullname" . }}-repl-tls"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
