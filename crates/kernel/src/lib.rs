@@ -157,13 +157,14 @@ pub use knowledge::scope::{Scope, ScopeResolver};
 pub use statistics::Statistics;
 pub use storage::store::{ConstraintCapabilities, MemoryEngine, StorageEngine, WriteBatch};
 pub use transaction::kernel::{
-    AssertionRequest, Clock, ComplianceReport, ConflictResolutionOutcome,
+    AssertionRequest, ClaimRequest, ClaimResult, Clock, ComplianceReport, ConflictResolutionOutcome,
     ConflictResolutionRequest, ContradictionRequest, ContradictionResult, ConversationMessage,
     DeriveRequest, EventFilter, Evolved, ExperienceRequest, Explanation, ForgetMode, Forgotten,
-    Fusion, IngestRequest, InvalidationRequest, InvalidationResult, Kernel, KnowledgeContext,
-    Lineage, ManualClock, MergeRequest, MergeStrategy, ObservationRequest, OfflineProof, Proof,
-    PropertyFilter, RememberRequest, Remembered, ScoredKO, SimilarityQuery, SplitRequest,
-    SplitResult, Subject, SubscriptionRecord, SummarizeConversationRequest, SupersedeRequest,
-    SupersedeResult, SystemClock, Transaction, TransactionOp, TxnMetrics, TxnMetricsSnapshot,
-    VerificationRequest, VerificationResult, VersionRecord,
+    Fusion, HandoffRequest, IngestRequest, InvalidationRequest, InvalidationResult, Kernel,
+    KnowledgeContext, Lineage, ManualClock, MergeRequest, MergeStrategy, ObservationRequest,
+    OfflineProof, Proof, PropertyFilter, ReleaseRequest, RememberRequest, Remembered, ScoredKO,
+    SimilarityQuery, SplitRequest, SplitResult, Subject, SubscriptionRecord,
+    SummarizeConversationRequest, SupersedeRequest, SupersedeResult, SystemClock, Transaction,
+    TransactionOp, TxnMetrics, TxnMetricsSnapshot, VerificationRequest, VerificationResult,
+    VersionRecord,
 };

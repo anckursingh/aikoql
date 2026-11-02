@@ -1157,24 +1157,38 @@ fn ag41_claim_tool_claims_once_and_releases() {
                 tags: vec![],
             },
         );
-        rr.properties.insert("task".into(), crate::json!("claim-me"));
+        rr.properties
+            .insert("task".into(), aikoql_kernel::Value::Text("claim-me".into()));
+        rr.security = Some(aikoql_kernel::SecurityDescriptor {
+            owner: "mcp-agent".into(),
+            acl: vec![aikoql_kernel::AclEntry {
+                principal: "other-agent".into(),
+                action: aikoql_kernel::Action::Write,
+                effect: aikoql_kernel::Effect::Allow,
+            }],
+            classification: None,
+        });
         k.remember(rr).unwrap().koid
     };
     let hex = task.to_hex();
-    let call = |args: &crate::J| {
-        crate::tool_registry::call_tool(&k, "claim_task", args, &db, &mut session, None, &txns)
+    let call = |args: &crate::J, session: &mut crate::session::McpSession| {
+        crate::tool_registry::call_tool(&k, "claim_task", args, &db, session, None, &txns)
     };
-    let ok = call(&crate::json!({"task": hex, "lease_seconds": 60})).unwrap();
+    let ok = call(&crate::json!({"task": hex, "lease_seconds": 60}), &mut session).unwrap();
     assert_eq!(ok["isError"], false);
     let data: crate::J =
         serde_json::from_str(ok["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(data["ok"], true);
-    assert_eq!(data["data"]["task"], hex);
-    assert_eq!(data["data"]["holder"], "mcp-agent");
-    assert!(data["data"]["claim_until"].is_u64());
-    assert_eq!(data["data"]["renewed"], false);
-    // A second claim loses: the shared envelope carries CLAIM_CONFLICT.
-    let conflict = call(&crate::json!({"task": hex})).unwrap();
+    assert_eq!(data["task"], hex);
+    assert_eq!(data["holder"], "mcp-agent");
+    assert!(data["claim_until"].is_u64());
+    assert_eq!(data["renewed"], false);
+    // A second claim by ANOTHER agent loses: the shared envelope carries
+    // CLAIM_CONFLICT. (A same-holder reclaim would renew instead.)
+    let conflict = call(
+        &crate::json!({"task": hex, "subject": "other-agent"}),
+        &mut session,
+    )
+    .unwrap();
     assert_eq!(conflict["isError"], true);
     let env: crate::J =
         serde_json::from_str(conflict["content"][0]["text"].as_str().unwrap()).unwrap();
@@ -1197,7 +1211,7 @@ fn ag41_claim_tool_claims_once_and_releases() {
     )
     .unwrap();
     assert_eq!(rel["isError"], false);
-    let again = call(&crate::json!({"task": hex})).unwrap();
+    let again = call(&crate::json!({"task": hex}), &mut session).unwrap();
     assert_eq!(again["isError"], false);
     drop(k);
     let _ = std::fs::remove_dir_all(&db);

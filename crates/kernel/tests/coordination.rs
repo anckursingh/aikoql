@@ -215,15 +215,14 @@ fn ag41_handoff_transfers_the_claim_and_records_provenance() {
     );
     assert_eq!(hko.epistemic_status(), EpistemicStatus::Asserted);
     assert!(hko.evidence().len() >= 1, "the handoff carries its evidence");
-    // A non-holder cannot hand the task off.
-    assert!(matches!(
-        k.handoff_task(HandoffRequest::new(Subject::new("alice"), task, "alice".into())),
-        Err(KError::ClaimConflict { .. })
-    ));
+    // A non-holder cannot hand the task off (evidence present so the
+    // failure is the claim, not the evidence gate).
+    let mut rogue = HandoffRequest::new(Subject::new("alice"), task, "alice".into());
+    rogue.evidence = vec![Evidence::new("rogue handoff", EvidenceMethod::AgentAnalysis)];
+    assert!(matches!(k.handoff_task(rogue), Err(KError::ClaimConflict { .. })));
     // An unclaimed task cannot be handed off either.
     let free = mk_task(&k, "free", &["alice", "bob"]);
-    assert!(matches!(
-        k.handoff_task(HandoffRequest::new(Subject::new("alice"), free, "bob".into())),
-        Err(KError::InvalidObject(_))
-    ));
+    let mut orphan = HandoffRequest::new(Subject::new("alice"), free, "bob".into());
+    orphan.evidence = vec![Evidence::new("orphan handoff", EvidenceMethod::AgentAnalysis)];
+    assert!(matches!(k.handoff_task(orphan), Err(KError::InvalidObject(_))));
 }

@@ -2467,6 +2467,207 @@ impl Kernel {
         scored.truncate(limit);
         Ok(scored)
     }
+
+    // ---- v0.3 AG-41: coordination primitives -------------------------------
+
+    /// Claim a task KO for `lease_secs` — the CAS under the pipe lock means
+    /// exactly one claimant wins; the wall-clock lease means an agent's
+    /// death frees its tasks. The holder re-claiming renews the lease.
+    pub fn claim_task(&self, req: ClaimRequest) -> KResult<ClaimResult> {
+        let mut pipe = self.pipe.lock().unwrap();
+        let head = self
+            .head_object(&req.task)?
+            .ok_or(KError::NotFound(req.task))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&req.context.subject, &head, Action::Write)?;
+        if head.invalidation().is_some() {
+            return Err(KError::InvalidObject(
+                "cannot claim an invalidated task".into(),
+            ));
+        }
+        let now = self.clock_now();
+        let (holder, until) = claim_of(&head);
+        let renewed = holder.as_deref() == Some(req.context.subject.name.as_str());
+        if !renewed && until > now {
+            return Err(KError::ClaimConflict {
+                koid: req.task,
+                holder: holder.unwrap_or_default(),
+                until,
+            });
+        }
+        let claim_until = now
+            .checked_add(
+                req.lease_secs
+                    .checked_mul(1000)
+                    .ok_or_else(|| KError::InvalidObject("lease overflows wall-clock millis".into()))?,
+            )
+            .ok_or_else(|| KError::InvalidObject("lease overflows wall-clock millis".into()))?;
+        let mut extensions = head.extensions.clone();
+        extensions.insert(
+            EXT_CLAIM_HOLDER.into(),
+            Value::Text(req.context.subject.name.clone()),
+        );
+        extensions.insert(EXT_CLAIM_UNTIL.into(), Value::Int(claim_until as i64));
+        let rr = RememberRequest {
+            context: req.context.clone(),
+            koid: Some(req.task),
+            expected_version: Some(head.version),
+            idempotency_key: None,
+            metadata: head.metadata.clone(),
+            properties: head.properties.clone(),
+            semantic: None,
+            relationships: head.relationships.clone(),
+            security: None,
+            extensions,
+            origin: Origin::Agent(req.context.subject.name.clone()),
+            note: Some(format!(
+                "claim by {} until {claim_until}",
+                req.context.subject.name
+            )),
+            referential_policy: ReferentialPolicy::default(),
+        };
+        let r = self.remember_locked(&mut pipe, &rr)?;
+        Ok(ClaimResult {
+            task: req.task,
+            version: r.version,
+            claim_until,
+            renewed,
+        })
+    }
+
+    /// Release a claim the caller holds. Only the holder releases a live
+    /// claim; an expired or foreign claim is rejected.
+    pub fn release_task(&self, req: ReleaseRequest) -> KResult<Remembered> {
+        let mut pipe = self.pipe.lock().unwrap();
+        let head = self
+            .head_object(&req.task)?
+            .ok_or(KError::NotFound(req.task))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&req.context.subject, &head, Action::Write)?;
+        let (holder, until) = claim_of(&head);
+        if holder.as_deref() != Some(req.context.subject.name.as_str()) {
+            return match holder {
+                Some(h) if until > self.clock_now() => Err(KError::ClaimConflict {
+                    koid: req.task,
+                    holder: h,
+                    until,
+                }),
+                _ => Err(KError::InvalidObject(format!(
+                    "task {} is not claimed",
+                    req.task.to_hex()
+                ))),
+            };
+        }
+        let mut extensions = head.extensions.clone();
+        // Null marks a deliberate removal — the carry-forward in
+        // remember_locked skips and strips it.
+        extensions.insert(EXT_CLAIM_HOLDER.into(), Value::Null);
+        extensions.insert(EXT_CLAIM_UNTIL.into(), Value::Null);
+        let rr = RememberRequest {
+            context: req.context.clone(),
+            koid: Some(req.task),
+            expected_version: Some(head.version),
+            idempotency_key: None,
+            metadata: head.metadata.clone(),
+            properties: head.properties.clone(),
+            semantic: None,
+            relationships: head.relationships.clone(),
+            security: None,
+            extensions,
+            origin: Origin::Agent(req.context.subject.name.clone()),
+            note: Some(format!("released by {}", req.context.subject.name)),
+            referential_policy: ReferentialPolicy::default(),
+        };
+        self.remember_locked(&mut pipe, &rr)
+    }
+
+    /// Hand the caller's claim to `to` (same lease end) and record an
+    /// `aikoql:handoff` KO with who/what/why provenance — the recipient
+    /// can read it and renew or release from there.
+    pub fn handoff_task(&self, req: HandoffRequest) -> KResult<Remembered> {
+        require_evidence(&req.evidence)?;
+        let mut pipe = self.pipe.lock().unwrap();
+        let head = self
+            .head_object(&req.task)?
+            .ok_or(KError::NotFound(req.task))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&req.context.subject, &head, Action::Write)?;
+        let (holder, until) = claim_of(&head);
+        if holder.as_deref() != Some(req.context.subject.name.as_str()) {
+            return match holder {
+                Some(h) if until > self.clock_now() => Err(KError::ClaimConflict {
+                    koid: req.task,
+                    holder: h,
+                    until,
+                }),
+                _ => Err(KError::InvalidObject(format!(
+                    "task {} is not claimed by you",
+                    req.task.to_hex()
+                ))),
+            };
+        }
+        // Transfer: the claim keys move to the recipient, lease end kept.
+        let mut extensions = head.extensions.clone();
+        extensions.insert(EXT_CLAIM_HOLDER.into(), Value::Text(req.to.clone()));
+        let rr = RememberRequest {
+            context: req.context.clone(),
+            koid: Some(req.task),
+            expected_version: Some(head.version),
+            idempotency_key: None,
+            metadata: head.metadata.clone(),
+            properties: head.properties.clone(),
+            semantic: None,
+            relationships: head.relationships.clone(),
+            security: None,
+            extensions,
+            origin: Origin::Agent(req.context.subject.name.clone()),
+            note: Some(format!("handoff to {}", req.to)),
+            referential_policy: ReferentialPolicy::default(),
+        };
+        self.remember_locked(&mut pipe, &rr)?;
+        // The handoff record: who handed what to whom, with evidence.
+        let mut props = PropertyMap::new();
+        props.insert("task".into(), Value::Text(req.task.to_hex()));
+        props.insert("from".into(), Value::Text(req.context.subject.name.clone()));
+        props.insert("to".into(), Value::Text(req.to.clone()));
+        let mut h_ext = ExtensionMap::new();
+        append_evidence(&mut h_ext, &req.evidence);
+        let hr = RememberRequest {
+            context: req.context.clone(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "aikoql:handoff".into(),
+                tenant: req.context.tenant.clone(),
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: Some(SecurityDescriptor {
+                owner: req.context.subject.name.clone(),
+                acl: vec![AclEntry {
+                    principal: req.to,
+                    action: Action::Read,
+                    effect: Effect::Allow,
+                }],
+                classification: None,
+            }),
+            extensions: h_ext,
+            origin: Origin::Agent(req.context.subject.name.clone()),
+            note: req.note,
+            referential_policy: ReferentialPolicy::default(),
+        };
+        self.remember_locked(&mut pipe, &hr)
+    }
 }
 
 /// AG-14: the outcome class weight for experience ranking — a rank boost
@@ -2491,6 +2692,29 @@ fn outcome_weight(outcome: Option<&Value>) -> f32 {
     } else {
         0.8
     }
+}
+
+// AG-41: the claim extension keys (kernel-managed — see
+// KERNEL_MANAGED_EXTENSIONS).
+pub const EXT_CLAIM_HOLDER: &str = "claim_holder";
+pub const EXT_CLAIM_UNTIL: &str = "claim_until";
+
+/// The current claim on a KO: (holder, wall-clock claim-until millis);
+/// (None, 0) when unclaimed.
+fn claim_of(ko: &KnowledgeObject) -> (Option<String>, u64) {
+    let holder = ko.extensions.get(EXT_CLAIM_HOLDER).and_then(|v| match v {
+        Value::Text(t) => Some(t.clone()),
+        _ => None,
+    });
+    let until = ko
+        .extensions
+        .get(EXT_CLAIM_UNTIL)
+        .and_then(|v| match v {
+            Value::Int(i) if *i > 0 => Some(*i as u64),
+            _ => None,
+        })
+        .unwrap_or(0);
+    (holder, until)
 }
 
 /// A captured agent execution outcome (`aikoql:experience`), for reuse
@@ -2553,6 +2777,74 @@ pub struct ExperienceRequest {
 pub struct ExperienceRecord {
     pub experience: Remembered,
     pub lesson: Option<Remembered>,
+}
+
+// ---- AG-41 coordination request/result types ---------------------------------
+
+/// AG-41: claim a task KO for the caller. The holder is the calling
+/// subject; re-claiming renews the lease.
+pub struct ClaimRequest {
+    pub context: KnowledgeContext,
+    pub task: KOID,
+    pub lease_secs: u64,
+}
+
+impl ClaimRequest {
+    pub fn new(context: impl Into<KnowledgeContext>, task: KOID, lease_secs: u64) -> Self {
+        ClaimRequest {
+            context: context.into(),
+            task,
+            lease_secs,
+        }
+    }
+}
+
+/// AG-41: the claim as it now stands.
+#[derive(Debug)]
+pub struct ClaimResult {
+    pub task: KOID,
+    pub version: u64,
+    /// Wall-clock millis when the lease ends.
+    pub claim_until: u64,
+    /// True when the same holder re-claimed (lease extended from now).
+    pub renewed: bool,
+}
+
+/// AG-41: release a claim the caller holds.
+pub struct ReleaseRequest {
+    pub context: KnowledgeContext,
+    pub task: KOID,
+}
+
+impl ReleaseRequest {
+    pub fn new(context: impl Into<KnowledgeContext>, task: KOID) -> Self {
+        ReleaseRequest {
+            context: context.into(),
+            task,
+        }
+    }
+}
+
+/// AG-41: hand the caller's claim to `to` (same lease end) and record an
+/// `aikoql:handoff` KO.
+pub struct HandoffRequest {
+    pub context: KnowledgeContext,
+    pub task: KOID,
+    pub to: String,
+    pub evidence: Vec<Evidence>,
+    pub note: Option<String>,
+}
+
+impl HandoffRequest {
+    pub fn new(context: impl Into<KnowledgeContext>, task: KOID, to: String) -> Self {
+        HandoffRequest {
+            context: context.into(),
+            task,
+            to,
+            evidence: Vec::new(),
+            note: None,
+        }
+    }
 }
 
 impl ExperienceRequest {
