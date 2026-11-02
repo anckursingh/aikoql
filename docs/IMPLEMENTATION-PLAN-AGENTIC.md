@@ -355,7 +355,7 @@ unusable.
   hanging shutdown. Open: cloud KMS `install` (AWS/Azure/GCP return
   unsupported), passphrase change, data-key (DEK) re-encryption.
 
-**AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). — **DONE 2026-11-01** (rebuild buckets each head under its own `metadata.tenant`, tenant-less → "default"; remember/transact creates and both forget modes keep the live counters in sync; gate: 5 tests — tenant unit tests + `tenant_accounting.rs`). Shortcut: no startup head scan wires `rebuild` yet, so counters restart empty and re-learn as writes land. *Gate:* usage per tenant matches the oracle count.
+**AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). — **DONE 2026-11-01** (rebuild buckets each head under its own `metadata.tenant`, tenant-less → "default"; remember/transact creates and both forget modes keep the live counters in sync; gate: 5 tests — tenant unit tests + `tenant_accounting.rs`). Shortcut closed 2026-11-02: `open_with` scans the heads on every non-standby open and rebuilds the counters from each head's `metadata.tenant` (RED `ag32_reopen_rebuilds_usage_from_store`). Remaining shortcut: the rebuild decodes every head on each open — switch to a persistent per-tenant watermark KV prefix when tenants number in the hundreds (the `tenant.rs` module doc names the same upgrade point). *Gate:* usage per tenant matches the oracle count.
 
 **AG-33 (P1) Prompt-injection provenance.** Every KO carries a trust class
 of its source (`user`, `tool_output`, `web`, `document`, `system`);

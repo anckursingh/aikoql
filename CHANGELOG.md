@@ -38,6 +38,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Tenant usage rebuilds on open (AG-32)**: opening a kernel scans the
+  heads and rebuilds per-tenant counters from each head's own
+  `metadata.tenant` (tenant-less heads count under `default`) — a
+  restart no longer empties the counters to re-learn as writes land.
+  Before, `rebuild` existed but nothing wired it at startup.
 - **Error ergonomics (AG-05)**: every tool error now carries `hint` (what went wrong) and `next` (what to do) beside `code`/`message`/`retryable`/`suggestion`; the txn tools route through the shared envelope instead of a hardcoded INTERNAL. A hygiene gate drives every tool with empty args and asserts no isError result is a bare string.
 - **Procedural memory (AG-14)**: `record_experience` materializes a carried `lesson` as a first-class `aikoql:lesson` KO beside the experience and returns both (`lesson_koid` in the tool response); `match_experiences` ranks outcome-weighted — successful procedures first, failures last, unclassified between.
 - **Coordination primitives (AG-41)**: `claim_task` / `release_task` / `handoff_task` (kernel ops + MCP tools) — claims are a pipe-locked CAS with kernel-managed `claim_holder`/`claim_until` extensions, so a task is claimed exactly once and the loser gets CLAIM_CONFLICT; wall-clock leases expire on agent death, the holder re-claiming renews, and handoff transfers the claim and records an evidence-backed `aikoql:handoff` KO.
