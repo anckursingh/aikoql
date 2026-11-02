@@ -158,6 +158,22 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Fixed
 
+- **The kind failover gate's first real run exposed six bugs (AG-51)**:
+  the pre-install TLS hook Job ran `openssl` + `kubectl` in
+  alpine/openssl (no kubectl) — helm now renders the `repl-tls` Secret
+  itself (lookup-stable CA) and the Role is lease-only; the chart arms
+  `adminPasswordKey` at render (the fail-closed surface has no
+  credentials without it); the non-loopback metrics+MCP bind refused
+  plaintext — the pods now serve it over TLS with HTTPS probes; every
+  post-initialize MCP call needs the `Mcp-Session-Id` header; a
+  StatefulSet resurrects a killed pod into its own pre-restart lease
+  before the standby's staleness window — the gate orphans the
+  StatefulSet before the kill; and MCP sessions are process-local, so
+  the gate re-initializes both sessions against the promoted leader
+  (the grants and the writes are what survive). The gate now PASSes:
+  the standby wins the Lease, both pre-failover writes serve, and a
+  pre-kill OAuth sign-in still authorizes the new leader.
+
 - **HTTP initialize no longer flips the stdio-only sampling flag
   (AG-12b)**: the flag is stdio process state (the sink is the stdio
   stdout); an HTTP session advertising `sampling` now deterministically

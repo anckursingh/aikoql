@@ -859,11 +859,43 @@ unless `AIKOQL_TEST_K8S_API` / `_TOKEN` / `_CA` are set):
 outside a pod (default: the pod mount). Green on kube-apiserver v1.37.0
 (`ENVTEST_K8S_VERSION` pins it). CI: `k8s-lease` gates (setup-envtest
 pinned to v0.25.2). The real-cluster pod path (service-account
-projection, RBAC scoped to `leases`) is now covered by the AG-51 kind
+projection, RBAC scoped to `leases`) is certified by the AG-51 kind
 failover gate (`scripts/kind-failover-e2e.sh`, nightly): the Helm chart
 runs the binary in a pod with the chart's lease-only Role, the leader
 pod is killed, and the standby wins the Lease and serves. RED:
 `k8s-lease-e2e`.
+
+First real run of that gate: 2026-11-03, kind v0.33.0, kindest/node
+v1.37.0, chart + `aikoql:local` image built by the script. Six
+first-run bugs, each pinned by a law in `tests/helm_chart.rs` before
+its fix:
+
+1. The pre-install TLS hook Job ran `openssl` + `kubectl` in
+   alpine/openssl (no kubectl) — the chart now renders the `repl-tls`
+   Secret itself (`genCA` + `genSignedCert` with pod-DNS SANs,
+   `lookup` keeps the CA stable across upgrades), and the Role grants
+   only the lease verbs.
+2. `AIKOQL_ALLOW_REMOTE_HTTP=1` without HTTP credentials fails closed —
+   the chart demands `auth.adminPasswordKey` at render, and the gate
+   sets it.
+3. A non-loopback metrics+MCP bind serves logins and session tokens —
+   the pods arm `--tls-cert/--tls-key` from the mounted secret, the
+   probes probe HTTPS, and the gate curls `https://`.
+4. Every post-initialize MCP call needs the `Mcp-Session-Id` header
+   (pinned by the claude.ai tunnel run) — the gate's `mcp_call` sends
+   it.
+5. A StatefulSet resurrects a killed pod into its own pre-restart lease
+   (same `--ha-node`, `begin` resumes the lease it holds) before the
+   standby's staleness window — the gate orphans the StatefulSet before
+   the kill so the leader stays dead.
+6. MCP sessions are process-local: the promoted leader 404s the
+   pre-kill session ids. What survives is the grant and the writes —
+   the gate re-initializes both sessions against the new leader.
+
+Final line of the first green run:
+`PASS: failover served both writes; the OAuth sign-in survived` — the
+standby wins the Lease, both pre-failover writes serve, and a pre-kill
+OAuth sign-in still authorizes the new leader.
 
 ## R1 known limits (shortcut comments in `db.rs`)
 
