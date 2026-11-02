@@ -176,4 +176,11 @@ fn ag51_surface_is_tls_and_the_gate_speaks_https() {
         script.contains("cascade=orphan"),
         "the gate must orphan the StatefulSet before the kill: {script}"
     );
+    // MCP sessions are process-local — the promoted leader knows nothing
+    // of the pre-kill session ids. What survives is the grant (the token)
+    // and the writes; the gate must re-initialize both sessions.
+    assert!(
+        script.contains("SID2=\"$(session \"$TOKEN\")\""),
+        "the gate must re-initialize the static-token session after failover: {script}"
+    );
 }
