@@ -367,8 +367,13 @@ unusable.
   generation-safe rotation), `aikoql-mcp key rotate`, the job rotates;
   kr001–kr004 + the job test. Found on the way: the derived store key
   (any rotation = an unreadable store), the DEK first-use race, the job's
-  hanging shutdown. Open: cloud KMS `install` (AWS/Azure/GCP return
-  unsupported), passphrase change, data-key (DEK) re-encryption.
+  hanging shutdown. Passphrase change landed 2026-11-02:
+  `aikoql-mcp key change-passphrase NEW [DB]` re-wraps the master key
+  file under a new passphrase — the master key itself never changes (no
+  data key moves), the old passphrase stops opening the database, and
+  the ring keeps its passphrase copy in sync so a later rotation still
+  wraps under the new one (kr005). Open: cloud KMS `install`
+  (AWS/Azure/GCP return unsupported), data-key (DEK) re-encryption.
 
 **AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). — **DONE 2026-11-01** (rebuild buckets each head under its own `metadata.tenant`, tenant-less → "default"; remember/transact creates and both forget modes keep the live counters in sync; gate: 5 tests — tenant unit tests + `tenant_accounting.rs`). Shortcut closed 2026-11-02: `open_with` scans the heads on every non-standby open and rebuilds the counters from each head's `metadata.tenant` (RED `ag32_reopen_rebuilds_usage_from_store`). Remaining shortcut: the rebuild decodes every head on each open — switch to a persistent per-tenant watermark KV prefix when tenants number in the hundreds (the `tenant.rs` module doc names the same upgrade point). *Gate:* usage per tenant matches the oracle count.
 

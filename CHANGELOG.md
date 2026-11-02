@@ -48,6 +48,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   CI's e2e-dogfood job) replays the chain with Python `cryptography` and
   rejects tampering. Events committed before the signer is attached (the
   fresh-open catalog bootstrap) stay outside the signed stream.
+- **Passphrase change (AG-31)**: `aikoql-mcp key change-passphrase NEW [DB]`
+  re-wraps the master key file under a new passphrase — the master key
+  itself never changes, so no data key moves and every object stays
+  readable; the old passphrase no longer opens the database, and a later
+  `key rotate` wraps under the new passphrase.
 - **Composite range indexes + CBO range histograms (AG-21)**: a range
   over the FIRST property of a composite index now serves as a
   byte-prefix scan over the ordered tuple keys (the exclusive-successor
