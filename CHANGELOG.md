@@ -38,6 +38,15 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Composite range indexes + CBO range histograms (AG-21)**: a range
+  over the FIRST property of a composite index now serves as a
+  byte-prefix scan over the ordered tuple keys (the exclusive-successor
+  upper bound keeps hi's suffix rows included), and `analyze` builds a
+  per-property range histogram (quantile buckets over the index's key
+  order) so the optimizer prices range filters and picks range indexes
+  from an estimate instead of materializing every candidate at plan
+  time — the exact-count probe remains the fallback when a property has
+  no histogram.
 - **Helm lint + render on every PR (AG-51)**: a new `ci.yml` job runs
   `helm lint deploy/helm/aikoql` and `helm template aikoql
   deploy/helm/aikoql` per push, so a broken chart template fails at PR

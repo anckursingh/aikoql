@@ -286,8 +286,23 @@ and a `lesson` KO type distilled by AG-12 sampling.
   0.1% 0.143 ms, range 0.1% 0.151 ms (was 133.6), eq under 100 live
   writes 0.254 ms (was a full scan — one write after analyze switched
   indexes off), build 32.85 → 0.26 s. Fixed on the way: Int/Float Eq
-  through an index missed rows; scan_from never seeked. Open: composite
-  range (prefix ranges on a tuple), a CBO histogram for ranges.
+  through an index missed rows; scan_from never seeked.
+- *Status (2026-11-02): the two open items landed (AG-21d).* **Composite
+  range**: a range over the FIRST property of a composite index serves
+  as a byte-prefix scan — the hi bound is the exclusive successor of its
+  key, so hi's own suffix rows stay included (RED `idx6_003` +
+  `cbo_default_010`; `covers_range` keeps Eq on the full tuple). **CBO
+  range histogram**: `analyze` builds a per-property quantile histogram
+  (64 buckets over the index's ordered keys, per-bucket row counts) for
+  orderable values (Num/Text/Bool) with ≥ 64 distinct; `range_fraction`
+  estimates a range's match fraction, the range index decision prices
+  from it instead of materializing candidates (the exact-count probe is
+  the fallback — never worse), and a range Filter without an Eq conjunct
+  prices its rows from it (RED `cbo_a07` +
+  `cbo_range_filter_prices_from_the_histogram`). Shortcut: histograms
+  rebuild at analyze (an explicit DBA op) — no incremental
+  maintenance, so the estimate ages with the watermark like every
+  other statistic.
 - *Problem:* 1M structured_filter 22.9 s (brute force + sort).
 - *Design:* property secondary indexes (`index_create` exists) used by the
   planner (the CBO in `runtime/src/cbo.rs` estimates only the first Eq —
