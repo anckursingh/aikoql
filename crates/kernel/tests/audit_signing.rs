@@ -131,3 +131,41 @@ fn au30_002_an_unsigned_kernel_commits_unsigned_events() {
         "no signer, no per-commit signatures"
     );
 }
+
+// --- au30_003 — a signer plumbed into open signs the bootstrap -------------------
+
+#[test]
+fn au30_003_open_signed_signs_the_catalog_bootstrap() {
+    let signer = Arc::new(Signer::new());
+    signer.set_key(SigningKey::generate().unwrap());
+    let public = signer.public_key().unwrap();
+    let k = Kernel::open_signed(
+        Arc::new(MemoryEngine::new()),
+        Arc::new(ManualClock::new(10_000)),
+        0xC0FFEE,
+        signer,
+    )
+    .unwrap();
+    let events = k.journal().unwrap();
+    assert_eq!(events[0].seq, 1, "the bootstrap is the first journal event");
+    assert!(
+        events.iter().all(|ke| ke.audit_signature.is_some()),
+        "every event is signed, the bootstrap included"
+    );
+    let (signed, tail_seq, tail_hash) = verify_chain(&k, &public);
+    assert_eq!(signed, events.len(), "the signed stream covers the whole journal");
+    let (seq, audit) = k.journal_head().unwrap();
+    assert_eq!(tail_seq, seq, "the signed tail is the journal head");
+    assert_eq!(tail_hash, audit, "the chain ends in the signed audit chain");
+
+    // the chain's first link is the bootstrap itself, anchored at zeros
+    let first = &events[0];
+    let sig = first.audit_signature.unwrap();
+    let mut msg = Vec::with_capacity(96);
+    msg.extend_from_slice(&[0u8; 64]);
+    msg.extend_from_slice(&first.audit_hash);
+    assert!(
+        SigningKey::verify(&public, &msg, &sig),
+        "seq 1 signs from the zero anchor"
+    );
+}
