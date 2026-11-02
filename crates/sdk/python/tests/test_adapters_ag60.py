@@ -12,6 +12,10 @@ adapter instance on the same server sees the stored history.
   each turn. The model is an offline stand-in (Model subclass) that
   records what it saw, so the gate can assert the session feed.
 
+Embedded-client gates (tmp_aikoql) cover the same flows over the
+positional client; the thread gate asserts the async session methods
+offload their sync client I/O via asyncio.to_thread.
+
 Requires: aikoql-mcp binary built (cargo build -p aikoql-mcp).
 Run: pytest tests/test_adapters_ag60.py -v
 """
@@ -124,3 +128,75 @@ def test_openai_agents_session_feeds_the_runner(mcp_server):
     assert items[0]["role"] == "user"
     assert items[0]["content"] == "remember me"
     assert items[1]["type"] == "message"
+
+
+def test_async_session_io_runs_off_the_event_loop(tmp_aikoql, monkeypatch):
+    """RED: the async Session methods must push their sync client I/O
+    through asyncio.to_thread — not run it on the event-loop thread."""
+    import threading
+
+    from aikoql.adapters import openai_agents as oa
+
+    io_calls = []
+    for name in ("remember", "enumerate_rows", "forget"):
+        orig = getattr(oa, name)
+
+        def spy(*args, _orig=orig, _name=name, **kwargs):
+            io_calls.append((_name, threading.get_ident()))
+            return _orig(*args, **kwargs)
+
+        monkeypatch.setattr(oa, name, spy)
+
+    loop_thread = {}
+
+    async def run() -> None:
+        loop_thread["id"] = threading.get_ident()
+        session = AikoqlSession(session_id="thread-gate", client=tmp_aikoql)
+        await session.add_items([{"role": "user", "content": "hi"}])
+        items = await session.get_items()
+        assert items == [{"role": "user", "content": "hi"}]
+
+    asyncio.run(run())
+
+    assert io_calls, "no client I/O observed"
+    assert all(tid != loop_thread["id"] for _, tid in io_calls), io_calls
+
+
+def test_llamaindex_memory_embedded_client(tmp_aikoql):
+    from llama_index.core.base.llms.types import ChatMessage
+    from llama_index.core.chat_engine import SimpleChatEngine
+    from llama_index.core.llms.mock import MockLLM
+
+    subject = "ag60-embedded-llamaindex"
+    memory = AikoqlMemory(client=tmp_aikoql, subject=subject)
+    engine = SimpleChatEngine.from_defaults(llm=MockLLM(max_tokens=16), memory=memory)
+    engine.chat("embedded hello")
+
+    # durability: a fresh memory on the same embedded store restores history
+    again = AikoqlMemory(client=tmp_aikoql, subject=subject)
+    hist = again.get_all()
+    assert [m.role.value for m in hist] == ["user", "assistant"]
+    assert hist[0].content == "embedded hello"
+    assert isinstance(hist[0], ChatMessage)
+
+    again.reset()
+    assert again.get_all() == []
+
+
+def test_openai_agents_session_embedded_client(tmp_aikoql):
+    model = _EchoModel()
+    session = AikoqlSession(session_id="ag60-embedded", client=tmp_aikoql)
+    agent = Agent(name="echo", model=model)
+
+    async def run() -> None:
+        await Runner.run(agent, "remember me", session=session)
+        await Runner.run(agent, "what did I say?", session=session)
+
+    asyncio.run(run())
+
+    assert any("remember me" in str(item) for item in model.inputs[-1])
+    fresh = AikoqlSession(session_id="ag60-embedded", client=tmp_aikoql)
+    items = asyncio.run(fresh.get_items())
+    assert len(items) == 4, items
+    assert items[0]["role"] == "user"
+    assert items[0]["content"] == "remember me"
