@@ -516,4 +516,52 @@ mod tests {
         super::rotate_keys(&dir, &enc_new).unwrap();
         read_all(&dir, &enc_new, &want);
     }
+
+    /// AG-31 — kr006: a DEK roll re-encrypts every encrypted field under
+    /// fresh data keys through the journal (one committed version per
+    /// object), keeps every object readable, is idempotent, and the
+    /// previous generation survives a later KEK rotation.
+    #[test]
+    fn kr006_dek_roll_reencrypts_every_field_and_keeps_history_readable() {
+        use aikoql_kernel::Subject;
+        let dir = scratch("kr006");
+        let enc = secret_enc(&dir);
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(enc.key_path.clone().into()));
+        let (want, old_dek) = {
+            let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
+            let old_dek = k.field_envelope().unwrap().tenant_key("t1").unwrap();
+            (
+                vec![
+                    put_secret(&k, Some("t1"), "alpha"),
+                    put_secret(&k, None, "beta"),
+                ],
+                old_dek,
+            )
+        };
+
+        assert_eq!(super::roll_deks(&dir, &enc).unwrap(), 2, "one version per object");
+
+        {
+            let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
+            let alice = Subject::new("alice");
+            for (koid, _, pin) in &want {
+                let ko = k.get(alice.clone(), koid).unwrap();
+                assert_eq!(ko.properties.get("pin"), Some(&aikoql_kernel::Value::Text(pin.clone())));
+                assert_eq!(ko.version, 2, "the roll committed one new version");
+            }
+            let e = k.field_envelope().unwrap();
+            assert_ne!(e.tenant_key("t1").unwrap(), old_dek, "fresh DEK in place");
+            assert_eq!(e.prev_key("t1"), Some(old_dek), "the old generation stays decryptable");
+            // Idempotent: a second roll finds nothing to migrate.
+            assert_eq!(super::roll_deks(&dir, &enc).unwrap(), 0);
+        }
+
+        // A KEK rotation after the roll rewraps the previous generation too
+        // (or historical versions are unreadable under the new KEK).
+        super::rotate_keys(&dir, &enc).unwrap();
+        {
+            let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
+            assert_eq!(k.field_envelope().unwrap().prev_key("t1"), Some(old_dek));
+        }
+    }
 }

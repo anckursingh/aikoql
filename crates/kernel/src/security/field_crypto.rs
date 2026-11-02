@@ -524,4 +524,36 @@ mod tests {
             assert_eq!(&restored, v, "round-trip failed for {:?}", v);
         }
     }
+
+    /// AG-31 — the DEK roll walk: `reencrypt_fields` moves ciphertext from
+    /// the previous generation to the current one (idempotent — a re-run
+    /// migrates nothing), and `decrypt_fields` falls back to the previous
+    /// generation for not-yet-migrated fields.
+    #[test]
+    fn dek_roll_reencrypts_and_decrypt_falls_back() {
+        let (fc, policy) = setup();
+        let mut props = BTreeMap::new();
+        props.insert("salary".into(), Value::Text("s3cret".into()));
+        fc.encrypt_fields("acme", "t", &mut props, &policy).unwrap();
+        let gen0 = props.clone();
+
+        fc.envelope().roll_deks().unwrap();
+
+        // Not-yet-migrated fields still decrypt (previous-generation fallback).
+        let mut read = gen0.clone();
+        assert_eq!(fc.decrypt_fields("acme", "t", &mut read, &policy).unwrap(), 1);
+        assert_eq!(read.get("salary"), Some(&Value::Text("s3cret".into())));
+
+        // The walk migrates them: one field moved, under new ciphertext,
+        // and a second run is a no-op.
+        let mut walk = gen0.clone();
+        assert_eq!(fc.reencrypt_fields("acme", "t", &mut walk, &policy).unwrap(), 1);
+        assert_ne!(walk.get("salary"), gen0.get("salary"), "new ciphertext");
+        assert_eq!(fc.reencrypt_fields("acme", "t", &mut walk, &policy).unwrap(), 0);
+
+        // A migrated field decrypts under the current generation.
+        let mut read2 = walk.clone();
+        assert_eq!(fc.decrypt_fields("acme", "t", &mut read2, &policy).unwrap(), 1);
+        assert_eq!(read2.get("salary"), Some(&Value::Text("s3cret".into())));
+    }
 }

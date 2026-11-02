@@ -389,11 +389,44 @@ mod tests {
         assert_eq!(env.wrapped_deks()[0].kek_id, 1);
     }
 
+    /// AG-31 — a DEK roll swaps generations in place: new encrypts use the
+    /// fresh key, the previous generation stays decryptable, and the
+    /// previous set rewraps under a new KEK for a later KEK rotation.
+    #[test]
+    fn envelope_dek_roll_swaps_generations() {
+        let kms = MemKms::new();
+        let provider = Aes256Gcm::new();
+        let crypto = std::sync::Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+
+        let env = Envelope::init(&kms, "pw", crypto.clone()).unwrap();
+        let old = env.tenant_key("a").unwrap();
+        let old_wraps = env.wrapped_deks();
+
+        let new_wraps = env.roll_deks().unwrap();
+        assert_eq!(env.wrapped_deks().len(), 1);
+        assert_eq!(
+            env.prev_key("a"),
+            Some(old),
+            "the old generation stays decryptable"
+        );
+        let new = env.tenant_key("a").unwrap();
+        assert_ne!(new, old, "new encrypts use a fresh DEK");
+        assert_eq!(new_wraps[0].kek_id, old_wraps[0].kek_id, "the KEK is unchanged");
+
+        // The previous set rewraps under a new KEK (a later KEK rotation):
+        // a fresh envelope under the rotated KMS loads it, and the old
+        // KEK's wraps no longer do.
+        let prev_rewrapped = env.rewrapped_prev(&kms.rotate("pw", &provider).unwrap()).unwrap();
+        let env2 = Envelope::init(&kms, "pw", crypto).unwrap();
+        let loaded_prev = env2.load_prev_dek(&prev_rewrapped[0]).unwrap();
+        assert_eq!(loaded_prev, old);
+        assert!(env2.load_prev_dek(&old_wraps[0]).is_err(), "old KEK retired");
+    }
+
     /// AG-31 — the create race: concurrent first calls for one tenant must
     /// agree on ONE DEK (two minted keys = ciphertext under a lost key).
     #[test]
-    fn envelope_concurrent_first_use_mints_one_dek() {
-        let kms = MemKms::new();
+    fn envelope_concurrent_first_use_mints_one_dek() {        let kms = MemKms::new();
         let crypto = std::sync::Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
         let env = std::sync::Arc::new(Envelope::init(&kms, "pw", crypto).unwrap());
         let keys: Vec<[u8; 32]> = (0..16)
