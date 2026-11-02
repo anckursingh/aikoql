@@ -523,6 +523,18 @@ completeness, time-travel correctness. *Gate:* reproducible harness in
 **AG-62 (P2) Hosted trial path.** One-command public trial (the verified
 Cloudflare-tunnel recipe, AGENTIC-QUICKSTART) plus a container template
 for common PaaS — the prerequisite for any hosted offering.
+- *Status (2026-11-02): done.* `scripts/public-trial.sh <db>` is the
+  AGENTIC-QUICKSTART tunnel recipe in one command: cloudflared quick
+  tunnel to the loopback serve surface, `AIKOQL_PUBLIC_URL` = the tunnel
+  URL, a generated admin password when none is set, connector URL printed,
+  both processes torn down on exit (gate: `scripts/e2e-public-trial.js`,
+  shimmed cloudflared/aikoql-mcp asserting the wiring — the real-tunnel
+  path was claude.ai-verified in the OAuth work). The PaaS template is
+  `deploy/docker-compose.yml`: the existing image plus a cloudflared
+  sidecar sharing its network namespace (`network_mode: service:` — the
+  loopback-only HTTP surface stays reachable without TLS keys, and the
+  tunnel front-ends HTTPS so logins never cross in plaintext); the file
+  passes `docker compose config -q` (Docker Desktop).
 
 ## 3. Sequencing
 
