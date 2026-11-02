@@ -69,6 +69,7 @@ spec:
             # the non-loopback metrics+MCP bind is fail-closed without this
             - name: AIKOQL_ALLOW_REMOTE_HTTP
               value: "1"
+            {{- $_ := required "auth.adminPasswordKey is required — the fail-closed surface has no credentials without it" .Values.auth.adminPasswordKey }}
             {{- if .Values.auth.adminPasswordKey }}
             - name: AIKOQL_ADMIN_PASSWORD
               valueFrom:

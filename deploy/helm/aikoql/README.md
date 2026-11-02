@@ -11,7 +11,7 @@ Streamable HTTP on the metrics port (`/mcp`, bearer = the auth token;
 
 ```sh
 kubectl create secret generic aikoql-auth --from-literal=token='<token>' \
-  --from-literal=admin-password='<admin password>'   # optional: arms OAuth
+  --from-literal=admin-password='<admin password>'   # required: arms OAuth (the server fails closed without it)
 helm install aikoql deploy/helm/aikoql
 ```
 

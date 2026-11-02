@@ -30,7 +30,8 @@ kubectl -n "$NS" delete secret aikoql-auth --ignore-not-found >/dev/null
 kubectl -n "$NS" create secret generic aikoql-auth \
   --from-literal=token="$TOKEN" --from-literal=admin-password="$ADMIN_PW"
 helm upgrade --install "$RELEASE" "$ROOT/deploy/helm/aikoql" \
-  -n "$NS" --set image.tag=local --wait --timeout 300s
+  -n "$NS" --set image.tag=local --set auth.adminPasswordKey=admin-password \
+  --wait --timeout 300s
 kubectl -n "$NS" wait --for=condition=Ready pod \
   -l app.kubernetes.io/name=aikoql --timeout=300s
 

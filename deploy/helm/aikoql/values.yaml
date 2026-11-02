@@ -16,7 +16,8 @@ image:
 auth:
   existingSecret: aikoql-auth
   tokenKey: token
-  # optional: arms the OAuth surface (RFC 9728) when this key holds the
+  # required: the server fails closed (refuses to start) without HTTP
+  # credentials — this key arms the OAuth surface (RFC 9728) with the
   # admin bootstrap password (AIKOQL_ADMIN_PASSWORD)
   adminPasswordKey: ""
 
