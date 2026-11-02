@@ -218,10 +218,32 @@ and a `lesson` KO type distilled by AG-12 sampling.
   recall path: VectorOnly with text (recall) takes the bounded leg; RRF
   ranks in N log N (was N^2); hybrid fusions score a bounded vector ∪
   text union (RRF 100k: 232 → 7.1 ms; 1M: 12.7 ms p50, p95 20.0); the unindexed tail is scored
-  exactly; no zero-score pads. Open: 20b filtered-ANN buckets, 20c
-  quantization. 20d: the HNSW already persisted in the maintainer
+  exactly; no zero-score pads. Open: nothing on 20 — b and c below.
+  20d: the HNSW already persisted in the maintainer
   checkpoint, but only replication leaders took one on a timer — every
   server does now (ck001); the embedded SDK still checkpoints on close only.
+- *Status (2026-11-01): AG-20b done.* A VectorOnly query whose filter is a
+  lone type now scores the repo type index directly when the type has
+  ≤ 4096 heads — candidates stay sublinear in the object count and recall
+  over the filtered set is exact (a 20/5020 split: 7580 → 20 scored
+  candidates; gate: `crates/kernel/tests/filtered_ann.rs`, 2 tests, incl.
+  a guard that the unfiltered path keeps the bounded pool). Property-pair
+  filters and bigger types keep the bounded ANN pool; ACORN-style filtered
+  graph traversal is the documented deep form (shortcut comment in
+  `coordinator.rs`).
+- *Status (2026-11-01): AG-20c done.* The rebuild copy (`model_map`) stores
+  int8 scalar quantization — codes + one uniform scale per vector — ~4x
+  smaller than the f32 copy. The graph keeps exact f32 (navigation
+  unchanged), rebuilds dequantize for re-insert, and cosine is
+  scale-invariant so the round-trip error is bounded by scale/2 per dim
+  (guard: post-rebuild scores within 2e-2 of exact; gate:
+  `quantized_bytes` ≤ dim+4 per vector + the tolerance guard in
+  `engines/vector`). Published hits are re-scored from the store by the
+  kernel, so quantization error never reaches a published score — the
+  exact top-k re-score is the coordinator's existing committed-cosine
+  chain, now documented as such. Checkpoint format unchanged (vectors
+  were never persisted). The RSS gate (≤ 1005 MB at 1M) is verified by
+  the next 1M bench run, not by a unit test.
 - *Problem:* 1M vector_recall 17.0 s, brute force (REPORT §Scale). An HNSW
   exists (`engines/vector`, attached to `find_similar` since M18) — the
   first step is to establish why the certified cell does not use it
@@ -272,6 +294,23 @@ improves on the agent eval set; latency budget ≤ 30 ms for 50 candidates.
 and larger models via `model install`), a re-embed migration job
 (background, resumable, dual-read during migration). *Gate:* switching
 models never serves mixed-dimension results; migration survives a kill.
+- *Status (2026-11-01): AG-23a + AG-23b1 done — dim safety + catalog bindings.*
+  `ModelAwareVectorIndex` (`engines/vector`) shards one HNSW per model:
+  each shard adopts its own dim (P5-M27's global drop becomes per-model),
+  model-scoped queries answer from their shard, and model-less queries
+  merge only shards whose dim equals the query vector's — a
+  mixed-dimension ranking is impossible by construction; same-dim models
+  merge (dual-read). Checkpoints: `models.json` first (fail-closed load)
+  + one dir per shard; legacy single-graph checkpoints load as the ""
+  shard, still label-filtered. The service and the Python SDK construct
+  the wrapper. Gate: 3 unit tests + `crates/kernel/tests/model_dims.rs`
+  (model-scoped and dim-scoped queries never mix; checkpoint round-trip).
+  AG-23b1: `catalog_set_type_model` / `catalog_type_model` journal a
+  "model" catalog row per type (persists, replaces in place; binding an
+  undeclared type is inert). Gate: ct007.
+  Open (AG-23b2): consuming the binding at enrichment (per-collection
+  provider choice) and the resumable re-embed migration job — the shards
+  already give dual-read its index side.
 
 ### Phase T — trust debt (the moat's own credibility)
 
@@ -291,8 +330,7 @@ unusable.
   hanging shutdown. Open: cloud KMS `install` (AWS/Azure/GCP return
   unsupported), passphrase change, data-key (DEK) re-encryption.
 
-**AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). *Gate:*
-usage per tenant matches the oracle count.
+**AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). — **DONE 2026-11-01** (rebuild buckets each head under its own `metadata.tenant`, tenant-less → "default"; remember/transact creates and both forget modes keep the live counters in sync; gate: 5 tests — tenant unit tests + `tenant_accounting.rs`). Shortcut: no startup head scan wires `rebuild` yet, so counters restart empty and re-learn as writes land. *Gate:* usage per tenant matches the oracle count.
 
 **AG-33 (P1) Prompt-injection provenance.** Every KO carries a trust class
 of its source (`user`, `tool_output`, `web`, `document`, `system`);

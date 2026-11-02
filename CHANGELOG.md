@@ -37,6 +37,43 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Per-model vector shards (AG-23)**: `ModelAwareVectorIndex` gives
+  each embedding model its own HNSW shard with its own adopted dim, so
+  switching models never serves mixed-dimension results — model-scoped
+  queries answer from their shard, model-less queries merge only shards
+  whose dim matches the query vector, and same-dim models merge
+  (dual-read during a migration). Checkpoints store a `models.json`
+  manifest plus one dir per shard; pre-AG-23 single-graph checkpoints
+  still load (as the legacy "" shard). The service and the Python SDK
+  construct the wrapper.
+- **Per-collection model bindings (AG-23b1)**: `catalog_set_type_model`
+  journals a "model" catalog row per type — persisted like every catalog
+  row and replaced in place; binding an undeclared type is inert, so a
+  typo can never corrupt enrichment. `catalog_type_model` reads it
+  fail-closed. The binding itself lands here; enrichment consumes it
+  with the re-embed migration job (AG-23b2).
+- **Int8 scalar quantization of the vector rebuild copy (AG-20c)**: the
+  in-memory rebuild copy stores int8 codes + one uniform scale per
+  vector (~4x smaller than the f32 copy). The HNSW graph keeps exact
+  f32, so navigation is unchanged; rebuilds dequantize for re-insert,
+  and cosine is scale-invariant so the error stays bounded (guard:
+  post-rebuild scores within 2e-2 of exact). Published hits are
+  re-scored from the store by the kernel, so quantization error never
+  reaches a published score. Checkpoint format unchanged.
+- **Filtered ANN via the type index (AG-20b)**: a `VectorOnly` query
+  whose filter is a lone type now scores the repo type index directly
+  when the type holds at most 4096 heads — candidates scored stay
+  sublinear in the object count and recall over the filtered set is
+  exact (a 20/5020 split: 7580 → 20 candidates). Property-pair filters
+  and larger types keep the bounded ANN pool (max(512, 16k), widened 4x
+  per round). Each candidate examination is observable via
+  `vector_distance_probes`.
+- **Tenant accounting from KO metadata (AG-32)**: usage counters follow
+  the object store — `remember`/`transact` creates and both forget modes
+  update the live per-tenant count, and a rebuild buckets every head
+  under its own `metadata.tenant` (tenant-less heads count as
+  "default"). Before, rebuild hard-coded every object to the "default"
+  tenant and the live counters never moved (every quota check read 0).
 - **MCP resources, subscriptions and prompts (AG-03)**: the three spec
   resources (`aikoql://ko/{koid}`, `aikoql://conflicts/open`,
   `aikoql://session/{id}/context`) answer as text over `resources/read`

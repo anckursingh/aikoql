@@ -396,6 +396,38 @@ impl Kernel {
         Ok(out)
     }
 
+    // ---- per-collection model bindings (AG-23b1) -------------------------------
+
+    /// Bind a collection's embedding model: a "model" catalog row whose
+    /// name is the type. Replaces an existing binding in place. Binding an
+    /// undeclared type is allowed — the row is only consulted for declared
+    /// collections, so a typo is inert, never corrupt.
+    pub fn catalog_set_type_model(&self, type_name: &str, model: &str) -> KResult<()> {
+        if let Some(ko) = self.catalog_entry_object("model", type_name)? {
+            let mut props = ko.properties.clone();
+            props.insert("model".into(), Value::Text(model.into()));
+            self.update_catalog_row(&ko, props)
+        } else {
+            let mut props = PropertyMap::new();
+            props.insert("model".into(), Value::Text(model.into()));
+            self.catalog_create_entry("model", type_name, props)
+        }
+    }
+
+    /// The collection's bound embedding model, if any. A corrupt row fails
+    /// closed — a binding is consulted at enrichment, never guessed.
+    pub fn catalog_type_model(&self, type_name: &str) -> KResult<Option<String>> {
+        match self.catalog_entry("model", type_name)? {
+            Some(props) => match props.get("model") {
+                Some(Value::Text(m)) => Ok(Some(m.clone())),
+                other => Err(KError::Store(format!(
+                    "catalog model binding '{type_name}' corrupt: model = {other:?}"
+                ))),
+            },
+            None => Ok(None),
+        }
+    }
+
     // ---- the version row -------------------------------------------------------
 
     /// The catalog version — the single migration state of the database.

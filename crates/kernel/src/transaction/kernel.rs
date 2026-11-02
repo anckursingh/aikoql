@@ -707,6 +707,9 @@ pub struct Kernel {
     /// AG-20 — list positions RRF fusion examined to rank its hits (the
     /// vs_scan_007 probe seam). Kernel-lifetime, shared.
     pub(crate) fusion_rank_probes: Arc<AtomicU64>,
+    /// AG-20b — committed cosine scores the vector leg computed per query
+    /// (the filtered-ANN sublinearity probe seam). Kernel-lifetime, shared.
+    pub(crate) vector_distance_probes: Arc<AtomicU64>,
     /// P5-M17b — parsed statistics cache (type_name → Statistics). Populated
     /// by `analyze` and by first-read misses; reads never re-walk the heads
     /// (the default query path reads statistics per query). Freshness stays
@@ -838,6 +841,7 @@ impl Kernel {
             txn_metrics: Arc::new(txn::TxnMetrics::default()),
             similarity_materializations: Arc::new(AtomicU64::new(0)),
             fusion_rank_probes: Arc::new(AtomicU64::new(0)),
+            vector_distance_probes: Arc::new(AtomicU64::new(0)),
             statistics_cache: Arc::new(RwLock::new(HashMap::new())),
         };
         // P5-M7 — database catalog: bootstrap/migrate the catalog rows, or
@@ -1106,6 +1110,7 @@ impl Kernel {
             txn_metrics: self.txn_metrics.clone(),
             similarity_materializations: self.similarity_materializations.clone(),
             fusion_rank_probes: self.fusion_rank_probes.clone(),
+            vector_distance_probes: self.vector_distance_probes.clone(),
             statistics_cache: self.statistics_cache.clone(),
         }
     }
@@ -1479,6 +1484,12 @@ impl Kernel {
         self.fusion_rank_probes.load(Ordering::Relaxed)
     }
 
+    /// AG-20b probe — committed cosine scores the vector leg computed since
+    /// open (one per candidate distance).
+    pub fn vector_distance_probes(&self) -> u64 {
+        self.vector_distance_probes.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn accessible_objects(
         &self,
         subject: &Subject,
@@ -1715,6 +1726,13 @@ impl Kernel {
         "authority",
         "scope",
     ];
+
+    /// AG-32: the live per-tenant object count the quota check enforces —
+    /// the observation window for the accounting gate (create/forget/rebuild
+    /// keep it in sync with the store).
+    pub fn tenant_usage(&self, tenant: &str) -> usize {
+        self.tenants.usage(tenant)
+    }
 
     /// Public entry point: the epistemic-metadata boundary. Kernel-managed
     /// extension keys are rejected here so no external caller can mint a
@@ -2382,6 +2400,13 @@ impl Kernel {
             scoped_idem.as_deref(),
             head.as_ref().map(|h| h.relationships.as_slice()),
         )?;
+        if creating {
+            // AG-32: the live counter follows the stored metadata.tenant —
+            // the same value rebuild reads from the head. The idempotent
+            // replay path returned above, so a retried create never
+            // double-counts.
+            self.tenants.record_create(req.metadata.tenant.as_deref());
+        }
         if is_auth_meta {
             self.refresh_auth_cache()?;
         }
@@ -2563,8 +2588,14 @@ impl Kernel {
 
         // Phase 2: authorize, validate referential integrity, build object versions.
         let mut pending = Vec::with_capacity(resolved.len());
+        // AG-32: batch creates are all-or-nothing — tenants are recorded
+        // only after the batch write succeeds below.
+        let mut created_tenants: Vec<Option<String>> = Vec::new();
         for r in &resolved {
             let req = &r.op.request;
+            if r.creating {
+                created_tenants.push(req.metadata.tenant.clone());
+            }
             let security = if r.creating {
                 let s = req.security.clone().unwrap_or_else(|| SecurityDescriptor {
                     owner: r.op.context.subject.name.clone(),
@@ -2949,6 +2980,11 @@ impl Kernel {
                 .put_txn_record(&mut batch, tid, &txn::encode_txn_record(body, &results));
         }
         self.repo.write_batch(&batch)?;
+        // AG-32: only a landed batch counts — the recorded retry returned
+        // above, so a re-applied txn never double-records.
+        for t in &created_tenants {
+            self.tenants.record_create(t.as_deref());
+        }
         if txn_id.is_some() {
             txn::txn_park("post_commit");
         }
@@ -3218,6 +3254,8 @@ impl Kernel {
                     None,
                     Some(&head.relationships),
                 )?;
+                // AG-32: the forgotten KO leaves its tenant's live count.
+                self.tenants.record_delete(head.metadata.tenant.as_deref());
                 Ok(Forgotten {
                     koid: *koid,
                     version: cur_v + 1,
@@ -3276,6 +3314,9 @@ impl Kernel {
                     self.repo.delete_object_version(&mut batch, koid, ts);
                 }
                 self.repo.write_batch(&batch)?;
+                // AG-32: legal erasure removes the head — its tenant's
+                // live count follows.
+                self.tenants.record_delete(head.metadata.tenant.as_deref());
                 pipe.seq = seq;
                 pipe.audit = audit;
                 self.broadcast(&ke);

@@ -163,6 +163,12 @@ impl IndexCoordinator {
             // nominates candidates, its own sim never becomes a published
             // score.
             let consider = |koid: &KOID, deleted: bool| -> KResult<Option<f32>> {
+                // AG-20b: one probe per candidate the leg examines (the
+                // scoring-record read below is the widening loop's real
+                // cost — the post-filter cosine is not).
+                kernel
+                    .vector_distance_probes
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if deleted {
                     return Ok(None);
                 }
@@ -214,7 +220,34 @@ impl IndexCoordinator {
             // than k and the index holds more — never the whole index at
             // once (usize::MAX walked every HNSW node and read every record).
             let mut want = q.k.saturating_mul(16).max(512);
-            if let Some(mut vmap) = ann(want) {
+            // AG-20b: a bare selective type filter scores the type index
+            // directly — sublinear in the object count, exact recall —
+            // instead of widening the ANN pool until it covers the index.
+            // shortcut: property-pair filters keep the widening pool;
+            // ACORN-style filtered graph traversal is the deep form.
+            const EXACT_FILTER_CAP: usize = 4096;
+            let type_candidates = match &q.filter {
+                Some(f) if f.required.is_empty() => f
+                    .type_name
+                    .as_ref()
+                    .and_then(|tn| kernel.type_koids(tn).ok())
+                    .filter(|ks| !ks.is_empty() && ks.len() <= EXACT_FILTER_CAP),
+                _ => None,
+            };
+            if let Some(koids) = type_candidates {
+                // Only that type's KOs are examined; `consider` re-checks the
+                // payload type, so a stale index entry (type change) is
+                // dropped, not leaked.
+                for koid in &koids {
+                    let deleted = match kernel.head_object(koid)? {
+                        Some(head) => head.lifecycle.state == LifecycleState::Deleted,
+                        None => true, // head erased — not a live candidate
+                    };
+                    if let Some(score) = consider(koid, deleted)? {
+                        ranked.push((*koid, score));
+                    }
+                }
+            } else if let Some(mut vmap) = ann(want) {
                 let held = m.as_ref().map_or(0, |mm| mm.vectors().len());
                 loop {
                     ranked.clear();

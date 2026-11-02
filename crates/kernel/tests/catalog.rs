@@ -334,3 +334,35 @@ fn ct006_version_compatibility() {
         assert!(msg.contains("999"), "the error names the version: {msg}");
     }
 }
+
+// --- AG-23b1 (ct007) — per-collection model bindings. RED: the missing
+// seam — catalog_set_type_model/catalog_type_model do not exist (E0609).
+// The binding row is the data layer the service consumes at enrichment
+// (per-collection provider choice) and the migration job's target. ---
+
+#[test]
+fn ct007_type_model_bindings_roundtrip_and_persist() {
+    let (k, engine) = mk_shared();
+    assert_eq!(k.catalog_type_model("Memory").unwrap(), None);
+    k.catalog_set_type_model("Memory", "mxbai-embed-large")
+        .unwrap();
+    assert_eq!(
+        k.catalog_type_model("Memory").unwrap().as_deref(),
+        Some("mxbai-embed-large")
+    );
+    // overwrite replaces, never duplicates
+    k.catalog_set_type_model("Memory", "multilingual-e5-small")
+        .unwrap();
+    assert_eq!(
+        k.catalog_type_model("Memory").unwrap().as_deref(),
+        Some("multilingual-e5-small")
+    );
+    // the binding is a journaled catalog row — it survives a restart
+    let k2 = reopen(&engine).unwrap();
+    assert_eq!(
+        k2.catalog_type_model("Memory").unwrap().as_deref(),
+        Some("multilingual-e5-small")
+    );
+    // an unbound type answers None
+    assert_eq!(k2.catalog_type_model("Other").unwrap(), None);
+}

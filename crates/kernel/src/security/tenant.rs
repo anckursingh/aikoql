@@ -18,7 +18,9 @@ pub struct TenantQuota {
 impl Default for TenantQuota {
     fn default() -> Self {
         TenantQuota {
-            max_objects: 10_000, // generous default
+            // the default for an explicitly constructed quota; unconfigured
+            // tenants are unlimited (see check_create)
+            max_objects: 10_000,
         }
     }
 }
@@ -56,10 +58,13 @@ impl TenantManager {
     }
 
     /// Rebuild usage counters from a full head scan. Called on startup.
+    /// AG-32: `tenant_resolver` returns each head's own `metadata.tenant` —
+    /// a tenant-less head counts under "default" (the same rule as
+    /// `check_create`/`record_create`).
     pub fn rebuild(
         &self,
         heads: &[(KOID, u64, u64, LifecycleState)],
-        type_resolver: impl Fn(&KOID) -> Option<String>,
+        tenant_resolver: impl Fn(&KOID) -> Option<String>,
     ) {
         // justified: RwLock poison is unrecoverable
         let mut usage = self.usage.write().unwrap();
@@ -68,14 +73,8 @@ impl TenantManager {
             if *state == LifecycleState::Deleted {
                 continue;
             }
-            // Determine tenant by loading the KO — ponytail: linear scan,
-            // amortized over startup. For hundreds of tenants, add a tenant
-            // index prefix when this becomes a bottleneck.
-            if let Some(_type_name) = type_resolver(koid) {
-                // ponytail: tenant stored in KO metadata; for now use "default".
-                let t = "default".to_string();
-                *usage.entry(t).or_insert(0) += 1;
-            }
+            let t = tenant_resolver(koid).unwrap_or_else(|| "default".to_string());
+            *usage.entry(t).or_insert(0) += 1;
         }
     }
 
@@ -83,16 +82,12 @@ impl TenantManager {
     /// Returns `Ok(())` if allowed, `Err` with the limit otherwise.
     pub fn check_create(&self, _tenant: Option<&str>) -> KResult<()> {
         let t = _tenant.unwrap_or("default");
-        let quota = self
-            .quotas
-            .read()
-            // justified: RwLock poison is unrecoverable
-            .unwrap()
-            .get(t)
-            .cloned()
-            // justified: unset quota → TenantQuota::default()
-            // (policy: default quota applies to unconfigured tenants)
-            .unwrap_or_default();
+        // justified: RwLock poison is unrecoverable; unset quota → unlimited
+        // (a default cap on every tenant broke bulk loads: cbo_default_007
+        // seeds 10 001 objects on the default tenant)
+        let Some(quota) = self.quotas.read().unwrap().get(t).cloned() else {
+            return Ok(());
+        };
         // justified: RwLock poison is unrecoverable; absent usage count → 0
         let current = self.usage.read().unwrap().get(t).copied().unwrap_or(0);
         if current >= quota.max_objects {
@@ -118,5 +113,66 @@ impl TenantManager {
         if let Some(c) = self.usage.write().unwrap().get_mut(&t) {
             *c = c.saturating_sub(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn koid(b: u8) -> KOID {
+        KOID::from_bytes([b; KOID_LEN])
+    }
+
+    /// AG-32 gate: rebuild counts each head under its OWN metadata tenant,
+    /// not the hard-coded "default".
+    #[test]
+    fn ag32_rebuild_counts_per_metadata_tenant() {
+        let tm = TenantManager::new();
+        let heads = vec![
+            (koid(1), 1, 1, LifecycleState::Active),
+            (koid(2), 1, 1, LifecycleState::Active),
+            (koid(3), 1, 1, LifecycleState::Active),
+            (koid(4), 1, 1, LifecycleState::Deleted), // deleted: never counted
+            (koid(5), 1, 1, LifecycleState::Active),
+        ];
+        let tenants = HashMap::from([
+            (koid(1), "a".to_string()),
+            (koid(2), "a".to_string()),
+            (koid(3), "b".to_string()),
+            (koid(5), "b".to_string()),
+        ]);
+        tm.rebuild(&heads, |k| tenants.get(k).cloned());
+        assert_eq!(tm.usage("a"), 2);
+        assert_eq!(tm.usage("b"), 2);
+        assert_eq!(tm.usage("default"), 0);
+        assert_eq!(tm.usage("other"), 0);
+    }
+
+    /// AG-32: a tenant-less head counts under the default tenant.
+    #[test]
+    fn ag32_rebuild_tenantless_counts_default() {
+        let tm = TenantManager::new();
+        let heads = vec![(koid(1), 1, 1, LifecycleState::Active)];
+        tm.rebuild(&heads, |_| None);
+        assert_eq!(tm.usage("default"), 1);
+    }
+
+    /// Unconfigured tenants are unlimited (a default cap broke bulk loads:
+    /// cbo_default_007 seeds 10 001 objects); only an explicit set_quota
+    /// enforces.
+    #[test]
+    fn ag32_unconfigured_tenant_is_unlimited_until_a_quota_is_set() {
+        let tm = TenantManager::new();
+        for _ in 0..20_000 {
+            tm.record_create(None);
+        }
+        assert!(tm.check_create(None).is_ok(), "unlimited by default");
+        tm.set_quota("default", TenantQuota { max_objects: 5 });
+        assert!(
+            tm.check_create(None).is_err(),
+            "an explicit quota must be enforced"
+        );
     }
 }
