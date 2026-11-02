@@ -131,6 +131,25 @@ pub(crate) fn rotate_keys(db_path: &str, enc: &RuntimeEncryption) -> KResult<()>
         .rotate(&kernel)
 }
 
+/// AG-31 — change the passphrase that wraps the master key of an encrypted
+/// database (offline: the database must not be open elsewhere). The master
+/// key itself does not change — no data key moves — and the old passphrase
+/// no longer opens the database.
+pub(crate) fn change_passphrase(db_path: &str, enc: &RuntimeEncryption, new: &str) -> KResult<()> {
+    if !enc.enabled {
+        return Err(KError::Store(
+            "passphrase change needs [encryption] enabled".into(),
+        ));
+    }
+    let old = enc
+        .passphrase
+        .as_deref()
+        .ok_or_else(|| KError::Store("passphrase change needs a current passphrase".into()))?;
+    let (_kernel, _admin, ring) = open_kernel_with_ring(db_path, enc, false, None)?;
+    ring.expect("an encrypted open returns its key ring")
+        .change_passphrase(old, new)
+}
+
 #[cfg(test)]
 mod tests {
     use super::open_kernel_auto;

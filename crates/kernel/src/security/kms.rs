@@ -63,6 +63,13 @@ pub trait KeyManager: Send + Sync {
     fn install(&self, _key: &[u8; 32], _passphrase: &str) -> Result<(), String> {
         Err("this key manager cannot install a master key".into())
     }
+
+    /// AG-31 — re-wrap the master key under a new passphrase. The key itself
+    /// does not change (nothing downstream is re-encrypted); the old
+    /// passphrase is verified first and stops working afterwards.
+    fn change_passphrase(&self, _old: &str, _new: &str) -> Result<(), String> {
+        Err("this key manager cannot change the passphrase".into())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +144,25 @@ impl KeyManager for LocalKms {
         crate::security::keyring::write_atomic(Path::new(&self.path), &envelope)?;
         // justified: RwLock poison is unrecoverable
         *self.cached_key.write().unwrap() = Some(*key);
+        Ok(())
+    }
+
+    fn change_passphrase(&self, old: &str, new: &str) -> Result<(), String> {
+        let path = Path::new(&self.path);
+        let raw =
+            fs::read(path).map_err(|e| format!("read master key file {}: {}", self.path, e))?;
+        // Verify the old passphrase by opening the file with it (a v1
+        // envelope migrates to v2 under the old passphrase first), then
+        // re-wrap under the new one with a fresh salt and nonce.
+        let key = if raw.len() == V1_ENVELOPE_LEN {
+            self.migrate_from_v1(&raw, old)?
+        } else {
+            decrypt_v2_envelope(&raw, old)?
+        };
+        let envelope = encrypt_v2_envelope(&key, new)?;
+        crate::security::keyring::write_atomic(path, &envelope)?;
+        // justified: RwLock poison is unrecoverable
+        *self.cached_key.write().unwrap() = Some(key);
         Ok(())
     }
 

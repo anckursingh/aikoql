@@ -75,7 +75,10 @@ fn sync_dir(dir: Option<&Path>) -> Result<(), String> {
 
 pub struct KeyRing {
     kms: Arc<dyn KeyManager>,
-    passphrase: String,
+    /// Kept in sync with the KMS file's wrap passphrase (a passphrase change
+    /// updates both, under `rotating`, or a later rotation would install the
+    /// new KEK under the retired passphrase).
+    passphrase: Mutex<String>,
     dek_path: PathBuf,
     crypto: Arc<Crypto>,
     store_key: [u8; 32],
@@ -121,7 +124,7 @@ impl KeyRing {
         };
         Ok(Arc::new(KeyRing {
             kms,
-            passphrase: passphrase.to_string(),
+            passphrase: Mutex::new(passphrase.to_string()),
             dek_path,
             crypto,
             store_key,
@@ -132,6 +135,19 @@ impl KeyRing {
     /// The data key the store is encrypted with — constant across rotations.
     pub fn store_key(&self) -> [u8; 32] {
         self.store_key
+    }
+
+    /// AG-31 — change the passphrase that wraps the master key (the key
+    /// itself never changes, so no data key moves). Serialized with rotation:
+    /// both write the KMS file, and the ring's copy must not go stale.
+    pub fn change_passphrase(&self, old: &str, new: &str) -> KResult<()> {
+        let err = |e: String| KError::Store(format!("passphrase change: {e}"));
+        // justified: Mutex poison is unrecoverable
+        let _one = self.rotating.lock().unwrap();
+        self.kms.change_passphrase(old, new).map_err(err)?;
+        // justified: Mutex poison is unrecoverable
+        *self.passphrase.lock().unwrap() = new.to_string();
+        Ok(())
     }
 
     /// Rotate the master KEK online (writers keep running: no data key
@@ -172,7 +188,10 @@ impl KeyRing {
             kernel.persist_next_deks(w)?; // 3
         }
         stop(3)?;
-        self.kms.install(&new_kek, &self.passphrase).map_err(err)?; // 4: commit
+        // justified: Mutex poison is unrecoverable
+        self.kms
+            .install(&new_kek, &self.passphrase.lock().unwrap())
+            .map_err(err)?; // 4: commit
         stop(4)?;
         if let (Some(e), Some(w)) = (&envelope, wraps) {
             kernel.promote_next_deks(&w)?; // 5

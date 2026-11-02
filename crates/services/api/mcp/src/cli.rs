@@ -31,6 +31,7 @@ pub(crate) fn print_usage() {
         "  report [PATH]          Print knowledge report for directory\n",
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
         "  key rotate [DB]        Rotate the master key of an encrypted database (offline; rewraps, no re-encryption)\n",
+        "  key change-passphrase NEW [DB]  Re-wrap the master key under a new passphrase (offline; the key itself does not change)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
         "  pitr --archive URL --to DIR [--until-seq N | --until-ms MS]  Restore from the archive\n",
         "  archive-prune --archive URL --keep N  Keep the newest N archived snapshots\n",
@@ -101,6 +102,7 @@ pub(crate) fn print_usage() {
 pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option<usize>) -> bool {
     let arg_after = subcmd_idx.and_then(|i| args.get(i + 2)).map(String::as_str);
     let arg_after2 = subcmd_idx.and_then(|i| args.get(i + 3)).map(String::as_str);
+    let arg_after3 = subcmd_idx.and_then(|i| args.get(i + 4)).map(String::as_str);
 
     match subcmd {
         Some("shell") => {
@@ -265,26 +267,47 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             run_backup(arg_after.unwrap_or(DEFAULT_DB_PATH));
             true
         }
-        Some("key") => {
-            if arg_after != Some("rotate") {
+        Some("key") => match arg_after {
+            Some("rotate") => {
+                let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
+                let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                if let Err(e) = crate::engine::rotate_keys(db, &cfg.encryption) {
+                    eprintln!("key rotate: {e}");
+                    std::process::exit(1);
+                }
+                println!("{}", serde_json::json!({"rotated": true, "db": db}));
+                true
+            }
+            Some("change-passphrase") => {
+                let Some(new) = arg_after2 else {
+                    eprintln!("Usage: aikoql-mcp key change-passphrase NEW_PASSPHRASE [DB_PATH]");
+                    std::process::exit(2);
+                };
+                let db = arg_after3.unwrap_or(DEFAULT_DB_PATH);
+                let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                if let Err(e) = crate::engine::change_passphrase(db, &cfg.encryption, new) {
+                    eprintln!("key change-passphrase: {e}");
+                    std::process::exit(1);
+                }
+                println!("{}", serde_json::json!({"changed": true, "db": db}));
+                true
+            }
+            _ => {
                 eprintln!("Usage: aikoql-mcp key rotate [DB_PATH]");
-                eprintln!("Rotates the master key (KEK) of an encrypted database: every data key");
-                eprintln!("is rewrapped under the new KEK, no data is re-encrypted, and the old");
-                eprintln!("key file no longer opens the database. Stop the server first.");
+                eprintln!("       aikoql-mcp key change-passphrase NEW_PASSPHRASE [DB_PATH]");
+                eprintln!("rotate rewraps every data key under a new master key — no data is");
+                eprintln!("re-encrypted — and the old key file no longer opens the database.");
+                eprintln!("change-passphrase re-wraps the master key file under a new passphrase");
+                eprintln!("(the master key itself does not change). Stop the server first.");
                 std::process::exit(2);
             }
-            let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
-            let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
-            if let Err(e) = crate::engine::rotate_keys(db, &cfg.encryption) {
-                eprintln!("key rotate: {e}");
-                std::process::exit(1);
-            }
-            println!("{}", serde_json::json!({"rotated": true, "db": db}));
-            true
-        }
+        },
         Some("restore") => {
             let backup = arg_after.unwrap_or_else(|| {
                 eprintln!("Usage: aikoql-mcp restore <BACKUP_DIR> [DB_PATH]");
