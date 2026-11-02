@@ -38,6 +38,16 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Per-commit journal signatures (AG-30)**: when a server runs with
+  `AIKOQL_AUDIT_SIGNING_KEY`, every journal event carries an Ed25519
+  signature over (the previous event's signature ‖ its audit hash) — a
+  chain anyone can verify with the public key alone, where dropping,
+  reordering or tampering with a signed event breaks its successor and
+  the chain's tail is the signed audit head. `evidence_pack` emits the
+  `journal_signatures` stream, and `scripts/e2e-audit-verify.py` (run in
+  CI's e2e-dogfood job) replays the chain with Python `cryptography` and
+  rejects tampering. Events committed before the signer is attached (the
+  fresh-open catalog bootstrap) stay outside the signed stream.
 - **Composite range indexes + CBO range histograms (AG-21)**: a range
   over the FIRST property of a composite index now serves as a
   byte-prefix scan over the ordered tuple keys (the exclusive-successor
