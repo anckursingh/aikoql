@@ -82,6 +82,9 @@ fn ag51_rbac_grants_only_the_lease_verbs() {
     assert!(rbac.contains("leases"), "leases resource");
     // R5a: nothing but the lease
     assert!(!rbac.contains("pods"), "no pod access needed");
+    // the first real kind run caught a secrets rule sneaking past this law:
+    // the TLS hook wrote the repl-tls Secret — helm renders it now
+    assert!(!rbac.contains("secrets"), "lease-only: {rbac}");
 }
 
 #[test]
@@ -102,4 +105,24 @@ fn ag51_kind_failover_e2e_is_wired_into_the_nightly_owner() {
         owner.contains("kind-failover-e2e.sh"),
         "benchmark.yml must run the kind failover e2e"
     );
+}
+
+#[test]
+fn ag51_repl_tls_is_a_helm_managed_secret_with_a_stable_ca() {
+    // the first real kind run died in the pre-install Job: alpine/openssl
+    // has no kubectl, and kubectl apply needed secret verbs the RBAC never
+    // granted. Helm renders the CA instead — no Job, no kubectl-in-a-pod,
+    // lease-only RBAC — and lookup keeps the CA stable across upgrades.
+    let hook = root().join("deploy/helm/aikoql/templates/tls-hook.yaml");
+    assert!(!hook.exists(), "no hook Job: {}", hook.display());
+    let secret = read(&root().join("deploy/helm/aikoql/templates/repl-tls.yaml"));
+    assert!(secret.contains("lookup"), "the CA must survive upgrades: {secret}");
+    assert!(
+        secret.contains("genCA") && secret.contains("genSignedCert"),
+        "a fresh install generates a CA + serving cert: {secret}"
+    );
+    // the statefulset mount contract: /tls/{ca.crt,tls.crt,tls.key}
+    assert!(secret.contains("ca.crt"), "ca.crt key: {secret}");
+    assert!(secret.contains("tls.crt"), "tls.crt key (server chain): {secret}");
+    assert!(secret.contains("tls.key"), "tls.key key: {secret}");
 }
