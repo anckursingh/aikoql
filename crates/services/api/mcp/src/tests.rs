@@ -1129,6 +1129,80 @@ fn ag05_no_tool_returns_a_bare_string_error() {
     let _ = std::fs::remove_dir_all(&db);
 }
 
+// AG-41: claim_task/release_task ride the kernel claim ops — the claim
+// lands once, the loser gets the structured CLAIM_CONFLICT envelope, and
+// release frees the task for the next agent.
+#[test]
+fn ag41_claim_tool_claims_once_and_releases() {
+    let db = tmp_db("ag41");
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let mut session = crate::session::McpSession::default();
+    let txns: crate::tools::txn::TxnRegistry = Default::default();
+    let task = {
+        let mut rr = crate::RememberRequest::create(
+            crate::Subject::new("mcp-agent"),
+            crate::Metadata {
+                type_name: "aikoql:task".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+        );
+        rr.properties.insert("task".into(), crate::json!("claim-me"));
+        k.remember(rr).unwrap().koid
+    };
+    let hex = task.to_hex();
+    let call = |args: &crate::J| {
+        crate::tool_registry::call_tool(&k, "claim_task", args, &db, &mut session, None, &txns)
+    };
+    let ok = call(&crate::json!({"task": hex, "lease_seconds": 60})).unwrap();
+    assert_eq!(ok["isError"], false);
+    let data: crate::J =
+        serde_json::from_str(ok["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(data["ok"], true);
+    assert_eq!(data["data"]["task"], hex);
+    assert_eq!(data["data"]["holder"], "mcp-agent");
+    assert!(data["data"]["claim_until"].is_u64());
+    assert_eq!(data["data"]["renewed"], false);
+    // A second claim loses: the shared envelope carries CLAIM_CONFLICT.
+    let conflict = call(&crate::json!({"task": hex})).unwrap();
+    assert_eq!(conflict["isError"], true);
+    let env: crate::J =
+        serde_json::from_str(conflict["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert!(
+        env["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("CLAIM_CONFLICT"),
+        "the losing claim must say CLAIM_CONFLICT: {env}"
+    );
+    // Release frees the task for the next claim.
+    let rel = crate::tool_registry::call_tool(
+        &k,
+        "release_task",
+        &crate::json!({"task": hex}),
+        &db,
+        &mut session,
+        None,
+        &txns,
+    )
+    .unwrap();
+    assert_eq!(rel["isError"], false);
+    let again = call(&crate::json!({"task": hex})).unwrap();
+    assert_eq!(again["isError"], false);
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+}
+
 // POC-4 S-3/S-6: the provenance + timeline panels render events[] — the
 // wire must carry the event's audit_hash and the version's asserted
 // event-time (valid_from) for that to be possible at all.
