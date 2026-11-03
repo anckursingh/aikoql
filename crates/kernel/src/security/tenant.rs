@@ -1,13 +1,39 @@
 //! Tenant Manager — multi-tenancy quota enforcement (MRFC-0005 §Enterprise).
 //!
 //! Tracks per-tenant object counts and enforces configurable limits.
-//! ponytail: in-memory counters rebuilt from journal on startup.
-//! Persistent per-tenant watermark would need a KV prefix; add when
-//! tenants number in the hundreds.
+//! AG-32b: the live counters persist as one KV row per tenant under
+//! `USAGE_PREFIX` (an 8-byte LE count), and a `(seq, ts)` head watermark
+//! (`USAGE_HEAD_KEY`) rides every commit batch atomically with the rows.
+//! A clean open loads the rows when the watermark matches the journal
+//! head — no head decode; anything else rebuilds from the heads and
+//! re-persists both (see `Kernel::open_with`).
 
 use crate::knowledge::kom::*;
 use std::collections::HashMap;
 use std::sync::RwLock;
+
+/// AG-32b — the KV row prefix for per-tenant usage counts.
+pub const USAGE_PREFIX: &[u8] = b"__tenants/usage/";
+/// AG-32b — the (seq, ts) watermark of the head the usage rows are
+/// exact at. It rides every commit batch, so it matches the journal
+/// head exactly when the rows are trustworthy.
+pub const USAGE_HEAD_KEY: &[u8] = b"__tenants/usage-head";
+
+/// The KV row key for a tenant's usage count.
+pub fn usage_row_key(tenant: &str) -> Vec<u8> {
+    let mut k = Vec::with_capacity(USAGE_PREFIX.len() + tenant.len());
+    k.extend_from_slice(USAGE_PREFIX);
+    k.extend_from_slice(tenant.as_bytes());
+    k
+}
+
+/// The watermark bytes for journal head `(seq, ts)`.
+pub fn usage_head(seq: u64, ts: u64) -> Vec<u8> {
+    let mut v = Vec::with_capacity(16);
+    v.extend_from_slice(&seq.to_le_bytes());
+    v.extend_from_slice(&ts.to_le_bytes());
+    v
+}
 
 /// Per-tenant resource limits.
 #[derive(Clone, Debug)]
@@ -64,16 +90,18 @@ impl TenantManager {
     pub fn rebuild(
         &self,
         heads: &[(KOID, u64, u64, LifecycleState)],
-        tenant_resolver: impl Fn(&KOID) -> Option<String>,
+        // (koid, commit_ts) — the resolver reads the head's metadata, which
+        // needs the version timestamp (get_object_version)
+        tenant_resolver: impl Fn(&KOID, u64) -> Option<String>,
     ) {
         // justified: RwLock poison is unrecoverable
         let mut usage = self.usage.write().unwrap();
         usage.clear();
-        for (koid, _, _, state) in heads {
+        for (koid, _version, ts, state) in heads {
             if *state == LifecycleState::Deleted {
                 continue;
             }
-            let t = tenant_resolver(koid).unwrap_or_else(|| "default".to_string());
+            let t = tenant_resolver(koid, *ts).unwrap_or_else(|| "default".to_string());
             *usage.entry(t).or_insert(0) += 1;
         }
     }
@@ -114,6 +142,24 @@ impl TenantManager {
             *c = c.saturating_sub(1);
         }
     }
+
+    /// AG-32b — the live map, for persisting after a rebuild.
+    pub fn usage_rows(&self) -> Vec<(String, usize)> {
+        // justified: RwLock poison is unrecoverable
+        self.usage
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(t, n)| (t.clone(), *n))
+            .collect()
+    }
+
+    /// AG-32b — replace the live map (a clean open loads the persisted
+    /// rows instead of decoding heads).
+    pub fn load(&self, rows: Vec<(String, usize)>) {
+        // justified: RwLock poison is unrecoverable
+        *self.usage.write().unwrap() = rows.into_iter().collect();
+    }
 }
 
 #[cfg(test)]
@@ -143,7 +189,7 @@ mod tests {
             (koid(3), "b".to_string()),
             (koid(5), "b".to_string()),
         ]);
-        tm.rebuild(&heads, |k| tenants.get(k).cloned());
+        tm.rebuild(&heads, |k, _ts| tenants.get(k).cloned());
         assert_eq!(tm.usage("a"), 2);
         assert_eq!(tm.usage("b"), 2);
         assert_eq!(tm.usage("default"), 0);
@@ -155,7 +201,7 @@ mod tests {
     fn ag32_rebuild_tenantless_counts_default() {
         let tm = TenantManager::new();
         let heads = vec![(koid(1), 1, 1, LifecycleState::Active)];
-        tm.rebuild(&heads, |_| None);
+        tm.rebuild(&heads, |_, _| None);
         assert_eq!(tm.usage("default"), 1);
     }
 

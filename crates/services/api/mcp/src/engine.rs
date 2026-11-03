@@ -9,7 +9,7 @@ use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto};
 use aikoql_kernel::security::envelope::Envelope;
 use aikoql_kernel::security::field_crypto::EncryptionPolicy;
 use aikoql_kernel::security::keyring::KeyRing;
-use aikoql_kernel::security::kms::LocalKms;
+use aikoql_kernel::security::kms::{AwsKms, KeyManager, LocalKms};
 use aikoql_kernel::storage::encrypted::EncryptedStore;
 use aikoql_kernel::storage::store::StorageEngine;
 use aikoql_kernel::{KError, KResult, Kernel, SystemClock};
@@ -46,7 +46,17 @@ pub(crate) fn open_kernel_with_ring(
     // NOT_LEADER; the replication stream still applies.
     let open = |store: Arc<dyn StorageEngine>| match &standby {
         Some(_) => Kernel::open_standby(store, Arc::new(SystemClock), 0xA9C9),
-        None => Kernel::open(store, Arc::new(SystemClock), 0xA9C9),
+        // AG-30: a signing server attaches the signer at open so the
+        // catalog bootstrap commits are inside the signed stream.
+        None => match crate::AUDIT_SIGNER.get() {
+            Some(signer) => Kernel::open_signed(
+                store,
+                Arc::new(SystemClock),
+                0xA9C9,
+                std::sync::Arc::clone(signer),
+            ),
+            None => Kernel::open(store, Arc::new(SystemClock), 0xA9C9),
+        },
     };
     if let Some(why) = standby.clone() {
         let Some(a) = admin.as_ref() else {
@@ -57,15 +67,33 @@ pub(crate) fn open_kernel_with_ring(
         a.fence(why);
     }
     if !enc.enabled {
-        return Ok((open(engine)?, admin, None));
+        let k = open(engine)?;
+        return Ok((k, admin, None));
     }
-    let Some(pass) = enc.passphrase.as_deref() else {
-        return Err(KError::Store(
-            "encryption enabled but no passphrase: set AIKOQL_PASSPHRASE or encryption.passphrase"
-                .into(),
-        ));
+    // AG-31: a KMS pointer key file opens through AWS KMS — AWS IAM gates
+    // the KEK, the passphrase is vestigial from there on.
+    let key_path = std::path::Path::new(&enc.key_path);
+    let pointer = AwsKms::is_pointer(key_path);
+    let kms: Arc<dyn KeyManager> = if pointer {
+        Arc::new(AwsKms::with_ops(
+            "",
+            key_path.to_path_buf(),
+            Arc::new(crate::aws_kms::SdkKmsOps::new(None).map_err(KError::Store)?),
+        ))
+    } else {
+        Arc::new(LocalKms::new(&enc.key_path))
     };
-    let kms = Arc::new(LocalKms::new(&enc.key_path));
+    let pass = if pointer {
+        ""
+    } else {
+        let Some(p) = enc.passphrase.as_deref() else {
+            return Err(KError::Store(
+                "encryption enabled but no passphrase: set AIKOQL_PASSPHRASE or encryption.passphrase"
+                    .into(),
+            ));
+        };
+        p
+    };
     let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
     // AG-31: the store key is a data key WRAPPED by the KEK (a pre-AG-31
     // database keeps its HKDF(KEK, store) value as that key), so the KEK
@@ -113,6 +141,76 @@ pub(crate) fn rotate_keys(db_path: &str, enc: &RuntimeEncryption) -> KResult<()>
     let (kernel, _admin, ring) = open_kernel_with_ring(db_path, enc, false, None)?;
     ring.expect("an encrypted open returns its key ring")
         .rotate(&kernel)
+}
+
+/// AG-31 — change the passphrase that wraps the master key of an encrypted
+/// database (offline: the database must not be open elsewhere). The master
+/// key itself does not change — no data key moves — and the old passphrase
+/// no longer opens the database.
+pub(crate) fn change_passphrase(db_path: &str, enc: &RuntimeEncryption, new: &str) -> KResult<()> {
+    if !enc.enabled {
+        return Err(KError::Store(
+            "passphrase change needs [encryption] enabled".into(),
+        ));
+    }
+    let old = enc
+        .passphrase
+        .as_deref()
+        .ok_or_else(|| KError::Store("passphrase change needs a current passphrase".into()))?;
+    let (_kernel, _admin, ring) = open_kernel_with_ring(db_path, enc, false, None)?;
+    ring.expect("an encrypted open returns its key ring")
+        .change_passphrase(old, new)
+}
+
+/// AG-31 — roll every tenant data key (DEK) and re-encrypt the encrypted
+/// fields under the fresh keys, one committed journal version per object
+/// (offline: the database must not be open elsewhere). The previous
+/// generation stays as decrypt fallback for historical versions.
+pub(crate) fn roll_deks(db_path: &str, enc: &RuntimeEncryption) -> KResult<usize> {
+    if !enc.enabled {
+        return Err(KError::Store("DEK roll needs [encryption] enabled".into()));
+    }
+    let (kernel, _admin, _ring) = open_kernel_with_ring(db_path, enc, false, None)?;
+    kernel.roll_field_deks()
+}
+
+/// AG-31 — move the master KEK of an encrypted database into AWS KMS
+/// (offline: the database must not be open elsewhere). The KEK itself does
+/// not change — no data key moves — it is wrapped under a new CMK into the
+/// key file, and AWS IAM gates every later open instead of the passphrase.
+/// shortcut: ImportKeyMaterial (the CMK holds OUR key, not a wrap of it) is
+/// the upgrade path for full BYOK control.
+pub(crate) fn install_to_kms(
+    enc: &RuntimeEncryption,
+    region: Option<&str>,
+) -> KResult<()> {
+    if !enc.enabled {
+        return Err(KError::Store("key install needs [encryption] enabled".into()));
+    }
+    let key_path = std::path::Path::new(&enc.key_path);
+    if !key_path.exists() {
+        return Err(KError::Store(format!(
+            "no master key file at {} — open the database once first",
+            enc.key_path
+        )));
+    }
+    if AwsKms::is_pointer(key_path) {
+        return Err(KError::Store("the master key is already held by AWS KMS".into()));
+    }
+    let Some(pass) = enc.passphrase.as_deref() else {
+        return Err(KError::Store("key install needs a current passphrase".into()));
+    };
+    let kek = LocalKms::new(&enc.key_path)
+        .master_key(pass)
+        .map_err(KError::Store)?;
+    let ops = Arc::new(
+        crate::aws_kms::SdkKmsOps::new(region.map(String::from)).map_err(KError::Store)?,
+    );
+    // install verifies the unwrap through the seam BEFORE replacing the
+    // local file, so a wrong region or permission set cannot strand the DB.
+    AwsKms::with_ops("", key_path.to_path_buf(), ops)
+        .install(&kek, pass)
+        .map_err(KError::Store)
 }
 
 #[cfg(test)]
@@ -442,5 +540,135 @@ mod tests {
             want.push(late);
         }
         read_all(&dir, &enc, &want);
+    }
+
+    /// AG-31 — kr005: a passphrase change re-wraps the master key file (the
+    /// key itself never changes: every object — field ciphertext included —
+    /// stays readable), the old passphrase stops opening the database, and a
+    /// later KEK rotation wraps under the new passphrase.
+    #[test]
+    fn kr005_passphrase_change_retires_the_old_passphrase_and_keeps_everything_readable() {
+        let dir = scratch("kr005");
+        let enc = secret_enc(&dir);
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(enc.key_path.clone().into()));
+        let want = {
+            let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
+            vec![
+                put_secret(&k, Some("t1"), "alpha"),
+                put_secret(&k, None, "beta"),
+            ]
+        };
+        let key_file = std::fs::read(&enc.key_path).unwrap();
+
+        super::change_passphrase(&dir, &enc, "pw-new").unwrap();
+        assert_ne!(
+            std::fs::read(&enc.key_path).unwrap(),
+            key_file,
+            "the envelope is rewrapped"
+        );
+
+        let enc_new =
+            super::RuntimeEncryption { passphrase: Some("pw-new".into()), ..enc.clone() };
+        read_all(&dir, &enc_new, &want);
+
+        // The old passphrase no longer opens the database.
+        assert!(super::open_kernel(&dir, &enc, false, None).is_err());
+
+        // A later KEK rotation wraps under the NEW passphrase (the ring's
+        // copy must stay in sync, or the rotated key file is unreadable).
+        super::rotate_keys(&dir, &enc_new).unwrap();
+        read_all(&dir, &enc_new, &want);
+    }
+
+    /// AG-31 — kr006: a DEK roll re-encrypts every encrypted field under
+    /// fresh data keys through the journal (one committed version per
+    /// object), keeps every object readable, is idempotent, and the
+    /// previous generation survives a later KEK rotation.
+    #[test]
+    fn kr006_dek_roll_reencrypts_every_field_and_keeps_history_readable() {
+        use aikoql_kernel::Subject;
+        let dir = scratch("kr006");
+        let enc = secret_enc(&dir);
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(enc.key_path.clone().into()));
+        let (want, old_dek) = {
+            let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
+            let old_dek = k.field_envelope().unwrap().tenant_key("t1").unwrap();
+            (
+                vec![
+                    put_secret(&k, Some("t1"), "alpha"),
+                    put_secret(&k, None, "beta"),
+                ],
+                old_dek,
+            )
+        };
+
+        assert_eq!(super::roll_deks(&dir, &enc).unwrap(), 2, "one version per object");
+
+        {
+            let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
+            let alice = Subject::new("alice");
+            for (koid, tenant, pin) in &want {
+                // T-55: a tenant-less subject cannot read a tenant's rows —
+                // mirror ctx_of's in_tenant qualification per object.
+                let subj = match tenant {
+                    Some(t) => alice.clone().in_tenant(t),
+                    None => alice.clone(),
+                };
+                let ko = k.get(subj, koid).unwrap();
+                assert_eq!(ko.properties.get("pin"), Some(&aikoql_kernel::Value::Text(pin.clone())));
+                assert_eq!(ko.version, 2, "the roll committed one new version");
+            }
+            let e = k.field_envelope().unwrap();
+            assert_ne!(e.tenant_key("t1").unwrap(), old_dek, "fresh DEK in place");
+            assert_eq!(e.prev_key("t1"), Some(old_dek), "the old generation stays decryptable");
+        }
+
+        // Idempotent: a second roll finds nothing to migrate. Fresh open —
+        // the kernel above must be dropped first (the database lock is
+        // exclusive).
+        assert_eq!(super::roll_deks(&dir, &enc).unwrap(), 0);
+
+        // A KEK rotation after the roll rewraps the previous generation too
+        // (or historical versions are unreadable under the new KEK).
+        super::rotate_keys(&dir, &enc).unwrap();
+        {
+            let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
+            assert_eq!(k.field_envelope().unwrap().prev_key("t1"), Some(old_dek));
+        }
+    }
+
+    /// AG-31 — kr007: the install guards fail closed BEFORE any AWS call:
+    /// no encryption config, a missing key file, and a key file that is
+    /// already a KMS pointer.
+    #[test]
+    fn kr007_install_guards_fail_before_touching_aws() {
+        let dir = scratch("kr007");
+        let enc = secret_enc(&dir);
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(enc.key_path.clone().into()));
+
+        let plain = super::RuntimeEncryption { enabled: false, ..enc.clone() };
+        assert!(super::install_to_kms(&plain, None).is_err(), "needs encryption");
+
+        let missing = super::RuntimeEncryption {
+            key_path: format!("{dir}.never-created.key"),
+            ..enc.clone()
+        };
+        assert!(
+            super::install_to_kms(&missing, None).is_err(),
+            "no key file, no install"
+        );
+
+        // A pointer file (written through the seam's mock-free format) is
+        // already KMS-held — a second install refuses.
+        let pointer = format!("{dir}.pointer.key");
+        let mut raw = Vec::new();
+        raw.extend_from_slice(b"AIKOQL-KMS1");
+        std::fs::write(&pointer, &raw).unwrap();
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(pointer.clone().into()));
+        let already = super::RuntimeEncryption { key_path: pointer, ..enc };
+        assert!(
+            super::install_to_kms(&already, None).is_err(),
+            "a pointer file is already KMS-held"
+        );
     }
 }

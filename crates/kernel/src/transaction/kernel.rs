@@ -37,10 +37,12 @@ use crate::relationship::RelationshipManager;
 use crate::security::auth::{AuthManager, POLICY_TYPE, ROLE_TYPE};
 use crate::security::crypto::Crypto;
 use crate::security::envelope::{
-    Envelope, WrappedDek, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_NEXT_KEY, DEKS_STORAGE_KEY,
+    Envelope, WrappedDek, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_NEXT_KEY, DEKS_PREV_KEY,
+    DEKS_PREV_NEXT_KEY, DEKS_STORAGE_KEY,
 };
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
-use crate::security::tenant::TenantManager;
+use crate::security::tenant::{usage_head, usage_row_key, TenantManager, USAGE_HEAD_KEY, USAGE_PREFIX};
+use crate::security::Signer;
 use crate::statistics::Statistics;
 pub use crate::storage::repository::DerivedIndexRebuild;
 use crate::storage::repository::KnowledgeRepository;
@@ -650,6 +652,9 @@ pub use crate::knowledge::notify::{EventFilter, SubscriptionRecord};
 pub(crate) struct Pipeline {
     seq: u64,
     audit: [u8; 32],
+    /// AG-30: the last committed event's Ed25519 audit signature — the
+    /// link the next event's signature chains through.
+    prev_sig: [u8; 64],
     /// T-47 atomic-pair pin: while set, every commit in this pipe reuses the
     /// pinned instant so a composite op's events share one commit time.
     /// Armed and cleared by the wrapping op before the lock releases —
@@ -684,6 +689,9 @@ pub struct Kernel {
     objects: Arc<ObjectManager>,
     /// Optional 32-byte HMAC-SHA256 key for at-rest version signatures.
     signing_key: Option<[u8; 32]>,
+    /// AG-30: the Ed25519 signer that chains a signature onto every
+    /// committed journal event (empty = no per-commit signatures).
+    audit_signer: Arc<Signer>,
     /// Per-tenant quota tracking and enforcement.
     tenants: Arc<TenantManager>,
     /// Optional field-level encryption (MRFC-0020 Phase 3).
@@ -741,7 +749,22 @@ impl Kernel {
         clock: Arc<dyn Clock>,
         id_seed: u64,
     ) -> KResult<Self> {
-        Self::open_with(store, clock, id_seed, false)
+        Self::open_with(store, clock, id_seed, false, None)
+    }
+
+    /// AG-30: open with the audit signer attached from the start — the
+    /// catalog bootstrap commits are inside the signed stream (every event
+    /// from seq 1 carries a chained signature, anchored at zeros).
+    /// shortcut: a restart re-anchors the chain at zeros (`prev_sig` is not
+    /// recovered from the journal head) — tighten when the verifier runs
+    /// against restarted databases.
+    pub fn open_signed(
+        store: Arc<dyn StorageEngine>,
+        clock: Arc<dyn Clock>,
+        id_seed: u64,
+        signer: Arc<Signer>,
+    ) -> KResult<Self> {
+        Self::open_with(store, clock, id_seed, false, Some(signer))
     }
 
     /// MRFC-0080 standby reads — open over a store the replication stream
@@ -753,7 +776,7 @@ impl Kernel {
         clock: Arc<dyn Clock>,
         id_seed: u64,
     ) -> KResult<Self> {
-        Self::open_with(store, clock, id_seed, true)
+        Self::open_with(store, clock, id_seed, true, None)
     }
 
     fn open_with(
@@ -761,6 +784,7 @@ impl Kernel {
         clock: Arc<dyn Clock>,
         id_seed: u64,
         standby: bool,
+        signer: Option<Arc<Signer>>,
     ) -> KResult<Self> {
         let repo = Arc::new(KnowledgeRepository::new(store.clone()));
         // R9: one-time backfill of the type index for databases created before
@@ -781,6 +805,54 @@ impl Kernel {
             repo.write_batch(&batch)?;
             if indexed > 0 {
                 eprintln!("type index: backfilled {indexed} objects");
+            }
+        }
+        // AG-32: per-tenant usage comes from the store. AG-32b: a clean
+        // reopen loads the persisted usage rows instead of decoding every
+        // head — the watermark rides every commit batch atomically with
+        // the rows, so a match means the rows are exact. Missing or stale
+        // (an older binary's database, a torn row) falls back to the full
+        // rebuild, which re-persists both.
+        let tenants = Arc::new(TenantManager::new());
+        if !standby {
+            let mut rows: Option<Vec<(String, usize)>> = None;
+            if let Some((s, _a, t)) = repo.journal_head()? {
+                if store.get(USAGE_HEAD_KEY)?.as_deref() == Some(usage_head(s, t).as_slice()) {
+                    let mut r = Vec::new();
+                    let mut ok = true;
+                    for (k, v) in store.scan(USAGE_PREFIX)? {
+                        if k.len() <= USAGE_PREFIX.len() || v.len() != 8 {
+                            ok = false;
+                            break;
+                        }
+                        let tenant =
+                            String::from_utf8_lossy(&k[USAGE_PREFIX.len()..]).into_owned();
+                        r.push((tenant, usize::from_le_bytes(v.as_slice().try_into().unwrap())));
+                    }
+                    if ok {
+                        rows = Some(r);
+                    }
+                }
+            }
+            match rows {
+                Some(r) => tenants.load(r),
+                None => {
+                    let heads = repo.scan_heads()?;
+                    tenants.rebuild(&heads, |koid, ts| {
+                        repo.get_object_version(koid, ts)
+                            .ok()
+                            .flatten()
+                            .and_then(|ko| ko.metadata.tenant)
+                    });
+                    let mut b = WriteBatch::new();
+                    for (t, n) in tenants.usage_rows() {
+                        b.put(usage_row_key(&t), n.to_le_bytes().to_vec());
+                    }
+                    if let Some((s, _a, t)) = repo.journal_head()? {
+                        b.put(USAGE_HEAD_KEY.to_vec(), usage_head(s, t));
+                    }
+                    store.write_batch(&b)?;
+                }
             }
         }
         let (seq, audit, last_ts) = match repo.journal_head()? {
@@ -818,6 +890,7 @@ impl Kernel {
             pipe: Arc::new(Mutex::new(Pipeline {
                 seq,
                 audit,
+                prev_sig: [0u8; 64],
                 pair_pin: None,
             })),
             events: Arc::new(Mutex::new(events)),
@@ -833,7 +906,10 @@ impl Kernel {
             objects,
             access_counts: Arc::new(Mutex::new(HashMap::new())),
             signing_key: None,
-            tenants: Arc::new(TenantManager::new()),
+            // AG-30: a signer plumbed into open signs the catalog bootstrap
+            // (it commits right after this literal is built).
+            audit_signer: signer.unwrap_or_default(),
+            tenants,
             field_crypto: None,
             encryption_policies: Arc::new(RwLock::new(HashMap::new())),
             embedding_provider: None,
@@ -898,6 +974,23 @@ impl Kernel {
         self
     }
 
+    /// AG-30: attach the Ed25519 audit signer — every event committed from
+    /// now on carries a signature chaining to the previous one. Events
+    /// committed before this call are outside the signed stream.
+    pub fn with_audit_signer(mut self, signer: Arc<Signer>) -> Self {
+        self.audit_signer = signer;
+        self
+    }
+
+    /// AG-30: the per-commit chain link — Sign(prev event's signature ||
+    /// this event's audit hash), None when no signer is attached.
+    fn sign_audit_event(&self, prev_sig: &[u8; 64], audit: &[u8; 32]) -> KResult<Option<[u8; 64]>> {
+        let mut msg = Vec::with_capacity(96);
+        msg.extend_from_slice(prev_sig);
+        msg.extend_from_slice(audit);
+        self.audit_signer.sign(&msg)
+    }
+
     /// Enable an in-memory LRU cache for heads and object versions.
     /// Only effective when called on the originally opened kernel (before any
     /// `clone_handle` shares the repository).
@@ -955,15 +1048,20 @@ impl Kernel {
             Some(raw) => Some(decode(&raw)?),
             None => None,
         };
+        let prev_next = match self.store.get(DEKS_PREV_NEXT_KEY)? {
+            Some(raw) => decode(&raw)?,
+            None => Vec::new(),
+        };
         let deks = match next {
             Some(n) if envelope.unwraps_all(&n) => {
-                self.promote_next_deks(&n)?;
+                self.promote_next_deks(&n, &prev_next)?;
                 n
             }
             stale => {
                 if stale.is_some() {
                     let mut b = WriteBatch::new();
                     b.del(DEKS_NEXT_KEY.to_vec());
+                    b.del(DEKS_PREV_NEXT_KEY.to_vec());
                     self.store.write_batch(&b)?;
                 }
                 match self.store.get(DEKS_STORAGE_KEY)? {
@@ -977,6 +1075,15 @@ impl Kernel {
                 .load_dek(d)
                 .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
         }
+        // AG-31: the previous generation (a DEK roll's decrypt fallback)
+        // loads too — an unwrap failure fails closed like the current set.
+        if let Some(raw) = self.store.get(DEKS_PREV_KEY)? {
+            for d in decode(&raw)? {
+                envelope
+                    .load_prev_dek(&d)
+                    .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
+            }
+        }
         self.field_crypto = Some(Arc::new(FieldCrypto::new(crypto, envelope)));
         Ok(self)
     }
@@ -987,26 +1094,127 @@ impl Kernel {
     }
 
     /// AG-31 rotation step 3 — the next generation's wraps, durable before
-    /// the KMS commits the new KEK.
-    pub fn persist_next_deks(&self, wraps: &[WrappedDek]) -> KResult<()> {
+    /// the KMS commits the new KEK (the previous generation rides the same
+    /// batch, so both switch at the commit point).
+    pub fn persist_next_deks(&self, wraps: &[WrappedDek], prev: &[WrappedDek]) -> KResult<()> {
         let mut b = WriteBatch::new();
         b.put(DEKS_NEXT_KEY.to_vec(), Envelope::encode_wrapped_deks(wraps));
+        if prev.is_empty() {
+            b.del(DEKS_PREV_NEXT_KEY.to_vec());
+        } else {
+            b.put(
+                DEKS_PREV_NEXT_KEY.to_vec(),
+                Envelope::encode_wrapped_deks(prev),
+            );
+        }
         self.store
             .write_batch(&b)
             .map_err(|e| KError::Store(format!("DEK persist: {e}")))
     }
 
-    /// AG-31 rotation step 5 — the next generation becomes the current one.
-    pub fn promote_next_deks(&self, wraps: &[WrappedDek]) -> KResult<()> {
+    /// AG-31 rotation step 5 — the next generation becomes the current one
+    /// (and the previous generation, if any, rides the same batch).
+    pub fn promote_next_deks(&self, wraps: &[WrappedDek], prev: &[WrappedDek]) -> KResult<()> {
         let mut b = WriteBatch::new();
         b.put(
             DEKS_STORAGE_KEY.to_vec(),
             Envelope::encode_wrapped_deks(wraps),
         );
+        if prev.is_empty() {
+            b.del(DEKS_PREV_KEY.to_vec());
+        } else {
+            b.put(DEKS_PREV_KEY.to_vec(), Envelope::encode_wrapped_deks(prev));
+        }
         b.del(DEKS_NEXT_KEY.to_vec());
+        b.del(DEKS_PREV_NEXT_KEY.to_vec());
         self.store
             .write_batch(&b)
             .map_err(|e| KError::Store(format!("DEK persist: {e}")))
+    }
+
+    /// AG-31 — re-encrypt every encrypted field under fresh data keys, one
+    /// committed version per object (the journal hashes the ciphertext, so
+    /// re-encryption is a commit, not a rewrite). Offline: stop the server
+    /// first. Idempotent: a re-run after a crash migrates nothing that was
+    /// already done. Returns the number of objects re-encrypted.
+    pub fn roll_field_deks(&self) -> KResult<usize> {
+        let fc = self.field_crypto.clone().ok_or_else(|| {
+            KError::Store("DEK roll needs field encryption enabled".into())
+        })?;
+        let e = fc.envelope();
+        // The guard covers the snapshot + swap + persist only: a tenant
+        // minted after the batch already encrypts under the new generation
+        // (nothing of theirs to walk), and the walk takes `pipe` — holding
+        // `creation` across it would invert the write path's pipe→creation
+        // order.
+        {
+            let _guard = e.creation_guard();
+            let old_wraps = e.wrapped_deks();
+            if old_wraps.is_empty() {
+                return Ok(0); // no tenant has an encrypted field yet
+            }
+            // A DEKS_PREV_KEY row means a roll already committed: this is a
+            // crash re-run (or a later invocation) — walk with the loaded
+            // generations instead of swapping again, or fields still under
+            // the retired generation lose their fallback. shortcut: a roll
+            // can be re-run but not repeated; forcing a fresh roll needs a
+            // manual reset of the DEK rows, which nothing offers yet.
+            if self.store.get(DEKS_PREV_KEY)?.is_none() {
+                let new_wraps = e
+                    .roll_deks()
+                    .map_err(|x| KError::Store(format!("DEK roll: {x}")))?;
+                // Both generations durable BEFORE the walk: a crash anywhere
+                // leaves readers with current=new, previous=old (fallback
+                // decrypt), and the walk resumes by re-running this command.
+                let mut b = WriteBatch::new();
+                b.put(
+                    DEKS_PREV_KEY.to_vec(),
+                    Envelope::encode_wrapped_deks(&old_wraps),
+                );
+                b.put(
+                    DEKS_STORAGE_KEY.to_vec(),
+                    Envelope::encode_wrapped_deks(&new_wraps),
+                );
+                self.store
+                    .write_batch(&b)
+                    .map_err(|x| KError::Store(format!("DEK persist: {x}")))?;
+            }
+        }
+
+        let mut migrated = 0usize;
+        let policies = self.encryption_policies.read().unwrap().clone();
+        for (koid, _version, ts, _state) in self.scan_heads()? {
+            let Some(mut ko) = self.repo.get_object_version(&koid, ts)? else {
+                continue;
+            };
+            let Some(policy) = policies.get(&ko.metadata.type_name) else {
+                continue;
+            };
+            let tenant = ko.metadata.tenant.clone().unwrap_or_else(|| "default".into());
+            let changed = fc
+                .reencrypt_fields(&tenant, &ko.metadata.type_name, &mut ko.properties, policy)
+                .map_err(|x| KError::Store(format!("DEK roll: {x}")))?;
+            if changed == 0 {
+                continue;
+            }
+            // justified: Mutex poison is unrecoverable
+            let mut pipe = self.pipe.lock().unwrap();
+            ko.version += 1;
+            let rels = ko.relationships.clone(); // untouched by the walk
+            self.commit_version(
+                &mut pipe,
+                ko,
+                EventKind::Updated,
+                Origin::System,
+                "system",
+                Some("ag-31 dek re-encryption".into()),
+                None,
+                Some(&rels),
+                None,
+            )?;
+            migrated += 1;
+        }
+        Ok(migrated)
     }
 
     /// Register an encryption policy for a schema type. Fields listed in the
@@ -1102,6 +1310,7 @@ impl Kernel {
             objects: self.objects.clone(),
             access_counts: self.access_counts.clone(),
             signing_key: self.signing_key,
+            audit_signer: self.audit_signer.clone(),
             tenants: self.tenants.clone(),
             field_crypto: self.field_crypto.clone(),
             encryption_policies: self.encryption_policies.clone(),
@@ -1586,6 +1795,10 @@ impl Kernel {
         note: Option<String>,
         idem: Option<&str>,
         prev_rels: Option<&[RelationshipRef]>,
+        // AG-32b — a count-changing commit passes the tenant and its
+        // post-change count; the row rides this batch (atomic with the
+        // watermark and the event).
+        usage: Option<(&str, usize)>,
     ) -> KResult<(u64, u64)> {
         ko.validate()?;
         // T-47: a composite op may pin one instant for all its events —
@@ -1615,6 +1828,7 @@ impl Kernel {
             actor,
             note.as_deref(),
         );
+        let audit_signature = self.sign_audit_event(&pipe.prev_sig, &audit)?;
         let ke = KnowledgeEvent {
             seq,
             koid: ko.koid,
@@ -1627,6 +1841,7 @@ impl Kernel {
             prev_audit_hash: pipe.audit,
             audit_hash: audit,
             signature,
+            audit_signature,
             note,
         };
         let mut batch = WriteBatch::new();
@@ -1677,6 +1892,14 @@ impl Kernel {
             .write_type_index(&mut batch, &ko.metadata.type_name, &ko.koid);
         self.repo.put_event(&mut batch, seq, &ke);
         self.repo.put_journal(&mut batch, seq, audit, commit_ts);
+        // AG-32b: the usage head watermark rides every commit so a clean
+        // reopen can trust the persisted usage rows; a count change rides
+        // its row in the same batch (atomic — a crash can leave a stale
+        // watermark, never a stale row behind a fresh one).
+        batch.put(USAGE_HEAD_KEY.to_vec(), usage_head(seq, commit_ts));
+        if let Some((tenant, count)) = usage {
+            batch.put(usage_row_key(tenant), count.to_le_bytes().to_vec());
+        }
         if let Some(k) = idem {
             self.repo.put_idem(
                 &mut batch,
@@ -1690,6 +1913,7 @@ impl Kernel {
         self.repo.write_batch(&batch)?;
         pipe.seq = seq;
         pipe.audit = audit;
+        pipe.prev_sig = audit_signature.unwrap_or([0u8; 64]);
         self.broadcast(&ke);
         Ok((commit_ts, seq))
     }
@@ -1819,6 +2043,7 @@ impl Kernel {
             Some("ag-13 salience refresh".into()),
             None,
             Some(&head.relationships),
+            None,
         )?;
         Ok(Some(salience))
     }
@@ -1875,6 +2100,7 @@ impl Kernel {
             Some("semantic enrichment".into()),
             None,
             Some(&head.relationships),
+            None,
         )?;
         Ok(Remembered {
             koid,
@@ -2406,6 +2632,18 @@ impl Kernel {
         };
         let is_auth_meta =
             req.metadata.type_name == ROLE_TYPE || req.metadata.type_name == POLICY_TYPE;
+        // AG-32b: the create's post-count rides the commit batch (computed
+        // under pipe — the same value record_create adds below).
+        let usage_row = if creating {
+            let t = req
+                .metadata
+                .tenant
+                .clone()
+                .unwrap_or_else(|| "default".into());
+            Some((t.clone(), self.tenants.usage(&t) + 1))
+        } else {
+            None
+        };
         let (commit_ts, seq) = self.commit_version(
             pipe,
             ko,
@@ -2415,6 +2653,7 @@ impl Kernel {
             req.note.clone(),
             scoped_idem.as_deref(),
             head.as_ref().map(|h| h.relationships.as_slice()),
+            usage_row.as_ref().map(|(t, n)| (t.as_str(), *n)),
         )?;
         if creating {
             // AG-32: the live counter follows the stored metadata.tenant —
@@ -2899,6 +3138,7 @@ impl Kernel {
         let mut events: Vec<KnowledgeEvent> = Vec::with_capacity(pending.len());
         let mut results = Vec::with_capacity(pending.len());
         let mut prev_audit = pipe.audit;
+        let mut prev_sig = pipe.prev_sig;
         let start_seq = pipe.seq;
         for (idx, (koid, cur_v, mut ko, kind, origin, actor, note, prev_rels)) in
             pending.into_iter().enumerate()
@@ -2926,6 +3166,7 @@ impl Kernel {
                 &actor,
                 note.as_deref(),
             );
+            let audit_signature = self.sign_audit_event(&prev_sig, &audit)?;
             let ke = KnowledgeEvent {
                 seq,
                 koid,
@@ -2938,6 +3179,7 @@ impl Kernel {
                 prev_audit_hash: prev_audit,
                 audit_hash: audit,
                 signature,
+                audit_signature,
                 note,
             };
             self.repo
@@ -2975,6 +3217,7 @@ impl Kernel {
             self.repo.put_event(&mut batch, seq, &ke);
             events.push(ke);
             prev_audit = audit;
+            prev_sig = audit_signature.unwrap_or([0u8; 64]);
             results.push(Remembered {
                 koid,
                 version: cur_v + 1,
@@ -2985,6 +3228,20 @@ impl Kernel {
         let final_seq = start_seq + events.len() as u64;
         self.repo
             .put_journal(&mut batch, final_seq, prev_audit, commit_ts);
+        // AG-32b: the head watermark and the created tenants' usage rows
+        // ride this batch (atomic with the events and the live counts).
+        batch.put(USAGE_HEAD_KEY.to_vec(), usage_head(final_seq, commit_ts));
+        let mut created_counts: HashMap<String, usize> = HashMap::new();
+        for t in &created_tenants {
+            let key = t.clone().unwrap_or_else(|| "default".into());
+            *created_counts.entry(key).or_insert(0) += 1;
+        }
+        for (t, n) in created_counts {
+            batch.put(
+                usage_row_key(&t),
+                (self.tenants.usage(&t) + n).to_le_bytes().to_vec(),
+            );
+        }
         if let Some(schema) = schema_row {
             let bytes = crate::knowledge::codec::encode_schema(schema);
             self.repo
@@ -3006,6 +3263,7 @@ impl Kernel {
         }
         pipe.seq = final_seq;
         pipe.audit = prev_audit;
+        pipe.prev_sig = prev_sig;
         for ke in events {
             self.broadcast(&ke);
         }
@@ -3075,6 +3333,7 @@ impl Kernel {
             note,
             None,
             Some(&head.relationships),
+            None,
         )?;
         Ok(Evolved {
             koid: *koid,
@@ -3216,6 +3475,7 @@ impl Kernel {
             reason,
             None,
             Some(&head.relationships),
+            None,
         )?;
         Ok(EpistemicChanged {
             koid: *koid,
@@ -3260,6 +3520,15 @@ impl Kernel {
                     state: LifecycleState::Deleted,
                     origin: Origin::System,
                 };
+                // AG-32b: the delete's post-count rides the commit batch.
+                let usage_row = {
+                    let t = head
+                        .metadata
+                        .tenant
+                        .clone()
+                        .unwrap_or_else(|| "default".into());
+                    Some((t.clone(), self.tenants.usage(&t).saturating_sub(1)))
+                };
                 let (commit_ts, _) = self.commit_version(
                     &mut pipe,
                     ko,
@@ -3269,6 +3538,7 @@ impl Kernel {
                     note,
                     None,
                     Some(&head.relationships),
+                    usage_row.as_ref().map(|(t, n)| (t.as_str(), *n)),
                 )?;
                 // AG-32: the forgotten KO leaves its tenant's live count.
                 self.tenants.record_delete(head.metadata.tenant.as_deref());
@@ -3304,6 +3574,7 @@ impl Kernel {
                     &ctx.subject.name,
                     note.as_deref(),
                 );
+                let audit_signature = self.sign_audit_event(&pipe.prev_sig, &audit)?;
                 let ke = KnowledgeEvent {
                     seq,
                     koid: *koid,
@@ -3316,11 +3587,26 @@ impl Kernel {
                     prev_audit_hash: pipe.audit,
                     audit_hash: audit,
                     signature,
+                    audit_signature,
                     note,
                 };
                 let mut batch = WriteBatch::new();
                 self.repo.put_event(&mut batch, seq, &ke);
                 self.repo.put_journal(&mut batch, seq, audit, commit_ts);
+                // AG-32b: the watermark and the erased tenant's post-count
+                // ride this batch.
+                batch.put(USAGE_HEAD_KEY.to_vec(), usage_head(seq, commit_ts));
+                let t = head
+                    .metadata
+                    .tenant
+                    .clone()
+                    .unwrap_or_else(|| "default".into());
+                batch.put(
+                    usage_row_key(&t),
+                    (self.tenants.usage(&t).saturating_sub(1))
+                        .to_le_bytes()
+                        .to_vec(),
+                );
                 self.repo.put_tombstone(&mut batch, koid, head_hash, seq);
                 self.repo.delete_head(&mut batch, koid);
                 // R9: the head is gone — drop the type-index entry with it.
@@ -3335,6 +3621,7 @@ impl Kernel {
                 self.tenants.record_delete(head.metadata.tenant.as_deref());
                 pipe.seq = seq;
                 pipe.audit = audit;
+                pipe.prev_sig = audit_signature.unwrap_or([0u8; 64]);
                 self.broadcast(&ke);
                 Ok(Forgotten {
                     koid: *koid,
@@ -4844,6 +5131,7 @@ impl Kernel {
             "kernel",
             Some(note),
         );
+        let audit_signature = self.sign_audit_event(&pipe.prev_sig, &audit)?;
         let ke = KnowledgeEvent {
             seq,
             koid: KOID::ZERO,
@@ -4856,14 +5144,18 @@ impl Kernel {
             prev_audit_hash: pipe.audit,
             audit_hash: audit,
             signature: None,
+            audit_signature,
             note: Some(note.into()),
         };
         let mut batch = WriteBatch::new();
         self.repo.put_event(&mut batch, seq, &ke);
         self.repo.put_journal(&mut batch, seq, audit, commit_ts);
+        // AG-32b: the watermark rides this batch too — every head advance.
+        batch.put(USAGE_HEAD_KEY.to_vec(), usage_head(seq, commit_ts));
         self.repo.write_batch(&batch)?;
         pipe.seq = seq;
         pipe.audit = audit;
+        pipe.prev_sig = audit_signature.unwrap_or([0u8; 64]);
         self.broadcast(&ke);
         Ok(())
     }

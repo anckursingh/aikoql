@@ -45,6 +45,13 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = ["
 # KMS uses) + 256-bit CSPRNG session tokens. Both already in Cargo.lock.
 argon2 = "0.5"
 getrandom = "0.2"
+# AG-31 cloud KMS install: the AWS SDK implementation of the kernel's
+# KmsOps seam (the serve binary supplies it; the kernel stays SDK-free).
+aws-config = "1"
+aws-sdk-kms = "1"
+# The SDK bridge's current-thread runtime (the binary carries no other
+# async runtime — see the OTLP comment below).
+tokio = { version = "1", features = ["rt", "time"] }
 
 [features]
 default = ["embedding-candle"]

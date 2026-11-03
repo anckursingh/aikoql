@@ -594,8 +594,8 @@ fn unix_ms() -> i64 {
 }
 
 impl AuthResolver {
-    // tests-only constructor (production goes through with_state); the bin
-    // build would flag it dead otherwise
+    /// Test-only convenience (AG-52's `with_state` is the serve path);
+    /// cfg(test) so the bin build does not flag it dead
     #[cfg(test)]
     pub(crate) fn new(
         users: Vec<crate::config::AuthUser>,

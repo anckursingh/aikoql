@@ -240,6 +240,7 @@ fn knowledge_event_strategy() -> impl Strategy<Value = KnowledgeEvent> {
                     prev_audit_hash,
                     audit_hash,
                     signature,
+                    audit_signature: None,
                     note,
                 }
             },

@@ -9,6 +9,17 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Security
 
+- **Cloud KMS `install` (AG-31)**: `aikoql-mcp key install [DB]
+  [--kms-region R]` wraps the master key under a new AWS KMS CMK
+  (`alias/aikoql/<db>`) and replaces the key file with a pointer
+  (`AIKOQL-KMS1` + ARN + key hash + ciphertext) — the KEK itself never
+  changes, and AWS IAM gates every later open instead of the passphrase
+  (a pointer file is detected at open, no config flag). The install
+  verifies the unwrap through KMS before touching the local file, and
+  the pointer's key hash fails a torn file closed. `key rotate` re-wraps
+  a fresh key under the same CMK. Azure/GCP still return unsupported;
+  ImportKeyMaterial (the CMK holding the key itself) is the BYOK
+  upgrade path.
 - **Login backoff survives restarts + per-IP layer (AG-52)**: the fail state persists to `<db>.login-backoff.json` (wall-clock lock-until, reloaded at serve) so a restart keeps its login backoffs; a per-IP failure layer (20 free, same doubling) sits in front of the credential check on `/api/login` and the OAuth sign-in so a username spray is refused before argon2 runs. `--trusted-proxy IP` (`server.trusted_proxy` / `AIKOQL_TRUSTED_PROXY`) arms `X-Forwarded-For` — the client address is the last XFF hop only when the peer is the proxy, the peer otherwise.
 - **Stored content is fenced and trust-classed (AG-33)**: `remember` and
   `memory_store` accept a `trust` class of the content's source (`user`,
@@ -38,6 +49,63 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Usage counts persist under a head watermark (AG-32)**: each tenant's
+  live object count is one 8-byte row under `__tenants/usage/<tenant>`,
+  and a `(seq, ts)` head watermark rides every commit batch atomically
+  with the rows, so a clean open loads the counts instead of decoding
+  every head; a database without the watermark (an older binary) still
+  rebuilds from the heads and writes both back.
+- **Per-commit journal signatures (AG-30)**: when a server runs with
+  `AIKOQL_AUDIT_SIGNING_KEY`, every journal event carries an Ed25519
+  signature over (the previous event's signature ‖ its audit hash) — a
+  chain anyone can verify with the public key alone, where dropping,
+  reordering or tampering with a signed event breaks its successor and
+  the chain's tail is the signed audit head. `evidence_pack` emits the
+  `journal_signatures` stream, and `scripts/e2e-audit-verify.py` (run in
+  CI's e2e-dogfood job) replays the chain with Python `cryptography` and
+  rejects tampering. With `open_signed` (the serve path) the whole
+  journal is in the stream — the catalog bootstrap signs from seq 1,
+  anchored at zeros (a restart re-anchors the chain; recovering the
+  anchor across restarts is the remaining shortcut).
+- **Passphrase change (AG-31)**: `aikoql-mcp key change-passphrase NEW [DB]`
+  re-wraps the master key file under a new passphrase — the master key
+  itself never changes, so no data key moves and every object stays
+  readable; the old passphrase no longer opens the database, and a later
+  `key rotate` wraps under the new passphrase.
+- **Data-key (DEK) re-encryption (AG-31)**: `aikoql-mcp key roll-deks [DB]`
+  mints a fresh data key per tenant and re-encrypts every encrypted field
+  through the journal (one committed version per object — the journal
+  hashes the ciphertext, so a rewrite is a commit, not an edit). Both
+  generations are persisted before the walk, a crash mid-walk resumes on
+  re-run without swapping generations again, readers fall back to the
+  previous generation, and a later `key rotate` rewraps the previous
+  generation too so historical versions stay readable. A second roll is a
+  no-op walk (returns 0) — a roll can be re-run but not repeated.
+- **Composite range indexes + CBO range histograms (AG-21)**: a range
+  over the FIRST property of a composite index now serves as a
+  byte-prefix scan over the ordered tuple keys (the exclusive-successor
+  upper bound keeps hi's suffix rows included), and `analyze` builds a
+  per-property range histogram (quantile buckets over the index's key
+  order) so the optimizer prices range filters and picks range indexes
+  from an estimate instead of materializing every candidate at plan
+  time — the exact-count probe remains the fallback when a property has
+  no histogram.
+- **Helm lint + render on every PR (AG-51)**: a new `ci.yml` job runs
+  `helm lint deploy/helm/aikoql` and `helm template aikoql
+  deploy/helm/aikoql` per push, so a broken chart template fails at PR
+  time instead of waiting for the nightly kind gate (which only renders
+  on schedule).
+- **Framework-adapter async offload (AG-60)**: the async OpenAI Agents
+  session methods now run their sync aikoql I/O on a worker thread via
+  `asyncio.to_thread` (the langgraph.py shape), and both python adapters
+  gained embedded-client gates over the positional client. Before, the
+  Runner's awaits executed the client round trips on the event-loop
+  thread.
+- **Tenant usage rebuilds on open (AG-32)**: opening a kernel scans the
+  heads and rebuilds per-tenant counters from each head's own
+  `metadata.tenant` (tenant-less heads count under `default`) — a
+  restart no longer empties the counters to re-learn as writes land.
+  Before, `rebuild` existed but nothing wired it at startup.
 - **Error ergonomics (AG-05)**: every tool error now carries `hint` (what went wrong) and `next` (what to do) beside `code`/`message`/`retryable`/`suggestion`; the txn tools route through the shared envelope instead of a hardcoded INTERNAL. A hygiene gate drives every tool with empty args and asserts no isError result is a bare string.
 - **Procedural memory (AG-14)**: `record_experience` materializes a carried `lesson` as a first-class `aikoql:lesson` KO beside the experience and returns both (`lesson_koid` in the tool response); `match_experiences` ranks outcome-weighted — successful procedures first, failures last, unclassified between.
 - **Coordination primitives (AG-41)**: `claim_task` / `release_task` / `handoff_task` (kernel ops + MCP tools) — claims are a pipe-locked CAS with kernel-managed `claim_holder`/`claim_until` extensions, so a task is claimed exactly once and the loser gets CLAIM_CONFLICT; wall-clock leases expire on agent death, the holder re-claiming renews, and handoff transfers the claim and records an evidence-backed `aikoql:handoff` KO.

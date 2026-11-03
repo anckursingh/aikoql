@@ -3242,6 +3242,11 @@ pub struct KnowledgeEvent {
     /// is opened with a signing key; proves payload integrity independently of
     /// the audit chain (MRFC-0011 §6.7).
     pub signature: Option<[u8; 32]>,
+    /// AG-30: the kernel's Ed25519 audit signature over (previous event's
+    /// signature || this event's audit hash) — a per-commit chain verifiable
+    /// with the public key alone; present when the kernel holds an audit
+    /// signer, and only for events committed after it was attached.
+    pub audit_signature: Option<[u8; 64]>,
     pub note: Option<String>,
 }
 

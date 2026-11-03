@@ -15,6 +15,7 @@ mod api_rest;
 mod archive;
 mod audit;
 mod authz;
+mod aws_kms;
 mod cli;
 mod config;
 mod dispatcher;
@@ -90,7 +91,11 @@ pub(crate) use tracing::{error, info, info_span, warn};
 pub(crate) static SERVER_START: OnceLock<Instant> = OnceLock::new();
 pub(crate) static MEMORY_DIR: OnceLock<String> = OnceLock::new();
 /// AG-30: the audit-signing key (AIKOQL_AUDIT_SIGNING_KEY), loaded once.
-pub(crate) static AUDIT_SIGNER: OnceLock<aikoql_kernel::security::SigningKey> = OnceLock::new();
+/// Shared with the kernel, so every committed journal event carries a
+/// chained per-commit signature in addition to the evidence-pack head
+/// signature.
+pub(crate) static AUDIT_SIGNER: OnceLock<std::sync::Arc<aikoql_kernel::security::Signer>> =
+    OnceLock::new();
 
 /// The Ed25519 seed in `path`: 64 hex characters (surrounding whitespace
 /// ignored), e.g. `openssl rand -hex 32 > audit.key`.
@@ -285,7 +290,11 @@ fn main() {
             Ok(key) => {
                 info!(public_key = %key.public_key().iter().map(|b| format!("{b:02x}")).collect::<String>(),
                     "audit evidence will be signed (Ed25519)");
-                AUDIT_SIGNER.get_or_init(|| key);
+                AUDIT_SIGNER.get_or_init(|| {
+                    let signer = std::sync::Arc::new(aikoql_kernel::security::Signer::new());
+                    signer.set_key(key);
+                    signer
+                });
             }
             Err(e) => {
                 eprintln!("AIKOQL_AUDIT_SIGNING_KEY: {e}");

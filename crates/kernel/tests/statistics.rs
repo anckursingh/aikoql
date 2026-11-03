@@ -288,3 +288,47 @@ fn cbo_a06_statistics_reads_are_cache_served_and_reanalyze_refreshes() {
         "the same-kernel read reflects the re-analysis"
     );
 }
+
+// --- cbo_a07 — AG-21d: analyze builds a per-property range histogram over
+// the index's ordered keys; range_fraction estimates a range's match
+// fraction without probing the index. A property whose values fall outside
+// the orderable domains (Num/Text/Bool) builds no histogram.
+#[test]
+fn cbo_a07_analyze_builds_a_range_histogram_and_estimates() {
+    let k = mk();
+    for i in 0..1000 {
+        emp(&k, &format!("E{i}"), "Eng", i);
+    }
+    let stats = k.analyze("Employee").unwrap();
+    // [300, 700): 400 of 1000 rows — quantile buckets estimate within one
+    // bucket (1000/64 ≈ 15.6 rows) of the true 0.40
+    let f = stats
+        .range_fraction(
+            "salary",
+            Some(&Value::Int(300)),
+            Some(&Value::Int(700)),
+        )
+        .expect("a histogram for the orderable salary");
+    assert!((f - 0.40).abs() < 0.03, "{f}");
+    // open upper end: [900, +∞) = 100 rows
+    let g = stats
+        .range_fraction("salary", Some(&Value::Int(900)), None)
+        .unwrap();
+    assert!((g - 0.10).abs() < 0.03, "{g}");
+    // a mixed-domain property never builds a histogram (Null is never
+    // range-ordered)
+    let mut req = RememberRequest::create(alice(), meta("Employee"));
+    req.properties
+        .insert("salary".into(), Value::Null);
+    k.remember(req).unwrap();
+    let stats = k.analyze("Employee").unwrap();
+    assert_eq!(
+        stats.range_fraction(
+            "salary",
+            Some(&Value::Int(0)),
+            Some(&Value::Int(100))
+        ),
+        None,
+        "a mixed-domain property has no histogram"
+    );
+}

@@ -108,6 +108,19 @@ fn ag51_kind_failover_e2e_is_wired_into_the_nightly_owner() {
 }
 
 #[test]
+fn ag51_helm_lint_render_is_wired_into_pr_ci() {
+    let ci = read(&root().join(".github/workflows/ci.yml"));
+    assert!(
+        ci.contains("helm lint deploy/helm/aikoql"),
+        "ci.yml must helm-lint the chart on every PR (the kind gate only renders nightly)"
+    );
+    assert!(
+        ci.contains("helm template") && ci.contains("deploy/helm/aikoql"),
+        "ci.yml must helm-render the chart on every PR"
+    );
+}
+
+#[test]
 fn ag51_repl_tls_is_a_helm_managed_secret_with_a_stable_ca() {
     // the first real kind run died in the pre-install Job: alpine/openssl
     // has no kubectl, and kubectl apply needed secret verbs the RBAC never
