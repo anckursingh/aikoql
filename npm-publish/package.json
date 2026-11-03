@@ -1,7 +1,7 @@
 {
   "name": "aikoql-mcp",
   "version": "0.4.0",
-  "description": "Aikoql — The Agent-First Knowledge Database. Single binary, zero deps. MCP server for knowledge CRUD, aikoql queries, graph traversal, hybrid search, context compilation, document ingestion, and more.",
+  "description": "Persistent, progressive agent memory for AI agents — encrypted hybrid vector+text knowledge database with an MCP server (recall, compile-context, knowledge CRUD, aikoql queries).",
   "license": "AGPL-3.0-only",
   "author": {
     "name": "Anckur Singh",
