@@ -10,4 +10,4 @@ aikoql-mcp serve ./kb              # MCP server over stdio
 
 `AIKOQL_BINARY=/path/to/aikoql-mcp` skips the download and runs a local binary (the CI tarball smoke uses this because a PR's version has no Release yet).
 
-- License: Apache-2.0
+- License: AGPL-3.0-only

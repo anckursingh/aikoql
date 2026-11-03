@@ -16,4 +16,4 @@ defer client.Close()
 
 - Tests: `AIKOQL_MCP_BIN=$PWD/target/release/aikoql-mcp go test -v ./...`
 - Fuzz smokes (8 targets): `go test -fuzz '^Fuzz' -fuzztime 5s .` (one target at a time)
-- License: Apache-2.0
+- License: AGPL-3.0-only

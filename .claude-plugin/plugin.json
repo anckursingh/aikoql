@@ -8,7 +8,7 @@
   },
   "homepage": "https://github.com/anckursingh/aikoql",
   "repository": "https://github.com/anckursingh/aikoql",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "keywords": [
     "knowledge-graph",
     "knowledge-database",

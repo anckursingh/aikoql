@@ -22,4 +22,4 @@ ResultSet rows = conn.query("MATCH person RETURN *");
 
 - Tests: `mvn test` (real-server conformance honors `AIKOQL_MCP_BIN`)
 - Fuzz smokes (7 Jazzer targets): `bash jazzer-smoke.sh` (`AIKOQL_JAZZER_SECONDS` for a bigger budget)
-- License: Apache-2.0
+- License: AGPL-3.0-only

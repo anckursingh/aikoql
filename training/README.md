@@ -34,4 +34,4 @@ The dataset pipeline and its contract are documented in the repo:
 
 ## License
 
-Apache-2.0.
+AGPL-3.0-only.
