@@ -210,6 +210,7 @@ dependencies = [
  "postgres",
  "prost",
  "ring",
+ "rusqlite",
  "rustls 0.23.46",
  "serde",
  "serde_json",

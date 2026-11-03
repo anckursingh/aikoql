@@ -48,6 +48,7 @@ mod tls;
 mod tool_registry;
 mod tools;
 mod transport;
+mod users;
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -543,6 +544,35 @@ fn main() {
                 std::process::exit(1);
             }
         };
+    // Enterprise multi-user (Task 3): only a verified multi-user license
+    // opens the user store — community mode never creates users.db. The
+    // store lives in the data dir, which the kernel has just opened. First
+    // start seeds the bootstrap admin from AIKOQL_ADMIN_PASSWORD; with no
+    // admin to seed or claim, serve refuses (exit 2 — an operator fix, not
+    // a runtime failure).
+    if license::LICENSE_STATE
+        .get()
+        .is_some_and(|s| s.features.multi_user)
+    {
+        let store_path = std::path::PathBuf::from(format!("{db_path}/users.db"));
+        let store = match users::UserStore::open(&store_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("multi-user user store {}: {e}", store_path.display());
+                std::process::exit(1);
+            }
+        };
+        if !store.has_admin() {
+            let Some(pw) = cfg.admin_password.as_deref() else {
+                eprintln!("multi-user requires a bootstrap admin (set AIKOQL_ADMIN_PASSWORD)");
+                std::process::exit(2);
+            };
+            if let Err(e) = store.seed_bootstrap_admin(pw) {
+                eprintln!("multi-user user store: seed bootstrap admin: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     if let (Some(slot), Some(a)) = (&ha_slot, &admin) {
         let _ = slot.set(a.clone()); // the renewer can now fence writes
     }

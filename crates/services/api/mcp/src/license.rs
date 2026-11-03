@@ -112,13 +112,39 @@ struct WireLicense {
     features: Vec<String>,
 }
 
-/// Verify an envelope against the production public key. Fail closed: any
-/// malformation — envelope, base64, signature, fields, or an expiry beyond
-/// the grace window — is an Err, never a default license.
+/// The public key `verify_license` pins: the embedded production key — or,
+/// in DEBUG builds only, `AIKOQL_LICENSE_PUBLIC_KEY` (base64url, no
+/// padding) when set, so the integration tests can spawn a debug server
+/// licensed by a TEST keypair. Release builds never read the env: a
+/// shipped binary always verifies against the production key.
+#[cfg(debug_assertions)]
+fn active_public_key_b64() -> String {
+    std::env::var("AIKOQL_LICENSE_PUBLIC_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| LICENSE_PUBLIC_KEY_B64.to_string())
+}
+
+#[cfg(not(debug_assertions))]
+fn active_public_key_b64() -> &'static str {
+    LICENSE_PUBLIC_KEY_B64
+}
+
+/// Verify an envelope against the production public key — or, in debug
+/// builds, the `AIKOQL_LICENSE_PUBLIC_KEY` override (see
+/// `active_public_key_b64`). Fail closed: any malformation — envelope,
+/// base64, signature, fields, or an expiry beyond the grace window — is an
+/// Err, never a default license.
 pub(crate) fn verify_license(bytes: &[u8]) -> Result<LicenseState, LicenseError> {
+    // a malformed override falls back to the production key — a test
+    // fixture then fails verification and degrades to community mode
     let pk = URL_SAFE_NO_PAD
-        .decode(LICENSE_PUBLIC_KEY_B64)
-        .expect("LICENSE_PUBLIC_KEY_B64 is a fixed, valid base64url public key");
+        .decode(active_public_key_b64())
+        .unwrap_or_else(|_| {
+            URL_SAFE_NO_PAD
+                .decode(LICENSE_PUBLIC_KEY_B64)
+                .expect("LICENSE_PUBLIC_KEY_B64 is a fixed, valid base64url public key")
+        });
     verify_license_with_key(bytes, &pk)
 }
 
