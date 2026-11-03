@@ -9,6 +9,10 @@ use serde::Deserialize;
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeConfig {
     pub db_path: String,
+    /// Enterprise licensing: `AIKOQL_LICENSE` names the license file, else
+    /// `<data-dir>/.aikoql-license` (the database directory). Resolved at
+    /// the end of load() — a positional DB path moves the default too.
+    pub license_path: String,
     pub listen_addr: Option<String>,
     /// D-15: the framed native protocol listener (§5/§6, ECO-2). Same
     /// loopback-only + token rules as the MCP TCP listener; CLI-only for
@@ -319,6 +323,7 @@ pub(crate) fn load(
 ) -> Result<RuntimeConfig, String> {
     let mut cfg = RuntimeConfig {
         db_path: DEFAULT_DB_PATH.into(),
+        license_path: String::new(), // resolved below, after every layer
         listen_addr: None,
         native_port: None,
         replicate_listen: None,
@@ -821,6 +826,11 @@ pub(crate) fn load(
         cfg.tcp_tokens = cli_tcp_tokens;
     }
 
+    // The enterprise license: AIKOQL_LICENSE wins, else the license lives
+    // next to the database (the v2 data directory).
+    cfg.license_path =
+        env_opt("AIKOQL_LICENSE").unwrap_or_else(|| format!("{}/.aikoql-license", cfg.db_path));
+
     Ok(cfg)
 }
 
@@ -1317,5 +1327,26 @@ employee = ["salary", "ssn"]
     fn positional_db_path_still_works() {
         let cfg = load_bare(&argv(&["aikoql-mcp", "./my-kb"])).unwrap();
         assert_eq!(cfg.db_path, "./my-kb");
+    }
+
+    #[test]
+    fn license_path_env_else_data_dir_default() {
+        let cfg = load_bare(&argv(&["aikoql-mcp"])).unwrap();
+        assert_eq!(
+            cfg.license_path,
+            format!("{DEFAULT_DB_PATH}/.aikoql-license")
+        );
+        // a positional DB path moves the default next to the database
+        let cfg = load_bare(&argv(&["aikoql-mcp", "/kb/x"])).unwrap();
+        assert_eq!(cfg.license_path, "/kb/x/.aikoql-license");
+        // AIKOQL_LICENSE wins over the default
+        let cfg = load_with_env(|| {
+            std::env::set_var("AIKOQL_LICENSE", "/lic/a.bin");
+            let r = load(&argv(&["aikoql-mcp", "/kb/x"]), None, None);
+            std::env::remove_var("AIKOQL_LICENSE");
+            r
+        })
+        .unwrap();
+        assert_eq!(cfg.license_path, "/lic/a.bin");
     }
 }

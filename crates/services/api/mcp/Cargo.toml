@@ -33,6 +33,9 @@ ureq = { version = "2", features = ["json"] }
 # the tree; no default features, so aws-lc-rs stays out)
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 base64 = "0.22"
+# Ed25519 license verification (Task 2) — ring is already linked via
+# rustls/kernel; this makes it a direct dependency for license.rs.
+ring = "0.17"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # AG-50: OTLP trace export when AIKOQL_OTEL_ENDPOINT is set (blocking HTTP

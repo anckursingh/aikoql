@@ -28,6 +28,7 @@ mod http;
 mod imports;
 mod ingest;
 mod knowledge_runtime;
+mod license;
 mod mcp_http;
 mod model;
 mod native;
@@ -301,6 +302,27 @@ fn main() {
                 std::process::exit(2);
             }
         }
+    }
+
+    // Enterprise licensing (Task 2): verify once at serve start. A valid
+    // license arms the enterprise features (Tasks 5/7/8/9); anything else —
+    // missing file, unreadable, tampered, expired — degrades to community
+    // mode with the reason in the log. Never a crash, never a default
+    // license (fail closed).
+    match std::fs::read(&cfg.license_path) {
+        Ok(bytes) => match license::verify_license(&bytes) {
+            Ok(state) => {
+                info!(org = %state.org, "enterprise license accepted");
+                let _ = license::LICENSE_STATE.set(state);
+            }
+            Err(e) => {
+                warn!(path = %cfg.license_path, "license rejected: {e}; running community mode")
+            }
+        },
+        Err(e) => warn!(
+            path = %cfg.license_path,
+            "license rejected: cannot read file: {e}; running community mode"
+        ),
     }
 
     // P3-M1 (§53–54): build the HTTP login resolver once — argon2id hashes
