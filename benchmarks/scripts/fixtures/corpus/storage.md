@@ -1,0 +1,1 @@
+The aikoql storage engine runs a journal-backed commit pipeline with group commit, compaction key sweeps, and checkpoint streaming. Every write lands in the journal first and heads are derived lazily.
