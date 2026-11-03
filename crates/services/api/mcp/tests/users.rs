@@ -112,83 +112,15 @@ fn roles_of_unknown_sub_none() {
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use ring::rand::SystemRandom;
-use ring::signature::{Ed25519KeyPair, KeyPair};
-use std::io::{BufRead, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::process::{Child, Command, Stdio};
-
-/// Hard-kill a still-running server child on drop (a panicked test must not
-/// leak the process).
-struct ServerGuard(Child);
-impl Drop for ServerGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-fn free_port() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").expect("bind :0");
-    let port = l.local_addr().unwrap().port();
-    drop(l);
-    port
-}
-
-/// Sign a license payload with a fresh TEST keypair → (public key, envelope).
-/// Never the production key — its private half is off-repo; the debug-only
-/// AIKOQL_LICENSE_PUBLIC_KEY override makes the debug server verify against
-/// this test pair.
-fn sign(org: &str, features: &[&str]) -> (Vec<u8>, Vec<u8>) {
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("system RNG");
-    let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("fresh PKCS#8");
-    let payload = serde_json::json!({
-        "ver": 1,
-        "org": org,
-        "issued_at": "0",
-        "expires_at": null,
-        "features": features,
-    });
-    let json = serde_json::to_vec(&payload).unwrap();
-    let sig = pair.sign(&json);
-    let envelope = format!(
-        "{}.{}",
-        URL_SAFE_NO_PAD.encode(&json),
-        URL_SAFE_NO_PAD.encode(sig.as_ref())
-    );
-    (pair.public_key().as_ref().to_vec(), envelope.into_bytes())
-}
-
-/// One raw HTTP request over plain TCP; the server closes after the
-/// response.
-fn http_req(port: u16, request: &str) -> Result<String, String> {
-    let mut s = TcpStream::connect(("127.0.0.1", port)).map_err(|e| e.to_string())?;
-    s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .expect("read timeout");
-    s.write_all(request.as_bytes()).unwrap();
-    s.flush().unwrap();
-    let mut out = Vec::new();
-    let _ = s.read_to_end(&mut out); // EOF = the response is complete
-    Ok(String::from_utf8_lossy(&out).into_owned())
-}
-
-/// Poll the child until it exits; panic if it is still serving.
-fn wait_exit(child: &mut Child, deadline: std::time::Instant) -> std::process::ExitStatus {
-    loop {
-        if let Some(st) = child.try_wait().expect("try_wait") {
-            return st;
-        }
-        assert!(std::time::Instant::now() < deadline, "server never exited");
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-}
+use std::io::{BufRead, Write};
+use std::net::TcpStream;
 
 /// A licensed server with multi-user on and no admin anywhere (no
 /// AIKOQL_ADMIN_PASSWORD) must refuse to start: non-zero exit and the
 /// operator's error message.
 #[test]
 fn multi_user_without_admin_refuses_start() {
-    let (pk, blob) = sign("test", &["multi-user"]);
+    let (pk, blob) = common::sign("test", None, &["multi-user"]);
     let lic = std::env::temp_dir().join(format!("aikoql-users-refuse-{}.lic", std::process::id()));
     std::fs::write(&lic, &blob).unwrap();
     common::register_temp_path(&lic);
@@ -198,26 +130,21 @@ fn multi_user_without_admin_refuses_start() {
     let log = std::env::temp_dir().join(format!("aikoql-users-refuse-{}.log", std::process::id()));
     common::register_temp_path(&log);
 
-    let port = free_port();
-    let mut srv = ServerGuard(
-        Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
-            .arg("serve")
-            .arg("--metrics-addr")
-            .arg(format!("127.0.0.1:{port}"))
-            .arg(&db)
-            .env("AIKOQL_LICENSE", &lic)
-            .env("AIKOQL_LICENSE_PUBLIC_KEY", URL_SAFE_NO_PAD.encode(&pk))
+    let lic_str = lic.to_str().unwrap();
+    let pk_b64 = URL_SAFE_NO_PAD.encode(&pk);
+    let mut srv = common::spawn_server(
+        &db,
+        &log,
+        &[
+            ("AIKOQL_LICENSE", lic_str),
+            ("AIKOQL_LICENSE_PUBLIC_KEY", pk_b64.as_str()),
             // no AIKOQL_ADMIN_PASSWORD — the refusal under test
-            .env_remove("AIKOQL_ADMIN_PASSWORD")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(std::fs::File::create(&log).unwrap()))
-            .spawn()
-            .expect("spawn aikoql-mcp serve"),
+        ],
+        &[],
     );
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let status = wait_exit(&mut srv.0, deadline);
+    let status = common::wait_exit(&mut srv.child, deadline);
     assert!(
         !status.success(),
         "a licensed multi-user server with no admin must refuse to start"
@@ -233,34 +160,21 @@ fn multi_user_without_admin_refuses_start() {
 /// password login work as before, and no enterprise users.db is created.
 #[test]
 fn unlicensed_server_unchanged() {
-    let db =
-        std::env::temp_dir().join(format!("aikoql-users-parity-db-{}", std::process::id()));
+    let db = std::env::temp_dir().join(format!("aikoql-users-parity-db-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&db);
     common::register_temp_path(&db);
     let log = std::env::temp_dir().join(format!("aikoql-users-parity-{}.log", std::process::id()));
     common::register_temp_path(&log);
 
-    let mcp_port = free_port();
-    let http_port = free_port();
-    let _srv = ServerGuard(
-        Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
-            .arg("serve")
-            .arg("--listen")
-            .arg(format!("127.0.0.1:{mcp_port}"))
-            .arg("--tcp-token")
-            .arg("parity-tok:acme:admin")
-            .arg("--metrics-addr")
-            .arg(format!("127.0.0.1:{http_port}"))
-            .arg(&db)
-            .env("AIKOQL_ADMIN_PASSWORD", "parity-pw")
-            .env_remove("AIKOQL_LICENSE")
-            .env_remove("AIKOQL_LICENSE_PUBLIC_KEY")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(std::fs::File::create(&log).unwrap()))
-            .spawn()
-            .expect("spawn aikoql-mcp serve"),
-    );
+    let mcp_port = common::free_port();
+    let mcp_addr = format!("127.0.0.1:{mcp_port}");
+    let extra = [
+        "--listen",
+        mcp_addr.as_str(),
+        "--tcp-token",
+        "parity-tok:acme:admin",
+    ];
+    let _srv = common::spawn_server(&db, &log, &[("AIKOQL_ADMIN_PASSWORD", "parity-pw")], &extra);
 
     // v0.4.0 TCP-token MCP auth: initialize with the token part succeeds
     let mut stream = {
@@ -291,7 +205,10 @@ fn unlicensed_server_unchanged() {
     let mut line = String::new();
     reader.read_line(&mut line).expect("initialize response");
     let resp: serde_json::Value = serde_json::from_str(line.trim()).expect("JSON response");
-    assert!(resp.get("result").is_some(), "TCP-token initialize failed: {resp}");
+    assert!(
+        resp.get("result").is_some(),
+        "TCP-token initialize failed: {resp}"
+    );
 
     // v0.4.0 password login: the bootstrap admin logs in over HTTP
     let body = r#"{"username":"admin","password":"parity-pw"}"#;
@@ -302,7 +219,7 @@ fn unlicensed_server_unchanged() {
     );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let login = loop {
-        if let Ok(resp) = http_req(http_port, &request) {
+        if let Ok(resp) = common::http_req(_srv.port, &request) {
             break resp;
         }
         assert!(
@@ -315,7 +232,10 @@ fn unlicensed_server_unchanged() {
         login.starts_with("HTTP/1.") && login.contains(" 200 "),
         "password login must keep working: {login}"
     );
-    assert!(login.contains("\"token\""), "login must mint a session: {login}");
+    assert!(
+        login.contains("\"token\""),
+        "login must mint a session: {login}"
+    );
 
     // and community mode never creates the enterprise store
     assert!(

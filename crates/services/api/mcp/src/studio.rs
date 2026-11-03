@@ -1953,3 +1953,34 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 </body>
 </html>"##;
+
+/// The Studio page. Community mode: byte-for-byte v0.4.0 (`STUDIO_HTML`
+/// itself). Enterprise SSO: the overlay gains the SSO button and the
+/// /oidc/callback `#token=` hand-off.
+pub(crate) fn studio_html(sso: bool) -> String {
+    if !sso {
+        return STUDIO_HTML.to_string();
+    }
+    let anchor = format!("<button onclick=\"doLogin()\">Sign In</button>{SSO_LOGIN_HTML}");
+    let html = STUDIO_HTML.replace("<button onclick=\"doLogin()\">Sign In</button>", &anchor);
+    debug_assert!(html != STUDIO_HTML, "the studio SSO anchor moved");
+    html
+}
+
+/// Injected only with SSO active: the IdP button plus the callback hand-off
+/// (a URL-fragment read; the page's api() sends authToken as a query param
+/// itself, unchanged from v0.4.0).
+const SSO_LOGIN_HTML: &str = r#"<button onclick="location.href='/api/login/sso'">Sign in with SSO</button>
+<script>window.addEventListener('load', () => {
+  // the callback hands the token over in the URL fragment; the query-string
+  // read below only keeps a bookmarked pre-fragment hand-off working
+  const q = new URLSearchParams(location.hash ? location.hash.slice(1) : location.search);
+  const t = q.get('token');
+  if (!t) return;
+  authToken = t;
+  currentUser = q.get('user') || 'sso';
+  document.getElementById('user-badge').textContent = currentUser + (currentUser === 'admin' ? ' (admin)' : '');
+  document.getElementById('login-overlay').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  initApp();
+});</script>"#;

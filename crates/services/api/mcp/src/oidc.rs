@@ -256,13 +256,23 @@ pub(crate) struct MockOidcProvider {
     key: RsaKeyPair,
 }
 
-/// What every token the mock signs carries.
+/// What every token the mock signs carries. Task 5: `exp`/`iss`/`aud` may
+/// override the correct values so the failure gates can be unit-tested
+/// through the real verify path; the same shape parses from
+/// AIKOQL_OIDC_MOCK_CLAIMS.
+#[derive(Debug, serde::Deserialize)]
 pub(crate) struct MockClaims {
     pub sub: String,
     pub name: Option<String>,
     /// None → the token carries no roles claim at all (the verifier then
     /// yields an empty roles vec).
     pub roles: Option<Vec<String>>,
+    /// None → now + 5 minutes (valid). Some → that exp.
+    pub exp: Option<u64>,
+    /// None → the provider's issuer (valid). Some → that iss.
+    pub iss: Option<String>,
+    /// None → the provider's client_id (valid). Some → that aud.
+    pub aud: Option<String>,
 }
 
 impl MockOidcProvider {
@@ -278,6 +288,9 @@ impl MockOidcProvider {
                 sub: "test-user".into(),
                 name: Some("Test User".into()),
                 roles: Some(vec!["viewer".into()]),
+                exp: None,
+                iss: None,
+                aud: None,
             },
             key,
         })
@@ -296,10 +309,10 @@ impl MockOidcProvider {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         let mut payload = serde_json::json!({
-            "iss": self.issuer,
+            "iss": self.claims.iss.clone().unwrap_or_else(|| self.issuer.clone()),
             "sub": self.claims.sub,
-            "aud": self.client_id,
-            "exp": now + 300,
+            "aud": self.claims.aud.clone().unwrap_or_else(|| self.client_id.clone()),
+            "exp": self.claims.exp.unwrap_or(now + 300),
         });
         if let Some(name) = &self.claims.name {
             payload["name"] = serde_json::Value::String(name.clone());
@@ -473,6 +486,93 @@ fn pkce_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
+// ---------------------------------------------------------------------------
+// Task 5: provider selection + role mapping
+// ---------------------------------------------------------------------------
+
+use std::sync::{Arc, OnceLock};
+
+/// The provider the enterprise login surfaces (Task 5) use: the debug mock
+/// when AIKOQL_OIDC_MOCK=1 (debug builds only — release cannot see the env
+/// at all), else the HTTP client. None when the license lacks oidc_sso or
+/// the config is absent: then the v0.4.0 password paths stay exactly as
+/// they were.
+pub(crate) fn gate() -> Option<Arc<dyn OidcProvider + Send + Sync>> {
+    static GATE: OnceLock<Option<Arc<dyn OidcProvider + Send + Sync>>> = OnceLock::new();
+    GATE.get_or_init(|| {
+        if !crate::license::LICENSE_STATE
+            .get()
+            .is_some_and(|s| s.features.oidc_sso)
+        {
+            return None;
+        }
+        match build_provider() {
+            Ok(p) => Some(p),
+            Err(e) => {
+                tracing::warn!(error = %e, "OIDC unavailable — password login only");
+                None
+            }
+        }
+    })
+    .clone()
+}
+
+fn build_provider() -> Result<Arc<dyn OidcProvider + Send + Sync>, OidcError> {
+    // the spawned-test stand-in — a real IdP is never contacted (debug only)
+    #[cfg(debug_assertions)]
+    if std::env::var("AIKOQL_OIDC_MOCK").is_ok_and(|v| v == "1") {
+        return Ok(Arc::new(mock_from_env()?));
+    }
+    Ok(Arc::new(HttpOidcProvider::from_env()?))
+}
+
+/// The mock the SSO integration tests (Task 5) drive: a placeholder issuer
+/// (.invalid), claims from AIKOQL_OIDC_MOCK_CLAIMS (JSON {"sub", "name",
+/// "roles"}), default {"sub":"mock-user","name":null,"roles":[]}.
+#[cfg(debug_assertions)]
+fn mock_from_env() -> Result<MockOidcProvider, OidcError> {
+    const ISSUER: &str = "https://oidc.test.invalid";
+    const CLIENT_ID: &str = "aikoql-test-client";
+    let pem = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/oidc-test-rsa.pem"
+    ))
+    .map_err(|e| OidcError::Missing(format!("the mock fixture key is unreadable: {e}")))?;
+    let claims = std::env::var("AIKOQL_OIDC_MOCK_CLAIMS")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(|raw| serde_json::from_str(&raw))
+        .transpose()
+        .map_err(|error| OidcError::Json {
+            context: "AIKOQL_OIDC_MOCK_CLAIMS",
+            error: error.to_string(),
+        })?
+        .unwrap_or(MockClaims {
+            sub: "mock-user".into(),
+            name: None,
+            roles: Some(vec![]),
+            exp: None,
+            iss: None,
+            aud: None,
+        });
+    MockOidcProvider::new(ISSUER, CLIENT_ID, &pem).map(|m| m.with_claims(claims))
+}
+
+/// Task 5 ruling: claim roles map onto {admin, viewer} — anything unknown
+/// or missing is viewer, never admin.
+pub(crate) fn map_roles(claims: &[String]) -> Vec<String> {
+    let mut roles: Vec<String> = claims
+        .iter()
+        .map(|r| if r == "admin" { "admin" } else { "viewer" }.to_string())
+        .collect();
+    roles.sort();
+    roles.dedup();
+    if roles.is_empty() {
+        roles.push("viewer".into());
+    }
+    roles
+}
+
 /// application/x-www-form-urlencoded: unreserved stays, space → '+'.
 fn form_encode(s: &str) -> String {
     s.bytes()
@@ -603,12 +703,83 @@ mod tests {
             sub: "no-roles".into(),
             name: None,
             roles: None,
+            exp: None,
+            iss: None,
+            aud: None,
         });
         let claims = provider
             .exchange("code-2", &pkce_verifier())
             .expect("mock exchange verifies");
         assert_eq!(claims.sub, "no-roles");
         assert!(claims.roles.is_empty());
+    }
+
+    /// Task 5 coverage (Task 4 review): the claims gates fail closed through
+    /// the mock — an expired exp, a wrong iss, a wrong aud are each rejected
+    /// by the same verify path the HTTP provider runs.
+    #[test]
+    fn expired_exp_rejected() {
+        let provider = mock().with_claims(MockClaims {
+            sub: "x".into(),
+            name: None,
+            roles: None,
+            exp: Some(1),
+            iss: None,
+            aud: None,
+        });
+        assert!(matches!(
+            provider.exchange("c", &pkce_verifier()),
+            Err(OidcError::Claims("expired"))
+        ));
+    }
+
+    #[test]
+    fn wrong_iss_rejected() {
+        let provider = mock().with_claims(MockClaims {
+            sub: "x".into(),
+            name: None,
+            roles: None,
+            exp: None,
+            iss: Some("https://evil.test.invalid".into()),
+            aud: None,
+        });
+        assert!(matches!(
+            provider.exchange("c", &pkce_verifier()),
+            Err(OidcError::Claims("iss does not match the issuer"))
+        ));
+    }
+
+    #[test]
+    fn wrong_aud_rejected() {
+        let provider = mock().with_claims(MockClaims {
+            sub: "x".into(),
+            name: None,
+            roles: None,
+            exp: None,
+            iss: None,
+            aud: Some("another-client".into()),
+        });
+        assert!(matches!(
+            provider.exchange("c", &pkce_verifier()),
+            Err(OidcError::Claims("aud does not contain the client_id"))
+        ));
+    }
+
+    /// The ruling's role mapping: claim roles map onto {admin, viewer};
+    /// unknown or missing → viewer, never admin.
+    #[test]
+    fn claim_roles_map_to_admin_or_viewer() {
+        assert_eq!(map_roles(&["admin".into()]), vec!["admin".to_string()]);
+        assert_eq!(map_roles(&["janitor".into()]), vec!["viewer".to_string()]);
+        assert_eq!(
+            map_roles(&["viewer".into(), "janitor".into()]),
+            vec!["viewer".to_string()]
+        );
+        assert_eq!(
+            map_roles(&["admin".into(), "viewer".into()]),
+            vec!["admin".to_string(), "viewer".to_string()]
+        );
+        assert_eq!(map_roles(&[]), vec!["viewer".to_string()]);
     }
 
     /// The S256 round-trip: the code_challenge the mock embeds in its

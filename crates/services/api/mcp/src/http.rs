@@ -117,6 +117,9 @@ pub(crate) fn serve_metrics(
         }
     };
     let sessions: Arc<Mutex<HashMap<String, HttpSession>>> = Arc::new(Mutex::new(HashMap::new()));
+    // Enterprise (Task 5): the serving handle on the user store main.rs
+    // opened (users.db); None in community mode.
+    crate::session::open_users(db_path.as_str());
     for stream in listener.incoming() {
         match stream {
             Ok(mut s) => {
@@ -556,6 +559,10 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
 /// no hardcoded credentials anywhere).
 pub(crate) struct AuthResolver {
     users: Vec<crate::config::AuthUser>,
+    /// The AIKOQL_ADMIN_PASSWORD bootstrap, kept apart from `users`: it arms
+    /// is_configured() (and so the OAuth surface), but enterprise break-glass
+    /// consults config users only — the env password just seeds the store.
+    admin: Option<crate::config::AuthUser>,
     ttl_secs: u64,
     /// per configured login: (consecutive failures, locked until unix ms)
     fails: Mutex<HashMap<String, (u32, i64)>>,
@@ -614,23 +621,25 @@ impl AuthResolver {
         ttl_secs: u64,
         state_path: Option<PathBuf>,
     ) -> Self {
-        let mut users = users;
-        if let Some(pw) = admin_password {
-            if !users.iter().any(|u| u.username == "admin") {
+        let admin = admin_password
+            .filter(|_| !users.iter().any(|u| u.username == "admin"))
+            .and_then(|pw| {
                 use argon2::password_hash::PasswordHasher;
                 let salt = argon2::password_hash::SaltString::generate(
                     &mut argon2::password_hash::rand_core::OsRng,
                 );
                 match argon2::Argon2::default().hash_password(pw.as_bytes(), &salt) {
-                    Ok(h) => users.push(crate::config::AuthUser {
+                    Ok(h) => Some(crate::config::AuthUser {
                         username: "admin".into(),
                         hash: h.to_string(),
                         roles: vec!["admin".into()],
                     }),
-                    Err(e) => eprintln!("admin password hash failed: {e}"),
+                    Err(e) => {
+                        eprintln!("admin password hash failed: {e}");
+                        None
+                    }
                 }
-            }
-        }
+            });
         // AG-52: reload the persisted fail state; a torn or unreadable file
         // reads as no state (the backoff restarts — fail open, login never
         // blocked by a corrupted sidecar).
@@ -641,6 +650,7 @@ impl AuthResolver {
             .unwrap_or_default();
         AuthResolver {
             users,
+            admin,
             ttl_secs,
             fails: Mutex::new(fails),
             ips: Mutex::new(HashMap::new()),
@@ -656,7 +666,7 @@ impl AuthResolver {
     }
 
     pub(crate) fn is_configured(&self) -> bool {
-        !self.users.is_empty()
+        !self.users.is_empty() || self.admin.is_some()
     }
 
     pub(crate) fn ttl_secs(&self) -> u64 {
@@ -671,6 +681,7 @@ impl AuthResolver {
         self.users
             .iter()
             .find(|u| u.username == username)
+            .or(self.admin.as_ref().filter(|a| a.username == username))
             .map(|u| u.roles.clone())
     }
 
@@ -703,7 +714,11 @@ impl AuthResolver {
     /// password extends the backoff, a right one clears it.
     pub(crate) fn verify(&self, username: &str, password: &str) -> Option<Vec<String>> {
         use argon2::password_hash::PasswordVerifier;
-        let u = self.users.iter().find(|u| u.username == username)?;
+        let u = self
+            .users
+            .iter()
+            .find(|u| u.username == username)
+            .or(self.admin.as_ref().filter(|a| a.username == username))?;
         if self.locked_for(username).is_some() {
             return None;
         }
@@ -730,6 +745,25 @@ impl AuthResolver {
         drop(fails);
         self.save();
         None
+    }
+
+    /// argon2id-verify against the CONFIG-FILE users only. Enterprise
+    /// break-glass falls back here after the store hash: a config-file admin
+    /// keeps its v0.4.0 password, while the env bootstrap entry is never
+    /// consulted (in enterprise the env only seeds the user store). Honors
+    /// the per-login backoff; the caller counts refusals at the IP layer.
+    pub(crate) fn verify_config(&self, username: &str, password: &str) -> Option<Vec<String>> {
+        use argon2::password_hash::PasswordVerifier;
+        let u = self.users.iter().find(|u| u.username == username)?;
+        if self.locked_for(username).is_some() {
+            return None;
+        }
+        let ok = argon2::PasswordHash::new(&u.hash).is_ok_and(|parsed| {
+            argon2::Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok()
+        });
+        ok.then(|| u.roles.clone())
     }
 
     /// AG-52: seconds `ip` must wait before its next login attempt.
@@ -802,14 +836,39 @@ pub(crate) fn handle_login(
             format!("too many failed sign-ins from your address; retry in {wait} s"),
         ));
     }
-    let roles = auth.verify(username, password).ok_or_else(|| {
+    // Enterprise break-glass (Task 5): with multi-user on, the bootstrap
+    // admin verifies against the users.db hash — AIKOQL_ADMIN_PASSWORD only
+    // seeded it. Config-file users keep the AuthResolver path untouched.
+    let roles = match crate::session::users() {
+        Some(store) if username == crate::users::ADMIN_SUB => store
+            .lock()
+            .unwrap() // justified: Mutex poison is unrecoverable
+            .verify_admin_password(password)
+            .unwrap_or(false)
+            .then(|| vec!["admin".to_string()])
+            // a config-file admin ([auth].users) keeps its v0.4.0 password;
+            // the env bootstrap entry is not consulted (it only seeds)
+            .or_else(|| auth.verify_config(username, password)),
+        _ => auth.verify(username, password),
+    }
+    .ok_or_else(|| {
         auth.ip_failure(client_ip);
         unauthorized("invalid credentials".into())
     })?;
-    // P3-M1 (auth002): 256-bit CSPRNG session token (64 hex chars). The old
-    // time+pid token was predictable; sessions are bearer credentials now.
+    let token = mint_session(sessions, username, roles, auth.ttl_secs()).map_err(unauthorized)?;
+    Ok(token)
+}
+
+/// Mint a 256-bit CSPRNG session token (64 hex chars — P3-M1 auth002) and
+/// store the session.
+fn mint_session(
+    sessions: &Mutex<HashMap<String, HttpSession>>,
+    username: &str,
+    roles: Vec<String>,
+    ttl_secs: u64,
+) -> Result<String, String> {
     let mut raw = [0u8; 32];
-    getrandom::getrandom(&mut raw).map_err(|e| unauthorized(format!("session token: {e}")))?;
+    getrandom::getrandom(&mut raw).map_err(|e| format!("session token: {e}"))?;
     let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     // justified: Mutex poison is unrecoverable
     sessions.lock().unwrap().insert(
@@ -818,7 +877,7 @@ pub(crate) fn handle_login(
             username: username.to_string(),
             roles,
             created: Instant::now(),
-            ttl_secs: auth.ttl_secs(),
+            ttl_secs,
         },
     );
     Ok(token)
@@ -837,11 +896,21 @@ pub(crate) fn validate_token(
     if sess.created.elapsed().as_secs() >= sess.ttl_secs {
         return None;
     }
-    Some(Subject {
+    let mut subject = Subject {
         name: sess.username.clone(),
         roles: sess.roles.clone(),
         tenant: None, // REST sessions carry no tenant claim; callers scope via query param
-    })
+    };
+    // Enterprise (Task 5): the store's roles are authoritative, per request
+    // — a revocation takes effect on the next call. Users not in the store
+    // (config-file logins) keep their session snapshot.
+    if let Some(store) = crate::session::users() {
+        // justified: Mutex poison is unrecoverable
+        if let Ok(Some(roles)) = store.lock().unwrap().roles_of(&sess.username) {
+            subject.roles = roles;
+        }
+    }
+    Some(subject)
 }
 
 pub(crate) fn aikoql_endpoint(
@@ -1264,6 +1333,14 @@ pub(crate) fn handle_http(
         return;
     }
 
+    // Enterprise SSO (Task 5): /api/login/sso starts an IdP sign-in and
+    // /oidc/callback finishes it. Without an oidc_sso license + OIDC config
+    // (gate() None) these 404 — the v0.4.0 surface is byte-for-byte unchanged.
+    if let Some(reply) = sso_routes(method, route, path, sessions, auth, mcp) {
+        crate::mcp_http::write_reply(stream, reply);
+        return;
+    }
+
     let (status, content_type, body) = match route {
         "/ui" => (
             "200 OK",
@@ -1273,7 +1350,7 @@ pub(crate) fn handle_http(
         "/" | "/studio" => (
             "200 OK",
             "text/html; charset=utf-8",
-            studio::STUDIO_HTML.to_string(),
+            studio::studio_html(crate::oidc::gate().is_some()),
         ),
         "/health" => {
             let uptime = SERVER_START
@@ -1405,6 +1482,120 @@ pub(crate) fn handle_http(
     resp.push_str("\r\n");
     resp.push_str(&body);
     let _ = stream.write_all(resp.as_bytes());
+}
+
+/// Task 5: the Studio SSO entry and the IdP callback. None for any other
+/// route (and for everything when OIDC is not active).
+fn sso_routes(
+    method: &str,
+    route: &str,
+    path: &str,
+    sessions: &Mutex<HashMap<String, HttpSession>>,
+    auth: &AuthResolver,
+    mcp: Option<&crate::mcp_http::McpHttp>,
+) -> Option<crate::mcp_http::Reply> {
+    match (method, route) {
+        ("GET", "/api/login/sso") => {
+            let provider = crate::oidc::gate()?;
+            let verifier = crate::oidc::pkce_verifier();
+            // no resume: the callback mints a Studio session
+            let state = crate::session::oidc_flows().begin(verifier.clone(), None);
+            let url = match provider.authorize_url(&state, &verifier) {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!(error = %e, "OIDC authorize URL failed");
+                    return Some((
+                        "500 Internal Server Error",
+                        vec![],
+                        "text/plain; charset=utf-8",
+                        format!("OIDC sign-in is not available: {e}\n"),
+                    ));
+                }
+            };
+            let mut h = vec![("Cache-Control", "no-store".to_string())];
+            h.push(("Location", url));
+            Some(("302 Found", h, "text/plain", String::new()))
+        }
+        ("GET", "/oidc/callback") => Some(callback(path, sessions, auth, mcp)),
+        _ => None,
+    }
+}
+
+/// /oidc/callback — the IdP sends the browser back here with code+state.
+/// Exchange → upsert the user → either resume the interrupted MCP authorize
+/// (issue its code) or mint a Studio session.
+fn callback(
+    path: &str,
+    sessions: &Mutex<HashMap<String, HttpSession>>,
+    auth: &AuthResolver,
+    mcp: Option<&crate::mcp_http::McpHttp>,
+) -> crate::mcp_http::Reply {
+    let page = |status: &'static str, msg: String| {
+        (
+            status,
+            vec![],
+            "text/plain; charset=utf-8",
+            format!("{msg}\n"),
+        )
+    };
+    let Some(provider) = crate::oidc::gate() else {
+        return page("404 Not Found", "OIDC is not configured".into());
+    };
+    let code = parse_query_param(path, "code");
+    let state = parse_query_param(path, "state");
+    let flow = match crate::session::oidc_flows().take(&state) {
+        Some(f) => f,
+        None => return page("400 Bad Request", "unknown or used OIDC state".into()),
+    };
+    let claims = match provider.exchange(&code, &flow.verifier) {
+        Ok(c) => c,
+        Err(e) => return page("401 Unauthorized", format!("OIDC sign-in failed: {e}")),
+    };
+    let roles = crate::oidc::map_roles(&claims.roles);
+    // the store is authoritative: first login inserts, later logins refresh
+    if let Some(store) = crate::session::users() {
+        let store = store.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        if let Err(e) = store.upsert_oidc_user(&claims.sub, claims.name.as_deref(), &roles) {
+            drop(store);
+            return page("500 Internal Server Error", format!("user store: {e}"));
+        }
+    }
+    match flow.resume {
+        Some(pending) => {
+            // the interrupted MCP sign-in continues: issue its code
+            let Some(oauth) = mcp.and_then(|m| m.oauth()) else {
+                return page("404 Not Found", "OAuth is not configured".into());
+            };
+            oauth.finish_sso(&pending, &claims.sub)
+        }
+        None => {
+            // Studio login: a session token, handed to the overlay via the
+            // home redirect's URL fragment (fragments never reach servers,
+            // proxies or Referer; the page's api() sends authToken as a
+            // query param itself).
+            let token = match mint_session(sessions, &claims.sub, roles, auth.ttl_secs()) {
+                Ok(t) => t,
+                Err(e) => return page("500 Internal Server Error", format!("session: {e}")),
+            };
+            let user = enc_query(&claims.sub);
+            let mut h = vec![("Cache-Control", "no-store".to_string())];
+            h.push(("Location", format!("/#token={token}&user={user}")));
+            ("302 Found", h, "text/plain", String::new())
+        }
+    }
+}
+
+/// Percent-encoding for the callback's home redirect (a sub may carry
+/// characters that would break the fragment).
+fn enc_query(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 pub(crate) fn prometheus_metrics(

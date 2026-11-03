@@ -10,32 +10,12 @@
 #[allow(dead_code)] // production-only items (verify_license, LICENSE_STATE, …)
 mod license;
 
+mod common;
+use common::sign;
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use ring::rand::SystemRandom;
-use ring::signature::{Ed25519KeyPair, KeyPair};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-/// Sign a payload with a fresh test keypair → (public key bytes, envelope).
-fn sign(org: &str, expires: Option<String>, features: &[&str]) -> (Vec<u8>, Vec<u8>) {
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("system RNG");
-    let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("fresh PKCS#8");
-    let payload = serde_json::json!({
-        "ver": 1,
-        "org": org,
-        "issued_at": "0",
-        "expires_at": expires,
-        "features": features,
-    });
-    let json = serde_json::to_vec(&payload).unwrap();
-    let sig = pair.sign(&json);
-    let envelope = format!(
-        "{}.{}",
-        URL_SAFE_NO_PAD.encode(&json),
-        URL_SAFE_NO_PAD.encode(sig.as_ref())
-    );
-    (pair.public_key().as_ref().to_vec(), envelope.into_bytes())
-}
 
 /// Swap one base64url char mid-segment for a DIFFERENT alphabet char: the
 /// decode always succeeds and the decoded bytes always change, so the
@@ -154,42 +134,6 @@ fn production_public_key_is_a_valid_ed25519_key() {
 
 // --- startup degradation (spawns the aikoql-mcp binary) ---
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::process::{Child, Command, Stdio};
-
-mod common;
-
-/// Hard-kill a still-running server child on drop (a panicked test must not
-/// leak the process).
-struct ServerGuard(Child);
-impl Drop for ServerGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-fn free_port() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").expect("bind :0");
-    let port = l.local_addr().unwrap().port();
-    drop(l);
-    port
-}
-
-/// One GET over plain TCP; the server closes after the response.
-fn http_get(port: u16) -> Result<String, String> {
-    let mut s = TcpStream::connect(("127.0.0.1", port)).map_err(|e| e.to_string())?;
-    s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .expect("read timeout");
-    s.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-        .unwrap();
-    s.flush().unwrap();
-    let mut out = Vec::new();
-    let _ = s.read_to_end(&mut out); // EOF = the response is complete
-    Ok(String::from_utf8_lossy(&out).into_owned())
-}
-
 /// A license signed by a TEST keypair — the production key rejects it — must
 /// degrade to community mode: the server still starts, /health responds, and
 /// the reason is logged.
@@ -206,33 +150,12 @@ fn tampered_key_runs_as_community() {
     let log = std::env::temp_dir().join(format!("aikoql-license-log-{}.log", std::process::id()));
     common::register_temp_path(&log);
 
-    let port = free_port();
-    let _srv = ServerGuard(
-        Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
-            .arg("serve")
-            .arg("--metrics-addr")
-            .arg(format!("127.0.0.1:{port}"))
-            .arg(&db)
-            .env("AIKOQL_LICENSE", &lic)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(std::fs::File::create(&log).unwrap()))
-            .spawn()
-            .expect("spawn aikoql-mcp serve"),
-    );
+    let lic_str = lic.to_str().unwrap();
+    let srv = common::spawn_server(&db, &log, &[("AIKOQL_LICENSE", lic_str)], &[]);
 
     // /health comes up — community mode still serves
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let health = loop {
-        if let Ok(resp) = http_get(port) {
-            break resp;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "server never served /health"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    };
+    let health = common::wait_health(srv.port, deadline);
     assert!(
         health.starts_with("HTTP/1.") && health.contains(" 200 "),
         "health: {health}"
@@ -240,15 +163,5 @@ fn tampered_key_runs_as_community() {
 
     // the rejection is logged with the reason, naming community mode
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let log_text = std::fs::read_to_string(&log).unwrap_or_default();
-        if log_text.contains("community mode") {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no community-mode log: {log_text}"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    common::wait_log(&log, "community mode", deadline);
 }

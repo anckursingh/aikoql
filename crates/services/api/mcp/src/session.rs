@@ -270,6 +270,113 @@ pub(crate) fn subject_of(args: &J) -> Subject {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Enterprise OIDC (Task 5): the login-flow registry + the shared user store.
+// ---------------------------------------------------------------------------
+
+use crate::users::UserStore;
+use base64::Engine as _;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+/// What the IdP callback must resume: the MCP client's authorize request
+/// the redirect interrupted (the password form's POST equivalent).
+pub(crate) struct PendingAuthorize {
+    pub(crate) client_id: String,
+    pub(crate) redirect_uri: String,
+    pub(crate) code_challenge: String,
+    /// the MCP client's state, echoed back with the code
+    pub(crate) state: Option<String>,
+    pub(crate) resource: String,
+    pub(crate) scope: String,
+}
+
+/// One in-flight SSO login: the PKCE verifier, plus what to resume.
+pub(crate) struct OidcFlow {
+    pub(crate) verifier: String,
+    pub(crate) resume: Option<PendingAuthorize>,
+    created: Instant,
+}
+
+/// Flow states by state token — in memory, like the OAuth codes.
+pub(crate) struct OidcFlows {
+    flows: Mutex<HashMap<String, OidcFlow>>,
+}
+
+/// A flow state is good for ten minutes (the OAuth codes' TTL).
+const FLOW_TTL: Duration = Duration::from_secs(600);
+
+impl OidcFlows {
+    /// Register a flow → its state token (fresh 256-bit randomness).
+    pub(crate) fn begin(&self, verifier: String, resume: Option<PendingAuthorize>) -> String {
+        let mut raw = [0u8; 32];
+        // getrandom fails only without an OS entropy source — unrecoverable
+        getrandom::getrandom(&mut raw).expect("OS randomness");
+        let state = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
+        // justified: Mutex poison is unrecoverable
+        let mut flows = self.flows.lock().unwrap();
+        flows.retain(|_, f| f.created.elapsed() < FLOW_TTL);
+        flows.insert(
+            state.clone(),
+            OidcFlow {
+                verifier,
+                resume,
+                created: Instant::now(),
+            },
+        );
+        state
+    }
+
+    /// Take (and invalidate) a flow by state — single use.
+    pub(crate) fn take(&self, state: &str) -> Option<OidcFlow> {
+        // justified: Mutex poison is unrecoverable
+        self.flows
+            .lock()
+            .unwrap()
+            .remove(state)
+            .filter(|f| f.created.elapsed() < FLOW_TTL)
+    }
+}
+
+/// The process-wide flow registry (one serve per process).
+pub(crate) fn oidc_flows() -> &'static OidcFlows {
+    static FLOWS: OnceLock<OidcFlows> = OnceLock::new();
+    FLOWS.get_or_init(|| OidcFlows {
+        flows: Mutex::new(HashMap::new()),
+    })
+}
+
+/// The process-wide user store: the serve path opens it once (main.rs owns
+/// the startup open/seed/refuse); None in community mode.
+static USERS: OnceLock<Option<Arc<Mutex<UserStore>>>> = OnceLock::new();
+
+/// Open the serving handle on the store main.rs seeded at `{db_path}/users.db`.
+/// Called by serve_metrics — the shared path of every HTTP surface.
+pub(crate) fn open_users(db_path: &str) -> Option<Arc<Mutex<UserStore>>> {
+    if !crate::license::LICENSE_STATE
+        .get()
+        .is_some_and(|s| s.features.multi_user)
+    {
+        return None;
+    }
+    USERS.get_or_init(|| {
+        let path = std::path::PathBuf::from(format!("{db_path}/users.db"));
+        match UserStore::open(&path) {
+            Ok(s) => Some(Arc::new(Mutex::new(s))),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "user store unavailable — enterprise logins degrade");
+                None
+            }
+        }
+    })
+    .clone()
+}
+
+/// The shared store, once the serve path has opened it.
+pub(crate) fn users() -> Option<Arc<Mutex<UserStore>>> {
+    USERS.get().cloned().flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
