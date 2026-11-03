@@ -1,6 +1,6 @@
 {
   "name": "aikoql-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Aikoql — The Agent-First Knowledge Database. Single binary, zero deps. MCP server for knowledge CRUD, aikoql queries, graph traversal, hybrid search, context compilation, document ingestion, and more.",
   "license": "AGPL-3.0-only",
   "author": {
