@@ -126,15 +126,15 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
 </header>
 
 <section class="hero">
-  <h1>The <em>Agent-First</em><br>Knowledge Database</h1>
-  <p class="sub">A SQL-style query language and embedded database for knowledge objects — code, docs, policies, programs — every fact versioned, evidence-backed, and traceable. Native MCP interface. Graph, vector, and text search in one statement.</p>
+  <h1>Persistent Memory for <em>AI Agents</em></h1>
+  <p class="sub">Your agents write facts, recall them across sessions, and stop re-reading the whole context every turn. Measured on our own repository: <strong>99.95% fewer tokens</strong> with aikoql recall slices. Versioned, evidence-backed, traceable — with graph, vector, and text search in one statement.</p>
   <div class="cta">
-    <a href="#install" class="cta-primary">Install aikoql</a>
+    <a href="#install" class="cta-primary">Try it in 2 minutes</a>
     <a href="/docs/" class="cta-secondary">Read the Docs</a>
   </div>
   <div class="hero-demo">
     <pre><code><span class="demo-prompt">aikoql&gt;</span> CREATE Note body == "refund policy: 30 days"<br><span class="demo-prompt">aikoql&gt;</span> MATCH Note SIMILAR TO "refund window"<br>          SCORE BM25 USING EMBEDDING RETURN *</code></pre>
-    <p><span class="demo-strong">npm i -g aikoql-mcp</span> · single binary · zero runtime deps</p>
+    <p>AGPL-3.0-only · <span class="demo-strong">npm i -g aikoql-mcp</span> · single binary · zero runtime deps</p>
   </div>
 </section>
 
@@ -357,7 +357,7 @@ aikoql&gt; MATCH Employee EPISTEMIC verified RETURN *    # only verified knowled
 
 <section id="install">
   <h2>Get Started in 5 Seconds</h2>
-  <p class="lead">Single binary. Zero dependencies. No installers. Latest release: v0.4.0 — agent tool profiles, recall, memory as knowledge objects, signed audit evidence and dependency security fixes.</p>
+  <p class="lead">Single binary. Zero dependencies. No installers. No install? Run the docker-compose trial with a Cloudflare quick-tunnel — <code>deploy/docker-compose.yml</code> in the repo. Latest release: v0.4.0 — agent tool profiles, recall, memory as knowledge objects, signed audit evidence and dependency security fixes.</p>
   <div class="install-section">
     <h3>Install</h3>
     <div class="tabs">
