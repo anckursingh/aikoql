@@ -8,7 +8,7 @@ exact numbers — latencies are excluded by design).
 
 | Item | Value |
 |---|---|
-| Dataset version | This repository's git HEAD — the corpus is versioned in-repo (`crates/ingestion/tests/common/trackb*.rs`). Corpus lineage: `docs/market/corpus-version.md` |
+| Dataset version | This repository's git HEAD — the corpus is versioned in-repo (`crates/ingestion/tests/common/trackb*.rs`). |
 | Task set | 148 tasks, 12 workload classes W1–W12 (`trackb::QUESTIONS` + `MARKET_QUESTIONS_31`) |
 | Judge | `trackb::units_hit` — token containment of 2 answer units per task, unknown-probe inverted (win-zone contract) |
 | Budget | 300 tokens for every treatment (G12 convention) |

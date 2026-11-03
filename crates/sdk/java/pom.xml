@@ -6,7 +6,7 @@
 
   <groupId>com.aikoql</groupId>
   <artifactId>aikoql-client</artifactId>
-  <version>0.3.0</version>
+  <version>0.4.0</version>
   <packaging>jar</packaging>
   <name>aikoql-client</name>
   <description>The first-party Java SDK for aikoql (D-14) — the canonical
@@ -15,8 +15,8 @@
 
   <licenses>
     <license>
-      <name>Apache License, Version 2.0</name>
-      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <name>GNU Affero General Public License v3.0</name>
+      <url>https://www.gnu.org/licenses/agpl-3.0.txt</url>
       <distribution>repo</distribution>
     </license>
   </licenses>

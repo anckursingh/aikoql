@@ -97,4 +97,4 @@ Storage Kernel (aikoql-v2 LSM · EncryptedStore)
 
 ## License
 
-Apache 2.0. Open source. Free for commercial use.
+AGPL-3.0-only. Open source. Free for commercial use.

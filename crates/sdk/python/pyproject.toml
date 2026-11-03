@@ -3,6 +3,7 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
+license = "AGPL-3.0-only"
 name = "aikoql"
 # P3-M9 — the version comes from the Rust crate (version.workspace): one
 # source of truth, sdk001 pins the parity.

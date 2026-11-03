@@ -21,4 +21,4 @@ pip install aikoql
 
 - Install from source: `pip install .` (maturin builds the Rust core; one abi3 wheel covers Python 3.9+)
 - Tests (the fuzz estate included): `python -m pytest tests/`
-- License: Apache-2.0
+- License: AGPL-3.0-only

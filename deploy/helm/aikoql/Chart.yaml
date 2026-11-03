@@ -5,4 +5,4 @@ type: application
 version: 0.1.0
 # the shipped appVersion tracks the workspace version — scripts/bump-version.py
 # bumps this too (tests/helm_chart.rs pins it)
-appVersion: "0.3.0"
+appVersion: "0.4.0"

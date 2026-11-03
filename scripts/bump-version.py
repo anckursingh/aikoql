@@ -50,6 +50,8 @@ PINNED = [
     ("QUICKSTART.md", 1),
     ("AGENTIC-QUICKSTART.md", 4),  # the Docker tag + three npx pins
     ("docker-compose.release.yml", 1),
+    ("deploy/helm/aikoql/Chart.yaml", 1),
+    ("deploy/helm/aikoql/values.yaml", 1),
 ]
 
 

@@ -78,7 +78,6 @@ results, each pinned by a committed test. Mechanical slice, no LLM
   rust, python, typescript, java, images) + storage adapters
   (redb/memory/sqlite/rocksdb/neo4j/postgres/mongodb/vector) behind one
   kernel API.
-- Full table: `docs/WAVE3-MARKET-EVIDENCE.md` §Build-vs-buy.
 
 ## Cost
 
