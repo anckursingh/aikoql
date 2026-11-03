@@ -34,6 +34,7 @@ mod model;
 mod native;
 mod oauth;
 mod observability;
+mod oidc;
 mod prompts;
 mod protocol;
 mod rate_limiter;
