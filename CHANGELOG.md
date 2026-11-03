@@ -5,7 +5,7 @@ Format: <https://keepachangelog.com/>-inspired, but terser. This file starts
 at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 (`git log v0.1.0..v0.1.19`).
 
-## [Unreleased]
+## [0.4.0] — 2026-11-03 (community launch: public repo, all registries)
 
 ### Security
 
@@ -49,6 +49,21 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Community launch**: the repo is public (homepage
+  https://www.aikoql.com) and 0.4.0 is published on every registry —
+  npm `aikoql-mcp`, crates.io (`aikoql-native`…`aikoql-sdk`, 10 crates),
+  PyPI `aikoql`, Maven Central `com.aikoql:aikoql-client`, and GHCR
+  `ghcr.io/anckursingh/aikoql:0.4.0` (arm64; amd64 + multi-arch manifest
+  pending).
+- **Release binaries for four platforms**: macOS (arm64, x64) and Linux
+  (gnu — glibc 2.31 floor — and static musl), each with a `.sha256` and
+  a combined `checksums.txt` on the GitHub release; the npm wrapper
+  downloads the platform binary and verifies its checksum. Windows exe
+  pending.
+- **Sigstore attestations**: the GitHub release carries PEP 740
+  attestations for the PyPI wheels + sdist (offline verification);
+  PyPI's index provenance is upload-time-only and cannot be backfilled,
+  so 0.4.0 shows no provenance badge.
 - **Usage counts persist under a head watermark (AG-32)**: each tenant's
   live object count is one 8-byte row under `__tenants/usage/<tenant>`,
   and a `(seq, ts)` head watermark rides every commit batch atomically
@@ -226,6 +241,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Fixed
 
+- **npm 11 silently dropped the bin entry (PR #26)**:
+  `npm-publish/package.json` declared `bin` with a `./` prefix, which
+  npm 11 auto-removed at publish — the published package had no
+  executable. It is now `"run.js"`, and `npx aikoql-mcp` installs the
+  wrapper again.
 - **The kind failover gate's first real run exposed six bugs (AG-51)**:
   the pre-install TLS hook Job ran `openssl` + `kubectl` in
   alpine/openssl (no kubectl) — helm now renders the `repl-tls` Secret
