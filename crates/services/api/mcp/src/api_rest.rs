@@ -49,6 +49,20 @@ pub fn route_v1(
         );
     }
 
+    // Enterprise (Task 6): REST writes go through the role gate — a viewer
+    // session may read but never write. The gate resolves the session's
+    // LIVE roles (the user store is authoritative); in community mode it
+    // passes, so v0.4.0 behavior is unchanged. Only the write set is
+    // gated: read POSTs (aikoql MATCH, find-similar, traverse, list-*
+    // twins, ...) stay reachable for viewers.
+    if method == "POST" && (is_write_route(clean_path, &folded_body) || is_admin_route(clean_path)) {
+        if let Some(roles) = crate::http::live_roles(token.as_deref(), sessions) {
+            if let Err(e) = crate::authz::check_rest(&roles, is_admin_route(clean_path)) {
+                return json_response(e.status(), &json!({"error": e.message()}));
+            }
+        }
+    }
+
     let result: Result<J, String> = route_inner(
         method,
         clean_path,
@@ -469,11 +483,67 @@ pub fn cors_headers() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
+/// Task 6: the mutating POST routes the role gate closes for viewers —
+/// every POST in route_inner that writes. Fail-closed: the set must stay
+/// complete. Read POSTs (aikoql MATCH, find-similar, traverse, explain,
+/// prove, reason/infer/predict, evaluate-policies, job-status, list-*
+/// twins, eval/*, agent/* reports) stay reachable.
+fn is_write_route(path: &str, body: &str) -> bool {
+    // aikoql is query-aware: a MATCH reads, every other statement writes.
+    if path == "/api/v1/aikoql" {
+        let q: J = serde_json::from_str(body).unwrap_or(J::Null);
+        let query = q.get("query").and_then(|q| q.as_str()).unwrap_or("");
+        return !matches!(
+            aikoql_compiler::parser::parse(query),
+            Ok(aikoql_compiler::parser::ast::Statement::Match(_))
+        );
+    }
+    matches!(
+        path,
+        "/api/v1/discover-ontology"
+            | "/api/v1/remember"
+            | "/api/v1/forget"
+            | "/api/v1/evolve"
+            | "/api/v1/verify"
+            | "/api/v1/relate"
+            | "/api/v1/deploy-program"
+            | "/api/v1/execute-program"
+            | "/api/v1/deploy-policy"
+            | "/api/v1/deploy-workflow"
+            | "/api/v1/deploy-trigger"
+            | "/api/v1/add-dependency"
+            | "/api/v1/deploy-agent"
+            | "/api/v1/execute-agent"
+            | "/api/v1/deploy-connector"
+            | "/api/v1/deploy-view"
+            | "/api/v1/deploy-report"
+            | "/api/v1/deploy-benchmark"
+            | "/api/v1/execute-workflow"
+            | "/api/v1/check-triggers"
+            | "/api/v1/approve-job"
+            | "/api/v1/documents"
+            | "/api/v1/documents/compile"
+            | "/api/v1/agent/memory-store"
+            | "/api/v1/agent/memory-update"
+            | "/api/v1/agent/memory-delete"
+    )
+}
+
+/// Task 6: the REST routes the role gate keeps admin-only — the
+/// storage-admin operations (tools/admin.rs).
+fn is_admin_route(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/v1/backup" | "/api/v1/restore" | "/api/v1/verify-backup"
+    )
+}
+
 fn json_response(code: u16, body: &J) -> (String, String, String) {
     let status = match code {
         200 => "200 OK",
         400 => "400 Bad Request",
         401 => "401 Unauthorized",
+        403 => "403 Forbidden",
         404 => "404 Not Found",
         429 => "429 Too Many Requests",
         _ => "500 Internal Server Error",

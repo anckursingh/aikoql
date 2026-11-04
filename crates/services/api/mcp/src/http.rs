@@ -913,6 +913,28 @@ pub(crate) fn validate_token(
     Some(subject)
 }
 
+/// Task 6: the session's live roles for the REST gate — the user store is
+/// authoritative when open (a revocation takes effect on the next call),
+/// exactly as validate_token resolves them, but WITHOUT the TTL check: the
+/// gate must never change a session's community-mode TTL behavior.
+pub(crate) fn live_roles(
+    token: Option<&str>,
+    sessions: &Mutex<HashMap<String, HttpSession>>,
+) -> Option<Vec<String>> {
+    let token = token?;
+    // justified: Mutex poison is unrecoverable
+    let guard = sessions.lock().unwrap();
+    let sess = guard.get(token)?;
+    let mut roles = sess.roles.clone();
+    if let Some(store) = crate::session::users() {
+        // justified: Mutex poison is unrecoverable
+        if let Ok(Some(store_roles)) = store.lock().unwrap().roles_of(&sess.username) {
+            roles = store_roles;
+        }
+    }
+    Some(roles)
+}
+
 pub(crate) fn aikoql_endpoint(
     k: &Kernel,
     query: &str,
