@@ -598,6 +598,40 @@ fn with_store<T>(
     f(&guard).map_err(|e| json_response(500, &json!({"error": format!("user store: {e}")})))
 }
 
+/// Task 9: GET /api/audit-export — the retention-trimmed audit log as a
+/// JSONL attachment. Admin-only (the same T6/T8 gate); http.rs dispatches
+/// here only under the audit-export license flag, so unlicensed servers
+/// keep the v0.4.0 plain 404.
+pub fn route_audit_export(
+    sessions: &Mutex<HashMap<String, crate::HttpSession>>,
+    token: Option<&str>,
+    db_path: &str,
+) -> (String, String, Vec<(String, String)>, String) {
+    if let Err(msg) = check_auth(token, sessions) {
+        let (s, ct, b) = json_response(401, &json!({"error": msg}));
+        return (s, ct, Vec::new(), b);
+    }
+    if let Err(r) = admin_only(token, sessions) {
+        let (s, ct, b) = r;
+        return (s, ct, Vec::new(), b);
+    }
+    match crate::admin::audit_jsonl(db_path) {
+        Ok(bytes) => (
+            "200 OK".to_string(),
+            "application/x-ndjson".to_string(),
+            vec![(
+                "Content-Disposition".to_string(),
+                "attachment; filename=\"aikoql-audit.jsonl\"".to_string(),
+            )],
+            bytes,
+        ),
+        Err(e) => {
+            let (s, ct, b) = json_response(500, &json!({"error": e}));
+            (s, ct, Vec::new(), b)
+        }
+    }
+}
+
 /// Task 8: the /api/license payload — the license fields on the wire.
 /// Community (no LICENSE_STATE) reports tier "community" with empty
 /// org/features and no expiry.
@@ -605,16 +639,7 @@ fn license_payload() -> J {
     let Some(state) = crate::license::LICENSE_STATE.get() else {
         return json!({"tier": "community", "org": "", "features": [], "expires": null});
     };
-    let mut features: Vec<&str> = Vec::new();
-    if state.features.multi_user {
-        features.push("multi-user");
-    }
-    if state.features.oidc_sso {
-        features.push("oidc-sso");
-    }
-    if state.features.audit_export {
-        features.push("audit-export");
-    }
+    let features = crate::license::feature_flags(&state.features);
     let expires = state
         .expires
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -633,7 +658,7 @@ pub fn cors_preflight() -> (String, String, String) {
 pub fn cors_headers() -> Vec<(&'static str, &'static str)> {
     vec![
         ("Access-Control-Allow-Origin", "*"),
-        ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+        ("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS"),
         (
             "Access-Control-Allow-Headers",
             "Content-Type, Authorization",

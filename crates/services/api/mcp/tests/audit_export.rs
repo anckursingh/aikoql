@@ -259,6 +259,115 @@ fn export_refuses_when_destination_aliases_the_log() {
     assert!(audit_log_text(&db).contains("alpha-seed"));
 }
 
+// ---- Task 9: the Studio download route ----
+
+use std::io::{Read, Write};
+use std::net::TcpStream;
+
+/// One HTTP request over plain TCP → (status, body).
+fn http(port: u16, method: &str, path: &str, body: &str) -> (u16, String) {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(30)))
+        .expect("read timeout");
+    let req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    s.write_all(req.as_bytes()).unwrap();
+    s.flush().unwrap();
+    let mut out = Vec::new();
+    s.read_to_end(&mut out).unwrap();
+    let raw = String::from_utf8_lossy(&out);
+    let status: u16 = raw
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let body = raw
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
+    (status, body)
+}
+
+/// POST /api/login as the bootstrap admin ("pw") → session token.
+fn admin_token(port: u16) -> String {
+    let (status, body) = http(
+        port,
+        "POST",
+        "/api/login",
+        r#"{"username":"admin","password":"pw"}"#,
+    );
+    assert_eq!(status, 200, "{}", body);
+    serde_json::from_str::<serde_json::Value>(&body).expect("json")["token"]
+        .as_str()
+        .expect("token")
+        .to_string()
+}
+
+#[test]
+fn http_export_serves_the_attachment_and_unlicensed_404s() {
+    // Task 9: GET /api/audit-export streams the (retention-truncated) audit
+    // log as a Content-Disposition attachment for an admin session under
+    // the audit-export flag; unlicensed servers keep the v0.4.0 plain 404.
+    let db = tmp("http-export-db");
+    let log = tmp("http-export-log");
+    seed(&db, &[("alpha-seed", now_secs()), ("beta-seed", now_secs())]);
+    let (lic, pk_b64) = write_license(&["audit-export"]);
+    let lic_str = lic.to_string_lossy().into_owned();
+    let envs = [
+        ("AIKOQL_LICENSE", lic_str.as_str()),
+        ("AIKOQL_LICENSE_PUBLIC_KEY", pk_b64.as_str()),
+        ("AIKOQL_ADMIN_PASSWORD", "pw"),
+    ];
+    let srv = common::spawn_server(&db, &log, &envs, &[]);
+    let health = common::wait_health(srv.port, Instant::now() + Duration::from_secs(60));
+    assert!(health.contains(" 200 "), "health: {health}");
+    let token = admin_token(srv.port);
+    let (status, body) = http(
+        srv.port,
+        "GET",
+        &format!("/api/audit-export?token={token}"),
+        "",
+    );
+    assert_eq!(status, 200, "{}", body);
+    assert_eq!(
+        body,
+        audit_log_text(&db),
+        "the export is the log, byte-for-byte"
+    );
+    // the attachment header the browser download keys on
+    let raw = common::http_req(
+        srv.port,
+        &format!(
+            "GET /api/audit-export?token={token} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        ),
+    )
+    .expect("raw response");
+    assert!(raw.contains("Content-Disposition: attachment"), "raw: {raw}");
+    // an anonymous GET is refused
+    let (anon, _) = http(srv.port, "GET", "/api/audit-export", "");
+    assert_eq!(anon, 401);
+
+    // unlicensed: the route never existed in v0.4.0 — plain 404
+    let db2 = tmp("http-export-community-db");
+    let log2 = tmp("http-export-community-log");
+    let srv2 = common::spawn_server(&db2, &log2, &[("AIKOQL_ADMIN_PASSWORD", "pw")], &[]);
+    let health2 = common::wait_health(srv2.port, Instant::now() + Duration::from_secs(60));
+    assert!(health2.contains(" 200 "), "health: {health2}");
+    let token2 = admin_token(srv2.port);
+    let (c_status, c_body) = http(
+        srv2.port,
+        "GET",
+        &format!("/api/audit-export?token={token2}"),
+        "",
+    );
+    assert_eq!(c_status, 404, "{}", c_body);
+    assert_eq!(c_body, "Not Found\n", "v0.4.0 plain-text 404: {}", c_body);
+}
+
 #[test]
 fn export_requires_enterprise_license() {
     // Unlicensed → the exact enterprise-feature error, non-zero exit, no

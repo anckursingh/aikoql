@@ -1360,19 +1360,38 @@ pub(crate) fn handle_http(
     // multi-user store is open (they are gated admin-only inside
     // route_admin with the T6 live-role check). Community mode has no
     // store: those paths fall through to the v0.4.0 404, byte-for-byte —
-    // no 401, no JSON, no "user store unavailable".
-    if route == "/api/license"
+    // no 401, no JSON, no "user store unavailable". Task 9 adds
+    // /api/audit-export under the audit-export flag, same fall-through.
+    let admin_reply = if route == "/api/license"
         || ((route == "/api/users" || route.starts_with("/api/users/"))
             && crate::session::users().is_some())
     {
         let (status, ct, body) =
             api_rest::route_admin(method, route, &body_str, sessions, token.as_deref());
+        Some((status, ct, Vec::new(), body))
+    } else if route == "/api/audit-export"
+        && crate::license::LICENSE_STATE
+            .get()
+            .is_some_and(|s| s.features.audit_export)
+    {
+        Some(api_rest::route_audit_export(
+            sessions,
+            token.as_deref(),
+            db_path.as_str(),
+        ))
+    } else {
+        None
+    };
+    if let Some((status, ct, extra_headers, body)) = admin_reply {
         let mut resp = format!(
             "HTTP/1.0 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
             status,
             ct,
             body.len()
         );
+        for (h, v) in extra_headers {
+            resp.push_str(&format!("{h}: {v}\r\n"));
+        }
         for (h, v) in api_rest::cors_headers() {
             resp.push_str(&format!("{}: {}\r\n", h, v));
         }
@@ -1399,7 +1418,7 @@ pub(crate) fn handle_http(
         "/" | "/studio" => (
             "200 OK",
             "text/html; charset=utf-8",
-            studio::studio_html(crate::oidc::gate().is_some()),
+            studio::studio_html(crate::oidc::gate().is_some(), crate::license::LICENSE_STATE.get()),
         ),
         "/health" => {
             let uptime = SERVER_START

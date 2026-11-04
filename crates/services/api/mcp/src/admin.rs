@@ -179,6 +179,14 @@ fn export_audit_jsonl(db_path: &str, out: &str) {
     println!("Exported audit log to: {out}");
 }
 
+/// Task 9: the audit log's content for the HTTP export route — the same
+/// bytes `audit --export-jsonl` streams. The HTTP response is a full
+/// in-memory String anyway, so read_to_string matches the transport.
+pub(crate) fn audit_jsonl(db_path: &str) -> Result<String, String> {
+    let log_path = crate::audit::audit_log_path(db_path);
+    std::fs::read_to_string(&log_path).map_err(|e| format!("open audit log {log_path}: {e}"))
+}
+
 /// Is `a` the same file as `b`? Canonical paths catch a direct path and
 /// symlinks; the inode/dev pair also catches a hardlink alias.
 fn same_file(a: &str, b: &str) -> bool {

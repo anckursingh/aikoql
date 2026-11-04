@@ -280,7 +280,8 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 <div id="login-overlay">
   <div class="login-card">
     <h1>Aikoql Studio</h1>
-    <div class="sub">The Knowledge OS Desktop</div>
+    <div class="sub" style="margin-bottom:6px;">The Knowledge OS Desktop</div>
+    <div class="sub" data-license-status style="margin-bottom:20px;"><!-- LICENSE_STATUS --></div>
     <input type="text" id="login-user" placeholder="Username" autocomplete="off" />
     <input type="password" id="login-pass" placeholder="Password" />
     <button onclick="doLogin()">Sign In</button>
@@ -508,6 +509,19 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <!-- ── Administration ── -->
       <div class="panel" id="panel-admin">
         <div class="admin-grid" id="admin-grid"><div class="loading">Loading dashboard...</div></div>
+        <!-- AUDIT_EXPORT -->
+        <div class="card" id="users-panel" data-users-panel style="display:none;">
+          <h3>👥 Users</h3>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Pre-provision an IdP subject, or edit roles for an existing user. Roles: admin, editor, viewer.</p>
+          <div style="display:flex;gap:8px;margin-bottom:8px;">
+            <input type="text" id="user-sub" placeholder="sub (IdP subject)" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font-mono);" />
+            <input type="text" id="user-name" placeholder="Name" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font-mono);" />
+            <input type="text" id="user-roles" placeholder="roles (comma separated)" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font-mono);" />
+            <button class="btn btn-pri" onclick="createUser()">Pre-provision</button>
+          </div>
+          <div id="users-msg"></div>
+          <div id="users-list"></div>
+        </div>
       </div>
 
       <!-- ── Timeline — MVCC Time Travel ── -->
@@ -659,6 +673,17 @@ async function apiPost(url, body) {
   }
   return res.json();
 }
+async function apiPut(url, body) {
+  const sep = url.includes('?') ? '&' : '?';
+  const full = url + (authToken ? sep + 'token=' + encodeURIComponent(authToken) : '');
+  const res = await fetch(full, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})});
+  if (!res.ok) {
+    let msg = 'HTTP ' + res.status;
+    try { const b = await res.json(); if (b.error) msg = b.error; } catch(_) {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
 
 // Epoch millis → "YYYY-MM-DD HH:MM:SS (13s ago)".
 function fmtTime(ms) {
@@ -689,7 +714,7 @@ function switchPanel(name) {
   if (name === 'explorer') loadExplorerTree();
   if (name === 'schema') loadSchemaPanel();
   if (name === 'ontology') loadOntologyPanel();
-  if (name === 'admin') loadAdminPanel();
+  if (name === 'admin') { loadAdminPanel(); loadUsers(); }
   if (name === 'providers') loadProviders();
   if (name === 'debugger') loadDebuggerPrograms();
   if (name === 'benchmarks') loadBenchmarks();
@@ -717,6 +742,7 @@ setInterval(updateStatus, 15000);
 function initApp() {
   updateStatus();
   loadTenants();
+  loadUsers();
   // Init CodeMirror 6 on the query editor div.
   if (window.__initCodeMirror) window.__initCodeMirror();
 }
@@ -1387,6 +1413,60 @@ async function loadAdminPanel() {
     document.getElementById('admin-grid').innerHTML = html;
   } catch(e) { document.getElementById('admin-grid').innerHTML = '<div class="error-text">Failed to load admin dashboard: '+e.message+'</div>'; }
 }
+
+// ═══════════════════════════════════════════
+// Panel: Users (enterprise; hidden without an admin session)
+// ═══════════════════════════════════════════
+async function loadUsers() {
+  const panel = document.getElementById('users-panel');
+  if (!panel) return;
+  try {
+    const d = await api('/api/users');
+    panel.style.display = 'block';
+    renderUsers(d.users || []);
+  } catch(e) { panel.style.display = 'none'; } // 403/404: no admin, or no license
+}
+// Escape & < > " ' — user rows render /api/users data (IdP-influenceable
+// sub/name claims in SSO mode), which must never reach the markup raw.
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function renderUsers(users) {
+  const el = document.getElementById('users-list');
+  if (!users.length) { el.innerHTML = '<div class="empty-state">No users yet.</div>'; return; }
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:11px;"><tr style="color:var(--muted);text-align:left;"><th>sub</th><th>name</th><th>roles</th><th></th></tr>';
+  users.forEach(u => {
+    const sub = esc(u.sub), name = esc(u.name), roles = esc((u.roles||[]).join(', '));
+    html += '<tr><td class="mono" style="padding:4px 0;">'+sub+'</td><td>'+name+'</td><td>'+roles+'</td><td><button class="btn btn-sec btn-sm" data-sub="'+sub+'" onclick="setUserRoles(this.dataset.sub)">Set roles</button></td></tr>';
+  });
+  html += '</table>';
+  el.innerHTML = html;
+}
+async function createUser() {
+  const sub = document.getElementById('user-sub').value.trim();
+  const name = document.getElementById('user-name').value.trim();
+  const roles = document.getElementById('user-roles').value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!sub) return;
+  const body = {sub: sub, roles: roles};
+  if (name) body.name = name;
+  try {
+    await apiPost('/api/users', body);
+    document.getElementById('user-sub').value = '';
+    document.getElementById('user-name').value = '';
+    document.getElementById('users-msg').innerHTML = '<span style="color:var(--green);">User provisioned.</span>';
+    loadUsers();
+  } catch(e) { document.getElementById('users-msg').innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+}
+async function setUserRoles(sub) {
+  const roles = document.getElementById('user-roles').value.split(',').map(s => s.trim()).filter(Boolean);
+  try {
+    await apiPut('/api/users/' + encodeURIComponent(sub) + '/roles', {roles: roles});
+    loadUsers();
+  } catch(e) { document.getElementById('users-msg').innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+}
+function downloadAuditExport() {
+  location.href = '/api/audit-export' + (authToken ? '?token=' + encodeURIComponent(authToken) : '');
+}
 async function adminCreateBackup() {
   const div = document.getElementById('admin-backup-result');
   div.innerHTML = '<span style="color:var(--muted);">Creating backup...</span>';
@@ -1954,23 +2034,52 @@ document.addEventListener('DOMContentLoaded', () => {
 </body>
 </html>"##;
 
-/// The Studio page. Community mode: byte-for-byte v0.4.0 (`STUDIO_HTML`
-/// itself). Enterprise SSO: the overlay gains the SSO button and the
-/// /oidc/callback `#token=` hand-off.
-pub(crate) fn studio_html(sso: bool) -> String {
-    if !sso {
-        return STUDIO_HTML.to_string();
+/// The Studio page. The served HTML always carries the Task 9 markers: the
+/// login card license line (`data-license-status`) and the admin users panel
+/// anchor (`data-users-panel`). Content varies: the line renders "Community"
+/// without a license, or `org · expires YYYY-MM-DD` with one; the SSO button
+/// (`data-sso-button`) appears only when OIDC is licensed AND configured; the
+/// audit export card (`data-audit-export`) only under the audit-export flag.
+pub(crate) fn studio_html(sso: bool, license: Option<&crate::license::LicenseState>) -> String {
+    let status = match license {
+        Some(l) => {
+            let mut line = l.org.clone();
+            let flags = crate::license::feature_flags(&l.features);
+            if !flags.is_empty() {
+                line.push_str(" · ");
+                line.push_str(&flags.join(", "));
+            }
+            if let Some(e) = l.expires {
+                line.push_str(&format!(" · expires {}", crate::license::expiry_date(e)));
+            }
+            line
+        }
+        None => "Community".to_string(),
+    };
+    let mut html = STUDIO_HTML.replace("<!-- LICENSE_STATUS -->", &status);
+    if sso {
+        let anchor = format!("<button onclick=\"doLogin()\">Sign In</button>{SSO_LOGIN_HTML}");
+        html = html.replace("<button onclick=\"doLogin()\">Sign In</button>", &anchor);
+        debug_assert!(html.contains("data-sso-button"), "the studio SSO anchor moved");
     }
-    let anchor = format!("<button onclick=\"doLogin()\">Sign In</button>{SSO_LOGIN_HTML}");
-    let html = STUDIO_HTML.replace("<button onclick=\"doLogin()\">Sign In</button>", &anchor);
-    debug_assert!(html != STUDIO_HTML, "the studio SSO anchor moved");
+    if license.is_some_and(|l| l.features.audit_export) {
+        html = html.replace("<!-- AUDIT_EXPORT -->", AUDIT_EXPORT_HTML);
+    }
     html
 }
+
+/// Injected only under the audit-export flag: the admin-panel download card,
+/// a plain browser GET (auth rides the token query param, like api()).
+const AUDIT_EXPORT_HTML: &str = r#"<div class="card" data-audit-export>
+  <h3>🧾 Audit Export</h3>
+  <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Download the retention-trimmed audit log as JSONL.</p>
+  <button class="btn btn-sec" onclick="downloadAuditExport()">⬇ Download audit log</button>
+</div>"#;
 
 /// Injected only with SSO active: the IdP button plus the callback hand-off
 /// (a URL-fragment read; the page's api() sends authToken as a query param
 /// itself, unchanged from v0.4.0).
-const SSO_LOGIN_HTML: &str = r#"<button onclick="location.href='/api/login/sso'">Sign in with SSO</button>
+const SSO_LOGIN_HTML: &str = r#"<button data-sso-button onclick="location.href='/api/login/sso'">Sign in with SSO</button>
 <script>window.addEventListener('load', () => {
   // the callback hands the token over in the URL fragment; the query-string
   // read below only keeps a bookmarked pre-fragment hand-off working
@@ -1984,3 +2093,111 @@ const SSO_LOGIN_HTML: &str = r#"<button onclick="location.href='/api/login/sso'"
   document.getElementById('app').style.display = 'flex';
   initApp();
 });</script>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::license::{FeatureSet, LicenseState};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn license(flags: &[&str], expires: Option<SystemTime>) -> LicenseState {
+        LicenseState {
+            org: "acme-corp".into(),
+            expires,
+            features: FeatureSet::from_flags(
+                &flags.iter().map(|f| f.to_string()).collect::<Vec<_>>(),
+            ),
+        }
+    }
+
+    #[test]
+    fn login_card_shows_license_status_marker() {
+        // Task 9: the served login card carries the status line — licensed
+        // servers render org + features + human-readable expiry (the same
+        // data GET /api/license serves), community renders "Community".
+        let lic = license(
+            &["multi-user"],
+            Some(UNIX_EPOCH + Duration::from_secs(4_102_444_800)), // 2100-01-01T00:00Z
+        );
+        let html = studio_html(false, Some(&lic));
+        assert!(html.contains("data-license-status"), "marker missing");
+        assert!(
+            html.contains("acme-corp · multi-user · expires 2099-12-31"),
+            "licensed line must carry org, features and the expiry day"
+        );
+        let community = studio_html(false, None);
+        assert!(
+            community.contains("data-license-status"),
+            "marker must stay in community mode"
+        );
+        assert!(
+            community.contains(">Community<"),
+            "community must say Community"
+        );
+    }
+
+    #[test]
+    fn login_card_has_sso_button_marker() {
+        // Task 9: the SSO button (T5, injected only when OIDC is licensed
+        // AND configured) carries data-sso-button; without it the button is
+        // absent from the served page.
+        let lic = license(&["oidc-sso"], None);
+        let configured = studio_html(true, Some(&lic));
+        assert!(configured.contains("data-sso-button"), "marker missing");
+        let licensed_but_unconfigured = studio_html(false, Some(&lic));
+        assert!(!licensed_but_unconfigured.contains("data-sso-button"));
+        let unlicensed = studio_html(false, None);
+        assert!(!unlicensed.contains("data-sso-button"));
+    }
+
+    #[test]
+    fn users_panel_marker_present() {
+        // Task 9: the served admin panel carries the users panel anchor —
+        // the JS reveals it only for sessions GET /api/users admits.
+        assert!(studio_html(false, None).contains("data-users-panel"));
+        let lic = license(&["multi-user"], None);
+        assert!(studio_html(false, Some(&lic)).contains("data-users-panel"));
+    }
+
+    #[test]
+    fn users_panel_escapes_server_data() {
+        // Task 9 fix: rows render /api/users data (IdP-influenceable in
+        // SSO mode) through an all-five-entities helper, and the sub
+        // reaches the handler via a data attribute — never raw inside an
+        // onclick string, where a name/sub claim would break out and steal
+        // the admin's authToken.
+        let html = studio_html(false, None);
+        assert!(html.contains("function esc("), "esc helper missing");
+        assert!(
+            html.contains(
+                "const sub = esc(u.sub), name = esc(u.name), roles = esc((u.roles||[]).join(', '));"
+            ),
+            "the row builder must escape every user field"
+        );
+        assert!(html.contains("data-sub="), "sub must ride a data attribute");
+        assert!(
+            !html.contains("onclick=\"setUserRoles('"),
+            "raw sub inside an onclick string is the XSS sink"
+        );
+    }
+
+    #[test]
+    fn audit_export_button_present_when_licensed() {
+        // Task 9: the export button exists only under the audit-export
+        // license flag — unlicensed pages must not carry the marker.
+        let lic = license(&["audit-export"], None);
+        assert!(
+            studio_html(false, Some(&lic)).contains("data-audit-export"),
+            "export marker missing under the flag"
+        );
+        assert!(
+            !studio_html(false, None).contains("data-audit-export"),
+            "community must not carry the export button"
+        );
+        let other = license(&["multi-user"], None);
+        assert!(
+            !studio_html(false, Some(&other)).contains("data-audit-export"),
+            "a license without the flag must not carry the export button"
+        );
+    }
+}

@@ -165,3 +165,14 @@ fn tampered_key_runs_as_community() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     common::wait_log(&log, "community mode", deadline);
 }
+
+#[test]
+fn expiry_date_renders_the_expiry_day() {
+    // Task 9: expires is the END of the expiry day (00:00 UTC of the next
+    // one) — the license line must show the day the owner wrote in
+    // expires_at, as civil_from_days here would.
+    let end = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(4_102_444_800); // 2100-01-01T00:00Z
+    assert_eq!(license::expiry_date(end), "2099-12-31");
+    let epoch_next = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(86_400); // 1970-01-02T00:00Z
+    assert_eq!(license::expiry_date(epoch_next), "1970-01-01");
+}
