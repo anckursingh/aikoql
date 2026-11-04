@@ -171,7 +171,9 @@ pub(crate) fn verify_license_with_key(
     bytes: &[u8],
     pk: &[u8],
 ) -> Result<LicenseState, LicenseError> {
-    let text = std::str::from_utf8(bytes).map_err(|_| LicenseError::Malformed("not UTF-8"))?;
+    // a license file may carry surrounding whitespace (the keygen itself
+    // prints a trailing newline) — trim before decoding
+    let text = std::str::from_utf8(bytes.trim_ascii()).map_err(|_| LicenseError::Malformed("not UTF-8"))?;
     // split on the LAST '.' — a stray separator in either half fails base64
     let (payload_b64, sig_b64) = text
         .rsplit_once('.')

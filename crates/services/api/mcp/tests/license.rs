@@ -73,6 +73,17 @@ fn malformed_base64_rejected() {
     assert!(license::verify_license_with_key(b"not-a-license", &pk).is_err());
 }
 
+#[test]
+fn trailing_newline_is_tolerated() {
+    // the keygen prints the envelope with println! — a license file on
+    // disk ends in '\n' and must still verify (first-boot field report)
+    let (pk, blob) = sign("test", None, &["all"]);
+    let mut on_disk = blob;
+    on_disk.push(b'\n');
+    let state = license::verify_license_with_key(&on_disk, &pk).expect("trailing newline tolerated");
+    assert_eq!(state.org, "test");
+}
+
 /// Days since 1970-01-01 → civil date (Hinnant's algorithm — the inverse of
 /// the verifier's days_from_civil).
 fn civil_from_days(z: i64) -> (i64, i64, i64) {
