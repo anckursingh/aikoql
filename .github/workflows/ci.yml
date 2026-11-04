@@ -157,7 +157,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
       - run: helm lint deploy/helm/aikoql
-      - run: helm template aikoql deploy/helm/aikoql
+      # the chart fails closed without a credential source (statefulset
+      # `required` on auth.adminPasswordKey) — the render is a syntax gate,
+      # so any non-empty value satisfies it
+      - run: helm template aikoql deploy/helm/aikoql --set auth.adminPasswordKey=ci-render-test
 
   docker:
     name: Docker build + health (Linux)
