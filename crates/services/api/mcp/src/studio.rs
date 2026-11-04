@@ -512,7 +512,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
         <!-- AUDIT_EXPORT -->
         <div class="card" id="users-panel" data-users-panel style="display:none;">
           <h3>👥 Users</h3>
-          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Pre-provision an IdP subject, or edit roles for an existing user. Roles: admin, editor, viewer.</p>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Pre-provision an IdP subject, or edit roles for an existing user. Roles: admin, viewer.</p>
           <div style="display:flex;gap:8px;margin-bottom:8px;">
             <input type="text" id="user-sub" placeholder="sub (IdP subject)" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font-mono);" />
             <input type="text" id="user-name" placeholder="Name" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font-mono);" />

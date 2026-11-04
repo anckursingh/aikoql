@@ -81,7 +81,10 @@ impl UserStore {
     /// AIKOQL_ADMIN_PASSWORD on first start. The password is stored as its
     /// argon2id PHC (kernel KMS params — plan ruling) in `password_hash`;
     /// break-glass login verifies it via [`Self::verify_admin_password`]
-    /// (Task 5). Ok(false) = an admin already exists.
+    /// (Task 5). Ok(false) = an admin already exists. The insert upserts on
+    /// sub: a demoted `admin` row is repaired (roles only — the stored
+    /// hash/name/created_at stay untouched), so a restart after a PUT-roles
+    /// demotion seeds instead of exit-1-ing on UNIQUE(sub).
     pub(crate) fn seed_bootstrap_admin(&self, password: &str) -> rusqlite::Result<bool> {
         if self.has_admin() {
             return Ok(false);
@@ -108,7 +111,8 @@ impl UserStore {
         let roles_json = serde_json::to_string(&["admin".to_string()]).map_err(to_sql_error)?;
         self.conn.execute(
             "INSERT INTO users (sub, name, roles, created_at, password_hash)
-             VALUES (?1, NULL, ?2, ?3, ?4)",
+             VALUES (?1, NULL, ?2, ?3, ?4)
+             ON CONFLICT(sub) DO UPDATE SET roles = excluded.roles",
             rusqlite::params![ADMIN_SUB, roles_json, rfc3339_utc_now(), phc.to_string()],
         )?;
         Ok(true)
@@ -142,6 +146,9 @@ impl UserStore {
 
     /// Create or refresh an OIDC user: the first login inserts (created_at
     /// now), later logins refresh name + roles from the live claims.
+    /// The bootstrap admin's sub is reserved: an upsert there would replace
+    /// its roles and brick the next restart's seed INSERT (UNIQUE(sub)) —
+    /// refused, loudly.
     #[allow(dead_code)] // the Task 5 contract — read there
     pub(crate) fn upsert_oidc_user(
         &self,
@@ -149,6 +156,9 @@ impl UserStore {
         name: Option<&str>,
         roles: &[String],
     ) -> rusqlite::Result<()> {
+        if sub == ADMIN_SUB {
+            return Err(to_sql_error(format!("reserved sub '{ADMIN_SUB}'")));
+        }
         let roles_json = serde_json::to_string(roles).map_err(to_sql_error)?;
         self.conn.execute(
             "INSERT INTO users (sub, name, roles, created_at) VALUES (?1, ?2, ?3, ?4)
@@ -231,4 +241,66 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (y + i64::from(m <= 2), m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upsert_refuses_the_reserved_admin_sub() {
+        // Final review I-4: the bootstrap admin row (sub "admin") is
+        // reserved — an OIDC/API upsert must error and leave it untouched
+        // (an overwrite would brick the next restart's seed INSERT).
+        let path =
+            std::env::temp_dir().join(format!("aikoql-users-reserved-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let store = UserStore::open(&path).expect("open store");
+        assert!(store.seed_bootstrap_admin("pw").expect("seed"), "seeded");
+        let before = store.roles_of(ADMIN_SUB).expect("roles_of").expect("row");
+        let err = store
+            .upsert_oidc_user(ADMIN_SUB, Some("IdP admin"), &["viewer".to_string()])
+            .expect_err("the reserved sub must be refused");
+        assert!(err.to_string().contains("reserved"), "{err}");
+        assert_eq!(
+            store.roles_of(ADMIN_SUB).expect("roles_of"),
+            Some(before),
+            "the reserved row must be untouched"
+        );
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[test]
+    fn seed_after_demotion_upserts_the_admin_row() {
+        // Final review round 2 (seed idempotency): PUT roles can demote
+        // sub "admin", and the next restart's seed then INSERTs a row that
+        // exists — UNIQUE(sub) would exit-1 the boot. The seed must upsert
+        // the roles back; password_hash/name/created_at stay untouched on
+        // the conflict path, so break-glass still verifies.
+        let path =
+            std::env::temp_dir().join(format!("aikoql-users-reseed-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let store = UserStore::open(&path).expect("open store");
+        assert!(store.seed_bootstrap_admin("pw").expect("seed"), "seeded");
+        store
+            .set_roles(ADMIN_SUB, &["viewer".to_string()])
+            .expect("demote");
+        assert!(!store.has_admin(), "demoted");
+        assert!(
+            store.seed_bootstrap_admin("pw").expect("reseed"),
+            "the reseed must upsert, not collide"
+        );
+        assert!(store.has_admin(), "admin restored");
+        assert!(
+            store.verify_admin_password("pw").expect("verify"),
+            "the conflict path must keep the seeded hash"
+        );
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
 }

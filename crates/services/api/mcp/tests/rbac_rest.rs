@@ -53,6 +53,54 @@ fn serve(tag: &str, tokens: &[&str]) -> (common::Server, u16) {
     (srv, mcp_port)
 }
 
+/// A licensed multi-user server with the given --tcp-token specs and NO
+/// --metrics-addr: the pure MCP-TCP serve shape (final review I-1). There
+/// is no HTTP listener, so readiness is the MCP port accepting and the
+/// server staying alive.
+fn serve_no_metrics(tag: &str, tokens: &[&str]) -> (common::Server, u16) {
+    let (pk, blob) = common::sign("test", None, &["multi-user"]);
+    let pk_b64 = URL_SAFE_NO_PAD.encode(&pk);
+    let lic = std::env::temp_dir().join(format!("aikoql-rbac-nm-{tag}-{}.lic", std::process::id()));
+    std::fs::write(&lic, &blob).unwrap();
+    common::register_temp_path(&lic);
+    let db = std::env::temp_dir().join(format!("aikoql-rbac-nm-{tag}-db-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&db);
+    common::register_temp_path(&db);
+    let log = std::env::temp_dir().join(format!("aikoql-rbac-nm-{tag}-{}.log", std::process::id()));
+    common::register_temp_path(&log);
+
+    let mcp_port = common::free_port();
+    let mcp_addr = format!("127.0.0.1:{mcp_port}");
+    let mut extra: Vec<String> = vec!["--listen".into(), mcp_addr];
+    for t in tokens {
+        extra.push("--tcp-token".into());
+        extra.push(t.to_string());
+    }
+    let extra_refs: Vec<&str> = extra.iter().map(|s| s.as_str()).collect();
+    let lic_str = lic.to_str().unwrap();
+    let envs = [
+        ("AIKOQL_LICENSE", lic_str),
+        ("AIKOQL_LICENSE_PUBLIC_KEY", pk_b64.as_str()),
+        ("AIKOQL_ADMIN_PASSWORD", "pw"),
+    ];
+    let mut srv = common::spawn_server_no_metrics(&db, &log, &envs, &extra_refs);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        match TcpStream::connect(("127.0.0.1", mcp_port)) {
+            Ok(_) => break,
+            Err(_) => {
+                assert!(Instant::now() < deadline, "MCP TCP never listened");
+                assert!(
+                    srv.child.try_wait().expect("try_wait").is_none(),
+                    "server exited early"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    (srv, mcp_port)
+}
+
 /// One newline-delimited MCP connection: initialize with the `--tcp-token`
 /// part, then one tools/call, returning its response.
 fn mcp_call(port: u16, token: &str, tool: &str, args: &J) -> J {
@@ -195,6 +243,30 @@ fn viewer_blocked_on_write_tools() {
             .contains("viewer"),
         "{resp}"
     );
+}
+
+#[test]
+fn viewer_write_gate_holds_without_metrics_listener() {
+    // Final review I-1: the viewer gate must not depend on --metrics-addr.
+    // The user store publishes process-wide at startup, so a licensed
+    // multi-user server serving MCP over TCP alone (no HTTP listener)
+    // still refuses viewer writes — fail-closed, never a silent write.
+    let (_srv, mcp_port) = serve_no_metrics("nm", &["vtok:acme:viewer"]);
+    let resp = mcp_call(mcp_port, "vtok", "remember", &json!({"type_name": "Fact"}));
+    assert_eq!(
+        resp["error"]["code"], -32001,
+        "viewer must not write without a metrics listener: {resp}"
+    );
+    assert!(
+        resp["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("viewer"),
+        "{resp}"
+    );
+    // a read tool stays reachable on the same connection shape
+    let read = mcp_call(mcp_port, "vtok", "recall", &json!({"query": "anything"}));
+    assert!(read.get("result").is_some(), "viewer must read: {read}");
 }
 
 #[test]

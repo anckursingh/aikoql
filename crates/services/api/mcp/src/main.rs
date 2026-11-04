@@ -582,6 +582,10 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // Final review I-1: publish the handle process-wide so every serve
+        // surface sees the store — MCP over TCP gates viewers even without
+        // a metrics listener (serve_metrics' open_users is then a no-op).
+        crate::session::set_users(Arc::new(Mutex::new(store)));
     }
     if let (Some(slot), Some(a)) = (&ha_slot, &admin) {
         let _ = slot.set(a.clone()); // the renewer can now fence writes

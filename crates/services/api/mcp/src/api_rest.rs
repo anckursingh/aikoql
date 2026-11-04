@@ -524,8 +524,25 @@ pub fn route_admin(
                 Some(s) => s,
                 None => return err(400, "missing sub".into()),
             };
+            // Final review I-4: the bootstrap admin row is reserved — an
+            // upsert here would overwrite it and brick the next restart's
+            // seed INSERT.
+            if sub == crate::users::ADMIN_SUB {
+                return err(400, format!("reserved sub '{sub}'"));
+            }
             let name = j.get("name").and_then(|v| v.as_str());
-            let roles: Vec<String> = roles_of_json(&j).unwrap_or_default();
+            let mut roles: Vec<String> = roles_of_json(&j).unwrap_or_default();
+            // Final review I-3: v1 roles are {admin, viewer} — anything
+            // else would pass check_rest as "not viewer" and grant writes.
+            if let Err(r) = validate_roles(&roles) {
+                return r;
+            }
+            // Final review N-1: an empty set (absent, [], or non-strings
+            // only) must not fail open — it normalizes to viewer, the
+            // stripped state (same as an unknown claim).
+            if roles.is_empty() {
+                roles = vec!["viewer".to_string()];
+            }
             match with_store(|s| s.upsert_oidc_user(sub, name, &roles)) {
                 Ok(()) => json_response(200, &json!({"data": {"sub": sub, "roles": roles}})),
                 Err(r) => r,
@@ -540,10 +557,20 @@ pub fn route_admin(
                 Ok(j) => j,
                 Err(e) => return err(400, format!("bad JSON: {e}")),
             };
-            let roles: Vec<String> = match roles_of_json(&j) {
+            let mut roles: Vec<String> = match roles_of_json(&j) {
                 Some(r) => r,
                 None => return err(400, "missing roles".into()),
             };
+            // Final review I-3: v1 roles are {admin, viewer} — anything
+            // else would pass check_rest as "not viewer" and grant writes.
+            if let Err(r) = validate_roles(&roles) {
+                return r;
+            }
+            // Final review N-1: an empty set must not fail open — it
+            // normalizes to viewer, the stripped state.
+            if roles.is_empty() {
+                roles = vec!["viewer".to_string()];
+            }
             match with_store(|s| {
                 // the row must exist — a bare UPDATE would silently no-op
                 if s.roles_of(sub)?.is_none() {
@@ -573,14 +600,36 @@ fn roles_of_json(j: &J) -> Option<Vec<String>> {
         })
 }
 
+/// Final review I-3: the admin API stores only v1 roles. An unknown value
+/// would pass `check_rest` as "not viewer" (a write grant), so the
+/// boundary refuses it with a 400.
+fn validate_roles(roles: &[String]) -> Result<(), (String, String, String)> {
+    for r in roles {
+        if r != "admin" && r != "viewer" {
+            return Err(json_response(
+                400,
+                &json!({"error": format!("invalid role '{r}' (admin or viewer)")}),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Task 8's admin-only gate: the session's LIVE store roles (a revocation
 /// takes effect on the next call), admin required — the same check_rest
-/// the T6 REST write gate uses. Community mode has no store, so the gate
-/// passes there (v0.4.0 parity).
+/// the T6 REST write gate uses. With no user store it refuses: only the
+/// flag-gated enterprise surfaces (route_audit_export) reach here
+/// store-less; community route_v1 calls check_rest directly.
 fn admin_only(
     token: Option<&str>,
     sessions: &Mutex<HashMap<String, crate::HttpSession>>,
 ) -> Result<(), (String, String, String)> {
+    if crate::session::users().is_none() {
+        return Err(json_response(
+            403,
+            &json!({"error": "admin role required"}),
+        ));
+    }
     let roles = crate::http::live_roles(token, sessions).unwrap_or_default();
     crate::authz::check_rest(&roles, true)
         .map_err(|e| json_response(e.status(), &json!({"error": e.message()})))

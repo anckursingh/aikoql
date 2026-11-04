@@ -372,6 +372,15 @@ pub(crate) fn open_users(db_path: &str) -> Option<Arc<Mutex<UserStore>>> {
     .clone()
 }
 
+/// Publish the store handle main.rs opened and seeded at startup (final
+/// review I-1): the process-wide handle every gate reads. main.rs exits on
+/// a startup open/seed failure, so a published handle is always a working
+/// store — and the gates hold on every serve surface, MCP over TCP with or
+/// without a metrics listener. serve_metrics' later open_users is a no-op.
+pub(crate) fn set_users(store: Arc<Mutex<UserStore>>) {
+    USERS.get_or_init(|| Some(store));
+}
+
 /// The shared store, once the serve path has opened it.
 pub(crate) fn users() -> Option<Arc<Mutex<UserStore>>> {
     USERS.get().cloned().flatten()

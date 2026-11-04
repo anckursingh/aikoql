@@ -83,6 +83,9 @@ override credentials on later starts.
 - v1 roles: **`admin`** and **`viewer`** (read-only). Claim mapping: only an
   exact `"admin"` value becomes admin — anything unknown or missing is
   `viewer`, never admin.
+- An empty or missing `roles` value defaults to `viewer` (never admin).
+- The subject `admin` is reserved for the break-glass bootstrap admin; SSO
+  logins presenting it are refused.
 - **Live role lookup**: roles resolve from the store on every request (not
   a snapshot at grant time), so a demotion revokes access immediately.
   `viewer` gates both MCP capability checks and REST/admin-API writes.

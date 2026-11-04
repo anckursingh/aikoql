@@ -1619,6 +1619,18 @@ fn callback(
         Ok(c) => c,
         Err(e) => return page("401 Unauthorized", format!("OIDC sign-in failed: {e}")),
     };
+    // Final review I-4: the bootstrap admin's sub is reserved — an IdP
+    // identity colliding with it must never overwrite the break-glass row
+    // (the store refuses too; this gives the clean status).
+    if claims.sub == crate::users::ADMIN_SUB {
+        return page(
+            "403 Forbidden",
+            format!(
+                "the break-glass admin '{}' cannot sign in via SSO",
+                crate::users::ADMIN_SUB
+            ),
+        );
+    }
     let roles = crate::oidc::map_roles(&claims.roles);
     // the store is authoritative: first login inserts, later logins refresh
     if let Some(store) = crate::session::users() {

@@ -312,10 +312,12 @@ fn http_export_serves_the_attachment_and_unlicensed_404s() {
     // Task 9: GET /api/audit-export streams the (retention-truncated) audit
     // log as a Content-Disposition attachment for an admin session under
     // the audit-export flag; unlicensed servers keep the v0.4.0 plain 404.
+    // (The license also carries multi-user: the admin-only gate resolves
+    // the admin role from the store — see the I-2 store-less refusal.)
     let db = tmp("http-export-db");
     let log = tmp("http-export-log");
     seed(&db, &[("alpha-seed", now_secs()), ("beta-seed", now_secs())]);
-    let (lic, pk_b64) = write_license(&["audit-export"]);
+    let (lic, pk_b64) = write_license(&["audit-export", "multi-user"]);
     let lic_str = lic.to_string_lossy().into_owned();
     let envs = [
         ("AIKOQL_LICENSE", lic_str.as_str()),
@@ -366,6 +368,91 @@ fn http_export_serves_the_attachment_and_unlicensed_404s() {
     );
     assert_eq!(c_status, 404, "{}", c_body);
     assert_eq!(c_body, "Not Found\n", "v0.4.0 plain-text 404: {}", c_body);
+}
+
+#[test]
+fn http_export_refused_when_no_store_exists() {
+    // Final review I-2: a license carrying audit-export WITHOUT multi-user
+    // opens no user store. The admin-only gate must fail closed — no
+    // config-file session (the auth resolver path), any role, may download
+    // the full audit JSONL.
+    let db = tmp("http-export-nostore-db");
+    let log = tmp("http-export-nostore-log");
+    seed(&db, &[("alpha-seed", now_secs())]);
+    let (lic, pk_b64) = write_license(&["audit-export"]);
+    let lic_str = lic.to_string_lossy().into_owned();
+    let envs = [
+        ("AIKOQL_LICENSE", lic_str.as_str()),
+        ("AIKOQL_LICENSE_PUBLIC_KEY", pk_b64.as_str()),
+        ("AIKOQL_ADMIN_PASSWORD", "pw"),
+    ];
+    let srv = common::spawn_server(&db, &log, &envs, &[]);
+    let health = common::wait_health(srv.port, Instant::now() + Duration::from_secs(60));
+    assert!(health.contains(" 200 "), "health: {health}");
+    let token = admin_token(srv.port);
+    let (status, body) = http(
+        srv.port,
+        "GET",
+        &format!("/api/audit-export?token={token}"),
+        "",
+    );
+    assert_eq!(status, 403, "no store, no export: {body}");
+    assert!(body.contains("admin role required"), "{body}");
+}
+
+#[test]
+fn community_backup_parity_with_config_file_session() {
+    // Final review I-2 round 2: the store-less admin-gate refusal belongs
+    // to the flag-gated enterprise surfaces (route_audit_export), not to
+    // route_v1. An UNLICENSED server with a config-file user (the auth
+    // resolver path) keeps v0.4.0 behavior — backup succeeds.
+    let db = tmp("backup-parity-db");
+    let log = tmp("backup-parity-log");
+    let hashed = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+        .arg("hash-password")
+        .arg("cfg-pw")
+        .output()
+        .expect("run hash-password");
+    assert!(
+        hashed.status.success(),
+        "hash-password: {}",
+        String::from_utf8_lossy(&hashed.stderr)
+    );
+    let phc = String::from_utf8(hashed.stdout).expect("hash-password stdout");
+    let cfg = tmp("backup-parity.toml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "[auth]\nusers = [\n  {{ username = \"admin\", hash = \"{}\", roles = [\"admin\"] }},\n]\n",
+            phc.trim()
+        ),
+    )
+    .unwrap();
+    let srv = common::spawn_server(&db, &log, &[], &["--config", cfg.to_str().unwrap()]);
+    let health = common::wait_health(srv.port, Instant::now() + Duration::from_secs(60));
+    assert!(health.contains(" 200 "), "health: {health}");
+    let login = http(
+        srv.port,
+        "POST",
+        "/api/login",
+        r#"{"username":"admin","password":"cfg-pw"}"#,
+    );
+    assert_eq!(login.0, 200, "{}", login.1);
+    let token = serde_json::from_str::<serde_json::Value>(&login.1).expect("json")["token"]
+        .as_str()
+        .expect("token")
+        .to_string();
+    let (status, body) = http(
+        srv.port,
+        "POST",
+        &format!("/api/v1/backup?token={token}"),
+        "{}",
+    );
+    assert_eq!(
+        status, 200,
+        "community config-file sessions must back up (v0.4.0 parity): {}",
+        body
+    );
 }
 
 #[test]

@@ -130,10 +130,35 @@ impl Server {
 /// with a clean enterprise env (license/OIDC/admin vars are removed unless
 /// `envs` re-adds them), stderr into `log`.
 pub fn spawn_server(db: &Path, log: &Path, envs: &[(&str, &str)], extra: &[&str]) -> Server {
+    spawn_server_inner(db, log, envs, extra, true)
+}
+
+/// The same spawn WITHOUT `--metrics-addr`: a pure MCP-TCP serve (final
+/// review I-1 — the viewer gate must not depend on the metrics listener).
+/// There is no HTTP listener; readiness is the MCP port accepting.
+pub fn spawn_server_no_metrics(
+    db: &Path,
+    log: &Path,
+    envs: &[(&str, &str)],
+    extra: &[&str],
+) -> Server {
+    spawn_server_inner(db, log, envs, extra, false)
+}
+
+fn spawn_server_inner(
+    db: &Path,
+    log: &Path,
+    envs: &[(&str, &str)],
+    extra: &[&str],
+    with_metrics: bool,
+) -> Server {
     let port = free_port();
-    let child = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
-        .arg("serve")
-        .args(["--metrics-addr", &format!("127.0.0.1:{port}")])
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"));
+    cmd.arg("serve");
+    if with_metrics {
+        cmd.args(["--metrics-addr", &format!("127.0.0.1:{port}")]);
+    }
+    let child = cmd
         .args(extra)
         .arg(db)
         .env_remove("AIKOQL_LICENSE")

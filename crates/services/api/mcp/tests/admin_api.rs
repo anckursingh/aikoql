@@ -236,7 +236,8 @@ fn create_user_preprovisions_oidc_sub() {
         r#"{"sub":"alice-oidc","name":"Alice","roles":["viewer"]}"#,
     );
     assert_eq!(r.status, 200, "{}", r.body);
-    // a sub with no name/roles provisions with defaults
+    // a sub with no name/roles provisions with defaults (roles → viewer,
+    // N-1: an empty set must never store as an un-gated row)
     let bare = http(
         srv.port,
         "POST",
@@ -259,7 +260,7 @@ fn create_user_preprovisions_oidc_sub() {
         .iter()
         .find(|u| u["sub"] == "bob-oidc")
         .expect("bob row");
-    assert_eq!(bob["roles"], json!([]), "{}", list.body);
+    assert_eq!(bob["roles"], json!(["viewer"]), "{}", list.body);
 }
 
 #[test]
@@ -294,6 +295,159 @@ fn unlicensed_user_routes_are_v040_404() {
     );
     assert_eq!(sub_auth.status, 404, "{}", sub_auth.body);
     assert_eq!(sub_auth.body, "Not Found\n", "v0.4.0 plain-text 404: {}", sub_auth.body);
+}
+
+#[test]
+fn create_user_rejects_unknown_roles() {
+    // Final review I-3: v1 roles are {admin, viewer} — anything else is
+    // refused at the admin-API boundary (an unknown value would pass
+    // check_rest as "not viewer" and grant writes).
+    let srv = serve("badrole", None);
+    let token = admin_token(srv.port);
+    let r = http(
+        srv.port,
+        "POST",
+        &format!("/api/users?token={token}"),
+        r#"{"sub":"eve","roles":["editor"]}"#,
+    );
+    assert_eq!(r.status, 400, "unknown role must 400: {}", r.body);
+    assert!(r.body.contains("invalid role 'editor'"), "{}", r.body);
+    // fail-closed: the refused row must not exist
+    let list = http(srv.port, "GET", &format!("/api/users?token={token}"), "");
+    assert!(
+        !list.body.contains("eve"),
+        "the refused user must not exist: {}",
+        list.body
+    );
+}
+
+#[test]
+fn put_roles_rejects_unknown_roles() {
+    // Final review I-3: the PUT roles route validates at the same boundary.
+    let srv = serve("putbadrole", None);
+    let token = admin_token(srv.port);
+    let create = http(
+        srv.port,
+        "POST",
+        &format!("/api/users?token={token}"),
+        r#"{"sub":"carol","roles":["viewer"]}"#,
+    );
+    assert_eq!(create.status, 200, "{}", create.body);
+    let put = http(
+        srv.port,
+        "PUT",
+        &format!("/api/users/carol/roles?token={token}"),
+        r#"{"roles":["editor"]}"#,
+    );
+    assert_eq!(put.status, 400, "unknown role must 400: {}", put.body);
+    assert!(put.body.contains("invalid role 'editor'"), "{}", put.body);
+    // the stored roles are untouched by the refused write
+    let list = http(srv.port, "GET", &format!("/api/users?token={token}"), "");
+    let j: J = serde_json::from_str(&list.body).expect("json");
+    let carol = j["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["sub"] == "carol")
+        .expect("carol row");
+    assert_eq!(carol["roles"], json!(["viewer"]), "{}", list.body);
+}
+
+#[test]
+fn put_roles_empty_normalizes_to_viewer_and_denies_writes() {
+    // Final review N-1: an empty role set must not fail open — the PUT
+    // boundary normalizes [] to ["viewer"] (the stripped state), so the
+    // live role lookup then refuses REST writes instead of passing them.
+    let srv = serve("putempty", None);
+    let token = admin_token(srv.port);
+    let put = http(
+        srv.port,
+        "PUT",
+        &format!("/api/users/admin/roles?token={token}"),
+        r#"{"roles":[]}"#,
+    );
+    assert_eq!(put.status, 200, "{}", put.body);
+    let j: J = serde_json::from_str(&put.body).expect("json");
+    assert_eq!(
+        j["data"]["roles"], json!(["viewer"]),
+        "empty roles must normalize to viewer: {}",
+        put.body
+    );
+    // the fail-closed side effect: the same session now writes as a viewer
+    let write = http(
+        srv.port,
+        "POST",
+        &format!("/api/v1/remember?token={token}"),
+        r#"{"type_name":"Fact"}"#,
+    );
+    assert_eq!(
+        write.status, 403,
+        "the normalized viewer must not write: {}",
+        write.body
+    );
+    assert!(
+        write.body.contains("viewer"),
+        "the viewer refusal text: {}",
+        write.body
+    );
+}
+
+#[test]
+fn create_user_without_roles_defaults_to_viewer() {
+    // Final review N-1: POST /api/users with no roles field must not
+    // create an un-gated (empty-roles) row — it normalizes to viewer.
+    let srv = serve("noroles", None);
+    let token = admin_token(srv.port);
+    let create = http(
+        srv.port,
+        "POST",
+        &format!("/api/users?token={token}"),
+        r#"{"sub":"eve"}"#,
+    );
+    assert_eq!(create.status, 200, "{}", create.body);
+    let j: J = serde_json::from_str(&create.body).expect("json");
+    assert_eq!(
+        j["data"]["roles"], json!(["viewer"]),
+        "missing roles must default to viewer: {}",
+        create.body
+    );
+    // the stored row carries viewer, not an empty set
+    let list = http(srv.port, "GET", &format!("/api/users?token={token}"), "");
+    let lj: J = serde_json::from_str(&list.body).expect("json");
+    let eve = lj["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["sub"] == "eve")
+        .expect("eve row");
+    assert_eq!(eve["roles"], json!(["viewer"]), "{}", list.body);
+}
+
+#[test]
+fn create_user_refuses_the_reserved_admin_sub() {
+    // Final review I-4: sub "admin" is the break-glass bootstrap admin —
+    // an API upsert must never overwrite that row (the next restart's
+    // seed would hit the UNIQUE(sub) conflict and refuse to boot).
+    let srv = serve("reserved", None);
+    let token = admin_token(srv.port);
+    let r = http(
+        srv.port,
+        "POST",
+        &format!("/api/users?token={token}"),
+        r#"{"sub":"admin","roles":["viewer"]}"#,
+    );
+    assert_eq!(r.status, 400, "reserved sub must 400: {}", r.body);
+    assert!(r.body.contains("reserved"), "{}", r.body);
+    // the bootstrap admin row keeps its roles
+    let list = http(srv.port, "GET", &format!("/api/users?token={token}"), "");
+    let j: J = serde_json::from_str(&list.body).expect("json");
+    let admin = j["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["sub"] == "admin")
+        .expect("admin row");
+    assert_eq!(admin["roles"], json!(["admin"]), "{}", list.body);
 }
 
 #[test]
