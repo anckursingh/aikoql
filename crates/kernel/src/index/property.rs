@@ -317,8 +317,7 @@ impl Index for PropertyIndex {
     /// range over the ordered keys. Eq still needs the full tuple
     /// (`covers`).
     fn covers_range(&self, type_name: &str, property: &str) -> bool {
-        self.type_name == type_name
-            && self.properties.first().is_some_and(|p| p == property)
+        self.type_name == type_name && self.properties.first().is_some_and(|p| p == property)
     }
 
     fn len(&self) -> usize {

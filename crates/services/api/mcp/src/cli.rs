@@ -307,7 +307,10 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     std::process::exit(1);
                 });
                 match crate::engine::roll_deks(db, &cfg.encryption) {
-                    Ok(n) => println!("{}", serde_json::json!({"rolled": true, "objects": n, "db": db})),
+                    Ok(n) => println!(
+                        "{}",
+                        serde_json::json!({"rolled": true, "objects": n, "db": db})
+                    ),
                     Err(e) => {
                         eprintln!("key roll-deks: {e}");
                         std::process::exit(1);
@@ -334,9 +337,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     eprintln!("{e}");
                     std::process::exit(1);
                 });
-                if let Err(e) =
-                    crate::engine::install_to_kms(&cfg.encryption, region.as_deref())
-                {
+                if let Err(e) = crate::engine::install_to_kms(&cfg.encryption, region.as_deref()) {
                     eprintln!("key install: {e}");
                     std::process::exit(1);
                 }
@@ -353,7 +354,9 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 eprintln!("change-passphrase re-wraps the master key file under a new passphrase");
                 eprintln!("(the master key itself does not change).");
                 eprintln!("roll-deks mints fresh tenant data keys and re-encrypts every encrypted");
-                eprintln!("field under them (one committed version per object). Stop the server first.");
+                eprintln!(
+                    "field under them (one committed version per object). Stop the server first."
+                );
                 eprintln!("install wraps the master key under a new AWS KMS CMK (aikoql/<db>) —");
                 eprintln!("AWS IAM gates every later open, the passphrase stops gating.");
                 std::process::exit(2);

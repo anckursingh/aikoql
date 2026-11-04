@@ -129,14 +129,20 @@ fn ag51_repl_tls_is_a_helm_managed_secret_with_a_stable_ca() {
     let hook = root().join("deploy/helm/aikoql/templates/tls-hook.yaml");
     assert!(!hook.exists(), "no hook Job: {}", hook.display());
     let secret = read(&root().join("deploy/helm/aikoql/templates/repl-tls.yaml"));
-    assert!(secret.contains("lookup"), "the CA must survive upgrades: {secret}");
+    assert!(
+        secret.contains("lookup"),
+        "the CA must survive upgrades: {secret}"
+    );
     assert!(
         secret.contains("genCA") && secret.contains("genSignedCert"),
         "a fresh install generates a CA + serving cert: {secret}"
     );
     // the statefulset mount contract: /tls/{ca.crt,tls.crt,tls.key}
     assert!(secret.contains("ca.crt"), "ca.crt key: {secret}");
-    assert!(secret.contains("tls.crt"), "tls.crt key (server chain): {secret}");
+    assert!(
+        secret.contains("tls.crt"),
+        "tls.crt key (server chain): {secret}"
+    );
     assert!(secret.contains("tls.key"), "tls.key key: {secret}");
 }
 

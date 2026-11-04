@@ -180,12 +180,11 @@ pub(crate) fn roll_deks(db_path: &str, enc: &RuntimeEncryption) -> KResult<usize
 /// key file, and AWS IAM gates every later open instead of the passphrase.
 /// shortcut: ImportKeyMaterial (the CMK holds OUR key, not a wrap of it) is
 /// the upgrade path for full BYOK control.
-pub(crate) fn install_to_kms(
-    enc: &RuntimeEncryption,
-    region: Option<&str>,
-) -> KResult<()> {
+pub(crate) fn install_to_kms(enc: &RuntimeEncryption, region: Option<&str>) -> KResult<()> {
     if !enc.enabled {
-        return Err(KError::Store("key install needs [encryption] enabled".into()));
+        return Err(KError::Store(
+            "key install needs [encryption] enabled".into(),
+        ));
     }
     let key_path = std::path::Path::new(&enc.key_path);
     if !key_path.exists() {
@@ -195,17 +194,20 @@ pub(crate) fn install_to_kms(
         )));
     }
     if AwsKms::is_pointer(key_path) {
-        return Err(KError::Store("the master key is already held by AWS KMS".into()));
+        return Err(KError::Store(
+            "the master key is already held by AWS KMS".into(),
+        ));
     }
     let Some(pass) = enc.passphrase.as_deref() else {
-        return Err(KError::Store("key install needs a current passphrase".into()));
+        return Err(KError::Store(
+            "key install needs a current passphrase".into(),
+        ));
     };
     let kek = LocalKms::new(&enc.key_path)
         .master_key(pass)
         .map_err(KError::Store)?;
-    let ops = Arc::new(
-        crate::aws_kms::SdkKmsOps::new(region.map(String::from)).map_err(KError::Store)?,
-    );
+    let ops =
+        Arc::new(crate::aws_kms::SdkKmsOps::new(region.map(String::from)).map_err(KError::Store)?);
     // install verifies the unwrap through the seam BEFORE replacing the
     // local file, so a wrong region or permission set cannot strand the DB.
     AwsKms::with_ops("", key_path.to_path_buf(), ops)
@@ -567,8 +569,10 @@ mod tests {
             "the envelope is rewrapped"
         );
 
-        let enc_new =
-            super::RuntimeEncryption { passphrase: Some("pw-new".into()), ..enc.clone() };
+        let enc_new = super::RuntimeEncryption {
+            passphrase: Some("pw-new".into()),
+            ..enc.clone()
+        };
         read_all(&dir, &enc_new, &want);
 
         // The old passphrase no longer opens the database.
@@ -602,7 +606,11 @@ mod tests {
             )
         };
 
-        assert_eq!(super::roll_deks(&dir, &enc).unwrap(), 2, "one version per object");
+        assert_eq!(
+            super::roll_deks(&dir, &enc).unwrap(),
+            2,
+            "one version per object"
+        );
 
         {
             let (k, _) = super::open_kernel(&dir, &enc, false, None).unwrap();
@@ -615,12 +623,19 @@ mod tests {
                     None => alice.clone(),
                 };
                 let ko = k.get(subj, koid).unwrap();
-                assert_eq!(ko.properties.get("pin"), Some(&aikoql_kernel::Value::Text(pin.clone())));
+                assert_eq!(
+                    ko.properties.get("pin"),
+                    Some(&aikoql_kernel::Value::Text(pin.clone()))
+                );
                 assert_eq!(ko.version, 2, "the roll committed one new version");
             }
             let e = k.field_envelope().unwrap();
             assert_ne!(e.tenant_key("t1").unwrap(), old_dek, "fresh DEK in place");
-            assert_eq!(e.prev_key("t1"), Some(old_dek), "the old generation stays decryptable");
+            assert_eq!(
+                e.prev_key("t1"),
+                Some(old_dek),
+                "the old generation stays decryptable"
+            );
         }
 
         // Idempotent: a second roll finds nothing to migrate. Fresh open —
@@ -646,8 +661,14 @@ mod tests {
         let enc = secret_enc(&dir);
         TEMP_PATHS.with(|t| t.borrow_mut().paths.push(enc.key_path.clone().into()));
 
-        let plain = super::RuntimeEncryption { enabled: false, ..enc.clone() };
-        assert!(super::install_to_kms(&plain, None).is_err(), "needs encryption");
+        let plain = super::RuntimeEncryption {
+            enabled: false,
+            ..enc.clone()
+        };
+        assert!(
+            super::install_to_kms(&plain, None).is_err(),
+            "needs encryption"
+        );
 
         let missing = super::RuntimeEncryption {
             key_path: format!("{dir}.never-created.key"),
@@ -665,7 +686,10 @@ mod tests {
         raw.extend_from_slice(b"AIKOQL-KMS1");
         std::fs::write(&pointer, &raw).unwrap();
         TEMP_PATHS.with(|t| t.borrow_mut().paths.push(pointer.clone().into()));
-        let already = super::RuntimeEncryption { key_path: pointer, ..enc };
+        let already = super::RuntimeEncryption {
+            key_path: pointer,
+            ..enc
+        };
         assert!(
             super::install_to_kms(&already, None).is_err(),
             "a pointer file is already KMS-held"

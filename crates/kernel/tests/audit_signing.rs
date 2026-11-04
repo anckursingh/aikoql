@@ -33,12 +33,15 @@ fn alice() -> KnowledgeContext {
 }
 
 fn note(k: &Kernel, n: i64) -> KOID {
-    let mut req = RememberRequest::create(alice(), Metadata {
-        type_name: "note".into(),
-        tenant: None,
-        schema_version: 1,
-        tags: vec![],
-    });
+    let mut req = RememberRequest::create(
+        alice(),
+        Metadata {
+            type_name: "note".into(),
+            tenant: None,
+            schema_version: 1,
+            tags: vec![],
+        },
+    );
     req.properties.insert("n".into(), Value::Int(n));
     k.remember(req).unwrap().koid
 }
@@ -153,7 +156,11 @@ fn au30_003_open_signed_signs_the_catalog_bootstrap() {
         "every event is signed, the bootstrap included"
     );
     let (signed, tail_seq, tail_hash) = verify_chain(&k, &public);
-    assert_eq!(signed, events.len(), "the signed stream covers the whole journal");
+    assert_eq!(
+        signed,
+        events.len(),
+        "the signed stream covers the whole journal"
+    );
     let (seq, audit) = k.journal_head().unwrap();
     assert_eq!(tail_seq, seq, "the signed tail is the journal head");
     assert_eq!(tail_hash, audit, "the chain ends in the signed audit chain");

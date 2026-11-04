@@ -2060,7 +2060,10 @@ pub(crate) fn studio_html(sso: bool, license: Option<&crate::license::LicenseSta
     if sso {
         let anchor = format!("<button onclick=\"doLogin()\">Sign In</button>{SSO_LOGIN_HTML}");
         html = html.replace("<button onclick=\"doLogin()\">Sign In</button>", &anchor);
-        debug_assert!(html.contains("data-sso-button"), "the studio SSO anchor moved");
+        debug_assert!(
+            html.contains("data-sso-button"),
+            "the studio SSO anchor moved"
+        );
     }
     if license.is_some_and(|l| l.features.audit_export) {
         html = html.replace("<!-- AUDIT_EXPORT -->", AUDIT_EXPORT_HTML);

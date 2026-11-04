@@ -20,8 +20,7 @@ use std::time::{Duration, Instant};
 fn serve(tag: &str, tokens: &[&str]) -> (common::Server, u16) {
     let (pk, blob) = common::sign("test", None, &["multi-user"]);
     let pk_b64 = URL_SAFE_NO_PAD.encode(&pk);
-    let lic =
-        std::env::temp_dir().join(format!("aikoql-rbac-{tag}-{}.lic", std::process::id()));
+    let lic = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-{}.lic", std::process::id()));
     std::fs::write(&lic, &blob).unwrap();
     common::register_temp_path(&lic);
     let db = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-db-{}", std::process::id()));
@@ -319,7 +318,11 @@ fn viewer_admin_route_rest_gate() {
         "viewer must not backup: {} {}",
         denied.status, denied.body
     );
-    assert!(denied.body.contains("admin role required"), "{}", denied.body);
+    assert!(
+        denied.body.contains("admin role required"),
+        "{}",
+        denied.body
+    );
     // admin: the same route succeeds with its success marker
     set_roles(&srv.db, "admin", &["admin"]);
     let atok = admin_token(srv.port);
@@ -329,7 +332,11 @@ fn viewer_admin_route_rest_gate() {
         &format!("/api/v1/backup?token={atok}"),
         "{}",
     );
-    assert_eq!(ok.status, 200, "admin must backup: {} {}", ok.status, ok.body);
+    assert_eq!(
+        ok.status, 200,
+        "admin must backup: {} {}",
+        ok.status, ok.body
+    );
     let j: J = serde_json::from_str(&ok.body).expect("json");
     assert_eq!(j["data"]["verified"], true, "backup marker: {}", ok.body);
 }
@@ -441,12 +448,10 @@ fn admin_passes_all_gates() {
 #[test]
 fn unlicensed_tcp_token_roles_unchanged() {
     // no license anywhere: v0.4.0 role behavior, byte-for-byte
-    let db =
-        std::env::temp_dir().join(format!("aikoql-rbac-parity-db-{}", std::process::id()));
+    let db = std::env::temp_dir().join(format!("aikoql-rbac-parity-db-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&db);
     common::register_temp_path(&db);
-    let log =
-        std::env::temp_dir().join(format!("aikoql-rbac-parity-{}.log", std::process::id()));
+    let log = std::env::temp_dir().join(format!("aikoql-rbac-parity-{}.log", std::process::id()));
     common::register_temp_path(&log);
 
     let mcp_port = common::free_port();

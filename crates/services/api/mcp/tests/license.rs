@@ -80,7 +80,8 @@ fn trailing_newline_is_tolerated() {
     let (pk, blob) = sign("test", None, &["all"]);
     let mut on_disk = blob;
     on_disk.push(b'\n');
-    let state = license::verify_license_with_key(&on_disk, &pk).expect("trailing newline tolerated");
+    let state =
+        license::verify_license_with_key(&on_disk, &pk).expect("trailing newline tolerated");
     assert_eq!(state.org, "test");
 }
 

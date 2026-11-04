@@ -316,7 +316,10 @@ fn http_export_serves_the_attachment_and_unlicensed_404s() {
     // the admin role from the store — see the I-2 store-less refusal.)
     let db = tmp("http-export-db");
     let log = tmp("http-export-log");
-    seed(&db, &[("alpha-seed", now_secs()), ("beta-seed", now_secs())]);
+    seed(
+        &db,
+        &[("alpha-seed", now_secs()), ("beta-seed", now_secs())],
+    );
     let (lic, pk_b64) = write_license(&["audit-export", "multi-user"]);
     let lic_str = lic.to_string_lossy().into_owned();
     let envs = [
@@ -348,7 +351,10 @@ fn http_export_serves_the_attachment_and_unlicensed_404s() {
         ),
     )
     .expect("raw response");
-    assert!(raw.contains("Content-Disposition: attachment"), "raw: {raw}");
+    assert!(
+        raw.contains("Content-Disposition: attachment"),
+        "raw: {raw}"
+    );
     // an anonymous GET is refused
     let (anon, _) = http(srv.port, "GET", "/api/audit-export", "");
     assert_eq!(anon, 401);

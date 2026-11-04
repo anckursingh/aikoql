@@ -189,7 +189,11 @@ fn users_list_requires_admin() {
         "viewer must not list users: {} {}",
         denied.status, denied.body
     );
-    assert!(denied.body.contains("admin role required"), "{}", denied.body);
+    assert!(
+        denied.body.contains("admin role required"),
+        "{}",
+        denied.body
+    );
     // restored, the route serves again
     set_roles(&srv.db, "admin", &["admin"]);
     let token = admin_token(srv.port);
@@ -213,7 +217,11 @@ fn viewer_cannot_create_user() {
         "viewer must not create users: {} {}",
         denied.status, denied.body
     );
-    assert!(denied.body.contains("admin role required"), "{}", denied.body);
+    assert!(
+        denied.body.contains("admin role required"),
+        "{}",
+        denied.body
+    );
     // fail-closed: the 403 came before the write — restore and confirm
     set_roles(&srv.db, "admin", &["admin"]);
     let token = admin_token(srv.port);
@@ -283,10 +291,18 @@ fn unlicensed_user_routes_are_v040_404() {
     // JSON, no "user store unavailable" — for authenticated sessions too
     let list = http(srv.port, "GET", &format!("/api/users?token={token}"), "");
     assert_eq!(list.status, 404, "{}", list.body);
-    assert_eq!(list.body, "Not Found\n", "v0.4.0 plain-text 404: {}", list.body);
+    assert_eq!(
+        list.body, "Not Found\n",
+        "v0.4.0 plain-text 404: {}",
+        list.body
+    );
     let sub = http(srv.port, "GET", "/api/users/any-subpath", "");
     assert_eq!(sub.status, 404, "{}", sub.body);
-    assert_eq!(sub.body, "Not Found\n", "v0.4.0 plain-text 404: {}", sub.body);
+    assert_eq!(
+        sub.body, "Not Found\n",
+        "v0.4.0 plain-text 404: {}",
+        sub.body
+    );
     let sub_auth = http(
         srv.port,
         "GET",
@@ -294,7 +310,11 @@ fn unlicensed_user_routes_are_v040_404() {
         "",
     );
     assert_eq!(sub_auth.status, 404, "{}", sub_auth.body);
-    assert_eq!(sub_auth.body, "Not Found\n", "v0.4.0 plain-text 404: {}", sub_auth.body);
+    assert_eq!(
+        sub_auth.body, "Not Found\n",
+        "v0.4.0 plain-text 404: {}",
+        sub_auth.body
+    );
 }
 
 #[test]
@@ -369,7 +389,8 @@ fn put_roles_empty_normalizes_to_viewer_and_denies_writes() {
     assert_eq!(put.status, 200, "{}", put.body);
     let j: J = serde_json::from_str(&put.body).expect("json");
     assert_eq!(
-        j["data"]["roles"], json!(["viewer"]),
+        j["data"]["roles"],
+        json!(["viewer"]),
         "empty roles must normalize to viewer: {}",
         put.body
     );
@@ -407,7 +428,8 @@ fn create_user_without_roles_defaults_to_viewer() {
     assert_eq!(create.status, 200, "{}", create.body);
     let j: J = serde_json::from_str(&create.body).expect("json");
     assert_eq!(
-        j["data"]["roles"], json!(["viewer"]),
+        j["data"]["roles"],
+        json!(["viewer"]),
         "missing roles must default to viewer: {}",
         create.body
     );

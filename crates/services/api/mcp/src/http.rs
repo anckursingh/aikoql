@@ -134,7 +134,10 @@ pub(crate) fn serve_metrics(
                 let mcp = mcp.clone();
                 // AG-52: the peer for the login per-IP layer (before the
                 // TLS wrap consumes the stream).
-                let peer_ip = s.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
+                let peer_ip = s
+                    .peer_addr()
+                    .map(|a| a.ip())
+                    .unwrap_or(IpAddr::from([0, 0, 0, 0]));
                 std::thread::spawn(move || match tls {
                     None => handle_http(
                         &mut s,
@@ -588,8 +591,7 @@ const MAX_BACKOFF_SECS: u64 = 900;
 /// The doubling backoff the login and per-IP layers share: failure n
 /// (1-based, past the free allowance) waits 2^(n-free) s, capped.
 fn backoff_secs(n: u32, free: u32) -> u64 {
-    1u64
-        .checked_shl(n.saturating_sub(free))
+    1u64.checked_shl(n.saturating_sub(free))
         .unwrap_or(u64::MAX)
         .min(MAX_BACKOFF_SECS)
 }
@@ -692,9 +694,13 @@ impl AuthResolver {
         // justified: Mutex poison is unrecoverable
         let fails = self.fails.lock().unwrap();
         let now = unix_ms();
-        let live: HashMap<&String, &(u32, i64)> =
-            fails.iter().filter(|(_, (_, until))| *until > now).collect();
-        let Ok(json) = serde_json::to_string(&live) else { return };
+        let live: HashMap<&String, &(u32, i64)> = fails
+            .iter()
+            .filter(|(_, (_, until))| *until > now)
+            .collect();
+        let Ok(json) = serde_json::to_string(&live) else {
+            return;
+        };
         let tmp = path.with_extension("login-backoff.tmp");
         if std::fs::write(&tmp, json).is_err() {
             return;
@@ -735,9 +741,7 @@ impl AuthResolver {
             self.save();
             return Some(u.roles.clone());
         }
-        let (n, until) = fails
-            .entry(username.to_string())
-            .or_insert((0, unix_ms()));
+        let (n, until) = fails.entry(username.to_string()).or_insert((0, unix_ms()));
         *n += 1;
         if *n >= FREE_FAILS {
             *until = unix_ms() + (backoff_secs(*n, FREE_FAILS) * 1000) as i64;
@@ -791,12 +795,16 @@ impl AuthResolver {
     /// the last X-Forwarded-For hop (the one the proxy appended) is the
     /// client. An unparseable entry falls back to the peer.
     pub(crate) fn client_ip(&self, peer: IpAddr, headers: &str) -> IpAddr {
-        let Some(proxy) = self.trusted_proxy else { return peer };
+        let Some(proxy) = self.trusted_proxy else {
+            return peer;
+        };
         if peer != proxy {
             return peer;
         }
         for line in headers.lines() {
-            let Some((name, value)) = line.split_once(':') else { continue };
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
             if name.trim().eq_ignore_ascii_case("x-forwarded-for") {
                 if let Some(last) = value.split(',').next_back().map(str::trim) {
                     if let Ok(ip) = last.parse() {
@@ -1418,7 +1426,10 @@ pub(crate) fn handle_http(
         "/" | "/studio" => (
             "200 OK",
             "text/html; charset=utf-8",
-            studio::studio_html(crate::oidc::gate().is_some(), crate::license::LICENSE_STATE.get()),
+            studio::studio_html(
+                crate::oidc::gate().is_some(),
+                crate::license::LICENSE_STATE.get(),
+            ),
         ),
         "/health" => {
             let uptime = SERVER_START

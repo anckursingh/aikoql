@@ -875,7 +875,10 @@ fn cbo_range_filter_prices_from_the_histogram() {
         k.remember(req).unwrap();
     }
     k.analyze("Person").unwrap();
-    let plan = plan_of(&k, "MATCH Person WHERE points > 300 AND points < 700 RETURN *");
+    let plan = plan_of(
+        &k,
+        "MATCH Person WHERE points > 300 AND points < 700 RETURN *",
+    );
     let report = cost_optimize(&k, &plan).unwrap();
     // No index declared → the Scan stays FullScan; the Filter row is the
     // histogram fraction × scan rows ≈ 0.40 × 1000.

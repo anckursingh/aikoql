@@ -342,9 +342,7 @@ impl OAuth {
                     None => self.authorize_page(&q, headers, None),
                 }
             }
-            ("POST", "/oauth/authorize") => {
-                self.authorize(&parse_form(body), headers, client_ip)
-            }
+            ("POST", "/oauth/authorize") => self.authorize(&parse_form(body), headers, client_ip),
             ("POST", "/oauth/token") => self.token(&parse_form(body), headers),
             _ => return None,
         })
@@ -1349,7 +1347,11 @@ mod tests {
             .collect()
         };
         for _ in 0..5 {
-            assert_eq!(o.authorize(&form("wrong"), H, "127.0.0.1".parse().unwrap()).0, "401 Unauthorized");
+            assert_eq!(
+                o.authorize(&form("wrong"), H, "127.0.0.1".parse().unwrap())
+                    .0,
+                "401 Unauthorized"
+            );
         }
         let r = o.authorize(&form("pw"), H, "127.0.0.1".parse().unwrap());
         assert_eq!(r.0, "429 Too Many Requests");
@@ -1460,7 +1462,14 @@ mod tests {
             "only the document's redirect URIs"
         );
         let meta = o
-            .route("GET", "/.well-known/oauth-authorization-server", "", H, "", "127.0.0.1".parse().unwrap())
+            .route(
+                "GET",
+                "/.well-known/oauth-authorization-server",
+                "",
+                H,
+                "",
+                "127.0.0.1".parse().unwrap(),
+            )
             .unwrap();
         let meta: J = serde_json::from_str(&meta.3).unwrap();
         assert_eq!(meta["client_id_metadata_document_supported"], json!(true));

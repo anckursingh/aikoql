@@ -90,10 +90,12 @@ impl Statistics {
             // the bucket covers [start, next_start); the last runs to +∞
             let end = buckets.get(i + 1).map(|(s, _)| s.as_slice());
             total += count;
-            let start_ge_lo = lo_key.as_ref().is_none_or(|k| start.as_slice() >= k.as_slice());
+            let start_ge_lo = lo_key
+                .as_ref()
+                .is_none_or(|k| start.as_slice() >= k.as_slice());
             let end_le_hi = match (end, hi_key.as_deref()) {
                 (Some(e), Some(k)) => e <= k,
-                (_, None) => true,     // +∞ cap: hi unbounded
+                (_, None) => true,        // +∞ cap: hi unbounded
                 (None, Some(_)) => false, // the last bucket runs past hi
             };
             if start_ge_lo && end_le_hi {
@@ -101,12 +103,12 @@ impl Statistics {
                 continue;
             }
             // a boundary bucket: it straddles lo or hi — half its rows
-            let crosses_lo = lo_key
-                .as_ref()
-                .is_some_and(|k| start.as_slice() < k.as_slice() && end.is_none_or(|e| e > k.as_slice()));
-            let crosses_hi = hi_key
-                .as_ref()
-                .is_some_and(|k| start.as_slice() < k.as_slice() && end.is_none_or(|e| e > k.as_slice()));
+            let crosses_lo = lo_key.as_ref().is_some_and(|k| {
+                start.as_slice() < k.as_slice() && end.is_none_or(|e| e > k.as_slice())
+            });
+            let crosses_hi = hi_key.as_ref().is_some_and(|k| {
+                start.as_slice() < k.as_slice() && end.is_none_or(|e| e > k.as_slice())
+            });
             if crosses_lo || crosses_hi {
                 inside += count / 2;
             }

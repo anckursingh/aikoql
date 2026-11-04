@@ -132,7 +132,10 @@ fn ag32_usage_persists_under_a_watermark_and_rebuilds_when_missing() {
     let rows = store.scan(PREFIX).unwrap();
     assert_eq!(rows.len(), 3, "one row per tenant, nothing more");
     assert_eq!(
-        store.get(b"__tenants/usage/aikoql:catalog").unwrap().map(|v| v.len()),
+        store
+            .get(b"__tenants/usage/aikoql:catalog")
+            .unwrap()
+            .map(|v| v.len()),
         Some(8),
         "the catalog object counts on its own tenant"
     );

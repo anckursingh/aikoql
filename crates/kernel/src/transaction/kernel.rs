@@ -41,7 +41,9 @@ use crate::security::envelope::{
     DEKS_PREV_NEXT_KEY, DEKS_STORAGE_KEY,
 };
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
-use crate::security::tenant::{usage_head, usage_row_key, TenantManager, USAGE_HEAD_KEY, USAGE_PREFIX};
+use crate::security::tenant::{
+    usage_head, usage_row_key, TenantManager, USAGE_HEAD_KEY, USAGE_PREFIX,
+};
 use crate::security::Signer;
 use crate::statistics::Statistics;
 pub use crate::storage::repository::DerivedIndexRebuild;
@@ -825,9 +827,11 @@ impl Kernel {
                             ok = false;
                             break;
                         }
-                        let tenant =
-                            String::from_utf8_lossy(&k[USAGE_PREFIX.len()..]).into_owned();
-                        r.push((tenant, usize::from_le_bytes(v.as_slice().try_into().unwrap())));
+                        let tenant = String::from_utf8_lossy(&k[USAGE_PREFIX.len()..]).into_owned();
+                        r.push((
+                            tenant,
+                            usize::from_le_bytes(v.as_slice().try_into().unwrap()),
+                        ));
                     }
                     if ok {
                         rows = Some(r);
@@ -1138,9 +1142,10 @@ impl Kernel {
     /// first. Idempotent: a re-run after a crash migrates nothing that was
     /// already done. Returns the number of objects re-encrypted.
     pub fn roll_field_deks(&self) -> KResult<usize> {
-        let fc = self.field_crypto.clone().ok_or_else(|| {
-            KError::Store("DEK roll needs field encryption enabled".into())
-        })?;
+        let fc = self
+            .field_crypto
+            .clone()
+            .ok_or_else(|| KError::Store("DEK roll needs field encryption enabled".into()))?;
         let e = fc.envelope();
         // The guard covers the snapshot + swap + persist only: a tenant
         // minted after the batch already encrypts under the new generation
@@ -1190,7 +1195,11 @@ impl Kernel {
             let Some(policy) = policies.get(&ko.metadata.type_name) else {
                 continue;
             };
-            let tenant = ko.metadata.tenant.clone().unwrap_or_else(|| "default".into());
+            let tenant = ko
+                .metadata
+                .tenant
+                .clone()
+                .unwrap_or_else(|| "default".into());
             let changed = fc
                 .reencrypt_fields(&tenant, &ko.metadata.type_name, &mut ko.properties, policy)
                 .map_err(|x| KError::Store(format!("DEK roll: {x}")))?;

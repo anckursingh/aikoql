@@ -55,7 +55,8 @@ pub fn route_v1(
     // passes, so v0.4.0 behavior is unchanged. Only the write set is
     // gated: read POSTs (aikoql MATCH, find-similar, traverse, list-*
     // twins, ...) stay reachable for viewers.
-    if method == "POST" && (is_write_route(clean_path, &folded_body) || is_admin_route(clean_path)) {
+    if method == "POST" && (is_write_route(clean_path, &folded_body) || is_admin_route(clean_path))
+    {
         if let Some(roles) = crate::http::live_roles(token.as_deref(), sessions) {
             if let Err(e) = crate::authz::check_rest(&roles, is_admin_route(clean_path)) {
                 return json_response(e.status(), &json!({"error": e.message()}));
@@ -520,7 +521,11 @@ pub fn route_admin(
                 Ok(j) => j,
                 Err(e) => return err(400, format!("bad JSON: {e}")),
             };
-            let sub = match j.get("sub").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            let sub = match j
+                .get("sub")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 Some(s) => s,
                 None => return err(400, "missing sub".into()),
             };
@@ -552,7 +557,9 @@ pub fn route_admin(
             if let Err(r) = admin_only(token, sessions) {
                 return r;
             }
-            let sub = p.trim_start_matches("/api/users/").trim_end_matches("/roles");
+            let sub = p
+                .trim_start_matches("/api/users/")
+                .trim_end_matches("/roles");
             let j: J = match serde_json::from_str(body) {
                 Ok(j) => j,
                 Err(e) => return err(400, format!("bad JSON: {e}")),
@@ -591,13 +598,11 @@ pub fn route_admin(
 /// Task 8: the wire `roles` array of a user-route body — strings only.
 /// None when the field is absent or not an array of strings.
 fn roles_of_json(j: &J) -> Option<Vec<String>> {
-    j.get("roles")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        })
+    j.get("roles").and_then(|v| v.as_array()).map(|a| {
+        a.iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect()
+    })
 }
 
 /// Final review I-3: the admin API stores only v1 roles. An unknown value
@@ -625,10 +630,7 @@ fn admin_only(
     sessions: &Mutex<HashMap<String, crate::HttpSession>>,
 ) -> Result<(), (String, String, String)> {
     if crate::session::users().is_none() {
-        return Err(json_response(
-            403,
-            &json!({"error": "admin role required"}),
-        ));
+        return Err(json_response(403, &json!({"error": "admin role required"})));
     }
     let roles = crate::http::live_roles(token, sessions).unwrap_or_default();
     crate::authz::check_rest(&roles, true)
@@ -640,9 +642,8 @@ fn admin_only(
 fn with_store<T>(
     f: impl FnOnce(&crate::users::UserStore) -> rusqlite::Result<T>,
 ) -> Result<T, (String, String, String)> {
-    let store = crate::session::users().ok_or_else(|| {
-        json_response(500, &json!({"error": "user store unavailable"}))
-    })?;
+    let store = crate::session::users()
+        .ok_or_else(|| json_response(500, &json!({"error": "user store unavailable"})))?;
     let guard = store.lock().unwrap(); // justified: Mutex poison is unrecoverable
     f(&guard).map_err(|e| json_response(500, &json!({"error": format!("user store: {e}")})))
 }

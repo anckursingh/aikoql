@@ -17,10 +17,7 @@ static STORE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 /// A fresh store file unique to this test process, swept at thread exit.
 fn tmp_store(tag: &str) -> (UserStore, std::path::PathBuf) {
     let n = STORE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!(
-        "aikoql-users-{tag}-{}-{n}.db",
-        std::process::id()
-    ));
+    let p = std::env::temp_dir().join(format!("aikoql-users-{tag}-{}-{n}.db", std::process::id()));
     let _ = std::fs::remove_file(&p);
     common::register_temp_path(&p);
     let store = UserStore::open(&p).expect("open a fresh user store");
