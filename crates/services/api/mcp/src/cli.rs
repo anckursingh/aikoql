@@ -19,7 +19,7 @@ pub(crate) fn print_usage() {
         "  serve [OPTIONS] [DB]   Start MCP server (default: stdio mode)\n",
         "  backup [DB]            Create a verified backup\n",
         "  restore BACKUP [DB]    Restore from a backup\n",
-        "  audit [DB]             Print encryption compliance report\n",
+        "  audit [--export-jsonl PATH] [DB]  Compliance report; --export-jsonl streams the audit log (licensed)\n",
         "  keygen [PATH]          Generate an encryption master key\n",
         "  status [DB]            Health, metrics, and ABI version of a knowledge base\n",
         "  query <AIKOQL> [DB]    Run one aikoql statement (CREATE/MATCH/...)\n",
@@ -369,7 +369,26 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             true
         }
         Some("audit") => {
-            run_audit(arg_after.unwrap_or(DEFAULT_DB_PATH));
+            // Task 7: audit [--export-jsonl PATH] [DB] — the export is
+            // license-gated inside run_audit (enterprise audit-export flag).
+            let tail: Vec<&str> = subcmd_idx
+                .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
+                .unwrap_or_default();
+            let (mut db, mut export) = (None, None);
+            let mut it = tail.iter();
+            while let Some(a) = it.next() {
+                match *a {
+                    "--export-jsonl" => match it.next() {
+                        Some(p) => export = Some(p.to_string()),
+                        None => {
+                            eprintln!("--export-jsonl requires a path");
+                            std::process::exit(2);
+                        }
+                    },
+                    _ => db = Some(a.to_string()),
+                }
+            }
+            run_audit(db.as_deref().unwrap_or(DEFAULT_DB_PATH), export.as_deref());
             true
         }
         Some("ingest-dir") => {

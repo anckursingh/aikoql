@@ -138,6 +138,7 @@ pub fn spawn_server(db: &Path, log: &Path, envs: &[(&str, &str)], extra: &[&str]
         .arg(db)
         .env_remove("AIKOQL_LICENSE")
         .env_remove("AIKOQL_LICENSE_PUBLIC_KEY")
+        .env_remove("AIKOQL_AUDIT_RETENTION_DAYS")
         .env_remove("AIKOQL_ADMIN_PASSWORD")
         .env_remove("AIKOQL_OIDC_MOCK")
         .env_remove("AIKOQL_OIDC_MOCK_CLAIMS")

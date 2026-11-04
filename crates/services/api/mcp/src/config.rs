@@ -13,6 +13,10 @@ pub(crate) struct RuntimeConfig {
     /// `<data-dir>/.aikoql-license` (the database directory). Resolved at
     /// the end of load() — a positional DB path moves the default too.
     pub license_path: String,
+    /// Enterprise audit retention (Task 7): startup rotation drops audit
+    /// entries older than this many days (`AIKOQL_AUDIT_RETENTION_DAYS`,
+    /// default 90). Read only when the license arms audit-export.
+    pub audit_retention_days: u64,
     pub listen_addr: Option<String>,
     /// D-15: the framed native protocol listener (§5/§6, ECO-2). Same
     /// loopback-only + token rules as the MCP TCP listener; CLI-only for
@@ -324,6 +328,7 @@ pub(crate) fn load(
     let mut cfg = RuntimeConfig {
         db_path: DEFAULT_DB_PATH.into(),
         license_path: String::new(), // resolved below, after every layer
+        audit_retention_days: 90,
         listen_addr: None,
         native_port: None,
         replicate_listen: None,
@@ -551,6 +556,14 @@ pub(crate) fn load(
     }
     if let Some(v) = env_opt("AIKOQL_ADMIN_PASSWORD") {
         cfg.admin_password = Some(v);
+    }
+    // Enterprise audit retention (Task 7): invalid values are rejected, not
+    // silently defaulted — an operator's typo must not silently widen the
+    // window evidence is kept for.
+    if let Some(v) = env_opt("AIKOQL_AUDIT_RETENTION_DAYS") {
+        cfg.audit_retention_days = v.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+            format!("AIKOQL_AUDIT_RETENTION_DAYS: requires a positive number of days, got {v:?}")
+        })?;
     }
 
     // Layer 4: CLI (highest precedence). Same semantics as the pre-PRR-4 loop.
@@ -1348,5 +1361,33 @@ employee = ["salary", "ssn"]
         })
         .unwrap();
         assert_eq!(cfg.license_path, "/lic/a.bin");
+    }
+
+    #[test]
+    fn audit_retention_env_default_parsed_and_invalid_rejected() {
+        assert_eq!(
+            load_bare(&argv(&["aikoql-mcp"]))
+                .unwrap()
+                .audit_retention_days,
+            90
+        );
+        let cfg = load_with_env(|| {
+            std::env::set_var("AIKOQL_AUDIT_RETENTION_DAYS", "7");
+            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            std::env::remove_var("AIKOQL_AUDIT_RETENTION_DAYS");
+            r
+        })
+        .unwrap();
+        assert_eq!(cfg.audit_retention_days, 7);
+        for bad in ["0", "abc", "-3"] {
+            let err = load_with_env(|| {
+                std::env::set_var("AIKOQL_AUDIT_RETENTION_DAYS", bad);
+                let r = load(&argv(&["aikoql-mcp"]), None, None);
+                std::env::remove_var("AIKOQL_AUDIT_RETENTION_DAYS");
+                r
+            })
+            .unwrap_err();
+            assert!(err.contains("AIKOQL_AUDIT_RETENTION_DAYS"), "got: {err}");
+        }
     }
 }

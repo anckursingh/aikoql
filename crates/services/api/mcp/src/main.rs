@@ -327,6 +327,15 @@ fn main() {
         ),
     }
 
+    // Enterprise audit retention (Task 7): startup rotation, gated on the
+    // license's audit-export flag — community mode never touches the log.
+    if license::LICENSE_STATE
+        .get()
+        .is_some_and(|s| s.features.audit_export)
+    {
+        audit::rotate(&db_path, cfg.audit_retention_days);
+    }
+
     // P3-M1 (§53–54): build the HTTP login resolver once — argon2id hashes
     // verified per login, bootstrap admin hashed here (the plaintext then
     // drops out of scope) — and fail closed on an armed-but-credentialless
