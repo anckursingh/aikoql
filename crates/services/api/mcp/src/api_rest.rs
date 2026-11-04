@@ -464,6 +464,164 @@ fn route_inner(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Enterprise (Task 8): the admin API — /api/license plus the user routes.
+// Root-level paths (outside /api/v1, which stays the untouched v0.4.0
+// surface) and outside route_v1's rate limiter, like the rest of the
+// root surface. The T6 admin-only gate applies directly here: these routes
+// are never in route_v1's POST-only gate.
+// ---------------------------------------------------------------------------
+
+/// The admin API: GET /api/license (any authenticated session) and
+/// GET/POST /api/users plus PUT /api/users/{sub}/roles (admin only).
+pub fn route_admin(
+    method: &str,
+    route: &str,
+    body: &str,
+    sessions: &Mutex<HashMap<String, crate::HttpSession>>,
+    token: Option<&str>,
+) -> (String, String, String) {
+    let err = |code: u16, msg: String| json_response(code, &json!({"error": msg}));
+    // Every route here needs an authenticated session — /api/license
+    // included (the license state is not public).
+    if let Err(msg) = check_auth(token, sessions) {
+        return err(401, msg);
+    }
+    match (method, route) {
+        // any authenticated session: the process license, or community
+        ("GET", "/api/license") => json_response(200, &license_payload()),
+        ("GET", "/api/users") => {
+            if let Err(r) = admin_only(token, sessions) {
+                return r;
+            }
+            let rows = match with_store(|s| s.list_users()) {
+                Ok(rows) => rows,
+                Err(r) => return r,
+            };
+            let users: Vec<J> = rows
+                .iter()
+                .map(|u| {
+                    json!({
+                        "id": u.id,
+                        "sub": u.sub,
+                        "name": u.name,
+                        "roles": u.roles,
+                        "created_at": u.created_at,
+                    })
+                })
+                .collect();
+            json_response(200, &json!({"users": users}))
+        }
+        ("POST", "/api/users") => {
+            if let Err(r) = admin_only(token, sessions) {
+                return r;
+            }
+            let j: J = match serde_json::from_str(body) {
+                Ok(j) => j,
+                Err(e) => return err(400, format!("bad JSON: {e}")),
+            };
+            let sub = match j.get("sub").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                Some(s) => s,
+                None => return err(400, "missing sub".into()),
+            };
+            let name = j.get("name").and_then(|v| v.as_str());
+            let roles: Vec<String> = roles_of_json(&j).unwrap_or_default();
+            match with_store(|s| s.upsert_oidc_user(sub, name, &roles)) {
+                Ok(()) => json_response(200, &json!({"data": {"sub": sub, "roles": roles}})),
+                Err(r) => r,
+            }
+        }
+        ("PUT", p) if p.starts_with("/api/users/") && p.ends_with("/roles") => {
+            if let Err(r) = admin_only(token, sessions) {
+                return r;
+            }
+            let sub = p.trim_start_matches("/api/users/").trim_end_matches("/roles");
+            let j: J = match serde_json::from_str(body) {
+                Ok(j) => j,
+                Err(e) => return err(400, format!("bad JSON: {e}")),
+            };
+            let roles: Vec<String> = match roles_of_json(&j) {
+                Some(r) => r,
+                None => return err(400, "missing roles".into()),
+            };
+            match with_store(|s| {
+                // the row must exist — a bare UPDATE would silently no-op
+                if s.roles_of(sub)?.is_none() {
+                    return Ok(None);
+                }
+                s.set_roles(sub, &roles)?;
+                Ok(Some(()))
+            }) {
+                Ok(Some(())) => json_response(200, &json!({"data": {"sub": sub, "roles": roles}})),
+                Ok(None) => json_response(404, &json!({"error": "user not found"})),
+                Err(r) => r,
+            }
+        }
+        _ => json_response(404, &json!({"error": "Not Found"})),
+    }
+}
+
+/// Task 8: the wire `roles` array of a user-route body — strings only.
+/// None when the field is absent or not an array of strings.
+fn roles_of_json(j: &J) -> Option<Vec<String>> {
+    j.get("roles")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+}
+
+/// Task 8's admin-only gate: the session's LIVE store roles (a revocation
+/// takes effect on the next call), admin required — the same check_rest
+/// the T6 REST write gate uses. Community mode has no store, so the gate
+/// passes there (v0.4.0 parity).
+fn admin_only(
+    token: Option<&str>,
+    sessions: &Mutex<HashMap<String, crate::HttpSession>>,
+) -> Result<(), (String, String, String)> {
+    let roles = crate::http::live_roles(token, sessions).unwrap_or_default();
+    crate::authz::check_rest(&roles, true)
+        .map_err(|e| json_response(e.status(), &json!({"error": e.message()})))
+}
+
+/// Run `f` against the shared user store. The "user store unavailable"
+/// error covers community mode (no multi-user store is ever opened there).
+fn with_store<T>(
+    f: impl FnOnce(&crate::users::UserStore) -> rusqlite::Result<T>,
+) -> Result<T, (String, String, String)> {
+    let store = crate::session::users().ok_or_else(|| {
+        json_response(500, &json!({"error": "user store unavailable"}))
+    })?;
+    let guard = store.lock().unwrap(); // justified: Mutex poison is unrecoverable
+    f(&guard).map_err(|e| json_response(500, &json!({"error": format!("user store: {e}")})))
+}
+
+/// Task 8: the /api/license payload — the license fields on the wire.
+/// Community (no LICENSE_STATE) reports tier "community" with empty
+/// org/features and no expiry.
+fn license_payload() -> J {
+    let Some(state) = crate::license::LICENSE_STATE.get() else {
+        return json!({"tier": "community", "org": "", "features": [], "expires": null});
+    };
+    let mut features: Vec<&str> = Vec::new();
+    if state.features.multi_user {
+        features.push("multi-user");
+    }
+    if state.features.oidc_sso {
+        features.push("oidc-sso");
+    }
+    if state.features.audit_export {
+        features.push("audit-export");
+    }
+    let expires = state
+        .expires
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs());
+    json!({"tier": "enterprise", "org": state.org, "features": features, "expires": expires})
+}
+
 pub fn cors_preflight() -> (String, String, String) {
     (
         "204 No Content".to_string(),

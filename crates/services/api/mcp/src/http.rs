@@ -1355,6 +1355,33 @@ pub(crate) fn handle_http(
         return;
     }
 
+    // Enterprise (Task 8): the admin API — /api/license for any
+    // authenticated session; the user routes dispatch only when the
+    // multi-user store is open (they are gated admin-only inside
+    // route_admin with the T6 live-role check). Community mode has no
+    // store: those paths fall through to the v0.4.0 404, byte-for-byte —
+    // no 401, no JSON, no "user store unavailable".
+    if route == "/api/license"
+        || ((route == "/api/users" || route.starts_with("/api/users/"))
+            && crate::session::users().is_some())
+    {
+        let (status, ct, body) =
+            api_rest::route_admin(method, route, &body_str, sessions, token.as_deref());
+        let mut resp = format!(
+            "HTTP/1.0 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
+            status,
+            ct,
+            body.len()
+        );
+        for (h, v) in api_rest::cors_headers() {
+            resp.push_str(&format!("{}: {}\r\n", h, v));
+        }
+        resp.push_str("\r\n");
+        resp.push_str(&body);
+        let _ = stream.write_all(resp.as_bytes());
+        return;
+    }
+
     // Enterprise SSO (Task 5): /api/login/sso starts an IdP sign-in and
     // /oidc/callback finishes it. Without an oidc_sso license + OIDC config
     // (gate() None) these 404 — the v0.4.0 surface is byte-for-byte unchanged.
