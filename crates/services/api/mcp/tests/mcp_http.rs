@@ -8,7 +8,7 @@
 
 use rustls::pki_types::{pem::PemObject, CertificateDer, ServerName};
 use serde_json::{json, Value as J};
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -80,9 +80,27 @@ fn serve(tag: &str, extra: &[&str]) -> Server {
         .arg(&db)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("spawn aikoql-mcp serve");
+    let mut child = child;
+    // Readiness is the server's own startup line, not a bare connect: under
+    // parallel load a connect to the not-yet-bound port can reach something
+    // that is not this server (a probe "succeeds", the request is then
+    // refused or dropped). The reader keeps draining so stderr never blocks.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let err = child.stderr.take().expect("piped stderr");
+    std::thread::spawn(move || {
+        for line in BufReader::new(err).lines().map_while(Result::ok) {
+            if line.contains("metrics HTTP server started") {
+                let _ = tx.send(());
+            }
+        }
+    });
+    assert!(
+        rx.recv_timeout(Duration::from_secs(60)).is_ok(),
+        "server never logged its startup on {port}"
+    );
     let deadline = Instant::now() + Duration::from_secs(20);
     while TcpStream::connect(("127.0.0.1", port)).is_err() {
         assert!(Instant::now() < deadline, "server never listened on {port}");
