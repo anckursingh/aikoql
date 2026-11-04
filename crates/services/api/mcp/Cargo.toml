@@ -55,7 +55,11 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # AG-31 cloud KMS install: the AWS SDK implementation of the kernel's
 # KmsOps seam (the serve binary supplies it; the kernel stays SDK-free).
 aws-config = "1"
-aws-sdk-kms = "1"
+# the SDK's default "rustls" feature is the legacy stack (hyper 0.14,
+# h2 0.3, rustls 0.21, webpki 0.101) — RustSec 2026-0258/0346/0349/
+# 0104/0382/0099/0098 have no patch in those lines. Take the modern
+# default-https-client (hyper 1, rustls 0.23) and leave the legacy off.
+aws-sdk-kms = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 # The SDK bridge's current-thread runtime (the binary carries no other
 # async runtime — see the OTLP comment below).
 tokio = { version = "1", features = ["rt", "time"] }
