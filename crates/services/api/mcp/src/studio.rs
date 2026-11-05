@@ -573,7 +573,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
           <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Versioned, replayable performance benchmarks as Knowledge Objects.</p>
           <div style="display:flex;gap:8px;margin-bottom:12px;">
             <button class="btn btn-pri" onclick="loadBenchmarks()">🔄 Refresh</button>
-            <button class="btn btn-sec btn-sm" onclick="showBenchmarkDeployForm()">+ New Benchmark</button>
+            <button class="btn btn-sec btn-sm" onclick="showBenchmarkDeployForm()">+ esc(New Benchmark</button>)
           </div>
           <div id="benchmark-deploy-form" style="display:none;margin-bottom:12px;">
             <input type="text" id="bm-name" placeholder="Benchmark name" style="width:100%;padding:6px;margin-bottom:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;font-family:var(--font);" />
@@ -730,7 +730,7 @@ document.querySelectorAll('#sidebar nav button').forEach(b => {
 async function updateStatus() {
   try {
     const h = await api('/health');
-    document.getElementById('status-left').innerHTML = '<span class="dot ok"></span> ' + (h.status||'ok');
+    document.getElementById('status-left').innerHTML = '<span class="dot ok"></span> ' + esc((h.status||'ok'));
     document.getElementById('status-right').textContent = 'uptime ' + (h.uptime_seconds||0).toFixed(0) + 's';
   } catch(e) { document.getElementById('status-left').innerHTML = '<span class="dot" style="background:var(--red)"></span> Offline'; }
 }
@@ -756,9 +756,9 @@ function loadTenants() {
     window.__schemaTypes = Object.keys(d.schema);
     const tenants = new Set();
     Object.values(d.schema).forEach(info => { if (info.tenants) info.tenants.forEach(t => tenants.add(t)); });
-    const opts = '<option value="">Default tenant</option>' + [...tenants].map(t => '<option value="'+t+'">'+t+'</option>').join('');
+    const opts = '<option value="">Default tenant</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
     document.getElementById('query-tenant').innerHTML = opts;
-    document.getElementById('graph-tenant').innerHTML = '<option value="">All tenants</option>' + [...tenants].map(t => '<option>'+t+'</option>').join('');
+    document.getElementById('graph-tenant').innerHTML = '<option value="">All tenants</option>' + [...tenants].map(t => '<option>'+esc(t)+'</option>').join('');
   }).catch(() => {});
 }
 
@@ -778,15 +778,15 @@ async function runQuery() {
     if (data.error) {
       // S-8 (POC-4): an unknown type is fixable from the studio — point at
       // the discovery flow instead of leaving a dead end.
-      resDiv.innerHTML = '<div class="error-text">'+data.error+'</div>' + (data.error.includes('AIKOQL1030') ? '<div style="font-size:10px;color:var(--muted);margin-top:4px;">type not registered — run Ontology → Auto-Discover</div>' : '');
+      resDiv.innerHTML = '<div class="error-text">'+esc(data.error)+'</div>' + esc((data.error.includes('AIKOQL1030') ? '<div style="font-size:10px;color:var(--muted);margin-top:4px;">type not registered — run Ontology → Auto-Discover</div>' : ''));
       return;
     }
-    if (data.created) { resDiv.innerHTML = '<div class="card"><span class="badge badge-green">Created</span> '+data.created+' v'+data.version+'</div>'; return; }
+    if (data.created) { resDiv.innerHTML = '<div class="card"><span class="badge badge-green">Created</span> '+esc(data.created)+' v'+esc(data.version)+'</div>'; return; }
     if (data.results && data.results.length > 0) {
       const keys = new Set();
       data.results.forEach(r => { Object.keys(r).forEach(k => { if (k !== 'properties') keys.add(k); }); if (r.properties) Object.keys(r.properties).forEach(k => keys.add(k)); });
       let html = '<div class="card"><table><thead><tr>';
-      [...keys].forEach(k => html += '<th>'+k+'</th>');
+      [...keys].forEach(k => html += '<th>'+esc(k)+'</th>');
       html += '</tr></thead><tbody>';
       data.results.forEach(row => {
         html += '<tr>';
@@ -794,15 +794,15 @@ async function runQuery() {
           let v = row[k];
           if (v === undefined && row.properties) v = row.properties[k];
           const sv = v !== undefined && v !== null ? String(v) : '';
-          html += '<td title="'+sv.replace(/"/g,'&quot;')+'">'+sv.substring(0,80)+'</td>';
+          html += '<td title="'+esc(sv)+'">'+esc(sv.substring(0,80))+'</td>';
         });
         html += '</tr>';
       });
       html += '</tbody></table></div>';
-      html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">'+data.results.length+' row'+(data.results.length!==1?'s':'')+'</div>';
+      html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">'+esc(data.results.length)+' row'+esc(data.results.length!==1?'s':'')+'</div>';
       resDiv.innerHTML = html;
     } else { resDiv.innerHTML = '<div class="empty-state">Query returned 0 results.</div>'; }
-  } catch(e) { resDiv.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 window.runQuery = runQuery;
 async function explainQuery() {
@@ -812,14 +812,14 @@ async function explainQuery() {
   resDiv.innerHTML = '<div class="loading">Explaining...</div>';
   try {
     const data = await api('/api/explain?query=' + encodeURIComponent(query));
-    if (data.error) { resDiv.innerHTML = '<div class="error-text">'+data.error+'</div>'; return; }
-    let html = '<div class="card"><h3>Query Plan — '+(data.operator_count||0)+' operators</h3>';
-    html += '<div class="mono" style="color:var(--muted);margin-bottom:8px;">'+data.query+'</div>';
+    if (data.error) { resDiv.innerHTML = '<div class="error-text">'+esc(data.error)+'</div>'; return; }
+    let html = '<div class="card"><h3>Query Plan — '+esc(data.operator_count||0)+' operators</h3>';
+    html += '<div class="mono" style="color:var(--muted);margin-bottom:8px;">'+esc(data.query)+'</div>';
     html += '<table><thead><tr><th>#</th><th>Operator</th></tr></thead><tbody>';
-    (data.operators||[]).forEach((op,i) => { html += '<tr><td style="color:var(--muted);">'+(i+1)+'</td><td class="mono">'+op+'</td></tr>'; });
+    (data.operators||[]).forEach((op,i) => { html += '<tr><td style="color:var(--muted);">'+esc(i+1)+'</td><td class="mono">'+esc(op)+'</td></tr>'; });
     html += '</tbody></table></div>';
     resDiv.innerHTML = html;
-  } catch(e) { resDiv.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 async function streamQuery() {
   const query = window.__cmGetValue().trim();
@@ -832,7 +832,7 @@ async function streamQuery() {
   // For now: run the query and chunk the results client-side.
   try {
     const data = await api('/api/aikoql?query=' + encodeURIComponent(query));
-    if (data.error) { resDiv.innerHTML = '<div class="error-text">'+data.error+'</div>'; return; }
+    if (data.error) { resDiv.innerHTML = '<div class="error-text">'+esc(data.error)+'</div>'; return; }
     if (!data.results || data.results.length === 0) { resDiv.innerHTML = '<div class="empty-state">0 results.</div>'; return; }
     const all = data.results;
     const CHUNK = 100;
@@ -841,25 +841,25 @@ async function streamQuery() {
     }
     let html = '';
     chunks.forEach((chunk, ci) => {
-      html += '<div class="card" style="border-left: 2px solid var(--accent);"><h3>Chunk '+(ci+1)+'/'+chunks.length+' ('+chunk.length+' rows)</h3>';
+      html += '<div class="card" style="border-left: 2px solid var(--accent);"><h3>Chunk '+esc(ci+1)+'/'+esc(chunks.length)+' ('+esc(chunk.length)+' rows)</h3>';
       const keys = new Set();
       chunk.forEach(r => { Object.keys(r).forEach(k => { if (k !== 'properties') keys.add(k); }); if (r.properties) Object.keys(r.properties).forEach(k => keys.add(k)); });
       html += '<table><thead><tr>';
-      [...keys].forEach(k => html += '<th>'+k+'</th>');
+      [...keys].forEach(k => html += '<th>'+esc(k)+'</th>');
       html += '</tr></thead><tbody>';
       chunk.forEach(row => {
         html += '<tr>';
         [...keys].forEach(k => {
           let v = row[k]; if (v === undefined && row.properties) v = row.properties[k];
-          html += '<td>'+(v !== undefined && v !== null ? String(v).substring(0,60) : '')+'</td>';
+          html += '<td>'+esc(v !== undefined && v !== null ? String(v).substring(0,60) : '')+'</td>';
         });
         html += '</tr>';
       });
       html += '</tbody></table></div>';
     });
-    html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">'+all.length+' total rows in '+chunks.length+' chunk'+(chunks.length!==1?'s':'')+'</div>';
+    html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">'+esc(all.length)+' total rows in '+esc(chunks.length)+' chunk'+esc(chunks.length!==1?'s':'')+'</div>';
     resDiv.innerHTML = html;
-  } catch(e) { resDiv.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 // Save query on Ctrl+S (CodeMirror auto-saves on change; this is for user feedback)
 document.addEventListener('keydown', e => {
@@ -915,7 +915,7 @@ async function loadGraph() {
       const superseded = es==='superseded';
       return {
         id: n.koid, label: (n.label||n.type_name)+(n.tenant?'\n@'+n.tenant:''),
-        title: '<b>'+n.type_name+'</b>'+(n.tenant?' @'+n.tenant:'')+'\n'+n.koid+(es?'\n'+es:''),
+        title: nodeTip(n, es),
         color: superseded
           ? {background:'#3d3d4a',border:'#8a8a99',highlight:{background:'#4a4a58',border:'#fff'}}
           : {background:colorFor(n.type_name),border:(n.tenant?'#b89ae0':'#252538'),highlight:{background:colorFor(n.type_name),border:'#fff'}},
@@ -947,7 +947,7 @@ async function loadGraph() {
     graphEdges.add(edges);
     // Legend
     let lh = '';
-    for (const [t,c] of Object.entries(typeColors)) { const cnt = data.nodes.filter(n=>n.type_name===t).length; lh += '<div class="legend-item"><div class="legend-dot" style="background:'+c+'"></div>'+t+' ('+cnt+')</div>'; }
+    for (const [t,c] of Object.entries(typeColors)) { const cnt = data.nodes.filter(n=>n.type_name===t).length; lh += '<div class="legend-item"><div class="legend-dot" style="background:'+esc(c)+'"></div>'+esc(t)+' ('+esc(cnt)+')</div>'; }
     document.getElementById('legend').innerHTML = lh||'<div style="color:var(--muted)">No types</div>';
     document.getElementById('status-center').textContent = data.nodes.length+' objects, '+edges.length+' relationships';
     setTimeout(() => { if(graphNetwork&&nodes.length>0) graphNetwork.fit({animation:{duration:400}}); }, 200);
@@ -960,17 +960,17 @@ function showGraphTooltip(nodeId) {
   let tt = document.getElementById('graph-tooltip');
   if (!tt) { tt = document.createElement('div'); tt.id = 'graph-tooltip'; tt.style.cssText = 'position:absolute;top:8px;right:8px;background:rgba(19,19,31,0.96);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:11px;max-width:260px;z-index:10;'; document.getElementById('graph-area').appendChild(tt); }
   tt.style.display = 'block';
-  let h = '<div style="color:var(--accent);font-weight:600;">'+node.type_name+'</div>';
-  if (node.tenant) h += '<div style="color:var(--purple);font-size:10px;">@'+node.tenant+'</div>';
-  if (node.key_props) node.key_props.slice(0,5).forEach(p => h += '<div style="color:var(--muted);">'+p.key+': '+JSON.stringify(p.value)+'</div>');
+  let h = '<div style="color:var(--accent);font-weight:600;">'+esc(node.type_name)+'</div>';
+  if (node.tenant) h += '<div style="color:var(--purple);font-size:10px;">@'+esc(node.tenant)+'</div>';
+  if (node.key_props) node.key_props.slice(0,5).forEach(p => h += '<div style="color:var(--muted);">'+esc(p.key)+': '+esc(JSON.stringify(p.value))+'</div>');
   // S-1 (POC-4): surface the epistemic status and its last transition —
   // lifecycle.state stays "draft" on retracted rows.
   const es = node.extensions&&node.extensions.epistemic_status;
-  if (es) h += '<div style="color:'+(es==='superseded'?'#c9a86a':'var(--muted)')+';">epistemic: '+es+'</div>';
+  if (es) h += '<div style="color:'+esc(es==='superseded'?'#c9a86a':'var(--muted)')+';">epistemic: '+esc(es)+'</div>';
   const hist = node.extensions&&node.extensions.epistemic_history;
   if (hist && hist.length) {
     const last = hist[hist.length-1];
-    h += '<div style="color:var(--muted);">'+last.from+' → '+last.to+(last.reason?' ('+last.reason+')':'')+' by '+(last.by||'?')+'</div>';
+    h += '<div style="color:var(--muted);">'+esc(last.from)+' → '+esc(last.to)+esc(last.reason?' ('+last.reason+')':'')+' by '+esc(last.by||'?')+'</div>';
   }
   tt.innerHTML = h;
 }
@@ -983,7 +983,7 @@ async function inspectNode(koid) {
     // Show in a floating card inside the graph panel
     let detail = document.getElementById('graph-detail-card');
     if (!detail) { detail = document.createElement('div'); detail.id = 'graph-detail-card'; detail.style.cssText = 'position:absolute;top:40px;right:8px;width:340px;max-height:70vh;overflow-y:auto;background:rgba(19,19,31,0.97);border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-size:11px;z-index:10;'; document.getElementById('graph-area').appendChild(detail); }
-    detail.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span style="font-weight:600;color:var(--accent);">'+node.type_name+'</span><button class="btn btn-sec btn-sm" onclick="this.parentElement.parentElement.remove()">✕</button></div>' + h;
+    detail.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span style="font-weight:600;color:var(--accent);">'+esc(node.type_name)+'</span><button class="btn btn-sec btn-sm" onclick="this.parentElement.parentElement.remove()">✕</button></div>' + h;
   } catch(e) {}
 }
 
@@ -995,7 +995,7 @@ async function loadExplorerTree() {
     const data = await api('/api/schema');
     explorerData = data;
     renderExplorerTree();
-  } catch(e) { document.getElementById('explorer-tree-content').innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { document.getElementById('explorer-tree-content').innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 function renderExplorerTree() {
   if (!explorerData || !explorerData.schema) return;
@@ -1006,35 +1006,35 @@ function renderExplorerTree() {
     const count = info.count||0;
     if (count === 0) return; // skip empty types — prevents "No objects" dead-end click
     const tenantList = (info.tenants||[]).join(', ');
-    html += '<div class="tree-item type-node" onclick="exploreType(\''+typeName.replace(/'/g,"\\'")+'\')" data-type="'+typeName+'">';
-    html += '<span style="color:'+colorFor(typeName)+'">●</span> '+typeName;
-    html += '<span class="count">'+count+'</span>';
+    html += '<div class="tree-item type-node" onclick="exploreType(\''+esc(typeName.replace(/'/g,"\\'")+'\')" data-type="'+typeName+'">');
+    html += '<span style="color:'+esc(colorFor(typeName))+'">●</span> '+esc(typeName);
+    html += '<span class="count">'+esc(count)+'</span>';
     html += '</div>';
     if (info.tenants && info.tenants.length > 0) {
       info.tenants.forEach(t => {
-        html += '<div class="tree-item" style="padding-left:32px;font-size:10px;" onclick="exploreTypeTenant(\''+typeName.replace(/'/g,"\\'")+'\',\''+t.replace(/'/g,"\\'")+'\')">@'+t+'</div>';
+        html += '<div class="tree-item" style="padding-left:32px;font-size:10px;" onclick="exploreTypeTenant(\''+esc(typeName.replace(/'/g,"\\'")+'\',\''+t.replace(/'/g,"\\'")+'\')">@'+t+'</div>');
       });
     }
   });
   document.getElementById('explorer-tree-content').innerHTML = html || '<div class="empty-state">No types found.</div>';
 }
 async function exploreType(typeName) {
-  document.getElementById('explorer-detail').innerHTML = '<div class="loading">Loading '+typeName+'...</div>';
+  document.getElementById('explorer-detail').innerHTML = '<div class="loading">Loading '+esc(typeName)+'...</div>';
   try {
     const data = await api('/api/graph?type=' + encodeURIComponent(typeName));
     if (!data.nodes || data.nodes.length === 0) {
-      document.getElementById('explorer-detail').innerHTML = '<div class="empty-state">No objects of type '+typeName+' found.</div>';
+      document.getElementById('explorer-detail').innerHTML = '<div class="empty-state">No objects of type '+esc(typeName)+' found.</div>';
       return;
     }
-    let html = '<div class="card"><h3>'+typeName+' ('+data.nodes.length+' objects)</h3>';
+    let html = '<div class="card"><h3>'+esc(typeName)+' ('+esc(data.nodes.length)+' objects)</h3>';
     html += '<table><thead><tr><th>KOID</th><th>Label</th><th>Tenant</th><th>Version</th><th>Edges</th></tr></thead><tbody>';
     data.nodes.forEach(n => {
       html += '<tr>';
-      html += '<td class="mono"><a href="#" onclick="switchPanel(\'inspector\');document.getElementById(\'inspector-search-input\').value=\''+n.koid+'\';inspectorSearch();return false;" style="color:var(--accent);">'+n.koid.substring(0,20)+'...</a></td>';
-      html += '<td>'+(n.label||n.type_name)+'</td>';
-      html += '<td>'+(n.tenant?'<span class="badge badge-purple">@'+n.tenant+'</span>':'―')+'</td>';
-      html += '<td>'+(n.version||'?')+'</td>';
-      html += '<td>'+(n.edge_count||0)+'</td>';
+      html += '<td class="mono"><a href="#" onclick="switchPanel(\'inspector\');document.getElementById(\'inspector-search-input\').value=\''+esc(n.koid)+'\';inspectorSearch();return false;" style="color:var(--accent);">'+esc(n.koid.substring(0,20))+'...</a></td>';
+      html += '<td>'+esc(n.label||n.type_name)+'</td>';
+      if (n.tenant) html += '<td><span class="badge badge-purple">@'+esc(n.tenant)+'</span></td>'; else html += '<td>―</td>';
+      html += '<td>'+esc(n.version||'?')+'</td>';
+      html += '<td>'+esc(n.edge_count||0)+'</td>';
       html += '</tr>';
     });
     html += '</tbody></table></div>';
@@ -1043,21 +1043,21 @@ async function exploreType(typeName) {
     document.querySelectorAll('#explorer-tree-content .tree-item').forEach(el => el.classList.remove('selected'));
     const sel = document.querySelector('#explorer-tree-content .tree-item[data-type="'+typeName+'"]');
     if (sel) sel.classList.add('selected');
-  } catch(e) { document.getElementById('explorer-detail').innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { document.getElementById('explorer-detail').innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 async function exploreTypeTenant(typeName, tenant) {
-  document.getElementById('explorer-detail').innerHTML = '<div class="loading">Loading '+typeName+' @'+tenant+'...</div>';
+  document.getElementById('explorer-detail').innerHTML = '<div class="loading">Loading '+esc(typeName)+' @'+esc(tenant)+'...</div>';
   try {
     const data = await api('/api/graph?type='+encodeURIComponent(typeName)+'&tenant='+encodeURIComponent(tenant));
-    let html = '<div class="card"><h3>'+typeName+' <span class="badge badge-purple">@'+tenant+'</span> ('+(data.nodes||[]).length+' objects)</h3>';
+    let html = '<div class="card"><h3>'+esc(typeName)+' <span class="badge badge-purple">@'+esc(tenant)+'</span> ('+esc((data.nodes||[]).length)+' objects)</h3>';
     if (data.nodes && data.nodes.length > 0) {
       html += '<table><thead><tr><th>KOID</th><th>Label</th><th>Version</th><th>Edges</th></tr></thead><tbody>';
-      data.nodes.forEach(n => html += '<tr><td class="mono" style="font-size:10px;">'+n.koid+'</td><td>'+(n.label||'')+'</td><td>'+(n.version||'?')+'</td><td>'+(n.edge_count||0)+'</td></tr>');
+      data.nodes.forEach(n => html += '<tr><td class="mono" style="font-size:10px;">'+esc(n.koid)+'</td><td>'+esc(n.label||'')+'</td><td>'+esc(n.version||'?')+'</td><td>'+esc(n.edge_count||0)+'</td></tr>');
       html += '</tbody></table>';
     }
     html += '</div>';
     document.getElementById('explorer-detail').innerHTML = html;
-  } catch(e) { document.getElementById('explorer-detail').innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { document.getElementById('explorer-detail').innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1067,28 +1067,28 @@ async function loadSchemaPanel() {
   try {
     const data = await api('/api/schema');
     if (!data.schema) { document.getElementById('schema-content').innerHTML = '<div class="empty-state">No schema data available.</div>'; return; }
-    let html = '<div style="margin-bottom:12px;font-size:12px;color:var(--accent);">'+Object.keys(data.schema).length+' types</div>';
+    let html = '<div style="margin-bottom:12px;font-size:12px;color:var(--accent);">'+esc(Object.keys(data.schema).length)+' types</div>';
     for (const [typeName, info] of Object.entries(data.schema)) {
       html += '<div class="card">';
       html += '<h3 style="display:flex;justify-content:space-between;align-items:center;">';
-      html += '<span><span style="color:'+colorFor(typeName)+'">●</span> '+typeName+'</span>';
-      html += '<span class="badge badge-cyan">'+(info.count||0)+' objects</span>';
+      html += '<span><span style="color:'+esc(colorFor(typeName))+'">●</span> '+esc(typeName)+'</span>';
+      html += '<span class="badge badge-cyan">'+esc(info.count||0)+' objects</span>';
       html += '</h3>';
-      if (info.tenants && info.tenants.length > 0) html += '<div style="margin-bottom:6px;">'+info.tenants.map(t => '<span class="badge badge-purple">@'+t+'</span>').join(' ')+'</div>';
+      if (info.tenants && info.tenants.length > 0) html += '<div style="margin-bottom:6px;">'+info.tenants.map(t => '<span class="badge badge-purple">@'+esc(t)+'</span>').join(' ')+'</div>';
       if (info.properties && info.properties.length > 0) {
         html += '<div style="font-size:11px;"><span style="color:var(--muted);">Properties: </span>';
-        html += info.properties.map(p => '<code style="background:var(--bg);padding:1px 6px;border-radius:3px;font-size:10px;color:var(--green);">'+p+'</code>').join(' ');
+        html += info.properties.map(p => '<code style="background:var(--bg);padding:1px 6px;border-radius:3px;font-size:10px;color:var(--green);">'+esc(p)+'</code>').join(' ');
         html += '</div>';
       } else { html += '<div style="font-size:11px;color:var(--muted);">No properties discovered yet.</div>'; }
       if (info.relationship_types && info.relationship_types.length > 0) {
         html += '<div style="font-size:11px;margin-top:4px;"><span style="color:var(--muted);">Relationships: </span>';
-        html += info.relationship_types.map(r => '<span class="badge badge-orange">'+r+'</span>').join(' ');
+        html += info.relationship_types.map(r => '<span class="badge badge-orange">'+esc(r)+'</span>').join(' ');
         html += '</div>';
       }
       html += '</div>';
     }
     document.getElementById('schema-content').innerHTML = html || '<div class="empty-state">No types found. Create KOs to populate the schema.</div>';
-  } catch(e) { document.getElementById('schema-content').innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { document.getElementById('schema-content').innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1097,68 +1097,68 @@ async function loadSchemaPanel() {
 function renderNodeDetail(node) {
   let h = '';
   // Header badges
-  if (node.tenant) h += '<span class="badge badge-purple">@'+node.tenant+'</span> ';
+  if (node.tenant) h += '<span class="badge badge-purple">@'+esc(node.tenant)+'</span> ';
   if (node.lifecycle) {
     const st = typeof node.lifecycle === 'object' ? node.lifecycle.state : node.lifecycle;
     const cls = st==='active'?'badge-green':st==='archived'?'badge-red':st==='draft'?'badge-orange':'badge-cyan';
-    h += '<span class="badge '+cls+'">'+st+'</span> ';
+    h += '<span class="badge '+esc(cls)+'">'+esc(st)+'</span> ';
   }
   // S-1 (POC-4): the lifecycle badge alone is misleading on retracted rows
   // ("draft") — show the epistemic status next to it.
   if (node.extensions && node.extensions.epistemic_status) {
     const es = node.extensions.epistemic_status;
-    h += '<span class="badge '+(es==='superseded'?'badge-orange':'badge-muted')+'">'+es+'</span> ';
+    h += '<span class="badge '+esc(es==='superseded'?'badge-orange':'badge-muted')+'">'+esc(es)+'</span> ';
   }
   if (node.security && node.security.classification) {
-    h += '<span class="badge badge-red">'+node.security.classification+'</span> ';
+    h += '<span class="badge badge-red">'+esc(node.security.classification)+'</span> ';
   }
   h += '<div style="margin-top:6px;"></div>';
 
   // Identity
   h += '<div class="section-title">Identity</div>';
-  h += '<div class="kv-row"><span class="kv-key">KOID</span><span class="kv-val mono" style="font-size:10px;">'+node.koid+'</span></div>';
-  h += '<div class="kv-row"><span class="kv-key">Type</span><span class="kv-val">'+node.type_name+'</span></div>';
-  h += '<div class="kv-row"><span class="kv-key">Version</span><span class="kv-val">'+(node.version||'?')+' (schema v'+(node.schema_version||1)+')</span></div>';
+  h += '<div class="kv-row"><span class="kv-key">KOID</span><span class="kv-val mono" style="font-size:10px;">'+esc(node.koid)+'</span></div>';
+  h += '<div class="kv-row"><span class="kv-key">Type</span><span class="kv-val">'+esc(node.type_name)+'</span></div>';
+  h += '<div class="kv-row"><span class="kv-key">Version</span><span class="kv-val">'+esc(node.version||'?')+' (schema v'+esc(node.schema_version||1)+')</span></div>';
 
   // Lifecycle
   if (node.lifecycle) {
     h += '<div class="section-title">Lifecycle</div>';
     if (typeof node.lifecycle === 'object') {
-      h += '<div class="kv-row"><span class="kv-key">State</span><span class="kv-val">'+node.lifecycle.state+'</span></div>';
-      if (node.lifecycle.origin) h += '<div class="kv-row"><span class="kv-key">Origin</span><span class="kv-val">'+node.lifecycle.origin+'</span></div>';
+      h += '<div class="kv-row"><span class="kv-key">State</span><span class="kv-val">'+esc(node.lifecycle.state)+'</span></div>';
+      if (node.lifecycle.origin) h += '<div class="kv-row"><span class="kv-key">Origin</span><span class="kv-val">'+esc(node.lifecycle.origin)+'</span></div>';
     }
-    h += '<div class="kv-row"><span class="kv-key">Edges</span><span class="kv-val">'+(node.edge_count||0)+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Edges</span><span class="kv-val">'+esc(node.edge_count||0)+'</span></div>';
   }
 
   // Security
   if (node.security) {
     h += '<div class="section-title">Security</div>';
-    h += '<div class="kv-row"><span class="kv-key">Owner</span><span class="kv-val">'+(node.security.owner||'?')+'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Classification</span><span class="kv-val">'+(node.security.classification||'none')+'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">ACL Entries</span><span class="kv-val">'+(node.security.acl_count||0)+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Owner</span><span class="kv-val">'+esc(node.security.owner||'?')+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Classification</span><span class="kv-val">'+esc(node.security.classification||'none')+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">ACL Entries</span><span class="kv-val">'+esc(node.security.acl_count||0)+'</span></div>';
   }
 
   // Semantic (embedding enrichment)
   if (node.semantic) {
     h += '<div class="section-title">Semantic</div>';
-    if (node.semantic.embedding_model) h += '<div class="kv-row"><span class="kv-key">Embedding Model</span><span class="kv-val">'+node.semantic.embedding_model+'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Embedding Dims</span><span class="kv-val">'+(node.semantic.embedding_dims||0)+'</span></div>';
-    if (node.semantic.summary) h += '<div class="kv-row"><span class="kv-key">Summary</span><span class="kv-val">'+node.semantic.summary+'</span></div>';
+    if (node.semantic.embedding_model) h += '<div class="kv-row"><span class="kv-key">Embedding Model</span><span class="kv-val">'+esc(node.semantic.embedding_model)+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Embedding Dims</span><span class="kv-val">'+esc(node.semantic.embedding_dims||0)+'</span></div>';
+    if (node.semantic.summary) h += '<div class="kv-row"><span class="kv-key">Summary</span><span class="kv-val">'+esc(node.semantic.summary)+'</span></div>';
   }
 
   // Properties
   if (node.properties && Object.keys(node.properties).length > 0) {
     h += '<div class="section-title">Properties</div>';
     for (const [k,v] of Object.entries(node.properties)) {
-      h += '<div class="kv-row"><span class="kv-key">'+k+'</span><span class="kv-val">'+JSON.stringify(v)+'</span></div>';
+      h += '<div class="kv-row"><span class="kv-key">'+esc(k)+'</span><span class="kv-val">'+esc(JSON.stringify(v))+'</span></div>';
     }
   }
 
   // Relationships
   if (node.relationships && node.relationships.length > 0) {
-    h += '<div class="section-title">Relationships ('+node.relationships.length+')</div>';
+    h += '<div class="section-title">Relationships ('+esc(node.relationships.length)+')</div>';
     node.relationships.forEach(r => {
-      h += '<div class="kv-row"><span class="kv-key">'+r.direction+'</span><span class="kv-val"><span class="badge badge-orange">'+r.type+'</span> → <span class="mono" style="font-size:10px;">'+(r.target||'').substring(0,20)+'...</span></span></div>';
+      h += '<div class="kv-row"><span class="kv-key">'+esc(r.direction)+'</span><span class="kv-val"><span class="badge badge-orange">'+esc(r.type)+'</span> → <span class="mono" style="font-size:10px;">'+esc((r.target||'').substring(0,20))+'...</span></span></div>';
     });
   }
 
@@ -1166,12 +1166,12 @@ function renderNodeDetail(node) {
   if (node.extensions && Object.keys(node.extensions).length > 0) {
     h += '<div class="section-title">Extensions</div>';
     for (const [k,v] of Object.entries(node.extensions)) {
-      h += '<div class="kv-row"><span class="kv-key">'+k+'</span><span class="kv-val">'+JSON.stringify(v)+'</span></div>';
+      h += '<div class="kv-row"><span class="kv-key">'+esc(k)+'</span><span class="kv-val">'+esc(JSON.stringify(v))+'</span></div>';
     }
   }
 
   // Events & Audit
-  if (node.event_refs) h += '<div class="section-title">Audit</div><div class="kv-row"><span class="kv-key">Events</span><span class="kv-val">'+node.event_refs+' journal references</span></div>';
+  if (node.event_refs) h += '<div class="section-title">Audit</div><div class="kv-row"><span class="kv-key">Events</span><span class="kv-val">'+esc(node.event_refs)+' journal references</span></div>';
 
   return h;
 }
@@ -1196,7 +1196,7 @@ async function inspectorSearch() {
           document.getElementById('inspector-detail').innerHTML = renderNodeDetail(node);
           sug.innerHTML = '<div style="font-size:10px;color:var(--green);padding:6px 10px;">✓ Found</div>';
         } else { sug.innerHTML = '<div class="empty-state">Not found.</div>'; }
-      } catch(e) { sug.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+      } catch(e) { sug.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
       return;
     }
     // Search by type name
@@ -1206,15 +1206,15 @@ async function inspectorSearch() {
       if (data.nodes && data.nodes.length > 0) {
         let html = '';
         data.nodes.slice(0, 30).forEach(n => {
-          html += '<div class="suggest-item" onclick="inspectorLoadKOID(\''+n.koid+'\')">';
-          html += '<span><span style="color:'+colorFor(n.type_name)+'">●</span> '+n.type_name+'</span>';
-          html += '<span class="mono" style="font-size:10px;color:var(--muted);">'+n.koid.substring(0,16)+'...</span>';
+          html += '<div class="suggest-item" onclick="inspectorLoadKOID(\''+esc(n.koid)+'\')">';
+          html += '<span><span style="color:'+esc(colorFor(n.type_name))+'">●</span> '+esc(n.type_name)+'</span>';
+          html += '<span class="mono" style="font-size:10px;color:var(--muted);">'+esc(n.koid.substring(0,16))+'...</span>';
           html += '</div>';
         });
-        if (data.nodes.length > 30) html += '<div style="font-size:10px;color:var(--muted);padding:4px 10px;">+ '+(data.nodes.length-30)+' more (narrow your search)</div>';
+        if (data.nodes.length > 30) html += '<div style="font-size:10px;color:var(--muted);padding:4px 10px;">+ '+esc(data.nodes.length-30)+' more (narrow your search)</div>';
         sug.innerHTML = html;
-      } else { sug.innerHTML = '<div class="empty-state">Nothing matches "'+q+'".</div>'; }
-    } catch(e) { sug.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+      } else { sug.innerHTML = '<div class="empty-state">Nothing matches "'+esc(q)+'".</div>'; }
+    } catch(e) { sug.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
   }, 300);
 }
 async function inspectorLoadKOID(koid) {
@@ -1225,9 +1225,9 @@ async function inspectorLoadKOID(koid) {
     const node = data.nodes.find(n => n.koid === koid);
     if (node) {
       document.getElementById('inspector-detail').innerHTML = renderNodeDetail(node);
-      document.getElementById('inspector-suggestions').innerHTML = '<div style="font-size:10px;color:var(--green);padding:6px 10px;">✓ '+node.type_name+'</div>';
+      document.getElementById('inspector-suggestions').innerHTML = '<div style="font-size:10px;color:var(--green);padding:6px 10px;">✓ '+esc(node.type_name)+'</div>';
     } else { document.getElementById('inspector-detail').innerHTML = '<div class="empty-state">Object not found.</div>'; }
-  } catch(e) { document.getElementById('inspector-detail').innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { document.getElementById('inspector-detail').innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1249,16 +1249,16 @@ async function loadOntologyPanel() {
     }
     const ko = data.results[0];
     const props = ko.properties || {};
-    statusDiv.innerHTML = '<div style="color:var(--green);margin-bottom:8px;">✓ Ontology loaded — <b>'+ (props.namespace||'?') +'</b> v'+ (props.version||'?') +'</div>';
+    statusDiv.innerHTML = '<div style="color:var(--green);margin-bottom:8px;">✓ Ontology loaded — <b>'+ esc(props.namespace||'?') +'</b> v'+ esc(props.version||'?') +'</div>';
 
     // Render classes
     if (props.classes && Array.isArray(props.classes)) {
-      let h = '<h3>Classes ('+props.classes.length+')</h3><div class="ontology-grid">';
+      let h = '<h3>Classes ('+esc(props.classes.length)+')</h3><div class="ontology-grid">';
       props.classes.forEach(c => {
         const cm = typeof c === 'object' ? c : {};
-        h += '<div class="card" style="padding:8px 12px;"><span style="color:var(--accent);font-weight:600;">'+ (cm.name||'?') +'</span>';
-        if (cm.parent) h += ' <span style="color:var(--muted);">extends</span> <span style="color:var(--green);">'+cm.parent+'</span>';
-        if (cm.description) h += '<div style="font-size:10px;color:var(--muted);">'+cm.description+'</div>';
+        h += '<div class="card" style="padding:8px 12px;"><span style="color:var(--accent);font-weight:600;">'+ esc(cm.name||'?') +'</span>';
+        if (cm.parent) h += ' <span style="color:var(--muted);">extends</span> <span style="color:var(--green);">'+esc(cm.parent)+'</span>';
+        if (cm.description) h += '<div style="font-size:10px;color:var(--muted);">'+esc(cm.description)+'</div>';
         h += '</div>';
       });
       h += '</div>';
@@ -1267,9 +1267,9 @@ async function loadOntologyPanel() {
 
     // Render relationships
     if (props.relationships && Array.isArray(props.relationships)) {
-      let h = '<h3>Relationships ('+props.relationships.length+')</h3><table><thead><tr><th>Name</th><th>Domain</th><th>Range</th><th>Card.</th></tr></thead><tbody>';
+      let h = '<h3>Relationships ('+esc(props.relationships.length)+')</h3><table><thead><tr><th>Name</th><th>Domain</th><th>Range</th><th>Card.</th></tr></thead><tbody>';
       props.relationships.forEach(r => {
-        h += '<tr><td style="color:var(--accent);">'+ (r.name||'?') +'</td><td>'+ (r.domain||'*') +'</td><td>'+ (r.range||'*') +'</td><td><span class="badge badge-purple">'+ (r.cardinality||'?') +'</span></td></tr>';
+        h += '<tr><td style="color:var(--accent);">'+ esc(r.name||'?') +'</td><td>'+ esc(r.domain||'*') +'</td><td>'+ esc(r.range||'*') +'</td><td><span class="badge badge-purple">'+ esc(r.cardinality||'?') +'</span></td></tr>';
       });
       h += '</tbody></table>';
       relsDiv.innerHTML = h;
@@ -1277,17 +1277,17 @@ async function loadOntologyPanel() {
 
     // Render mappings
     if (props.mappings && Array.isArray(props.mappings)) {
-      let h = '<h3>Mappings ('+props.mappings.length+')</h3><table><thead><tr><th>Source</th><th>Physical Type</th><th>Class</th><th>Property Map</th></tr></thead><tbody>';
+      let h = '<h3>Mappings ('+esc(props.mappings.length)+')</h3><table><thead><tr><th>Source</th><th>Physical Type</th><th>Class</th><th>Property Map</th></tr></thead><tbody>';
       props.mappings.forEach(m => {
         const pm = typeof m.property_map === 'object' ? m.property_map : {};
         const pmStr = Object.entries(pm).map(([k,v]) => k+' → '+v).join(', ');
-        h += '<tr><td><span class="badge badge-cyan">'+ (m.source||'?') +'</span></td><td class="mono" style="font-size:10px;">'+ (m.physical_type||'?') +'</td><td>'+ (m.class||'?') +'</td><td style="font-size:10px;color:var(--muted);">'+pmStr+'</td></tr>';
+        h += '<tr><td><span class="badge badge-cyan">'+ esc(m.source||'?') +'</span></td><td class="mono" style="font-size:10px;">'+ esc(m.physical_type||'?') +'</td><td>'+ esc(m.class||'?') +'</td><td style="font-size:10px;color:var(--muted);">'+esc(pmStr)+'</td></tr>';
       });
       h += '</tbody></table>';
       mapsDiv.innerHTML = h;
     }
   } catch(e) {
-    document.getElementById('ontology-status').innerHTML = '<div class="error-text">'+e.message+'</div>';
+    document.getElementById('ontology-status').innerHTML = '<div class="error-text">'+esc(e.message)+'</div>';
   }
 }
 
@@ -1298,11 +1298,11 @@ async function discoverOntology() {
     const url = '/api/v1/discover-ontology' + (authToken ? '?token=' + encodeURIComponent(authToken) : '');
     const res = await fetch(url, { method: 'POST' });
     const data = await res.json();
-    if (data.error) { msg.innerHTML = '<span style="color:var(--red);">Error: '+data.error+'</span>'; return; }
+    if (data.error) { msg.innerHTML = '<span style="color:var(--red);">Error: '+esc(data.error)+'</span>'; return; }
     const d = data.data || data;
-    msg.innerHTML = '<span style="color:var(--green);">✓ Discovered: '+d.classes+' classes, '+d.relationships+' relationships, '+d.mappings+' mappings from '+(d.types_discovered||[]).length+' types.</span>';
+    msg.innerHTML = '<span style="color:var(--green);">✓ Discovered: '+esc(d.classes)+' classes, '+esc(d.relationships)+' relationships, '+esc(d.mappings)+' mappings from '+esc((d.types_discovered||[]).length)+' types.</span>';
     loadOntologyPanel();
-  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
 
 async function saveOntology() {
@@ -1331,7 +1331,7 @@ async function saveOntology() {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      msg.innerHTML = '<span style="color:var(--red);">Error: '+ (err.error || 'HTTP '+res.status) +'</span>';
+      msg.innerHTML = '<span style="color:var(--red);">Error: '+ esc(err.error || 'HTTP '+res.status) +'</span>';
       return;
     }
     const result = await res.json();
@@ -1339,7 +1339,7 @@ async function saveOntology() {
     // Reload the display
     setTimeout(() => loadOntologyPanel(), 500);
   } catch(e) {
-    msg.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>';
+    msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>';
   }
 }
 
@@ -1357,19 +1357,19 @@ async function loadAdminPanel() {
     let html = '';
     // Health card
     html += '<div class="card"><h3>System Health</h3>';
-    html += '<div class="metric-big">'+(health.status||'?')+'</div>';
-    html += '<div class="metric-label">uptime '+(health.uptime_seconds||0).toFixed(0)+'s</div>';
-    html += '<div style="margin-top:8px;font-size:11px;color:var(--muted);">Journal seq: '+(metrics.journal_seq||'?')+' · Objects: '+(metrics.total_objects||'?')+' · Types: '+(Object.keys(metrics.by_type||{}).length||'?')+'</div>';
+    html += '<div class="metric-big">'+esc(health.status||'?')+'</div>';
+    html += '<div class="metric-label">uptime '+esc((health.uptime_seconds||0).toFixed(0))+'s</div>';
+    html += '<div style="margin-top:8px;font-size:11px;color:var(--muted);">Journal seq: '+esc(metrics.journal_seq||'?')+' · Objects: '+esc(metrics.total_objects||'?')+' · Types: '+esc(Object.keys(metrics.by_type||{}).length||'?')+'</div>';
     html += '</div>';
     // Metrics card
     html += '<div class="card"><h3>Database Metrics</h3>';
-    html += '<div class="kv-row"><span class="kv-key">Objects</span><span class="kv-val">'+(metrics.total_objects||0)+'</span></div>';
-    html += '<div class="kv-row"><span class="kv-key">Active</span><span class="kv-val">'+(metrics.active_objects||0)+'</span></div>';
-    html += '<div class="kv-row"><span class="kv-key">Journal Seq</span><span class="kv-val mono">'+(metrics.journal_seq||0)+'</span></div>';
-    html += '<div class="kv-row"><span class="kv-key">Uptime</span><span class="kv-val">'+(metrics.uptime_seconds||0).toFixed(0)+'s</span></div>';
+    html += '<div class="kv-row"><span class="kv-key">Objects</span><span class="kv-val">'+esc(metrics.total_objects||0)+'</span></div>';
+    html += '<div class="kv-row"><span class="kv-key">Active</span><span class="kv-val">'+esc(metrics.active_objects||0)+'</span></div>';
+    html += '<div class="kv-row"><span class="kv-key">Journal Seq</span><span class="kv-val mono">'+esc(metrics.journal_seq||0)+'</span></div>';
+    html += '<div class="kv-row"><span class="kv-key">Uptime</span><span class="kv-val">'+esc((metrics.uptime_seconds||0).toFixed(0))+'s</span></div>';
     if (metrics.by_type) {
       html += '<div style="margin-top:6px;font-size:11px;">';
-      for (const [t,c] of Object.entries(metrics.by_type)) html += '<span class="badge badge-cyan" style="margin:1px;">'+t+': '+c+'</span> ';
+      for (const [t,c] of Object.entries(metrics.by_type)) html += '<span class="badge badge-cyan" style="margin:1px;">'+esc(t)+': '+esc(c)+'</span> ';
       html += '</div>';
     }
     html += '</div>';
@@ -1377,10 +1377,10 @@ async function loadAdminPanel() {
     if (compliance) {
       const cs = compliance.field_crypto_summary || {};
       html += '<div class="card"><h3>Encryption</h3>';
-      html += '<div class="kv-row"><span class="kv-key">Enabled</span><span class="kv-val">'+(compliance.encryption_enabled?'✅ Yes':'⬜ No')+'</span></div>';
-      html += '<div class="kv-row"><span class="kv-key">Policies</span><span class="kv-val">'+(compliance.policies_registered||0)+'</span></div>';
-      html += '<div class="kv-row"><span class="kv-key">Tenant Keys</span><span class="kv-val">'+(cs.tenant_keys||0)+'</span></div>';
-      html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Policy types: '+(compliance.policy_types||[]).join(', ')||'none'+'</div>';
+      html += '<div class="kv-row"><span class="kv-key">Enabled</span><span class="kv-val">'+esc(compliance.encryption_enabled?'✅ Yes':'⬜ No')+'</span></div>';
+      html += '<div class="kv-row"><span class="kv-key">Policies</span><span class="kv-val">'+esc(compliance.policies_registered||0)+'</span></div>';
+      html += '<div class="kv-row"><span class="kv-key">Tenant Keys</span><span class="kv-val">'+esc(cs.tenant_keys||0)+'</span></div>';
+      html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Policy types: '+esc((compliance.policy_types||[]).join(', ')||'none')+'</div>';
       html += '</div>';
     }
     // Backups card (upgraded: actions + correct columns)
@@ -1394,10 +1394,10 @@ async function loadAdminPanel() {
       html += '<table><thead><tr><th>Name</th><th>Objects</th><th>Journal</th><th>Actions</th></tr></thead><tbody>';
       blist.forEach(b => {
         const meta = b.meta || {};
-        html += '<tr><td class="mono" style="font-size:10px;">'+b.name+'</td><td>'+(meta.object_count||'?')+'</td><td>'+(meta.journal_seq||'?')+'</td>';
+        html += '<tr><td class="mono" style="font-size:10px;">'+esc(b.name)+'</td><td>'+esc(meta.object_count||'?')+'</td><td>'+esc(meta.journal_seq||'?')+'</td>';
         html += '<td>';
-        html += '<button class="btn btn-sec btn-sm" onclick="adminVerifyBackup(\''+b.name+'\')" style="margin-right:4px;">Verify</button>';
-        html += '<button class="btn btn-sec btn-sm" onclick="adminRestoreBackup(\''+b.name+'\')">Restore</button>';
+        html += '<button class="btn btn-sec btn-sm" onclick="adminVerifyBackup(\''+esc(b.name)+'\')" style="margin-right:4px;">Verify</button>';
+        html += '<button class="btn btn-sec btn-sm" onclick="adminRestoreBackup(\''+esc(b.name)+'\')">Restore</button>';
         html += '</td></tr>';
       });
       html += '</tbody></table>';
@@ -1411,7 +1411,7 @@ async function loadAdminPanel() {
     html += '<div id="admin-audit-result" style="margin-top:8px;"></div>';
     html += '</div>';
     document.getElementById('admin-grid').innerHTML = html;
-  } catch(e) { document.getElementById('admin-grid').innerHTML = '<div class="error-text">Failed to load admin dashboard: '+e.message+'</div>'; }
+  } catch(e) { document.getElementById('admin-grid').innerHTML = '<div class="error-text">Failed to load admin dashboard: '+esc(e.message)+'</div>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1428,7 +1428,17 @@ async function loadUsers() {
 }
 // Escape & < > " ' — user rows render /api/users data (IdP-influenceable
 // sub/name claims in SSO mode), which must never reach the markup raw.
+// A vis-network tooltip as DOM text nodes (a title string may be parsed as HTML).
+function nodeTip(n, es) {
+  const d = document.createElement('div'), b = document.createElement('b');
+  d.style.whiteSpace = 'pre';
+  b.textContent = n.type_name;
+  d.appendChild(b);
+  d.append((n.tenant ? ' @' + n.tenant : '') + '\n' + n.koid + (es ? '\n' + es : ''));
+  return d;
+}
 function esc(s) {
+  if (s === null || s === undefined) return '';
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function renderUsers(users) {
@@ -1437,7 +1447,7 @@ function renderUsers(users) {
   let html = '<table style="width:100%;border-collapse:collapse;font-size:11px;"><tr style="color:var(--muted);text-align:left;"><th>sub</th><th>name</th><th>roles</th><th></th></tr>';
   users.forEach(u => {
     const sub = esc(u.sub), name = esc(u.name), roles = esc((u.roles||[]).join(', '));
-    html += '<tr><td class="mono" style="padding:4px 0;">'+sub+'</td><td>'+name+'</td><td>'+roles+'</td><td><button class="btn btn-sec btn-sm" data-sub="'+sub+'" onclick="setUserRoles(this.dataset.sub)">Set roles</button></td></tr>';
+    html += '<tr><td class="mono" style="padding:4px 0;">'+esc(sub)+'</td><td>'+esc(name)+'</td><td>'+esc(roles)+'</td><td><button class="btn btn-sec btn-sm" data-sub="'+esc(sub)+'" onclick="setUserRoles(this.dataset.sub)">Set roles</button></td></tr>';
   });
   html += '</table>';
   el.innerHTML = html;
@@ -1455,14 +1465,14 @@ async function createUser() {
     document.getElementById('user-name').value = '';
     document.getElementById('users-msg').innerHTML = '<span style="color:var(--green);">User provisioned.</span>';
     loadUsers();
-  } catch(e) { document.getElementById('users-msg').innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+  } catch(e) { document.getElementById('users-msg').innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
 async function setUserRoles(sub) {
   const roles = document.getElementById('user-roles').value.split(',').map(s => s.trim()).filter(Boolean);
   try {
     await apiPut('/api/users/' + encodeURIComponent(sub) + '/roles', {roles: roles});
     loadUsers();
-  } catch(e) { document.getElementById('users-msg').innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+  } catch(e) { document.getElementById('users-msg').innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
 function downloadAuditExport() {
   location.href = '/api/audit-export' + (authToken ? '?token=' + encodeURIComponent(authToken) : '');
@@ -1473,45 +1483,45 @@ async function adminCreateBackup() {
   try {
     const data = await apiPost('/api/v1/backup');
     const d = data.data || data;
-    div.innerHTML = '<span style="color:var(--green);">Backup created: '+d.backup+' ('+d.object_count+' objects, verified: '+d.verified+')</span>';
+    div.innerHTML = '<span style="color:var(--green);">Backup created: '+esc(d.backup)+' ('+esc(d.object_count)+' objects, verified: '+esc(d.verified)+')</span>';
     setTimeout(() => loadAdminPanel(), 1500);
-  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
 async function adminVerifyBackup(name) {
   const div = document.getElementById('admin-backup-result');
-  div.innerHTML = '<span style="color:var(--muted);">Verifying '+name+'...</span>';
+  div.innerHTML = '<span style="color:var(--muted);">Verifying '+esc(name)+'...</span>';
   try {
     const data = await apiPost('/api/v1/verify-backup', {backup: name});
     const d = data.data || data;
-    div.innerHTML = '<span style="color:'+(d.verified?'var(--green)':'var(--red)')+';">Backup '+name+': '+(d.verified?'✅ Verified':'❌ Invalid')+' (seq '+d.expected_journal_seq+')</span>';
-  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+    div.innerHTML = '<span style="color:'+esc(d.verified?'var(--green)':'var(--red)')+';">Backup '+esc(name)+': '+esc(d.verified?'✅ Verified':'❌ Invalid')+' (seq '+esc(d.expected_journal_seq)+')</span>';
+  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
 async function adminRestoreBackup(name) {
   const div = document.getElementById('admin-backup-result');
   if (!confirm('Restore backup "'+name+'"? This will replace the current database.')) return;
-  div.innerHTML = '<span style="color:var(--orange);">Restoring from '+name+'... server may restart.</span>';
+  div.innerHTML = '<span style="color:var(--orange);">Restoring from '+esc(name)+'... server may restart.</span>';
   try {
     const data = await apiPost('/api/v1/restore', {backup: name});
     const d = data.data || data;
-    div.innerHTML = '<span style="color:var(--green);">Restored from '+name+'. Recovery point: seq '+(d.recovery_point?.journal_seq||'?')+'</span>';
+    div.innerHTML = '<span style="color:var(--green);">Restored from '+esc(name)+'. Recovery point: seq '+esc(d.recovery_point?.journal_seq||'?')+'</span>';
     setTimeout(() => loadAdminPanel(), 2000);
-  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
 async function loadAuditReport() {
   const div = document.getElementById('admin-audit-result');
   div.innerHTML = '<div class="loading">Loading...</div>';
   try {
     const data = await api('/api/v1/audit');
-    div.innerHTML = '<div class="pre-box">'+JSON.stringify(data, null, 2)+'</div>';
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+    div.innerHTML = '<div class="pre-box">'+esc(JSON.stringify(data, null, 2))+'</div>';
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 async function loadComplianceReport() {
   const div = document.getElementById('admin-audit-result');
   div.innerHTML = '<div class="loading">Loading...</div>';
   try {
     const data = await api('/api/v1/compliance');
-    div.innerHTML = '<div class="pre-box">'+JSON.stringify(data, null, 2)+'</div>';
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+    div.innerHTML = '<div class="pre-box">'+esc(JSON.stringify(data, null, 2))+'</div>';
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1531,22 +1541,22 @@ async function loadTimeline() {
     const vmap = {};
     (data.versions || []).forEach(v => { vmap[v.version] = v; });
     if (!events.length) { div.innerHTML = '<div class="empty-state">No versions found for this KOID.</div>'; return; }
-    let h = '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">'+events.length+' versions</div>';
+    let h = '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">'+esc(events.length)+' versions</div>';
     h += '<div class="timeline-track">';
     events.forEach((e, i) => {
       const ver = e.version !== undefined ? 'v' + e.version : '';
       const vf = (vmap[e.version] || {}).valid_from;
       h += '<div class="timeline-dot" style="margin-bottom:8px;">';
-      h += '<span class="badge badge-cyan">' + ver + '</span> ';
-      h += '<span class="badge badge-purple">' + (e.kind || '') + '</span> ';
-      h += '<span style="font-size:11px;">' + fmtTime(e.commit_ts) + '</span> ';
-      if (vf) h += '<span style="font-size:10px;color:var(--muted);">event time: ' + fmtTime(vf) + '</span> ';
-      h += '<span style="font-size:10px;color:var(--muted);">by ' + (e.actor || '?') + '</span>';
+      h += '<span class="badge badge-cyan">' + esc(ver) + '</span> ';
+      h += '<span class="badge badge-purple">' + esc(e.kind || '') + '</span> ';
+      h += '<span style="font-size:11px;">' + esc(fmtTime(e.commit_ts)) + '</span> ';
+      if (vf) h += '<span style="font-size:10px;color:var(--muted);">event time: ' + esc(fmtTime(vf)) + '</span> ';
+      h += '<span style="font-size:10px;color:var(--muted);">by ' + esc(e.actor || '?') + '</span>';
       h += '</div>';
     });
     h += '</div>';
     div.innerHTML = h;
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1567,16 +1577,16 @@ async function loadProvenance() {
     let h = '<div class="provenance-chain">';
     events.forEach((e, i) => {
       h += '<div class="provenance-node" style="border-left:2px solid var(--cyan);padding-left:12px;margin-bottom:12px;">';
-      h += '<div style="font-size:12px;font-weight:600;">#' + (i + 1) + ' — v' + (e.version || '?') + ' <span class="badge badge-purple">' + (e.kind || '') + '</span></div>';
-      h += '<div style="font-size:11px;color:var(--muted);">' + fmtTime(e.commit_ts) + '</div>';
-      h += '<div style="font-size:10px;color:var(--muted);">Actor: ' + (e.actor || '?') + '</div>';
-      if (e.note) h += '<div style="font-size:10px;color:var(--muted);">Note: ' + e.note + '</div>';
-      if (e.audit_hash) h += '<div style="font-size:10px;font-family:var(--font-mono);color:var(--green);">SHA-256: ' + e.audit_hash.substring(0, 16) + '...</div>';
+      h += '<div style="font-size:12px;font-weight:600;">#' + esc(i + 1) + ' — v' + esc(e.version || '?') + ' <span class="badge badge-purple">' + esc(e.kind || '') + '</span></div>';
+      h += '<div style="font-size:11px;color:var(--muted);">' + esc(fmtTime(e.commit_ts)) + '</div>';
+      h += '<div style="font-size:10px;color:var(--muted);">Actor: ' + esc(e.actor || '?') + '</div>';
+      if (e.note) h += '<div style="font-size:10px;color:var(--muted);">Note: ' + esc(e.note) + '</div>';
+      if (e.audit_hash) h += '<div style="font-size:10px;font-family:var(--font-mono);color:var(--green);">SHA-256: ' + esc(e.audit_hash.substring(0, 16)) + '...</div>';
       h += '</div>';
     });
     h += '</div>';
     div.innerHTML = h;
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 async function verifyProvenance() {
@@ -1591,14 +1601,15 @@ async function verifyProvenance() {
     // head_audit_hash is a byte array on the wire — hex-join it.
     const headHex = (data.head_audit_hash || []).map(b => b.toString(16).padStart(2,'0')).join('');
     const ok = data.chain_valid;
-    div.innerHTML = '<div class="card" style="border-left:3px solid ' + (ok ? 'var(--green)' : 'var(--red)') + ';padding:12px;">' +
-      '<div style="font-size:14px;font-weight:600;color:' + (ok ? 'var(--green)' : 'var(--red)') + ';">' + (ok ? '✅ Audit Chain Verified' : '❌ Audit Chain Broken') + '</div>' +
-      '<div style="font-size:11px;color:var(--muted);margin-top:4px;">Chain valid: ' + (ok ? 'yes' : 'no') + '</div>' +
-      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Claim: ' + (data.claim || '?') + '</div>' +
-      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Head: ' + headHex.substring(0, 32) + '...</div>' +
-      '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Events: ' + (data.events||0) + ' in chain</div>' +
+    const col = ok ? 'var(--green)' : 'var(--red)';
+    div.innerHTML = '<div class="card" style="border-left:3px solid ' + esc(col) + ';padding:12px;">' +
+      '<div style="font-size:14px;font-weight:600;color:' + esc(col) + ';">' + esc(ok ? '✅ Audit Chain Verified' : '❌ Audit Chain Broken') + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);margin-top:4px;">Chain valid: ' + esc(ok ? 'yes' : 'no') + '</div>' +
+      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Claim: ' + esc(data.claim || '?') + '</div>' +
+      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Head: ' + esc(headHex.substring(0, 32)) + '...</div>' +
+      '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Events: ' + esc(data.events||0) + ' in chain</div>' +
       '</div>';
-  } catch(e) { div.innerHTML = '<div class="error-text">Chain verification failed: '+e.message+'</div>'; }
+  } catch(e) { div.innerHTML = '<div class="error-text">Chain verification failed: '+esc(e.message)+'</div>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1612,7 +1623,7 @@ async function loadDebuggerPrograms() {
     const programs = data.programs || [];
     sel.innerHTML = '<option value="">Select a program...</option>';
     programs.forEach(p => {
-      sel.innerHTML += '<option value="'+p.koid+'">'+p.name+' (v'+p.version+')</option>';
+      sel.innerHTML += '<option value="'+esc(p.koid)+'">'+esc(p.name)+' (v'+esc(p.version)+')</option>';
     });
   } catch(e) { sel.innerHTML = '<option value="">Error loading programs</option>'; }
 }
@@ -1628,16 +1639,16 @@ async function loadProgramDebugger() {
     const programs = data.programs || [];
     const prog = programs.find(p => p.koid === koid);
     if (!prog) { div.innerHTML = '<div class="error-text">Program not found.</div>'; return; }
-    let h = '<div class="card"><h3>'+prog.name+'</h3>';
-    h += '<div class="kv-row"><span class="kv-key">KOID</span><span class="kv-val mono">'+prog.koid+'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Language</span><span class="kv-val">'+ (prog.language||'aikoql') +'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Version</span><span class="kv-val">'+ (prog.version||'?') +'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Lifecycle</span><span class="kv-val">'+ (prog.lifecycle||'?') +'</span></div>';
+    let h = '<div class="card"><h3>'+esc(prog.name)+'</h3>';
+    h += '<div class="kv-row"><span class="kv-key">KOID</span><span class="kv-val mono">'+esc(prog.koid)+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Language</span><span class="kv-val">'+ esc(prog.language||'aikoql') +'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Version</span><span class="kv-val">'+ esc(prog.version||'?') +'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Lifecycle</span><span class="kv-val">'+ esc(prog.lifecycle||'?') +'</span></div>';
     h += '</div>';
     // Show source.
     if (prog.body) {
       h += '<div class="card" style="margin-top:8px;"><h3>Source Code</h3>';
-      h += '<pre style="background:var(--bg);padding:10px;border-radius:5px;font-size:12px;font-family:var(--font-mono);overflow-x:auto;">'+prog.body+'</pre>';
+      h += '<pre style="background:var(--bg);padding:10px;border-radius:5px;font-size:12px;font-family:var(--font-mono);overflow-x:auto;">'+esc(prog.body)+'</pre>';
       h += '</div>';
     }
     // Execution stats.
@@ -1645,18 +1656,18 @@ async function loadProgramDebugger() {
     try {
       const stats = await api('/api/v1/execution-stats');
       const s = stats.data || stats;
-      h += '<div class="kv-row"><span class="kv-key">Programs Executed</span><span class="kv-val">'+(s.programs_executed||0)+'</span></div>';
-      h += '<div class="kv-row"><span class="kv-key">Total Rows</span><span class="kv-val">'+(s.total_rows_returned||0)+'</span></div>';
-      h += '<div class="kv-row"><span class="kv-key">Cache Hit %</span><span class="kv-val">'+(s.cache_hit_pct||0).toFixed(1)+'%</span></div>';
+      h += '<div class="kv-row"><span class="kv-key">Programs Executed</span><span class="kv-val">'+esc(s.programs_executed||0)+'</span></div>';
+      h += '<div class="kv-row"><span class="kv-key">Total Rows</span><span class="kv-val">'+esc(s.total_rows_returned||0)+'</span></div>';
+      h += '<div class="kv-row"><span class="kv-key">Cache Hit %</span><span class="kv-val">'+esc((s.cache_hit_pct||0).toFixed(1))+'%</span></div>';
     } catch(e) { h += '<div style="color:var(--muted);font-size:11px;">Stats unavailable</div>'; }
     h += '</div>';
     // Show dependencies.
     h += '<div class="card" style="margin-top:8px;"><h3>Dependencies</h3>';
-    h += '<button class="btn btn-sec btn-sm" onclick="loadProgramDeps(\''+prog.koid+'\')">Show Dependency Graph</button>';
+    h += '<button class="btn btn-sec btn-sm" onclick="loadProgramDeps(\''+esc(prog.koid)+'\')">Show Dependency Graph</button>';
     h += '<div id="debugger-deps" style="margin-top:8px;"></div>';
     h += '</div>';
     div.innerHTML = h;
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 async function loadProgramDeps(koid) {
@@ -1665,8 +1676,8 @@ async function loadProgramDeps(koid) {
   try {
     const data = await api('/api/v1/trace/' + encodeURIComponent(koid));
     const versions = (data.data||data).versions || (data.data||data).events || [];
-    div.innerHTML = '<div style="font-size:11px;color:var(--muted);">'+versions.length+' versions in trace chain. Program DAG is stored as DEPENDS_ON relationships.</div>';
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+    div.innerHTML = '<div style="font-size:11px;color:var(--muted);">'+esc(versions.length)+' versions in trace chain. Program DAG is stored as DEPENDS_ON relationships.</div>';
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1682,21 +1693,21 @@ async function loadBenchmarks() {
     let h = '<table><thead><tr><th>Name</th><th>Target Query</th><th>Iterations</th><th>Lifecycle</th><th>Actions</th></tr></thead><tbody>';
     benchmarks.forEach(b => {
       h += '<tr>';
-      h += '<td><strong>'+b.name+'</strong></td>';
-      h += '<td style="font-family:var(--font-mono);font-size:11px;">'+(b.target_query||'?')+'</td>';
-      h += '<td>'+(b.iterations||0)+'</td>';
-      h += '<td><span class="badge badge-cyan">'+b.lifecycle+'</span></td>';
-      h += '<td><button class="btn btn-sec btn-sm" onclick="runBenchmark(\''+b.koid+'\')">▶ Run</button></td>';
+      h += '<td><strong>'+esc(b.name)+'</strong></td>';
+      h += '<td style="font-family:var(--font-mono);font-size:11px;">'+esc(b.target_query||'?')+'</td>';
+      h += '<td>'+esc(b.iterations||0)+'</td>';
+      h += '<td><span class="badge badge-cyan">'+esc(b.lifecycle)+'</span></td>';
+      h += '<td><button class="btn btn-sec btn-sm" onclick="runBenchmark(\''+esc(b.koid)+'\')">▶ Run</button></td>';
       h += '</tr>';
     });
     h += '</tbody></table>';
     div.innerHTML = h;
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 async function runBenchmark(koid) {
   const div = document.getElementById('benchmarks-result');
-  div.innerHTML = '<div class="loading">Running benchmark '+koid+'...</div>';
+  div.innerHTML = '<div class="loading">Running benchmark '+esc(koid)+'...</div>';
   try {
     // Deploy a program from the benchmark's target query for execution.
     const data = await api('/api/v1/list-benchmarks');
@@ -1718,15 +1729,15 @@ async function runBenchmark(koid) {
     const opsPerSec = (iterations / (elapsed / 1000)).toFixed(1);
 
     let h = '<div class="card" style="border-left:3px solid var(--cyan);">';
-    h += '<h3>Benchmark: ' + name + '</h3>';
-    h += '<div class="kv-row"><span class="kv-key">Iterations</span><span class="kv-val">' + iterations + '</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Total Time</span><span class="kv-val">' + elapsed + 'ms</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Throughput</span><span class="kv-val">' + opsPerSec + ' ops/s</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Avg Latency</span><span class="kv-val">' + (elapsed / iterations).toFixed(2) + 'ms</span></div>';
+    h += '<h3>Benchmark: ' + esc(name) + '</h3>';
+    h += '<div class="kv-row"><span class="kv-key">Iterations</span><span class="kv-val">' + esc(iterations) + '</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Total Time</span><span class="kv-val">' + esc(elapsed) + 'ms</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Throughput</span><span class="kv-val">' + esc(opsPerSec) + ' ops/s</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Avg Latency</span><span class="kv-val">' + esc((elapsed / iterations).toFixed(2)) + 'ms</span></div>';
     h += '</div>';
     h += '<button class="btn btn-sec btn-sm" style="margin-top:8px;" onclick="loadBenchmarks()">← Back to Benchmarks</button>';
     div.innerHTML = h;
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 function showBenchmarkDeployForm() {
@@ -1748,12 +1759,12 @@ async function deployBenchmark() {
     const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body});
     const data = await res.json();
     if (data.koid) {
-      msg.innerHTML = '<span style="color:var(--green);">Deployed: '+data.koid+'</span>';
+      msg.innerHTML = '<span style="color:var(--green);">Deployed: '+esc(data.koid)+'</span>';
       document.getElementById('bm-name').value = '';
       document.getElementById('bm-query').value = '';
       setTimeout(() => loadBenchmarks(), 500);
-    } else { msg.innerHTML = '<span style="color:var(--red);">'+ (data.error||'Failed') +'</span>'; }
-  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+    } else { msg.innerHTML = '<span style="color:var(--red);">'+ esc(data.error||'Failed') +'</span>'; }
+  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1771,22 +1782,22 @@ async function profileRun() {
     const rows = data.rows || data.data?.rows || [];
     let h = '<div class="card" style="border-left:3px solid var(--accent);">';
     h += '<h4>Results</h4>';
-    h += '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">' + rows.length + ' rows in ' + (t1-t0).toFixed(1) + 'ms</div>';
+    h += '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">' + esc(rows.length) + ' rows in ' + esc((t1-t0).toFixed(1)) + 'ms</div>';
     if (rows.length > 0) {
       h += '<table><thead><tr>';
-      Object.keys(rows[0]).forEach(k => h += '<th>'+k+'</th>');
+      Object.keys(rows[0]).forEach(k => h += '<th>'+esc(k)+'</th>');
       h += '</tr></thead><tbody>';
       rows.slice(0,50).forEach(r => {
         h += '<tr>';
-        Object.values(r).forEach(v => h += '<td style="font-size:10px;font-family:var(--font-mono);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(v===null?'∅':String(v).substring(0,80))+'</td>');
+        Object.values(r).forEach(v => h += '<td style="font-size:10px;font-family:var(--font-mono);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(v===null?'∅':String(v).substring(0,80))+'</td>');
         h += '</tr>';
       });
       h += '</tbody></table>';
-      if (rows.length > 50) h += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Showing 50 of '+rows.length+' rows.</div>';
+      if (rows.length > 50) h += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Showing 50 of '+esc(rows.length)+' rows.</div>';
     }
     h += '</div>';
     div.innerHTML = h;
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 async function profileExplain() {
   const koid = document.getElementById('profiler-koid-input').value.trim();
@@ -1796,19 +1807,19 @@ async function profileExplain() {
   try {
     const data = await api('/api/v1/explain/' + encodeURIComponent(koid));
     const d = data.data || data;
-    let h = '<div class="card"><h4>EXPLAIN — '+d.origin+'</h4>';
-    h += '<div class="kv-row"><span class="kv-key">KOID</span><span class="kv-val mono">'+d.koid+'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Version</span><span class="kv-val">'+d.version+'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Source</span><span class="kv-val mono" style="font-size:10px;">'+(d.source||'').substring(0,200)+'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Confidence</span><span class="kv-val">'+d.confidence+'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Verified</span><span class="kv-val">'+d.verified+'</span></div>';
+    let h = '<div class="card"><h4>EXPLAIN — '+esc(d.origin)+'</h4>';
+    h += '<div class="kv-row"><span class="kv-key">KOID</span><span class="kv-val mono">'+esc(d.koid)+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Version</span><span class="kv-val">'+esc(d.version)+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Source</span><span class="kv-val mono" style="font-size:10px;">'+esc((d.source||'').substring(0,200))+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Confidence</span><span class="kv-val">'+esc(d.confidence)+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Verified</span><span class="kv-val">'+esc(d.verified)+'</span></div>';
     if (d.evidence && d.evidence.length > 0) {
-      h += '<div style="margin-top:8px;font-size:11px;font-weight:600;">Evidence ('+d.evidence.length+'):</div>';
-      d.evidence.forEach(e => h += '<div class="kv-row"><span class="kv-key">'+e.rel_type+'</span><span class="kv-val mono">'+e.target+'</span></div>');
+      h += '<div style="margin-top:8px;font-size:11px;font-weight:600;">Evidence ('+esc(d.evidence.length)+'):</div>';
+      d.evidence.forEach(e => h += '<div class="kv-row"><span class="kv-key">'+esc(e.rel_type)+'</span><span class="kv-val mono">'+esc(e.target)+'</span></div>');
     }
     h += '</div>';
     div.innerHTML = h;
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1823,15 +1834,15 @@ async function loadProviders() {
       div.innerHTML = '<div class="empty-state">No connectors deployed. Use the form below to add one.</div>';
       return;
     }
-    let h = '<div class="card"><h4>Connectors ('+connectors.length+')</h4><table><thead><tr><th>KOID</th><th>Name</th><th>Plugin</th><th>Status</th></tr></thead><tbody>';
+    let h = '<div class="card"><h4>Connectors ('+esc(connectors.length)+')</h4><table><thead><tr><th>KOID</th><th>Name</th><th>Plugin</th><th>Status</th></tr></thead><tbody>';
     connectors.forEach(c => {
       const lc = c.lifecycle || '?';
       const badge = lc === 'active' ? 'badge-green' : lc === 'draft' ? 'badge-cyan' : 'badge-muted';
-      h += '<tr><td class="mono" style="font-size:10px;">'+c.koid.substring(0,16)+'...</td><td>'+c.name+'</td><td>'+ (c.plugin||'?') +'</td><td><span class="badge '+badge+'">'+lc+'</span></td></tr>';
+      h += '<tr><td class="mono" style="font-size:10px;">'+esc(c.koid.substring(0,16))+'...</td><td>'+esc(c.name)+'</td><td>'+ esc(c.plugin||'?') +'</td><td><span class="badge '+esc(badge)+'">'+esc(lc)+'</span></td></tr>';
     });
     h += '</tbody></table></div>';
     div.innerHTML = h;
-  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { div.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 async function deployConnector() {
   const name = document.getElementById('connector-name').value.trim();
@@ -1842,11 +1853,11 @@ async function deployConnector() {
   try {
     const data = await apiPost('/api/v1/deploy-connector', {name, plugin, config:{}, schedule:'manual'});
     const d = data.data || data;
-    msg.innerHTML = '<span style="color:var(--green);">Deployed: '+d.koid+'</span>';
+    msg.innerHTML = '<span style="color:var(--green);">Deployed: '+esc(d.koid)+'</span>';
     document.getElementById('connector-name').value = '';
     document.getElementById('connector-plugin').value = '';
     setTimeout(() => loadProviders(), 500);
-  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -1861,12 +1872,12 @@ async function loadDocuments() {
     let html = '<table class="data-table"><thead><tr><th>KOID</th><th>Filename</th><th>Type</th><th>Size</th><th>Status</th><th>SHA-256</th><th>Actions</th></tr></thead><tbody>';
     for (const doc of docs) {
       const sz = doc.size_bytes < 1024 ? doc.size_bytes+' B' : doc.size_bytes < 1048576 ? (doc.size_bytes/1024).toFixed(1)+' KB' : (doc.size_bytes/1048576).toFixed(1)+' MB';
-      const badge = doc.status === 'ingested' ? '<span class="badge badge-ok">ingested</span>' : '<span class="badge">'+doc.status+'</span>';
-      html += '<tr><td class="mono"><a href="#" onclick="switchPanel(\'inspector\');document.getElementById(\'inspector-search-input\').value=\''+doc.koid+'\';inspectorSearch();return false;" style="color:var(--accent);">'+doc.koid.substring(0,16)+'...</a></td><td>'+doc.filename+'</td><td>'+doc.mime_type+'</td><td>'+sz+'</td><td>'+badge+'</td><td class="mono" style="font-size:9px;">'+doc.sha256.substring(0,12)+'...</td><td><button class="btn btn-pri btn-sm" onclick="compileDocument(\''+doc.koid+'\')">Compile</button></td></tr>';
+      const badge = esc(doc.status === 'ingested' ? '<span class="badge badge-ok">ingested</span>' : '<span class="badge">')+esc(doc.status)+'</span>';
+      html += '<tr><td class="mono"><a href="#" onclick="switchPanel(\'inspector\');document.getElementById(\'inspector-search-input\').value=\''+esc(doc.koid)+'\';inspectorSearch();return false;" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td>'+esc(badge)+'</td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" onclick="compileDocument(\''+esc(doc.koid)+'\')">Compile</button></td></tr>';
     }
     html += '</tbody></table>';
     el.innerHTML = html;
-  } catch(e) { el.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+  } catch(e) { el.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
 async function ingestDocument() {
@@ -1889,10 +1900,10 @@ async function ingestDocument() {
     const data = await apiPost('/api/v1/documents', {filename: file.name, content_base64: base64, mime_type: file.type || 'application/octet-stream'});
     const d = data.data || data;
     const sz = d.size_bytes < 1024 ? d.size_bytes+' B' : (d.size_bytes/1024).toFixed(1)+' KB';
-    msg.innerHTML = '<span style="color:var(--green);">✓ Ingested: '+d.koid+' ('+d.status+', '+sz+', SHA-256: '+d.sha256.substring(0,16)+'...)</span>';
+    msg.innerHTML = '<span style="color:var(--green);">✓ Ingested: '+esc(d.koid)+' ('+esc(d.status)+', '+esc(sz)+', SHA-256: '+esc(d.sha256.substring(0,16))+'...)</span>';
     fileInput.value = '';
     setTimeout(() => loadDocuments(), 500);
-  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
 
 async function compileDocument(koid) {
@@ -1917,61 +1928,61 @@ async function compileDocument(koid) {
       if (kind === 'UpdateKO') return '<span class="badge badge-cyan">Update</span>';
       if (kind === 'Skip') return '<span class="badge">Skip</span>';
       if (kind === 'NeedsReview') return '<span class="badge badge-orange">Review</span>';
-      return '<span class="badge">'+kind+'</span>';
+      return '<span class="badge">'+esc(kind)+'</span>';
     };
 
     let html = '<div class="card" style="margin-bottom:12px;"><h4>🔬 Compilation Results</h4>';
 
     // ── Stats ──
-    html += '<details open><summary><b>Phase Stats</b> ('+r.stats.phases.length+' phases, '+r.stats.total_us+' µs total)</summary>';
+    html += '<details open><summary><b>Phase Stats</b> ('+esc(r.stats.phases.length)+' phases, '+esc(r.stats.total_us)+' µs total)</summary>';
     html += '<table class="data-table" style="margin-top:8px;"><thead><tr><th>Phase</th><th>Duration (µs)</th><th>Items</th></tr></thead><tbody>';
     for (const p of r.stats.phases) {
-      html += '<tr><td>'+p.phase+'</td><td>'+p.duration_us+'</td><td>'+p.item_count+'</td></tr>';
+      html += '<tr><td>'+esc(p.phase)+'</td><td>'+esc(p.duration_us)+'</td><td>'+esc(p.item_count)+'</td></tr>';
     }
     html += '</tbody></table></details>';
 
     // ── Knowledge IR ──
-    html += '<details style="margin-top:8px;"><summary><b>Knowledge IR</b> ('+r.ir.entities.length+' entities, '+r.ir.facts.length+' facts, '+r.ir.temporal.length+' temporal)</summary>';
+    html += '<details style="margin-top:8px;"><summary><b>Knowledge IR</b> ('+esc(r.ir.entities.length)+' entities, '+esc(r.ir.facts.length)+' facts, '+esc(r.ir.temporal.length)+' temporal)</summary>';
     if (r.ir.entities.length) {
       html += '<table class="data-table" style="margin-top:8px;"><thead><tr><th>Entity</th><th>Class</th><th>Properties</th><th>Confidence</th></tr></thead><tbody>';
       for (const e of r.ir.entities) {
-        html += '<tr><td><b>'+e.name+'</b></td><td>'+(e.type_hint||'?')+'</td><td>'+JSON.stringify(e.mentions||[]).substring(0,120)+'</td><td>'+(e.confidence||0).toFixed(2)+'</td></tr>';
+        html += '<tr><td><b>'+esc(e.name)+'</b></td><td>'+esc(e.type_hint||'?')+'</td><td>'+esc(JSON.stringify(e.mentions||[]).substring(0,120))+'</td><td>'+esc((e.confidence||0).toFixed(2))+'</td></tr>';
       }
       html += '</tbody></table>';
     }
     if (r.ir.facts.length) {
-      html += '<div style="margin-top:6px;font-size:11px;color:var(--muted);">Facts: '+r.ir.facts.map(f=>f.statement).join('; ')+'</div>';
+      html += '<div style="margin-top:6px;font-size:11px;color:var(--muted);">Facts: '+esc(r.ir.facts.map(f=>f.statement).join('; '))+'</div>';
     }
     html += '</details>';
 
     // ── Ontology ──
-    html += '<details style="margin-top:8px;"><summary><b>Ontology Proposals</b> ('+r.ontology.classes.length+' classes, '+r.ontology.properties.length+' properties, '+r.ontology.relationships.length+' relationships)</summary>';
+    html += '<details style="margin-top:8px;"><summary><b>Ontology Proposals</b> ('+esc(r.ontology.classes.length)+' classes, '+esc(r.ontology.properties.length)+' properties, '+esc(r.ontology.relationships.length)+' relationships)</summary>';
     if (r.ontology.classes.length) {
-      html += '<div style="margin-top:6px;"><b>Classes:</b> '+r.ontology.classes.map(c=>c.name+' (parent: '+(c.parent||'none')+')').join(', ')+'</div>';
+      html += '<div style="margin-top:6px;"><b>Classes:</b> '+esc(r.ontology.classes.map(c=>c.name+' (parent: '+(c.parent||'none')+')').join(', '))+'</div>';
     }
     if (r.ontology.properties.length) {
-      html += '<div style="margin-top:4px;"><b>Properties:</b> '+r.ontology.properties.map(p=>p.name+' ('+p.value_type+')').join(', ')+'</div>';
+      html += '<div style="margin-top:4px;"><b>Properties:</b> '+esc(r.ontology.properties.map(p=>p.name+' ('+p.value_type+')').join(', '))+'</div>';
     }
     if (r.ontology.relationships.length) {
-      html += '<div style="margin-top:4px;"><b>Relationships:</b> '+r.ontology.relationships.map(r=>r.name+' ('+(r.domain||'?')+' → '+(r.range||'?')+')').join(', ')+'</div>';
+      html += '<div style="margin-top:4px;"><b>Relationships:</b> '+esc(r.ontology.relationships.map(r=>r.name+' ('+(r.domain||'?')+' → '+(r.range||'?')+')').join(', '))+'</div>';
     }
     html += '</details>';
 
     // ── Resolution ──
-    html += '<details style="margin-top:8px;"><summary><b>Entity Resolution</b> ('+r.resolution.stats.total_entities+' total: '+r.resolution.stats.matched_count+' matched, '+r.resolution.stats.ambiguous_count+' ambiguous, '+r.resolution.stats.unmatched_count+' unmatched)</summary>';
+    html += '<details style="margin-top:8px;"><summary><b>Entity Resolution</b> ('+esc(r.resolution.stats.total_entities)+' total: '+esc(r.resolution.stats.matched_count)+' matched, '+esc(r.resolution.stats.ambiguous_count)+' ambiguous, '+esc(r.resolution.stats.unmatched_count)+' unmatched)</summary>';
     if (r.resolution.matched.length) {
-      html += '<div style="margin-top:6px;font-size:11px;color:var(--green);">✓ Matched: '+r.resolution.matched.map(m=>m.entity_name+' → '+m.matched_koid).join(', ')+'</div>';
+      html += '<div style="margin-top:6px;font-size:11px;color:var(--green);">✓ Matched: '+esc(r.resolution.matched.map(m=>m.entity_name+' → '+m.matched_koid).join(', '))+'</div>';
     }
     if (r.resolution.ambiguous.length) {
-      html += '<div style="margin-top:4px;font-size:11px;color:var(--orange);">⚠ Ambiguous: '+r.resolution.ambiguous.map(m=>m.entity_name).join(', ')+'</div>';
+      html += '<div style="margin-top:4px;font-size:11px;color:var(--orange);">⚠ Ambiguous: '+esc(r.resolution.ambiguous.map(m=>m.entity_name).join(', '))+'</div>';
     }
     if (r.resolution.unmatched.length) {
-      html += '<div style="margin-top:4px;font-size:11px;color:var(--red);">✗ Unmatched: '+r.resolution.unmatched.map(m=>m.entity_name).join(', ')+'</div>';
+      html += '<div style="margin-top:4px;font-size:11px;color:var(--red);">✗ Unmatched: '+esc(r.resolution.unmatched.map(m=>m.entity_name).join(', '))+'</div>';
     }
     html += '</details>';
 
     // ── Commit Plan ──
-    html += '<details style="margin-top:8px;"><summary><b>Commit Plan</b> ('+r.commit_plan.stats.total_actions+' actions: '+r.commit_plan.stats.creates+' create, '+r.commit_plan.stats.updates+' update, '+r.commit_plan.stats.skips+' skip, '+r.commit_plan.stats.needs_review+' review, '+r.commit_plan.stats.total_conflicts+' conflicts)</summary>';
+    html += '<details style="margin-top:8px;"><summary><b>Commit Plan</b> ('+esc(r.commit_plan.stats.total_actions)+' actions: '+esc(r.commit_plan.stats.creates)+' create, '+esc(r.commit_plan.stats.updates)+' update, '+esc(r.commit_plan.stats.skips)+' skip, '+esc(r.commit_plan.stats.needs_review)+' review, '+esc(r.commit_plan.stats.total_conflicts)+' conflicts)</summary>';
     if (r.commit_plan.actions.length) {
       html += '<table class="data-table" style="margin-top:8px;"><thead><tr><th>Kind</th><th>Entity</th><th>Details</th></tr></thead><tbody>';
       for (const a of r.commit_plan.actions) {
@@ -1982,22 +1993,22 @@ async function compileDocument(koid) {
         else if (k === 'UpdateKO') detail = 'koid: '+(p.koid||'?')+', conflicts: '+(p.conflicts||[]).length;
         else if (k === 'Skip') detail = p.reason||'';
         else if (k === 'NeedsReview') detail = (p.reason||'')+', conflicts: '+(p.conflicts||[]).length;
-        html += '<tr><td>'+badgeFor(k)+'</td><td><b>'+p.entity_name+'</b></td><td style="font-size:10px;">'+detail+'</td></tr>';
+        html += '<tr><td>'+esc(badgeFor(k))+'</td><td><b>'+esc(p.entity_name)+'</b></td><td style="font-size:10px;">'+detail+'</td></tr>';
       }
       html += '</tbody></table>';
     }
     html += '</details>';
 
     // ── Evidence Trail ──
-    html += '<details style="margin-top:8px;"><summary><b>Evidence Trail</b> ('+r.evidence_trail.nodes.length+' nodes)</summary>';
+    html += '<details style="margin-top:8px;"><summary><b>Evidence Trail</b> ('+esc(r.evidence_trail.nodes.length)+' nodes)</summary>';
     if (r.evidence_trail.nodes.length) {
       for (const n of r.evidence_trail.nodes) {
-        html += '<div style="margin-top:6px;padding:8px;background:var(--bg);border-radius:5px;border-left:3px solid var(--accent);"><span class="badge badge-purple">'+n.phase+'</span> <span style="font-size:11px;">'+n.step+'</span>';
+        html += '<div style="margin-top:6px;padding:8px;background:var(--bg);border-radius:5px;border-left:3px solid var(--accent);"><span class="badge badge-purple">'+esc(n.phase)+'</span> <span style="font-size:11px;">'+esc(n.step)+'</span>';
         if (n.entities && n.entities.length) {
-          html += '<div style="margin-top:4px;font-size:10px;color:var(--muted);">Entities: '+n.entities.join(', ')+'</div>';
+          html += '<div style="margin-top:4px;font-size:10px;color:var(--muted);">Entities: '+esc(n.entities.join(', '))+'</div>';
         }
         if (n.source && n.source.length) {
-          html += '<div style="margin-top:2px;font-size:10px;color:var(--muted);">Evidence items: '+n.source.length+'</div>';
+          html += '<div style="margin-top:2px;font-size:10px;color:var(--muted);">Evidence items: '+esc(n.source.length)+'</div>';
         }
         html += '</div>';
       }
@@ -2005,13 +2016,13 @@ async function compileDocument(koid) {
     html += '</details>';
 
     // ── Chunks ──
-    html += '<details style="margin-top:8px;"><summary><b>Embedded Chunks</b> ('+r.embedded_chunks.length+' chunks)</summary>';
+    html += '<details style="margin-top:8px;"><summary><b>Embedded Chunks</b> ('+esc(r.embedded_chunks.length)+' chunks)</summary>';
     if (r.embedded_chunks.length) {
       html += '<table class="data-table" style="margin-top:8px;"><thead><tr><th>#</th><th>Structure</th><th>Heading Path</th><th>Preview</th><th>Embedding Dims</th></tr></thead><tbody>';
       for (const ec of r.embedded_chunks) {
         const ch = ec.chunk || ec;
         const hp = (ch.structure && ch.structure.heading_path || []).join(' › ');
-        html += '<tr><td>'+(ch.position ? ch.position.chunk_index : 0)+'</td><td>'+(ch.structure ? ch.structure.source_type : '?')+'</td><td style="font-size:10px;">'+hp+'</td><td style="font-size:10px;">'+(ch.text||'').substring(0,80)+'...</td><td>'+(ec.embedding||[]).length+'</td></tr>';
+        html += '<tr><td>'+esc(ch.position ? ch.position.chunk_index : 0)+'</td><td>'+esc(ch.structure ? ch.structure.source_type : '?')+'</td><td style="font-size:10px;">'+hp+'</td><td style="font-size:10px;">'+esc((ch.text||'').substring(0,80))+'...</td><td>'+esc((ec.embedding||[]).length)+'</td></tr>';
       }
       html += '</tbody></table>';
     }
@@ -2020,7 +2031,7 @@ async function compileDocument(koid) {
     html += '</div>'; // card
     el.innerHTML = html;
     el.scrollIntoView({behavior:'smooth'});
-  } catch(e) { el.innerHTML = '<div class="error-text">Compile failed: '+e.message+'</div>'; }
+  } catch(e) { el.innerHTML = '<div class="error-text">Compile failed: '+esc(e.message)+'</div>'; }
 }
 
 // ═══════════════════════════════════════════
@@ -2116,97 +2127,288 @@ mod tests {
     // M1 (Studio hardening): every value the Studio puts into markup comes from
     // stored data or an API reply — KO fields, type/tenant names, ontology
     // text, error messages (a compiler error echoes the query) — and must go
-    // through esc(). These are source-level lints in the style of the other
-    // marker tests here: the JS lives in a Rust string, so the string is the
-    // thing to check.
+    // through esc(). The JS lives in a Rust string, so the string is what these
+    // source-level lints check, in the style of the other marker tests here.
+    //
+    // The lint is exhaustive, not a deny-list: in any expression that
+    // concatenates a markup literal (one containing '<' or '>'), every other
+    // operand must be esc(...), a variable that already holds built markup
+    // (MARKUP_VARS), or a `.map(cb).join(..)` whose callback itself builds
+    // markup (checked recursively). Numbers are wrapped too — harmless.
 
-    /// Operands that must never be concatenated into markup bare. Extend this
-    /// list when a new panel renders a new untrusted field.
-    const UNTRUSTED: &[&str] = &[
-        "e.message",
-        "data.error",
-        "err.error",
-        "data.query",
-        "node.tenant",
-        "node.koid",
-        "node.type_name",
-        "node.label",
-        "node.lifecycle.state",
-        "node.lifecycle.origin",
-        "node.security.owner",
-        "node.security.classification",
-        "node.semantic.summary",
-        "node.semantic.embedding_model",
-        "p.key",
-        "r.direction",
-        "r.type",
-        "last.from",
-        "last.to",
-        "last.reason",
-        "last.by",
-        "typeName",
-        "tenant",
-        "n.koid",
-        "n.type_name",
-        "n.tenant",
-        "n.label",
-        "cm.name",
-        "cm.parent",
-        "cm.description",
-        "r.name",
-        "r.domain",
-        "r.range",
-        "m.source",
-        "m.physical_type",
-        "props.namespace",
-        "props.version",
-        "b.name",
-        "op",
-        "q",
-        "t",
-        "k",
-        "p",
-        "r",
-        "es",
-        "st",
-        "ver",
-    ];
+    /// Variables that hold markup built (and escaped) by the Studio itself.
+    const MARKUP_VARS: &[&str] = &["h", "html", "detail", "hp", "rows", "lh"];
 
-    /// `+TOKEN` / `+(TOKEN||…)` operand uses in the whitespace-stripped JS.
-    fn raw_uses(src: &str, token: &str) -> usize {
-        let is_ident = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '(' | '[');
-        let mut n = 0;
-        for lead in ["+", "+("] {
-            let pat = format!("{lead}{token}");
-            let mut from = 0;
-            while let Some(i) = src[from..].find(&pat) {
-                let end = from + i + pat.len();
-                let next = src[end..].chars().next();
-                let boundary = next.is_none_or(|c| !is_ident(c));
-                // `+(t||` is an operand use; `+(t)` / `+(t+1)` are arithmetic.
-                let ok_paren = lead == "+" || src[end..].starts_with("||");
-                if boundary && ok_paren {
-                    n += 1;
+    /// Split `s` at `+` operators that are outside quotes and brackets.
+    fn plus_operands(s: &str) -> Vec<String> {
+        let (mut ops, mut cur) = (Vec::new(), String::new());
+        let (mut quote, mut escaped, mut depth) = (None::<char>, false, 0i32);
+        let cs: Vec<char> = s.chars().collect();
+        for (i, &c) in cs.iter().enumerate() {
+            if let Some(q) = quote {
+                cur.push(c);
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == q {
+                    quote = None;
                 }
-                from = end;
+                continue;
+            }
+            match c {
+                '\'' | '"' | '`' => {
+                    quote = Some(c);
+                    cur.push(c);
+                }
+                '(' | '[' | '{' => {
+                    depth += 1;
+                    cur.push(c);
+                }
+                ')' | ']' | '}' => {
+                    depth -= 1;
+                    cur.push(c);
+                }
+                '+' if depth <= 0 && !matches!(cs.get(i + 1), Some('+' | '=')) => {
+                    ops.push(std::mem::take(&mut cur));
+                }
+                _ => cur.push(c),
             }
         }
-        n
+        ops.push(cur);
+        ops
+    }
+
+    /// Split at `;`, `{`, `}` and `,` outside quotes and `()`/`[]` — the
+    /// statement and argument boundaries.
+    fn statements(s: &str) -> Vec<String> {
+        let (mut out, mut cur) = (Vec::new(), String::new());
+        let (mut quote, mut escaped, mut depth) = (None::<char>, false, 0i32);
+        for c in s.chars() {
+            if let Some(q) = quote {
+                cur.push(c);
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == q {
+                    quote = None;
+                }
+                continue;
+            }
+            match c {
+                '\'' | '"' | '`' => {
+                    quote = Some(c);
+                    cur.push(c);
+                }
+                '(' | '[' => {
+                    depth += 1;
+                    cur.push(c);
+                }
+                ')' | ']' => {
+                    depth -= 1;
+                    cur.push(c);
+                }
+                ';' | '{' | '}' | ',' if depth <= 0 => out.push(std::mem::take(&mut cur)),
+                _ => cur.push(c),
+            }
+        }
+        out.push(cur);
+        out
+    }
+
+    /// Drop a leading `lhs =`, `lhs +=`, `x =>`, `return` or `key:` so a
+    /// leading string literal shows (scans outside quotes and brackets only).
+    fn strip_prefix(op: &str) -> &str {
+        let b = op.as_bytes();
+        let (mut quote, mut escaped, mut depth, mut cut) = (None::<u8>, false, 0i32, 0usize);
+        let mut i = 0;
+        while i < b.len() {
+            let c = b[i];
+            if let Some(q) = quote {
+                if escaped {
+                    escaped = false;
+                } else if c == b'\\' {
+                    escaped = true;
+                } else if c == q {
+                    quote = None;
+                }
+                i += 1;
+                continue;
+            }
+            match c {
+                b'\'' | b'"' | b'`' if depth == 0 => break, // the first literal operand
+                b'\'' | b'"' | b'`' => quote = Some(c),
+                b'(' | b'[' => depth += 1,
+                b')' | b']' => depth -= 1,
+                b'=' if depth == 0 => {
+                    let prev = if i > 0 { b[i - 1] } else { b' ' };
+                    let next = b.get(i + 1).copied().unwrap_or(b' ');
+                    if next == b'>' {
+                        cut = i + 2;
+                    } else if next != b'=' && !matches!(prev, b'=' | b'!' | b'<' | b'>') {
+                        cut = i + 1;
+                    }
+                }
+                b':' if depth == 0 => cut = i + 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        let t = op[cut..].trim_start();
+        t.strip_prefix("return ").unwrap_or(t)
+    }
+
+    fn is_markup_literal(op: &str) -> bool {
+        let t = strip_prefix(op).trim_start_matches(['(', ' ']);
+        let Some(q) = t.chars().next().filter(|c| matches!(c, '\'' | '"')) else {
+            return false;
+        };
+        // the literal's own text: up to its closing, unescaped quote
+        let (mut esc, mut body) = (false, String::new());
+        for c in t[1..].chars() {
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == q {
+                break;
+            }
+            body.push(c);
+        }
+        body.contains('<') || body.contains('>')
+    }
+
+    fn is_literal(op: &str) -> bool {
+        let t = strip_prefix(op).trim_start_matches(['(', ' ']);
+        t.starts_with('\'') || t.starts_with('"')
+    }
+
+    /// Bracketed groups directly inside `op` (their inner text).
+    fn groups(op: &str) -> Vec<String> {
+        let (mut out, mut cur) = (Vec::new(), String::new());
+        let (mut quote, mut escaped, mut depth) = (None::<char>, false, 0i32);
+        for c in op.chars() {
+            if let Some(q) = quote {
+                if depth > 0 {
+                    cur.push(c);
+                }
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == q {
+                    quote = None;
+                }
+                continue;
+            }
+            match c {
+                '\'' | '"' | '`' => {
+                    quote = Some(c);
+                    if depth > 0 {
+                        cur.push(c);
+                    }
+                }
+                '(' | '[' | '{' => {
+                    if depth > 0 {
+                        cur.push(c);
+                    }
+                    depth += 1;
+                }
+                ')' | ']' | '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        out.push(std::mem::take(&mut cur));
+                    } else {
+                        cur.push(c);
+                    }
+                }
+                _ if depth > 0 => cur.push(c),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn lint_expr(expr: &str, bad: &mut Vec<String>) {
+        for st in statements(expr) {
+            lint_stmt(&st, bad);
+        }
+    }
+
+    fn lint_stmt(expr: &str, bad: &mut Vec<String>) {
+        let ops = plus_operands(expr);
+        let markup = ops.len() > 1 && ops.iter().any(|o| is_markup_literal(o));
+        for (k, op) in ops.iter().enumerate() {
+            let t = op.trim();
+            let core = t.trim_end_matches([';', ')', ',', '}', ' ']);
+            if markup && !is_literal(t) && !core.is_empty() {
+                let unwrapped = core.trim_start_matches(['(', ' ']);
+                let first = k == 0;
+                let name = core.trim_start_matches('(');
+                // the first operand's statement prefix (`h += `, `x =>`) is not a value
+                let value = if first { strip_prefix(t).trim() } else { t };
+                let value = value.trim_end_matches([';', ',', '}', ' ']);
+                let ok = value.is_empty()
+                    || value.starts_with("esc(")
+                    || MARKUP_VARS.contains(&value.trim_end_matches(')'))
+                    || MARKUP_VARS.contains(&name)
+                    || (value.contains(".join(") && value.contains("=>") && {
+                        // an HTML-producing map/join: its callback must build markup
+                        // (and is linted below); a text join must be esc()-wrapped
+                        groups(value)
+                            .iter()
+                            .any(|g| g.contains("=>") && g.contains('<'))
+                    });
+                if !ok
+                    && !unwrapped.is_empty()
+                    && !value.starts_with('\'')
+                    && !value.starts_with('"')
+                {
+                    bad.push(value.chars().take(70).collect());
+                }
+            }
+            for g in groups(op) {
+                lint_expr(&g, bad);
+            }
+        }
+    }
+
+    /// Join physical lines that continue a `+` chain into logical lines.
+    fn logical_lines(js: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut carry = false;
+        for l in js.lines() {
+            let t = l.trim();
+            if carry {
+                if let Some(last) = out.last_mut() {
+                    last.push(' ');
+                    last.push_str(t);
+                }
+            } else {
+                out.push(t.to_string());
+            }
+            carry = t.ends_with('+') && !t.ends_with("++");
+        }
+        out
     }
 
     #[test]
     fn studio_js_escapes_untrusted_values_before_markup() {
-        let src: String = STUDIO_HTML.chars().filter(|c| !c.is_whitespace()).collect();
-        let offenders: Vec<String> = UNTRUSTED
-            .iter()
-            .filter_map(|t| {
-                let n = raw_uses(&src, t);
-                (n > 0).then(|| format!("{t} x{n}"))
-            })
-            .collect();
+        let a = STUDIO_HTML.find("<script>").unwrap_or(0);
+        let mut bad = Vec::new();
+        for line in logical_lines(&STUDIO_HTML[a..]) {
+            if line.starts_with("//") || !line.contains('<') {
+                continue;
+            }
+            lint_expr(&line, &mut bad);
+        }
+        bad.sort();
+        bad.dedup();
         assert!(
-            offenders.is_empty(),
-            "raw untrusted values concatenated into markup (wrap each in esc()): {offenders:?}"
+            bad.is_empty(),
+            "{} operands concatenated into markup without esc(): {bad:#?}",
+            bad.len()
         );
     }
 
