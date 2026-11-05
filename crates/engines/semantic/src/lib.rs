@@ -405,6 +405,30 @@ mod tests {
         );
     }
 
+    // Studio hardening: an Ontology definition is schema, not content. The
+    // enricher re-versioned every saved ontology ~1s after the write, so an
+    // editor's compare-and-swap (expected_version) lost to the engine and the
+    // user's next save failed with VERSION_CONFLICT for no reason of their own.
+    #[test]
+    fn semantic_engine_does_not_re_version_ontology_definitions() {
+        let k = mk();
+        let subj = Subject::with_roles("admin", &["admin"]);
+        let onto = remember_body(&k, &subj, "Ontology", "a definition");
+        let fact = remember_body(&k, &subj, "fact", "cats are great");
+
+        let engine = Arc::new(SemanticEngine::new(Arc::new(MockProvider)));
+        let sched = Scheduler::new();
+        sched.register(engine);
+        sched.start_all(&k).unwrap();
+
+        // control: ordinary content IS enriched, so the engine really ran
+        let f = k.get(&subj, &fact).unwrap();
+        assert!(f.semantic.is_some() && f.version == 2, "engine did not run");
+        let o = k.get(&subj, &onto).unwrap();
+        assert!(o.semantic.is_none(), "an Ontology definition was embedded");
+        assert_eq!(o.version, 1, "an Ontology definition was re-versioned");
+    }
+
     // ---- AG-23b2: per-collection model bindings drive enrichment ----
 
     /// Records the model hints the engine passes to the provider, and echoes
