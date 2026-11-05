@@ -66,47 +66,54 @@ impl Drop for Server {
 }
 
 fn serve(tag: &str, extra: &[&str]) -> Server {
-    let (db, port) = (tmp(tag), free_port());
-    let child = Command::new(bin())
-        .arg("serve")
-        .args(["--metrics-addr", &format!("127.0.0.1:{port}")])
-        .args([
-            "--tcp-token",
-            "http-tok::admin",
-            "--tcp-token",
-            "other-tok::admin",
-        ])
-        .args(extra)
-        .arg(&db)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn aikoql-mcp serve");
-    let mut child = child;
-    // Readiness is the server's own startup line, not a bare connect: under
-    // parallel load a connect to the not-yet-bound port can reach something
-    // that is not this server (a probe "succeeds", the request is then
-    // refused or dropped). The reader keeps draining so stderr never blocks.
-    let (tx, rx) = std::sync::mpsc::channel();
-    let err = child.stderr.take().expect("piped stderr");
-    std::thread::spawn(move || {
-        for line in BufReader::new(err).lines().map_while(Result::ok) {
-            if line.contains("metrics HTTP server started") {
-                let _ = tx.send(());
+    // The pre-picked port can be taken between free_port() releasing it and
+    // the child binding it (another test's child, an ephemeral client port):
+    // the server then logs "bind failed" — retry on a fresh port rather than
+    // talk to whatever owns the old one.
+    for _attempt in 0..4 {
+        let (db, port) = (tmp(tag), free_port());
+        let mut child = Command::new(bin())
+            .arg("serve")
+            .args(["--metrics-addr", &format!("127.0.0.1:{port}")])
+            .args([
+                "--tcp-token",
+                "http-tok::admin",
+                "--tcp-token",
+                "other-tok::admin",
+            ])
+            .args(extra)
+            .arg(&db)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn aikoql-mcp serve");
+        // Ready = the server's own "listening" line, logged after bind
+        // succeeded. No connect probe: a connect to a not-yet-bound port can
+        // reach something that is not this server. The reader keeps draining
+        // so stderr never blocks the child.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let err = child.stderr.take().expect("piped stderr");
+        std::thread::spawn(move || {
+            for line in BufReader::new(err).lines().map_while(Result::ok) {
+                if line.contains("metrics HTTP server listening") {
+                    let _ = tx.send(true);
+                } else if line.contains("metrics server bind failed") {
+                    let _ = tx.send(false);
+                }
             }
+        });
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(true) => return Server { child, db, port },
+            Ok(false) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_dir_all(&db);
+            }
+            Err(_) => panic!("server never reported listening on {port}"),
         }
-    });
-    assert!(
-        rx.recv_timeout(Duration::from_secs(60)).is_ok(),
-        "server never logged its startup on {port}"
-    );
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while TcpStream::connect(("127.0.0.1", port)).is_err() {
-        assert!(Instant::now() < deadline, "server never listened on {port}");
-        std::thread::sleep(Duration::from_millis(50));
     }
-    Server { child, db, port }
+    panic!("no free port after 4 attempts");
 }
 
 /// One HTTP response: status code, lower-cased headers, body.

@@ -186,6 +186,9 @@ pub(crate) fn serve_metrics(
             return;
         }
     };
+    // Logged only once the socket is bound and listening — the "started" line
+    // in spawn_metrics precedes the bind, so it cannot gate a client.
+    info!(addr = %addr, "metrics HTTP server listening");
     let sessions: Arc<Mutex<HashMap<String, HttpSession>>> = Arc::new(Mutex::new(HashMap::new()));
     // Enterprise (Task 5): the serving handle on the user store main.rs
     // opened (users.db); None in community mode.
