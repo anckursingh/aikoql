@@ -516,7 +516,7 @@ pub(crate) fn tool_filter_secrets(k: &Kernel, args: &J, db_path: &str) -> Result
 
 // ---- Agent Experience Improvements (MRFC-0040) -------------------------
 
-pub(crate) fn tool_discover_schema(k: &Kernel) -> Result<J, String> {
+pub(crate) fn tool_discover_schema(k: &Kernel, _args: &J) -> Result<J, String> {
     let types = k.list_types().map_err(|e| e.to_string())?;
     let heads = k.scan_heads().map_err(|e| e.to_string())?;
     let subject = Subject {
@@ -546,7 +546,7 @@ pub(crate) fn tool_discover_schema(k: &Kernel) -> Result<J, String> {
 }
 
 /// Discover an ontology from all stored Knowledge Objects (MRFC-0041).
-pub(crate) fn tool_discover_ontology(k: &Kernel) -> Result<J, String> {
+pub(crate) fn tool_discover_ontology(k: &Kernel, _args: &J) -> Result<J, String> {
     let subject = Subject {
         name: "ontology-discovery".into(),
         roles: vec!["admin".into()],

@@ -1328,7 +1328,7 @@ fn s08_discover_ontology_hot_reloads_the_compile_registry() {
     );
 
     // Auto-Discover (the studio button's route) must republish the registry.
-    crate::tools::tool_discover_ontology(&k).expect("discover");
+    crate::tools::tool_discover_ontology(&k, &serde_json::json!({})).expect("discover");
 
     // No restart: the hot-reloaded registry in the slot resolves the type.
     let hot = crate::http::current_ontology().expect("slot populated");

@@ -127,7 +127,7 @@ fn route_inner(
         }
         ("POST", "/api/v1/discover-ontology") => {
             need_auth()?;
-            tool_discover_ontology(k)
+            tool_discover_ontology(k, &args())
         }
 
         ("GET", p) if p.starts_with("/api/v1/schema") => {
