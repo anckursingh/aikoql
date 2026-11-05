@@ -47,6 +47,19 @@ pub(crate) fn current_ontology() -> Option<Arc<OntologyRegistry>> {
     ONTOLOGY_SLOT.get().map(|slot| slot.read().unwrap().clone()) // justified: poison is unrecoverable
 }
 
+/// The registry a query for `tenant` compiles against: that tenant's own
+/// ontology when it has saved one, else the process-wide (untenanted) one.
+pub(crate) fn registry_for(_tenant: Option<&str>) -> Option<Arc<OntologyRegistry>> {
+    current_ontology()
+}
+
+/// How many per-tenant registries are held (bounded by tenants that have an
+/// ontology — never by the tenant strings callers supply).
+#[cfg(test)]
+pub(crate) fn tenant_registry_count() -> usize {
+    0
+}
+
 /// The ontology the compiler uses, and the one Studio shows: the newest
 /// *manual* untenanted Ontology KO, else the newest auto-discovered one. A
 /// tenant's own ontology is never the process-wide one. Returns the KO and

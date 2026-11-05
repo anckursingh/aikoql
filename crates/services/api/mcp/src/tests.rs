@@ -1511,6 +1511,60 @@ fn m2_discover_schema_is_confined_to_the_callers_tenant() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Studio hardening M5: a tenant's queries compile against that tenant's own
+// ontology (when it has one), else the global one. Before: one process-wide
+// registry, so tenant A's classes — and tenant B's, via an admin discovery —
+// were what every tenant's queries resolved against.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m5_each_tenant_compiles_against_its_own_ontology() {
+    let _serial = crate::http::ontology_serial();
+    let k = m2_kernel("m5a");
+    m2_put(&k, "m5_shared", None);
+    m2_discover(&k, serde_json::json!({}));
+    m2_put(&k, "m5_alpha", Some("tenant-a"));
+    m2_discover(&k, serde_json::json!({"tenant": "tenant-a"}));
+    m2_put(&k, "m5_beta", Some("tenant-b"));
+    m2_discover(&k, serde_json::json!({"tenant": "tenant-b"}));
+
+    let a = crate::http::registry_for(Some("tenant-a")).expect("tenant-a registry");
+    assert!(a.resolve_class("m5_alpha").is_some(), "own class");
+    assert!(
+        a.resolve_class("m5_beta").is_none(),
+        "tenant-a resolved tenant-b's class"
+    );
+    let b = crate::http::registry_for(Some("tenant-b")).expect("tenant-b registry");
+    assert!(b.resolve_class("m5_beta").is_some() && b.resolve_class("m5_alpha").is_none());
+    for scope in [None, Some("tenant-without-an-ontology")] {
+        let g = crate::http::registry_for(scope).expect("global registry");
+        assert!(g.resolve_class("m5_shared").is_some(), "{scope:?}: global");
+        assert!(
+            g.resolve_class("m5_alpha").is_none(),
+            "{scope:?}: the global registry holds a tenant's class"
+        );
+    }
+}
+
+#[test]
+fn m5_tenant_registries_are_bounded_by_tenants_with_an_ontology() {
+    let _serial = crate::http::ontology_serial();
+    let k = m2_kernel("m5b");
+    m2_put(&k, "m5_one", Some("tenant-one"));
+    m2_discover(&k, serde_json::json!({"tenant": "tenant-one"}));
+    assert_eq!(crate::http::tenant_registry_count(), 1);
+    // a caller-supplied tenant string must never grow server state
+    for i in 0..500 {
+        let _ = crate::http::registry_for(Some(&format!("probe-{i}")));
+    }
+    assert_eq!(
+        crate::http::tenant_registry_count(),
+        1,
+        "lookups for tenants without an ontology cached an entry"
+    );
+}
+
 // POC-4 S-7: REST /api/aikoql validated every type against an empty
 // SchemaRegistry + whatever ontology existed, while the MCP tool compiled
 // without schema validation — the identical query died in the studio with
