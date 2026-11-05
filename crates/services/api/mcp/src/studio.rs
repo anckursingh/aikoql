@@ -251,7 +251,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
           <div class="query-toolbar">
             <button class="btn btn-pri" onclick="runQuery()">▶ Run</button>
             <button class="btn btn-sec" onclick="explainQuery()">🔍 Explain Plan</button>
-            <button class="btn btn-sec btn-sm" onclick="streamQuery()" title="Stream results in chunks">📡 Stream</button>
+            <button class="btn btn-sec btn-sm" onclick="streamQuery()" title="Runs the query, then shows the rows in chunks of 100 — paged in the browser (client-side), not a server stream">📄 Chunked</button>
             <select id="query-tenant" style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;font-family:var(--font);">
               <option value="">Default tenant</option>
             </select>
@@ -718,7 +718,7 @@ async function streamQuery() {
   const query = window.__cmGetValue().trim();
   if (!query) return;
   const resDiv = document.getElementById('query-results');
-  resDiv.innerHTML = '<div class="loading">Streaming (chunks of 100)...</div>';
+  resDiv.innerHTML = '<div class="loading">Running; rows will be shown in chunks of 100 (client-side)...</div>';
   let chunks = [];
   // ponytail: streaming via REST fallback — call /api/aikoql repeatedly with LIMIT/OFFSET.
   // True MCP notifications/notify streaming requires a WebSocket or SSE transport on the REST side.
