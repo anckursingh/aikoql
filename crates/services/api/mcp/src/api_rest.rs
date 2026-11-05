@@ -78,7 +78,13 @@ pub fn route_v1(
     match result {
         Ok(payload) => json_response(200, &json!({"data": payload})),
         Err(msg) => {
-            let code = if msg.contains("missing") || msg.contains("bad") {
+            let code = if msg.contains("VERSION_CONFLICT") {
+                409 // a CAS on expected_version lost the race
+            } else if msg.contains("missing")
+                || msg.contains("bad")
+                || msg.starts_with("invalid ontology")
+                || msg.starts_with("expected_version required")
+            {
                 400
             } else if msg.contains("not found") || msg.contains("NotFound") {
                 404
@@ -786,6 +792,7 @@ fn json_response(code: u16, body: &J) -> (String, String, String) {
         401 => "401 Unauthorized",
         403 => "403 Forbidden",
         404 => "404 Not Found",
+        409 => "409 Conflict",
         429 => "429 Too Many Requests",
         _ => "500 Internal Server Error",
     };
