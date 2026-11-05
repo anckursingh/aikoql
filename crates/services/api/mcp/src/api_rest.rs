@@ -943,6 +943,7 @@ mod tests {
 
     #[test]
     fn m3_the_active_ontology_endpoint_agrees_with_the_compile_registry() {
+        let _serial = crate::http::ontology_serial();
         let (k, db) = m3_kernel("active");
         for (ns, class, tags) in [
             ("manual-ns", "ManualClass", vec![]),
@@ -973,6 +974,7 @@ mod tests {
 
     #[test]
     fn m3_saving_updates_the_one_ontology_in_place() {
+        let _serial = crate::http::ontology_serial();
         let (k, db) = m3_kernel("save");
         let (s1, one) = m3_call(
             &k,
@@ -1011,6 +1013,7 @@ mod tests {
 
     #[test]
     fn m3_a_stale_or_missing_expected_version_cannot_overwrite() {
+        let _serial = crate::http::ontology_serial();
         let (k, db) = m3_kernel("cas");
         let (_, one) = m3_call(
             &k,
@@ -1053,6 +1056,7 @@ mod tests {
 
     #[test]
     fn m3_an_invalid_definition_is_rejected_and_stores_nothing() {
+        let _serial = crate::http::ontology_serial();
         let (k, db) = m3_kernel("invalid");
         let (ok, good) = m3_call(
             &k,

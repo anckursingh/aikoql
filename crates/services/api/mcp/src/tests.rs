@@ -1289,6 +1289,7 @@ fn s03_trace_events_carry_audit_hash_and_versions_carry_valid_from() {
 // until a server restart — a fresh KB was a dead end in the query editor.
 #[test]
 fn s08_discover_ontology_hot_reloads_the_compile_registry() {
+    let _serial = crate::http::ontology_serial();
     let db = tmp_db("s08");
     let _ = std::fs::remove_dir_all(&db);
     let k = crate::Kernel::open(
@@ -1452,6 +1453,7 @@ fn m2_preview_returns_a_proposal_and_persists_nothing() {
 
 #[test]
 fn m2_rediscovery_picks_up_new_data_and_is_idempotent_when_unchanged() {
+    let _serial = crate::http::ontology_serial();
     let k = m2_kernel("m2d");
     m2_put(&k, "first_doc", None);
     let one = m2_discover(&k, serde_json::json!({}));
@@ -1478,6 +1480,7 @@ fn m2_rediscovery_picks_up_new_data_and_is_idempotent_when_unchanged() {
 
 #[test]
 fn m2_a_tenant_ontology_never_becomes_the_global_compile_registry() {
+    let _serial = crate::http::ontology_serial();
     let k = m2_kernel("m2e");
     m2_put(&k, "alpha_doc", Some("tenant-a"));
     let saved = m2_discover(&k, serde_json::json!({"tenant": "tenant-a"}));

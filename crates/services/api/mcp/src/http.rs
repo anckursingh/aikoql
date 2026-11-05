@@ -22,6 +22,15 @@ use std::sync::RwLock;
 /// `aikoql_endpoint` prefers it over the startup snapshot it is handed.
 static ONTOLOGY_SLOT: OnceLock<RwLock<Arc<OntologyRegistry>>> = OnceLock::new();
 
+/// Tests that install into (or read back from) the process-wide registry slot
+/// take this lock: parallel tests would otherwise overwrite each other's slot
+/// between a publish and its assertion.
+#[cfg(test)]
+pub(crate) fn ontology_serial() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub(crate) fn install_ontology(reg: Arc<OntologyRegistry>) {
     match ONTOLOGY_SLOT.get() {
         Some(slot) => {
