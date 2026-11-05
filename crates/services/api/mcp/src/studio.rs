@@ -2057,6 +2057,17 @@ const SSO_LOGIN_HTML: &str = r#"<button data-sso-button onclick="location.href='
   initApp();
 });</script>"#;
 
+/// The whole Studio page as a reviewer sees it: the HTML shell, every script
+/// the shell loads from this binary, and the snippets injected per licence.
+/// Tests assert on this, never on `STUDIO_HTML` alone, so moving code between
+/// files cannot turn an assertion vacuous (an absence check on an empty
+/// string passes forever).
+#[cfg(test)]
+pub(crate) fn page_for_tests() -> &'static str {
+    static PAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PAGE.get_or_init(|| [STUDIO_HTML, SSO_LOGIN_HTML, AUDIT_EXPORT_HTML].join("\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2344,9 +2355,9 @@ mod tests {
 
     #[test]
     fn studio_js_escapes_untrusted_values_before_markup() {
-        let a = STUDIO_HTML.find("<script>").unwrap_or(0);
+        let a = page_for_tests().find("<script>").unwrap_or(0);
         let mut bad = Vec::new();
-        for line in logical_lines(&STUDIO_HTML[a..]) {
+        for line in logical_lines(&page_for_tests()[a..]) {
             if line.starts_with("//") || !line.contains('<') {
                 continue;
             }
@@ -2366,7 +2377,10 @@ mod tests {
         // `onclick="f(\''+x+'\')"` splices data into a JS string inside an
         // attribute: a `'` or entity in x breaks out. Handlers read
         // this.dataset.* from an esc()'d data-* attribute instead (renderUsers).
-        let src: String = STUDIO_HTML.chars().filter(|c| !c.is_whitespace()).collect();
+        let src: String = page_for_tests()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
         let n = src.matches("\\''+").count();
         assert_eq!(n, 0, "{n} inline handlers splice data into JS strings");
     }
@@ -2376,11 +2390,11 @@ mod tests {
         // Discovery output is a proposal: the button shows it and an explicit
         // second action saves (it must never silently become the ontology).
         assert!(
-            STUDIO_HTML.contains("{preview: !save}"),
+            page_for_tests().contains("{preview: !save}"),
             "discoverOntology must request a preview unless saving"
         );
         assert!(
-            STUDIO_HTML.contains("discoverOntology(true)"),
+            page_for_tests().contains("discoverOntology(true)"),
             "the preview must offer an explicit Save action"
         );
     }
@@ -2390,13 +2404,13 @@ mod tests {
         // The panel shows what the compiler uses (GET /api/v1/ontology, not
         // results[0] of a MATCH) and saves in place under expected_version.
         assert!(
-            !STUDIO_HTML.contains("MATCH%20Ontology"),
+            !page_for_tests().contains("MATCH%20Ontology"),
             "the panel must not pick an arbitrary Ontology row"
         );
-        let a = STUDIO_HTML
+        let a = page_for_tests()
             .find("async function saveOntology()")
             .expect("saveOntology");
-        let body = &STUDIO_HTML[a..a + 1800];
+        let body = &page_for_tests()[a..a + 1800];
         assert!(body.contains("/api/v1/ontology"), "{body}");
         assert!(body.contains("expected_version"), "{body}");
         assert!(!body.contains("/api/v1/remember"), "{body}");
@@ -2409,15 +2423,15 @@ mod tests {
         // authenticates with `Authorization: Bearer`; the audit download is a
         // fetch + Blob, not a navigation to `?token=`.
         assert!(
-            !STUDIO_HTML.contains("token="),
+            !page_for_tests().contains("token="),
             "Studio still builds a ?token= URL"
         );
         assert!(
-            STUDIO_HTML.contains("'Authorization': 'Bearer '"),
+            page_for_tests().contains("'Authorization': 'Bearer '"),
             "no Authorization header helper"
         );
         assert!(
-            !STUDIO_HTML.contains("location.href = '/api/audit-export"),
+            !page_for_tests().contains("location.href = '/api/audit-export"),
             "the audit export is a navigation"
         );
     }
@@ -2427,14 +2441,14 @@ mod tests {
         // Supply chain + air-gap: the editor and the graph library are vendored
         // into the binary and served same-origin, not fetched from a CDN.
         assert!(
-            !STUDIO_HTML.contains("https://") && !STUDIO_HTML.contains("http://"),
+            !page_for_tests().contains("https://") && !page_for_tests().contains("http://"),
             "the page references an external origin"
         );
         for asset in ["/studio/assets/editor.js", "/studio/assets/vis-network.js"] {
-            assert!(STUDIO_HTML.contains(asset), "{asset} not referenced");
+            assert!(page_for_tests().contains(asset), "{asset} not referenced");
         }
         assert!(
-            !STUDIO_HTML.contains("type=\"module\""),
+            !page_for_tests().contains("type=\"module\""),
             "inline module script remains"
         );
     }
@@ -2443,10 +2457,10 @@ mod tests {
     fn user_admin_is_probed_only_when_the_licence_includes_it() {
         // Community mode has no /api/users: asking anyway logs a 404 in the
         // browser console on every login. Ask /api/license first.
-        let a = STUDIO_HTML
+        let a = page_for_tests()
             .find("async function loadUsers()")
             .expect("loadUsers");
-        let body = &STUDIO_HTML[a..a + 700];
+        let body = &page_for_tests()[a..a + 700];
         let lic = body.find("/api/license").expect("no licence check");
         let users = body.find("/api/users").expect("no users call");
         assert!(lic < users, "{body}");
@@ -2459,7 +2473,7 @@ mod tests {
         // (`<b>${x}</b>`) would slip past it, so the page may not use any until
         // the lint learns them.
         assert!(
-            !STUDIO_HTML.contains('`'),
+            !page_for_tests().contains('`'),
             "a template literal appeared in the Studio JS — teach studio_js_escapes_* about ${{}}"
         );
     }
@@ -2468,10 +2482,33 @@ mod tests {
     fn the_chunked_view_does_not_claim_to_stream() {
         // streamQuery() runs the whole query and pages the rows in the browser.
         assert!(
-            !STUDIO_HTML.contains("📡 Stream") && !STUDIO_HTML.contains("Stream results in chunks"),
+            !page_for_tests().contains("📡 Stream")
+                && !page_for_tests().contains("Stream results in chunks"),
             "the button still advertises streaming"
         );
-        assert!(STUDIO_HTML.contains("client-side"), "no honest label");
+        assert!(page_for_tests().contains("client-side"), "no honest label");
+    }
+
+    #[test]
+    fn the_page_helper_contains_the_whole_app() {
+        // If code moves out of STUDIO_HTML, page_for_tests() must follow it;
+        // this fails loudly instead of letting absence checks go vacuous.
+        let page = page_for_tests();
+        for marker in [
+            "function esc(",
+            "async function saveOntology(",
+            "function renderUsers(",
+            "<title>Aikoql Studio</title>",
+            "data-sso-button",
+            "data-audit-export",
+        ] {
+            assert!(page.contains(marker), "page_for_tests() lost {marker}");
+        }
+        assert!(
+            page.len() > 60_000,
+            "page is suspiciously small: {}",
+            page.len()
+        );
     }
 
     #[test]
@@ -2479,7 +2516,7 @@ mod tests {
         // The server derives the subject from the bearer token (with_principal);
         // the client must not claim one.
         assert!(
-            !STUDIO_HTML.contains("subject: \"admin\""),
+            !page_for_tests().contains("subject: \"admin\""),
             "saveOntology sends a body-declared subject"
         );
     }

@@ -1153,7 +1153,7 @@ mod tests {
     fn s04_studio_prove_call_carries_the_koid() {
         // POC-4 S-4: the studio's Prove button must send the inspected KOID
         // and guard the empty-input case instead of a blind GET /api/v1/prove.
-        let html = crate::studio::STUDIO_HTML;
+        let html = crate::studio::page_for_tests();
         assert!(
             html.contains("/api/v1/prove?koid=' + encodeURIComponent"),
             "studio prove must carry the koid in the query string"
@@ -1169,7 +1169,7 @@ mod tests {
         // POC-4 S-3/S-6: provenance + timeline must render events[] with
         // kind/actor/note/audit_hash and human-readable times (ISO + relative),
         // plus the event-time column when the version carries valid_from.
-        let html = crate::studio::STUDIO_HTML;
+        let html = crate::studio::page_for_tests();
         assert!(
             html.contains("function fmtTime("),
             "studio needs a time formatter"
@@ -1205,7 +1205,7 @@ mod tests {
         // POC-4 S-4 follow-through: the prove panel must render the
         // response's actual fields — the chain_valid verdict and the
         // hex-joined head hash — not fields the response never carries.
-        let html = crate::studio::STUDIO_HTML;
+        let html = crate::studio::page_for_tests();
         assert!(
             html.contains("chain_valid"),
             "prove panel must show the chain_valid verdict"
@@ -1226,7 +1226,7 @@ mod tests {
         // must style nodes from extensions.epistemic_status (superseded →
         // dashed border + muted palette) and surface the epistemic_history
         // transition in the tooltip.
-        let html = crate::studio::STUDIO_HTML;
+        let html = crate::studio::page_for_tests();
         assert!(
             html.contains("n.extensions&&n.extensions.epistemic_status"),
             "node styling must read extensions.epistemic_status"
@@ -1247,7 +1247,7 @@ mod tests {
         // studio derives virtual "retracts" edges: same tenant + case_id +
         // kind, with the successor's valid_from equal to the predecessor's
         // valid_to_asserted.
-        let html = crate::studio::STUDIO_HTML;
+        let html = crate::studio::page_for_tests();
         assert!(
             html.contains("valid_to_asserted"),
             "the virtual-edge heuristic must key on valid_to_asserted"
@@ -1266,7 +1266,7 @@ mod tests {
     fn s08_editor_1030_error_surface_points_at_auto_discover() {
         // POC-4 S-8: when the query editor surfaces an AIKOQL1030, it must
         // point at the discovery flow instead of leaving a dead end.
-        let html = crate::studio::STUDIO_HTML;
+        let html = crate::studio::page_for_tests();
         assert!(
             html.contains("includes('AIKOQL1030')"),
             "the editor must detect the unknown-type error"
@@ -1284,7 +1284,7 @@ mod tests {
         // different timebases that the editor presented as one "time travel"
         // — against 2023-event/2026-ingest corpora, event-anchored AS_OF
         // always looked broken. The editor label must name each timebase.
-        let html = crate::studio::STUDIO_HTML;
+        let html = crate::studio::page_for_tests();
         assert!(
             html.contains("AS_OF = wall-clock"),
             "the editor must label AS_OF's timebase"
@@ -1302,7 +1302,7 @@ mod tests {
         // "login required" body into the results panel — a manual reload was
         // the only way back. A 401 from the api helper must drop the stale
         // session and return the user to the login overlay with a message.
-        let html = crate::studio::STUDIO_HTML;
+        let html = crate::studio::page_for_tests();
         assert!(
             html.contains("res.status === 401"),
             "the api helper must detect a 401"
@@ -1325,7 +1325,7 @@ mod tests {
         // sidebar div itself as the interceptor, and a slow-machine user
         // sees the same flakiness. The audit found no overlay: the moving
         // hit area is the width transition, so the rule must not carry one.
-        let html = crate::studio::STUDIO_HTML;
+        let html = crate::studio::page_for_tests();
         assert!(
             !html.contains("transition: width"),
             "the sidebar must not animate its width under the cursor"
