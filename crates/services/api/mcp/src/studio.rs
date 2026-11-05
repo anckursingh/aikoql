@@ -1006,13 +1006,13 @@ function renderExplorerTree() {
     const count = info.count||0;
     if (count === 0) return; // skip empty types — prevents "No objects" dead-end click
     const tenantList = (info.tenants||[]).join(', ');
-    html += '<div class="tree-item type-node" onclick="exploreType(\''+esc(typeName.replace(/'/g,"\\'")+'\')" data-type="'+typeName+'">');
+    html += '<div class="tree-item type-node" data-type="'+esc(typeName)+'" onclick="exploreType(this.dataset.type)">';
     html += '<span style="color:'+esc(colorFor(typeName))+'">●</span> '+esc(typeName);
     html += '<span class="count">'+esc(count)+'</span>';
     html += '</div>';
     if (info.tenants && info.tenants.length > 0) {
       info.tenants.forEach(t => {
-        html += '<div class="tree-item" style="padding-left:32px;font-size:10px;" onclick="exploreTypeTenant(\''+esc(typeName.replace(/'/g,"\\'")+'\',\''+t.replace(/'/g,"\\'")+'\')">@'+t+'</div>');
+        html += '<div class="tree-item" style="padding-left:32px;font-size:10px;" data-type="'+esc(typeName)+'" data-tenant="'+esc(t)+'" onclick="exploreTypeTenant(this.dataset.type,this.dataset.tenant)">@'+esc(t)+'</div>';
       });
     }
   });
@@ -1030,7 +1030,7 @@ async function exploreType(typeName) {
     html += '<table><thead><tr><th>KOID</th><th>Label</th><th>Tenant</th><th>Version</th><th>Edges</th></tr></thead><tbody>';
     data.nodes.forEach(n => {
       html += '<tr>';
-      html += '<td class="mono"><a href="#" onclick="switchPanel(\'inspector\');document.getElementById(\'inspector-search-input\').value=\''+esc(n.koid)+'\';inspectorSearch();return false;" style="color:var(--accent);">'+esc(n.koid.substring(0,20))+'...</a></td>';
+      html += '<td class="mono"><a href="#" data-koid="'+esc(n.koid)+'" onclick="return openInInspector(this.dataset.koid)" style="color:var(--accent);">'+esc(n.koid.substring(0,20))+'...</a></td>';
       html += '<td>'+esc(n.label||n.type_name)+'</td>';
       if (n.tenant) html += '<td><span class="badge badge-purple">@'+esc(n.tenant)+'</span></td>'; else html += '<td>―</td>';
       html += '<td>'+esc(n.version||'?')+'</td>';
@@ -1206,7 +1206,7 @@ async function inspectorSearch() {
       if (data.nodes && data.nodes.length > 0) {
         let html = '';
         data.nodes.slice(0, 30).forEach(n => {
-          html += '<div class="suggest-item" onclick="inspectorLoadKOID(\''+esc(n.koid)+'\')">';
+          html += '<div class="suggest-item" data-koid="'+esc(n.koid)+'" onclick="inspectorLoadKOID(this.dataset.koid)">';
           html += '<span><span style="color:'+esc(colorFor(n.type_name))+'">●</span> '+esc(n.type_name)+'</span>';
           html += '<span class="mono" style="font-size:10px;color:var(--muted);">'+esc(n.koid.substring(0,16))+'...</span>';
           html += '</div>';
@@ -1320,8 +1320,7 @@ async function saveOntology() {
     // Since CREATE doesn't support nested structures, use the /api/v1/remember endpoint.
     const payload = {
       type_name: "Ontology",
-      properties: def,
-      subject: "admin"
+      properties: def
     };
     const url = '/api/v1/remember' + (authToken ? '?token=' + encodeURIComponent(authToken) : '');
     const res = await fetch(url, {
@@ -1396,8 +1395,8 @@ async function loadAdminPanel() {
         const meta = b.meta || {};
         html += '<tr><td class="mono" style="font-size:10px;">'+esc(b.name)+'</td><td>'+esc(meta.object_count||'?')+'</td><td>'+esc(meta.journal_seq||'?')+'</td>';
         html += '<td>';
-        html += '<button class="btn btn-sec btn-sm" onclick="adminVerifyBackup(\''+esc(b.name)+'\')" style="margin-right:4px;">Verify</button>';
-        html += '<button class="btn btn-sec btn-sm" onclick="adminRestoreBackup(\''+esc(b.name)+'\')">Restore</button>';
+        html += '<button class="btn btn-sec btn-sm" data-name="'+esc(b.name)+'" onclick="adminVerifyBackup(this.dataset.name)" style="margin-right:4px;">Verify</button>';
+        html += '<button class="btn btn-sec btn-sm" data-name="'+esc(b.name)+'" onclick="adminRestoreBackup(this.dataset.name)">Restore</button>';
         html += '</td></tr>';
       });
       html += '</tbody></table>';
@@ -1436,6 +1435,14 @@ function nodeTip(n, es) {
   d.appendChild(b);
   d.append((n.tenant ? ' @' + n.tenant : '') + '\n' + n.koid + (es ? '\n' + es : ''));
   return d;
+}
+// Open a KO in the Inspector (a data-koid attribute feeds it — never splice a
+// KOID into an inline handler's JS string).
+function openInInspector(koid) {
+  switchPanel('inspector');
+  document.getElementById('inspector-search-input').value = koid;
+  inspectorSearch();
+  return false;
 }
 function esc(s) {
   if (s === null || s === undefined) return '';
@@ -1663,7 +1670,7 @@ async function loadProgramDebugger() {
     h += '</div>';
     // Show dependencies.
     h += '<div class="card" style="margin-top:8px;"><h3>Dependencies</h3>';
-    h += '<button class="btn btn-sec btn-sm" onclick="loadProgramDeps(\''+esc(prog.koid)+'\')">Show Dependency Graph</button>';
+    h += '<button class="btn btn-sec btn-sm" data-koid="'+esc(prog.koid)+'" onclick="loadProgramDeps(this.dataset.koid)">Show Dependency Graph</button>';
     h += '<div id="debugger-deps" style="margin-top:8px;"></div>';
     h += '</div>';
     div.innerHTML = h;
@@ -1697,7 +1704,7 @@ async function loadBenchmarks() {
       h += '<td style="font-family:var(--font-mono);font-size:11px;">'+esc(b.target_query||'?')+'</td>';
       h += '<td>'+esc(b.iterations||0)+'</td>';
       h += '<td><span class="badge badge-cyan">'+esc(b.lifecycle)+'</span></td>';
-      h += '<td><button class="btn btn-sec btn-sm" onclick="runBenchmark(\''+esc(b.koid)+'\')">▶ Run</button></td>';
+      h += '<td><button class="btn btn-sec btn-sm" data-koid="'+esc(b.koid)+'" onclick="runBenchmark(this.dataset.koid)">▶ Run</button></td>';
       h += '</tr>';
     });
     h += '</tbody></table>';
@@ -1873,7 +1880,7 @@ async function loadDocuments() {
     for (const doc of docs) {
       const sz = doc.size_bytes < 1024 ? doc.size_bytes+' B' : doc.size_bytes < 1048576 ? (doc.size_bytes/1024).toFixed(1)+' KB' : (doc.size_bytes/1048576).toFixed(1)+' MB';
       const badge = esc(doc.status === 'ingested' ? '<span class="badge badge-ok">ingested</span>' : '<span class="badge">')+esc(doc.status)+'</span>';
-      html += '<tr><td class="mono"><a href="#" onclick="switchPanel(\'inspector\');document.getElementById(\'inspector-search-input\').value=\''+esc(doc.koid)+'\';inspectorSearch();return false;" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td>'+esc(badge)+'</td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" onclick="compileDocument(\''+esc(doc.koid)+'\')">Compile</button></td></tr>';
+      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" onclick="return openInInspector(this.dataset.koid)" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td>'+esc(badge)+'</td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" onclick="compileDocument(this.dataset.koid)">Compile</button></td></tr>';
     }
     html += '</tbody></table>';
     el.innerHTML = html;
