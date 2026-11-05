@@ -2512,6 +2512,86 @@ mod tests {
     }
 
     #[test]
+    fn studio_has_no_inline_event_handlers_or_inline_scripts() {
+        // CSP `script-src 'self'` blocks inline handlers and inline <script>:
+        // a control still carrying one would silently do nothing. Handlers are
+        // `data-click` / `data-change` / `data-input` names resolved by one
+        // delegated listener against a fixed allowlist (ACTIONS).
+        let page = page_for_tests();
+        let events = [
+            "click",
+            "dblclick",
+            "change",
+            "input",
+            "keydown",
+            "keyup",
+            "keypress",
+            "submit",
+            "load",
+            "error",
+            "focus",
+            "blur",
+            "mouseover",
+            "mouseout",
+            "mouseenter",
+            "mouseleave",
+            "mousedown",
+            "mouseup",
+            "contextmenu",
+            "paste",
+            "select",
+            "toggle",
+            "scroll",
+            "wheel",
+            "resize",
+        ];
+        let mut bad = Vec::new();
+        for ev in events {
+            for pat in [format!(" on{ev}="), format!(" on{ev} =")] {
+                for (i, _) in page.match_indices(&pat) {
+                    bad.push(page[i..(i + 60).min(page.len())].replace('\n', " "));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{} inline handlers: {bad:#?}", bad.len());
+        assert!(!page.contains("javascript:"), "a javascript: URL");
+        for (i, _) in page.match_indices("<script") {
+            let tag = &page[i..page[i..].find('>').map_or(page.len(), |e| i + e)];
+            assert!(tag.contains(" src="), "inline <script>: {tag}");
+        }
+    }
+
+    #[test]
+    fn every_data_action_names_an_entry_in_the_actions_allowlist() {
+        // A typo'd action name does nothing (silently). Every name the markup
+        // uses must be a key of ACTIONS, one key per line (`  name: ...`).
+        let page = page_for_tests();
+        let block = page
+            .find("const ACTIONS = ")
+            .map(|i| &page[i..])
+            .expect("no ACTIONS allowlist");
+        let mut used = std::collections::BTreeSet::new();
+        for attr in ["data-click", "data-change", "data-input"] {
+            let pat = format!("{attr}=\"");
+            for (i, _) in page.match_indices(&pat) {
+                let rest = &page[i + pat.len()..];
+                used.insert(rest[..rest.find('"').unwrap_or(0)].to_string());
+            }
+        }
+        assert!(
+            used.len() > 25,
+            "found only {} actions: {used:?}",
+            used.len()
+        );
+        for name in &used {
+            assert!(
+                block.contains(&format!("\n  {name}:")),
+                "data-* action {name:?} is not in ACTIONS"
+            );
+        }
+    }
+
+    #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
         // the client must not claim one.

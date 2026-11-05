@@ -948,11 +948,15 @@ fn h020_the_studio_page_is_served_with_framing_and_referrer_hardening() {
         }
         for d in [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline'",
+            "script-src 'self';",
             "connect-src 'self'",
         ] {
             assert!(csp.contains(d), "{path}: CSP lacks {d}: {csp}");
         }
+        assert!(
+            !csp.contains("script-src 'self' 'unsafe-inline'"),
+            "{path}: {csp}"
+        );
         assert_eq!(r.header("x-frame-options"), Some("DENY"), "{path}");
         assert_eq!(r.header("referrer-policy"), Some("no-referrer"), "{path}");
         assert_eq!(
@@ -978,6 +982,7 @@ fn h021_the_vendored_studio_scripts_are_served_from_the_binary() {
     for (path, marker) in [
         ("/studio/assets/editor.js", "__initCodeMirror"),
         ("/studio/assets/vis-network.js", "vis"),
+        ("/studio/assets/app.js", "const ACTIONS"),
     ] {
         let r = get(path);
         assert_eq!(r.status, 200, "{path}");
@@ -988,7 +993,7 @@ fn h021_the_vendored_studio_scripts_are_served_from_the_binary() {
             r.header("content-type")
         );
         assert!(
-            r.body.len() > 100_000 && r.body.contains(marker),
+            r.body.len() > 50_000 && r.body.contains(marker),
             "{path}: {} bytes",
             r.body.len()
         );
