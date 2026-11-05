@@ -16,5 +16,6 @@ Rebuild with `scripts/build-studio-assets.sh` (exact versions in
 | editor.js | style-mod, w3c-keyname, crelt, @marijn/find-cluster-break | 4.1.4, 2.2.8, 1.0.7, 1.0.4 | MIT |
 | vis-network.js | vis-network (standalone UMD build, unmodified) | 9.1.2 | Apache-2.0 OR MIT |
 
-`editor.src.js` is this repository's own code (the AIKOQL language definition
-and completion); it carries the repository licence.
+`editor.src.js` (the AIKOQL language definition and completion) and `app.js`
+(the Studio application script, hand-written and served unbundled) are this
+repository's own code and carry the repository licence.

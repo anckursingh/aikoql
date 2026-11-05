@@ -25,6 +25,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   `/studio/assets/*` (works air-gapped). The Studio page carries a CSP that
   confines scripts and connections to its own origin, plus `X-Frame-Options`,
   `Referrer-Policy: no-referrer` and `nosniff`.
+- **Studio has no inline script or inline event handler, and the CSP says so**:
+  the 43 inline `on*=` handlers became delegated `data-click` / `data-change` /
+  `data-input` actions against a closed allowlist, the application script is
+  served from `/studio/assets/app.js`, and `script-src` is now `'self'` (an
+  injected inline script is blocked, not just discouraged). A real-Chrome e2e
+  (`tests/e2e/studio`, run by `scripts/prepush.sh`) clicks every control.
 - **Tenant-confined ontology and schema discovery**: `discover_ontology` /
   `discover_schema` honour the call's `tenant` (the session forces it for a
   tenant-scoped caller): the kernel's tenant rule now confines the scan, where
@@ -35,6 +41,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Added
 
+- **Per-tenant compile registries**: REST/Studio queries for a tenant compile
+  against that tenant's own ontology (when it has one), else the global one.
+  Held only for tenants that have an ontology, so tenant strings from callers
+  never grow server state. (A tenant with none still falls back to the global
+  ontology, which an unscoped admin discovery may have built from every
+  tenant's data — a product decision, not changed here.)
 - `discover_ontology` takes `preview: true` (the proposal, nothing written);
   Studio's Auto-Discover now shows the proposal and saves only on an explicit
   second click.
@@ -51,6 +63,9 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Fixed
 
+- The semantic enricher no longer embeds (and so re-versions) an `Ontology`
+  definition: it wrote version 2 about a second after every save, so the next
+  save lost its compare-and-swap with `VERSION_CONFLICT`.
 - Re-running discovery replayed the first result (fixed idempotency key); it
   now updates the scope's auto-discovered ontology in place and writes nothing
   when unchanged.
