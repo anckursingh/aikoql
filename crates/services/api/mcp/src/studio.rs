@@ -2488,6 +2488,26 @@ mod tests {
     }
 
     #[test]
+    fn studio_sends_the_session_token_in_a_header_never_a_url() {
+        // A token in a URL lands in browser history, proxy/server logs and
+        // (before the Referrer-Policy) Referer headers. Every Studio request
+        // authenticates with `Authorization: Bearer`; the audit download is a
+        // fetch + Blob, not a navigation to `?token=`.
+        assert!(
+            !STUDIO_HTML.contains("token="),
+            "Studio still builds a ?token= URL"
+        );
+        assert!(
+            STUDIO_HTML.contains("'Authorization': 'Bearer '"),
+            "no Authorization header helper"
+        );
+        assert!(
+            !STUDIO_HTML.contains("location.href = '/api/audit-export"),
+            "the audit export is a navigation"
+        );
+    }
+
+    #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
         // the client must not claim one.

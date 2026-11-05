@@ -1792,3 +1792,30 @@ pub(crate) fn spawn_metrics(
         )
     });
 }
+
+#[cfg(test)]
+mod token_tests {
+    use super::extract_token;
+
+    #[test]
+    fn bearer_header_name_is_case_insensitive() {
+        // Header names are case-insensitive (RFC 9110); a client that sends
+        // `authorization:` must authenticate like one that sends `Authorization:`.
+        for name in ["Authorization", "authorization", "AUTHORIZATION"] {
+            let req = format!("GET /api/x HTTP/1.1\r\nHost: h\r\n{name}: Bearer tok-1\r\n\r\n");
+            assert_eq!(
+                extract_token("/api/x", &req).as_deref(),
+                Some("tok-1"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn query_token_still_works_for_existing_clients() {
+        assert_eq!(
+            extract_token("/api/x?token=abc", "GET /api/x?token=abc HTTP/1.0\r\n\r\n").as_deref(),
+            Some("abc")
+        );
+    }
+}
