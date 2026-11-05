@@ -93,3 +93,6 @@ npm-publish/memory/
 .commit-msg.txt
 # maturin develop builds the native module in place
 /crates/sdk/python/python/aikoql/_aikoql*.so
+
+# Studio vendored-asset build inputs
+crates/services/api/mcp/assets/studio/node_modules/

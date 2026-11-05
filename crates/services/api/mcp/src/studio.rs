@@ -3,8 +3,10 @@
 //! Served at `/studio`. Single-page application: sidebar navigation + 6 panels.
 //! Every panel uses the existing REST API — zero new backend endpoints.
 //!
-//! ponytail: one HTML file, no framework, no build step, no npm.
-//! CodeMirror 6 via esm.sh CDN (3 imports, ESM, cached).
+//! ponytail: one HTML file, no framework. The two libraries (CodeMirror 6 +
+//! the AIKOQL language, vis-network) are vendored under `assets/studio/`,
+//! embedded in the binary and served same-origin — no CDN at runtime. The
+//! bundles are committed; `scripts/build-studio-assets.sh` rebuilds them.
 
 pub const STUDIO_HTML: &str = r##"<!DOCTYPE html>
 <html lang="en">
@@ -12,119 +14,8 @@ pub const STUDIO_HTML: &str = r##"<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Aikoql Studio</title>
-<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js"></script>
-<script type="module">
-import {EditorView, basicSetup} from "https://esm.sh/codemirror@6.0.1"
-import {sql, PostgreSQL} from "https://esm.sh/@codemirror/lang-sql@6.2.0"
-import {oneDark} from "https://esm.sh/@codemirror/theme-one-dark@6.1.2"
-import {autocompletion} from "https://esm.sh/@codemirror/autocomplete@6.0.0"
-
-// ── aikoql keyword completions ──
-const AIKOQL_KEYWORDS = [
-  // Statements
-  {label:"CREATE",type:"keyword",detail:"Create a Knowledge Object",boost:3},
-  {label:"MATCH",type:"keyword",detail:"Query Knowledge Objects",boost:3},
-  {label:"RETURN",type:"keyword",detail:"Return clause (required)",boost:4},
-  {label:"TRAVERSE",type:"keyword",detail:"Walk relationships",boost:2},
-  {label:"UPDATE",type:"keyword",detail:"Update a KO",boost:2},
-  {label:"DELETE",type:"keyword",detail:"Delete/deactivate a KO",boost:1},
-  {label:"INGEST",type:"keyword",detail:"Ingest external data",boost:1},
-  // Clauses
-  {label:"WHERE",type:"keyword",detail:"Filter condition",boost:2},
-  {label:"AND",type:"keyword",detail:"Logical AND",boost:1},
-  {label:"OR",type:"keyword",detail:"Logical OR",boost:1},
-  {label:"NOT",type:"keyword",detail:"Logical NOT",boost:1},
-  {label:"ORDER BY",type:"keyword",detail:"Sort results",boost:1},
-  {label:"LIMIT",type:"keyword",detail:"Max results",boost:1},
-  {label:"OFFSET",type:"keyword",detail:"Skip results",boost:1},
-  {label:"DEPENDS_ON",type:"keyword",detail:"Dependency relationship",boost:1},
-  {label:"CONTAINS",type:"keyword",detail:"Container relationship",boost:1},
-  {label:"USES",type:"keyword",detail:"Usage relationship",boost:1},
-  {label:"GOVERNED_BY",type:"keyword",detail:"Governance relationship",boost:1},
-  {label:"DEPTH",type:"keyword",detail:"Traversal depth",boost:1},
-  {label:"FUSION",type:"keyword",detail:"Search fusion mode (exact/vector/text/hybrid)",boost:1},
-  {label:"INBOUND",type:"keyword",detail:"Inbound direction",boost:1},
-  {label:"OUTBOUND",type:"keyword",detail:"Outbound direction",boost:1},
-  {label:"BOTH",type:"keyword",detail:"Both directions",boost:1},
-  // Operators
-  {label:"==",type:"operator",detail:"Equal",boost:1},
-  {label:"!=",type:"operator",detail:"Not equal",boost:1},
-  {label:">",type:"operator",detail:"Greater than",boost:1},
-  {label:"<",type:"operator",detail:"Less than",boost:1},
-  // Lifecycle
-  {label:"ACTIVE",type:"keyword",detail:"Active lifecycle"},
-  {label:"DRAFT",type:"keyword",detail:"Draft lifecycle"},
-  {label:"ARCHIVED",type:"keyword",detail:"Archived lifecycle"},
-  // Values
-  {label:"true",type:"keyword",detail:"Boolean"},
-  {label:"false",type:"keyword",detail:"Boolean"},
-  {label:"null",type:"keyword",detail:"Null"},
-  // aikoql: types
-  {label:"aikoql:program",type:"type",detail:"Program KO"},
-  {label:"aikoql:workflow",type:"type",detail:"Workflow KO"},
-  {label:"aikoql:policy",type:"type",detail:"Policy KO"},
-  {label:"aikoql:agent",type:"type",detail:"Agent KO"},
-  {label:"aikoql:trigger",type:"type",detail:"Trigger KO"},
-  {label:"aikoql:connector",type:"type",detail:"Connector KO"},
-  {label:"aikoql:benchmark",type:"type",detail:"Benchmark KO"},
-  {label:"aikoql:view",type:"type",detail:"Materialized view KO"},
-  {label:"aikoql:report",type:"type",detail:"Report KO"},
-  {label:"aikoql:ontology",type:"type",detail:"Ontology KO"},
-  {label:"aikoql:memory",type:"type",detail:"Agent memory"},
-  {label:"aikoql:query",type:"type",detail:"Saved query KO"},
-];
-// Dynamic type names — populated from /api/schema after login.
-window.__schemaTypes = [];
-function aiokoqlCompletions(context) {
-  const word = context.matchBefore(/[\w:]*/);
-  if (!word || (word.from === word.to && !context.explicit)) return null;
-  const text = word.text.toLowerCase();
-  let options = AIKOQL_KEYWORDS.filter(k => k.label.toLowerCase().startsWith(text));
-  // Add dynamic type names from schema (lower priority).
-  for (const t of (window.__schemaTypes || [])) {
-    if (t.toLowerCase().startsWith(text) && !options.find(o => o.label === t)) {
-      options.push({label: t, type: "type", detail: "Knowledge Object type", boost: 0});
-    }
-  }
-  if (!options.length) return null;
-  return {from: word.from, options, filter: false};
-}
-
-// Expose init function globally so non-module JS can call it after login.
-window.__initCodeMirror = function() {
-  const el = document.getElementById('query-editor');
-  if (!el || window.__cmView) return;
-  window.__cmView = new EditorView({
-    doc: '',
-    extensions: [
-      basicSetup,
-      sql({ dialect: PostgreSQL }),
-      oneDark,
-      autocompletion({ override: [aiokoqlCompletions] }),
-      EditorView.updateListener.of(update => {
-        if (update.docChanged) {
-          const q = update.state.doc.toString().trim();
-          const hist = JSON.parse(localStorage.getItem('aikoql-query-history')||'[]');
-          if (q && !hist.includes(q)) { hist.unshift(q); if (hist.length>50) hist.pop(); localStorage.setItem('aikoql-query-history',JSON.stringify(hist)); }
-        }
-      })
-    ],
-    parent: el
-  });
-  // Ctrl+Enter → run query (capture phase to beat CodeMirror's internal handlers).
-  window.__cmView.dom.addEventListener('keydown', e => {
-    if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); window.runQuery(); }
-  }, true);
-};
-window.__cmSetValue = function(v) {
-  if (!window.__cmView) return;
-  const tx = window.__cmView.state.update({changes:{from:0,to:window.__cmView.state.doc.length,insert:v}});
-  window.__cmView.dispatch(tx);
-};
-window.__cmGetValue = function() {
-  return window.__cmView ? window.__cmView.state.doc.toString() : '';
-};
-</script>
+<script src="/studio/assets/vis-network.js"></script>
+<script src="/studio/assets/editor.js"></script>
 <style>
 :root {
   --bg: #0a0a12;
@@ -753,6 +644,9 @@ function loadTenants() {
     if (!d.schema) return;
     // Populate dynamic type names for CodeMirror autocomplete.
     window.__schemaTypes = Object.keys(d.schema);
+    const propNames = new Set();
+    Object.values(d.schema).forEach(i => (i.properties||[]).forEach(p => propNames.add(p)));
+    window.__schemaProps = [...propNames];
     const tenants = new Set();
     Object.values(d.schema).forEach(info => { if (info.tenants) info.tenants.forEach(t => tenants.add(t)); });
     const opts = '<option value="">Default tenant</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
@@ -1252,6 +1146,7 @@ async function loadOntologyPanel() {
     }
     const ko = data.results[0];
     ontologyVersion = ko.version; ontologySource = ko.source;
+    window.__ontologyClasses = ((ko.properties||{}).classes||[]).map(c => c && c.name).filter(Boolean);
     const props = ko.properties || {};
     statusDiv.innerHTML = '<div style="color:var(--green);margin-bottom:8px;">✓ Ontology loaded — <b>'+ esc(props.namespace||'?') +'</b> v'+ esc(props.version||'?') +' <span style="color:var(--muted);">('+ esc(ko.source||'?') +', revision '+ esc(ko.version) +')</span></div>';
 
@@ -2055,16 +1950,25 @@ document.addEventListener('DOMContentLoaded', () => {
 </body>
 </html>"##;
 
-/// Headers for the Studio page itself (`GET /` and `/studio`). Studio has no
-/// forms, `<base>`, frames or plugin content and is never framed; its session
-/// token rides some URLs, so the Referer must not carry them anywhere. A
-/// `script-src` policy is deliberately absent: the page's inline script and
-/// handlers would need `'unsafe-inline'`, which protects nothing — XSS is
-/// closed by esc() (see the lints below), not by CSP.
+/// The vendored Studio scripts, served at `/studio/assets/*` (see the module
+/// doc). Embedded so a deployed binary needs no network to render Studio.
+pub(crate) const EDITOR_JS: &str = include_str!("../assets/studio/editor.js");
+pub(crate) const VIS_JS: &str = include_str!("../assets/studio/vis-network.js");
+
+/// Headers for the Studio page itself (`GET /` and `/studio`). Everything the
+/// page loads is same-origin (vendored scripts, `/api/*`), so scripts and
+/// connections are confined to the origin: an injected `<script src=evil>` or
+/// an `fetch('https://evil')` exfiltration is blocked. The page's inline
+/// script and handlers need `'unsafe-inline'` for scripts, so this does not
+/// stop inline XSS — esc() (and its lint) is the control for that. No forms,
+/// `<base>`, frames or plugins are used, and Studio is never framed; its token
+/// rides a header now, and Referrer-Policy keeps URLs from leaking anyway.
 pub(crate) const STUDIO_HEADERS: &[(&str, &str)] = &[
     (
         "Content-Security-Policy",
-        "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; \
+         base-uri 'none'; object-src 'none'; form-action 'self'",
     ),
     ("X-Frame-Options", "DENY"),
     ("Referrer-Policy", "no-referrer"),

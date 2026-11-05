@@ -1431,6 +1431,16 @@ pub(crate) fn handle_http(
                 crate::license::LICENSE_STATE.get(),
             ),
         ),
+        "/studio/assets/editor.js" => (
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            studio::EDITOR_JS.to_string(),
+        ),
+        "/studio/assets/vis-network.js" => (
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            studio::VIS_JS.to_string(),
+        ),
         "/health" => {
             let uptime = SERVER_START
                 .get()
