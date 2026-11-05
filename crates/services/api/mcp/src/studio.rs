@@ -2516,6 +2516,23 @@ mod tests {
     }
 
     #[test]
+    fn studio_loads_no_third_party_scripts() {
+        // Supply chain + air-gap: the editor and the graph library are vendored
+        // into the binary and served same-origin, not fetched from a CDN.
+        assert!(
+            !STUDIO_HTML.contains("https://") && !STUDIO_HTML.contains("http://"),
+            "the page references an external origin"
+        );
+        for asset in ["/studio/assets/editor.js", "/studio/assets/vis-network.js"] {
+            assert!(STUDIO_HTML.contains(asset), "{asset} not referenced");
+        }
+        assert!(
+            !STUDIO_HTML.contains("type=\"module\""),
+            "inline module script remains"
+        );
+    }
+
+    #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
         // the client must not claim one.

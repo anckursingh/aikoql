@@ -946,6 +946,13 @@ fn h020_the_studio_page_is_served_with_framing_and_referrer_hardening() {
         ] {
             assert!(csp.contains(d), "{path}: CSP lacks {d}: {csp}");
         }
+        for d in [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline'",
+            "connect-src 'self'",
+        ] {
+            assert!(csp.contains(d), "{path}: CSP lacks {d}: {csp}");
+        }
         assert_eq!(r.header("x-frame-options"), Some("DENY"), "{path}");
         assert_eq!(r.header("referrer-policy"), Some("no-referrer"), "{path}");
         assert_eq!(
@@ -954,4 +961,37 @@ fn h020_the_studio_page_is_served_with_framing_and_referrer_hardening() {
             "{path}"
         );
     }
+}
+
+#[test]
+fn h021_the_vendored_studio_scripts_are_served_from_the_binary() {
+    let srv = serve("021", &[]);
+    let get = |path: &str| {
+        let mut s = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        s.write_all(format!("GET {path} HTTP/1.0\r\nHost: x\r\n\r\n").as_bytes())
+            .unwrap();
+        let mut raw = Vec::new();
+        let _ = s.read_to_end(&mut raw);
+        parse(&raw)
+    };
+    for (path, marker) in [
+        ("/studio/assets/editor.js", "__initCodeMirror"),
+        ("/studio/assets/vis-network.js", "vis"),
+    ] {
+        let r = get(path);
+        assert_eq!(r.status, 200, "{path}");
+        assert!(
+            r.header("content-type")
+                .is_some_and(|c| c.starts_with("application/javascript")),
+            "{path}: {:?}",
+            r.header("content-type")
+        );
+        assert!(
+            r.body.len() > 100_000 && r.body.contains(marker),
+            "{path}: {} bytes",
+            r.body.len()
+        );
+    }
+    assert_eq!(get("/studio/assets/nope.js").status, 404);
 }
