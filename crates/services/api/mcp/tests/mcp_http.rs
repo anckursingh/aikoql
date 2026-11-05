@@ -917,3 +917,41 @@ fn h019_http_sampling_capability_does_not_leak_to_the_stdio_transport() {
     );
     let _ = sid;
 }
+
+#[test]
+fn h020_the_studio_page_is_served_with_framing_and_referrer_hardening() {
+    // Studio puts the session token in some URLs (`?token=`), is a plain
+    // page with no forms/<base>/frames/objects, and is never meant to be
+    // framed: clickjacking, <base> hijack, plugin content and a leaking
+    // Referer are all closed at the header. (A script-src policy is not here:
+    // the page's inline script and handlers need 'unsafe-inline'.)
+    let srv = serve("020", &[]);
+    for path in ["/studio", "/"] {
+        let mut s = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        s.write_all(format!("GET {path} HTTP/1.0\r\nHost: x\r\n\r\n").as_bytes())
+            .unwrap();
+        let mut raw = Vec::new();
+        let _ = s.read_to_end(&mut raw);
+        let r = parse(&raw);
+        assert_eq!(r.status, 200, "{path}");
+        let csp = r
+            .header("content-security-policy")
+            .unwrap_or_else(|| panic!("{path}: no Content-Security-Policy"));
+        for d in [
+            "frame-ancestors 'none'",
+            "base-uri 'none'",
+            "object-src 'none'",
+            "form-action 'self'",
+        ] {
+            assert!(csp.contains(d), "{path}: CSP lacks {d}: {csp}");
+        }
+        assert_eq!(r.header("x-frame-options"), Some("DENY"), "{path}");
+        assert_eq!(r.header("referrer-policy"), Some("no-referrer"), "{path}");
+        assert_eq!(
+            r.header("x-content-type-options"),
+            Some("nosniff"),
+            "{path}"
+        );
+    }
+}
