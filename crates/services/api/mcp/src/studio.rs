@@ -2462,6 +2462,20 @@ mod tests {
     }
 
     #[test]
+    fn auto_discover_previews_before_it_saves() {
+        // Discovery output is a proposal: the button shows it and an explicit
+        // second action saves (it must never silently become the ontology).
+        assert!(
+            STUDIO_HTML.contains("{preview: !save}"),
+            "discoverOntology must request a preview unless saving"
+        );
+        assert!(
+            STUDIO_HTML.contains("discoverOntology(true)"),
+            "the preview must offer an explicit Save action"
+        );
+    }
+
+    #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
         // the client must not claim one.
