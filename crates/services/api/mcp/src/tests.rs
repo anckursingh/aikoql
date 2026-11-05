@@ -1347,6 +1347,167 @@ fn s08_discover_ontology_hot_reloads_the_compile_registry() {
     let _ = std::fs::remove_file(format!("{db}.audit.log"));
 }
 
+// ---------------------------------------------------------------------------
+// Studio hardening M2: discovery is tenant-confined, previewable, and
+// refreshes on re-run. Before: the tools scanned every tenant as an unscoped
+// admin whatever the caller's tenant, always persisted, and the fixed
+// idempotency key made a second run replay the first result.
+// ---------------------------------------------------------------------------
+
+fn m2_kernel(tag: &str) -> crate::Kernel {
+    let db = tmp_db(tag);
+    let _ = std::fs::remove_dir_all(&db);
+    crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel")
+}
+
+fn m2_put(k: &crate::Kernel, ty: &str, tenant: Option<&str>) {
+    let mut a = serde_json::json!({
+        "subject": "admin", "roles": ["admin"], "type_name": ty,
+        "properties": {"case_id": ty},
+    });
+    if let Some(t) = tenant {
+        a["tenant"] = serde_json::json!(t);
+    }
+    crate::tools::tool_remember(k, &a).expect("remember");
+}
+
+fn m2_types(r: &serde_json::Value) -> Vec<String> {
+    r["types_discovered"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn m2_discover(k: &crate::Kernel, extra: serde_json::Value) -> serde_json::Value {
+    let mut a = serde_json::json!({"subject": "admin", "roles": ["admin"]});
+    for (key, v) in extra.as_object().expect("object") {
+        a[key] = v.clone();
+    }
+    crate::tools::tool_discover_ontology(k, &a).expect("discover")
+}
+
+#[test]
+fn m2_discovery_is_confined_to_the_callers_tenant() {
+    let k = m2_kernel("m2a");
+    m2_put(&k, "alpha_doc", Some("tenant-a"));
+    m2_put(&k, "beta_doc", Some("tenant-b"));
+    m2_put(&k, "shared_doc", None);
+    let a = m2_discover(
+        &k,
+        serde_json::json!({"tenant": "tenant-a", "preview": true}),
+    );
+    let got = m2_types(&a);
+    assert!(
+        got.contains(&"alpha_doc".to_string()),
+        "own tenant: {got:?}"
+    );
+    assert!(
+        !got.contains(&"beta_doc".to_string()),
+        "another tenant's type leaked into tenant-a's discovery: {got:?}"
+    );
+    assert!(
+        !got.contains(&"shared_doc".to_string()),
+        "a tenant-scoped read of untenanted rows must fail closed: {got:?}"
+    );
+}
+
+#[test]
+fn m2_unscoped_admin_discovery_still_sees_every_tenant() {
+    // The Studio console is a platform-level view; confinement is opt-in by
+    // tenant scope, not a behavior change for the unscoped admin.
+    let k = m2_kernel("m2b");
+    m2_put(&k, "alpha_doc", Some("tenant-a"));
+    m2_put(&k, "shared_doc", None);
+    let got = m2_types(&m2_discover(&k, serde_json::json!({"preview": true})));
+    assert!(got.contains(&"alpha_doc".to_string()) && got.contains(&"shared_doc".to_string()));
+}
+
+#[test]
+fn m2_preview_returns_a_proposal_and_persists_nothing() {
+    let k = m2_kernel("m2c");
+    m2_put(&k, "shared_doc", None);
+    let r = m2_discover(&k, serde_json::json!({"preview": true}));
+    assert_eq!(r["saved"], serde_json::json!(false), "{r}");
+    assert!(m2_types(&r).contains(&"shared_doc".to_string()), "{r}");
+    let subj = crate::Subject::with_roles("admin", &["admin"]);
+    let stored = k.scan_by_type(&subj, crate::ONTOLOGY_TYPE).expect("scan");
+    assert!(
+        stored.is_empty(),
+        "preview wrote an Ontology KO: {}",
+        stored.len()
+    );
+}
+
+#[test]
+fn m2_rediscovery_picks_up_new_data_and_is_idempotent_when_unchanged() {
+    let k = m2_kernel("m2d");
+    m2_put(&k, "first_doc", None);
+    let one = m2_discover(&k, serde_json::json!({}));
+    m2_put(&k, "second_doc", None);
+    let two = m2_discover(&k, serde_json::json!({}));
+    assert!(
+        m2_types(&two).contains(&"second_doc".to_string()),
+        "re-discovery replayed the first result: {two}"
+    );
+    assert_eq!(
+        one["koid"], two["koid"],
+        "re-discovery must update the same KO"
+    );
+    assert!(
+        two["version"].as_u64() > one["version"].as_u64(),
+        "{one} -> {two}"
+    );
+    let three = m2_discover(&k, serde_json::json!({}));
+    assert_eq!(
+        three["version"], two["version"],
+        "unchanged data must not write a new version"
+    );
+}
+
+#[test]
+fn m2_a_tenant_ontology_never_becomes_the_global_compile_registry() {
+    let k = m2_kernel("m2e");
+    m2_put(&k, "alpha_doc", Some("tenant-a"));
+    let saved = m2_discover(&k, serde_json::json!({"tenant": "tenant-a"}));
+    assert_eq!(saved["saved"], serde_json::json!(true), "{saved}");
+    let reg = crate::http::load_ontology_registry(&k);
+    assert!(
+        reg.resolve_class("alpha_doc").is_none(),
+        "tenant-a's discovered ontology was installed as the process-wide registry"
+    );
+}
+
+#[test]
+fn m2_discover_schema_is_confined_to_the_callers_tenant() {
+    let k = m2_kernel("m2f");
+    m2_put(&k, "alpha_doc", Some("tenant-a"));
+    m2_put(&k, "beta_doc", Some("tenant-b"));
+    let r = crate::tools::tool_discover_schema(
+        &k,
+        &serde_json::json!({"subject": "admin", "roles": ["admin"], "tenant": "tenant-a"}),
+    )
+    .expect("schema");
+    let types = r["types"].as_array().expect("types");
+    let names: Vec<&str> = types.iter().filter_map(|t| t.as_str()).collect();
+    assert!(names.contains(&"alpha_doc"), "{names:?}");
+    assert!(
+        !names.contains(&"beta_doc"),
+        "tenant-a saw tenant-b's type name: {names:?}"
+    );
+}
+
 // POC-4 S-7: REST /api/aikoql validated every type against an empty
 // SchemaRegistry + whatever ontology existed, while the MCP tool compiled
 // without schema validation — the identical query died in the studio with
