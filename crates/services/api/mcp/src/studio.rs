@@ -2437,6 +2437,20 @@ mod tests {
     }
 
     #[test]
+    fn user_admin_is_probed_only_when_the_licence_includes_it() {
+        // Community mode has no /api/users: asking anyway logs a 404 in the
+        // browser console on every login. Ask /api/license first.
+        let a = STUDIO_HTML
+            .find("async function loadUsers()")
+            .expect("loadUsers");
+        let body = &STUDIO_HTML[a..a + 700];
+        let lic = body.find("/api/license").expect("no licence check");
+        let users = body.find("/api/users").expect("no users call");
+        assert!(lic < users, "{body}");
+        assert!(body.contains("multi-user"), "{body}");
+    }
+
+    #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
         // the client must not claim one.
