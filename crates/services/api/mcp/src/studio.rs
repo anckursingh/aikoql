@@ -1309,13 +1309,14 @@ async function loadUsers() {
   const panel = document.getElementById('users-panel');
   if (!panel) return;
   try {
+    // community mode has no user admin — ask the licence first, don't 404
+    const lic = await api('/api/license');
+    if (!(lic.features || []).includes('multi-user')) { panel.style.display = 'none'; return; }
     const d = await api('/api/users');
     panel.style.display = 'block';
     renderUsers(d.users || []);
   } catch(e) { panel.style.display = 'none'; } // 403/404: no admin, or no license
 }
-// Escape & < > " ' — user rows render /api/users data (IdP-influenceable
-// sub/name claims in SSO mode), which must never reach the markup raw.
 // A vis-network tooltip as DOM text nodes (a title string may be parsed as HTML).
 function nodeTip(n, es) {
   const d = document.createElement('div'), b = document.createElement('b');
@@ -1333,6 +1334,8 @@ function openInInspector(koid) {
   inspectorSearch();
   return false;
 }
+// Escape & < > " ' — rendered rows carry stored data and IdP-influenceable
+// claims (sub/name in SSO mode), which must never reach the markup raw.
 function esc(s) {
   if (s === null || s === undefined) return '';
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
