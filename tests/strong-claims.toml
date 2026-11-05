@@ -65,31 +65,31 @@ evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 419
+line = 472
 text = "/// Audit counter: one increment per physical-type resolution. Pins O(1):"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 521
+line = 599
 text = "/// TDD-COMP-001 (P4-M7): O(1) via the `by_physical_type` index — one hash"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 536
+line = 614
 text = "/// for O(1) average resolution."
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 1373
+line = 1460
 text = "// TDD-COMP-001 (P4-M7): physical-type index — O(1) resolution"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 1378
+line = 1465
 text = "// The probe counter pins O(1) average: each lookup costs exactly ONE"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
@@ -149,7 +149,7 @@ evidence = "t25b_concurrent_readers_and_writers_see_only_committed_state"
 
 [[claim]]
 file = "crates/kernel/tests/conformance.rs"
-line = 3834
+line = 3857
 text = "// Wait for completion (bounded poll — the wait itself never journals)."
 evidence = "t11_class_b_admission_is_audited_and_out_of_the_class_a_stream"
 
