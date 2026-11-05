@@ -1984,4 +1984,120 @@ mod tests {
         assert_eq!(supersedes.domain.as_deref(), Some("identity_link"));
         assert_eq!(supersedes.range.as_deref(), Some("identity_link"));
     }
+
+    // ---- Studio hardening M4: ontology correctness ------------------------
+
+    fn names(defs: Vec<&PropertyDef>) -> Vec<String> {
+        let mut v: Vec<String> = defs.into_iter().map(|d| d.name.clone()).collect();
+        v.sort();
+        v
+    }
+
+    fn scoped() -> OntologyDef {
+        let mut o = sample_ontology();
+        o.property_defs.clear();
+        for n in ["name", "salary", "budget"] {
+            o.property_defs.insert(
+                n.into(),
+                PropertyDef {
+                    name: n.into(),
+                    value_type: "Text".into(),
+                    required: false,
+                    nullable: false,
+                },
+            );
+        }
+        o.classes.get_mut("Person").unwrap().properties = vec!["name".into()];
+        o.classes.get_mut("Employee").unwrap().properties = vec!["salary".into()];
+        o.classes.get_mut("Department").unwrap().properties = vec!["budget".into()];
+        o
+    }
+
+    #[test]
+    fn m4_class_properties_are_scoped_to_the_class_and_its_ancestors() {
+        let reg = OntologyRegistry::new(scoped()).unwrap();
+        assert_eq!(names(reg.class_properties("Person")), ["name"]);
+        // Employee inherits Person's; Manager inherits both
+        assert_eq!(names(reg.class_properties("Employee")), ["name", "salary"]);
+        assert_eq!(names(reg.class_properties("Manager")), ["name", "salary"]);
+        assert_eq!(names(reg.class_properties("Department")), ["budget"]);
+    }
+
+    #[test]
+    fn m4_a_legacy_ontology_without_class_properties_still_returns_every_property() {
+        let mut o = scoped();
+        for c in o.classes.values_mut() {
+            c.properties.clear();
+        }
+        let reg = OntologyRegistry::new(o).unwrap();
+        assert_eq!(
+            names(reg.class_properties("Person")),
+            ["budget", "name", "salary"]
+        );
+    }
+
+    #[test]
+    fn m4_class_properties_round_trip_and_an_empty_list_is_not_emitted() {
+        let o = scoped();
+        let back = OntologyDef::from_property_map(&o.to_property_map()).unwrap();
+        assert_eq!(
+            back.classes["Employee"].properties,
+            vec!["salary".to_string()]
+        );
+        assert_eq!(back, o);
+        // byte-compat: a class with no declared properties encodes exactly as before
+        let legacy = sample_ontology().to_property_map();
+        let Value::List(classes) = &legacy["classes"] else {
+            panic!()
+        };
+        for c in classes {
+            let Value::Map(cm) = c else { panic!() };
+            assert!(!cm.contains_key("properties"), "{cm:?}");
+        }
+    }
+
+    #[test]
+    fn m4_nullable_survives_encode_and_decode() {
+        let mut o = scoped();
+        o.property_defs.get_mut("name").unwrap().nullable = true;
+        let back = OntologyDef::from_property_map(&o.to_property_map()).unwrap();
+        assert!(back.property_defs["name"].nullable, "nullable was dropped");
+        assert!(!back.property_defs["salary"].nullable);
+        // an ontology stored before the field existed decodes as non-nullable
+        let mut pm = o.to_property_map();
+        if let Some(Value::List(pl)) = pm.get_mut("property_defs") {
+            for p in pl {
+                if let Value::Map(m) = p {
+                    m.remove("nullable");
+                }
+            }
+        }
+        let legacy = OntologyDef::from_property_map(&pm).unwrap();
+        assert!(!legacy.property_defs["name"].nullable);
+    }
+
+    #[test]
+    fn m4_validate_rejects_circular_inheritance() {
+        let mut o = sample_ontology();
+        o.classes.get_mut("Person").unwrap().parent = Some("Manager".into());
+        let err = o
+            .validate()
+            .expect_err("Person -> Manager -> Employee -> Person");
+        assert!(err.to_string().contains("circular"), "{err}");
+        let mut own = sample_ontology();
+        own.classes.get_mut("Department").unwrap().parent = Some("Department".into());
+        assert!(own
+            .validate()
+            .expect_err("self parent")
+            .to_string()
+            .contains("circular"));
+    }
+
+    #[test]
+    fn m4_validate_rejects_a_class_declaring_an_unknown_property() {
+        let mut o = scoped();
+        o.classes.get_mut("Person").unwrap().properties = vec!["ghost".into()];
+        let err = o.validate().expect_err("unknown property");
+        assert!(err.to_string().contains("ghost"), "{err}");
+    }
 }
