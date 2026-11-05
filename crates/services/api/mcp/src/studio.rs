@@ -2113,6 +2113,135 @@ mod tests {
         }
     }
 
+    // M1 (Studio hardening): every value the Studio puts into markup comes from
+    // stored data or an API reply — KO fields, type/tenant names, ontology
+    // text, error messages (a compiler error echoes the query) — and must go
+    // through esc(). These are source-level lints in the style of the other
+    // marker tests here: the JS lives in a Rust string, so the string is the
+    // thing to check.
+
+    /// Operands that must never be concatenated into markup bare. Extend this
+    /// list when a new panel renders a new untrusted field.
+    const UNTRUSTED: &[&str] = &[
+        "e.message",
+        "data.error",
+        "err.error",
+        "data.query",
+        "node.tenant",
+        "node.koid",
+        "node.type_name",
+        "node.label",
+        "node.lifecycle.state",
+        "node.lifecycle.origin",
+        "node.security.owner",
+        "node.security.classification",
+        "node.semantic.summary",
+        "node.semantic.embedding_model",
+        "p.key",
+        "r.direction",
+        "r.type",
+        "last.from",
+        "last.to",
+        "last.reason",
+        "last.by",
+        "typeName",
+        "tenant",
+        "n.koid",
+        "n.type_name",
+        "n.tenant",
+        "n.label",
+        "cm.name",
+        "cm.parent",
+        "cm.description",
+        "r.name",
+        "r.domain",
+        "r.range",
+        "m.source",
+        "m.physical_type",
+        "props.namespace",
+        "props.version",
+        "b.name",
+        "op",
+        "q",
+        "t",
+        "k",
+        "p",
+        "r",
+        "es",
+        "st",
+        "ver",
+    ];
+
+    /// `+TOKEN` / `+(TOKEN||…)` operand uses in the whitespace-stripped JS.
+    fn raw_uses(src: &str, token: &str) -> usize {
+        let is_ident = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '(' | '[');
+        let mut n = 0;
+        for lead in ["+", "+("] {
+            let pat = format!("{lead}{token}");
+            let mut from = 0;
+            while let Some(i) = src[from..].find(&pat) {
+                let end = from + i + pat.len();
+                let next = src[end..].chars().next();
+                let boundary = next.is_none_or(|c| !is_ident(c));
+                // `+(t||` is an operand use; `+(t)` / `+(t+1)` are arithmetic.
+                let ok_paren = lead == "+" || src[end..].starts_with("||");
+                if boundary && ok_paren {
+                    n += 1;
+                }
+                from = end;
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn studio_js_escapes_untrusted_values_before_markup() {
+        let src: String = STUDIO_HTML.chars().filter(|c| !c.is_whitespace()).collect();
+        let offenders: Vec<String> = UNTRUSTED
+            .iter()
+            .filter_map(|t| {
+                let n = raw_uses(&src, t);
+                (n > 0).then(|| format!("{t} x{n}"))
+            })
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "raw untrusted values concatenated into markup (wrap each in esc()): {offenders:?}"
+        );
+    }
+
+    #[test]
+    fn studio_handlers_take_data_from_dataset_not_js_strings() {
+        // `onclick="f(\''+x+'\')"` splices data into a JS string inside an
+        // attribute: a `'` or entity in x breaks out. Handlers read
+        // this.dataset.* from an esc()'d data-* attribute instead (renderUsers).
+        let src: String = STUDIO_HTML.chars().filter(|c| !c.is_whitespace()).collect();
+        let n = src.matches("\\''+").count();
+        assert_eq!(n, 0, "{n} inline handlers splice data into JS strings");
+    }
+
+    #[test]
+    fn save_ontology_does_not_assert_an_identity() {
+        // The server derives the subject from the bearer token (with_principal);
+        // the client must not claim one.
+        assert!(
+            !STUDIO_HTML.contains("subject: \"admin\""),
+            "saveOntology sends a body-declared subject"
+        );
+    }
+
+    #[test]
+    fn licence_status_line_is_html_escaped() {
+        let mut lic = license(&["multi-user"], None);
+        lic.org = "<img src=x onerror=alert(1)>".into();
+        let html = studio_html(false, Some(&lic));
+        assert!(
+            !html.contains("<img src=x onerror=alert(1)>"),
+            "the licence org reaches the page as markup"
+        );
+        assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    }
+
     #[test]
     fn login_card_shows_license_status_marker() {
         // Task 9: the served login card carries the status line — licensed
