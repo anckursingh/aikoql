@@ -1233,23 +1233,28 @@ async function inspectorLoadKOID(koid) {
 // ═══════════════════════════════════════════
 // Panel: Ontology
 // ═══════════════════════════════════════════
+// The ontology the compiler uses (GET /api/v1/ontology) — never an arbitrary
+// row. Its version and source are kept for saveOntology's CAS.
+let ontologyVersion = null, ontologySource = null;
 async function loadOntologyPanel() {
   try {
-    // Fetch existing ontology via the aikoql endpoint.
-    const data = await api('/api/aikoql?query=MATCH%20Ontology%20RETURN%20*');
+    const raw = await api('/api/v1/ontology');
+    const data = {results: (raw.data || raw).properties ? [raw.data || raw] : []};
     const statusDiv = document.getElementById('ontology-status');
     const classesDiv = document.getElementById('ontology-classes');
     const relsDiv = document.getElementById('ontology-relationships');
     const mapsDiv = document.getElementById('ontology-mappings');
 
     if (!data.results || data.results.length === 0) {
+      ontologyVersion = null; ontologySource = null;
       statusDiv.innerHTML = '<div class="empty-state">No ontology defined yet. Use the form below to create one.</div>';
       classesDiv.innerHTML = ''; relsDiv.innerHTML = ''; mapsDiv.innerHTML = '';
       return;
     }
     const ko = data.results[0];
+    ontologyVersion = ko.version; ontologySource = ko.source;
     const props = ko.properties || {};
-    statusDiv.innerHTML = '<div style="color:var(--green);margin-bottom:8px;">✓ Ontology loaded — <b>'+ esc(props.namespace||'?') +'</b> v'+ esc(props.version||'?') +'</div>';
+    statusDiv.innerHTML = '<div style="color:var(--green);margin-bottom:8px;">✓ Ontology loaded — <b>'+ esc(props.namespace||'?') +'</b> v'+ esc(props.version||'?') +' <span style="color:var(--muted);">('+ esc(ko.source||'?') +', revision '+ esc(ko.version) +')</span></div>';
 
     // Render classes
     if (props.classes && Array.isArray(props.classes)) {
@@ -1316,33 +1321,19 @@ async function saveOntology() {
     const raw = document.getElementById('ontology-yaml-input').value.trim();
     if (!raw) { msg.innerHTML = '<span style="color:var(--red);">Please paste an ontology definition.</span>'; return; }
     const def = JSON.parse(raw);
-    // Validate required fields
     if (!def.namespace) { msg.innerHTML = '<span style="color:var(--red);">Missing "namespace" field.</span>'; return; }
     if (!def.classes) { msg.innerHTML = '<span style="color:var(--red);">Missing "classes" array.</span>'; return; }
-
-    // Build the ontology KO and save via CREATE-style aikoql.
-    // Since CREATE doesn't support nested structures, use the /api/v1/remember endpoint.
-    const payload = {
-      type_name: "Ontology",
-      properties: def
-    };
-    const url = '/api/v1/remember' + (authToken ? '?token=' + encodeURIComponent(authToken) : '');
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      msg.innerHTML = '<span style="color:var(--red);">Error: '+ esc(err.error || 'HTTP '+res.status) +'</span>';
-      return;
-    }
-    const result = await res.json();
-    msg.innerHTML = '<span style="color:var(--green);">✓ Ontology saved — reload to apply.</span>';
-    // Reload the display
-    setTimeout(() => loadOntologyPanel(), 500);
+    // Saved in place under a CAS on the revision this editor loaded; the server
+    // validates the definition and answers with the new revision. The
+    // identity comes from the bearer token, not from this body.
+    const payload = {definition: def};
+    if (ontologySource === 'manual') payload.expected_version = ontologyVersion;
+    const r = await apiPost('/api/v1/ontology', payload);
+    const d = r.data || r;
+    msg.innerHTML = '<span style="color:var(--green);">✓ Ontology saved (revision '+esc(d.version)+').</span>';
+    loadOntologyPanel();
   } catch(e) {
-    msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>';
+    msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+' — reload the panel if the ontology changed since you opened it.</span>';
   }
 }
 
