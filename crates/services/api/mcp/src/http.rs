@@ -1558,6 +1558,11 @@ pub(crate) fn handle_http(
     for (k, v) in api_rest::cors_headers() {
         resp.push_str(&format!("{}: {}\r\n", k, v));
     }
+    if matches!(route, "/" | "/studio") {
+        for (k, v) in studio::STUDIO_HEADERS {
+            resp.push_str(&format!("{}: {}\r\n", k, v));
+        }
+    }
     resp.push_str("\r\n");
     resp.push_str(&body);
     let _ = stream.write_all(resp.as_bytes());

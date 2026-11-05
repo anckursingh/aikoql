@@ -2052,6 +2052,38 @@ document.addEventListener('DOMContentLoaded', () => {
 </body>
 </html>"##;
 
+/// Headers for the Studio page itself (`GET /` and `/studio`). Studio has no
+/// forms, `<base>`, frames or plugin content and is never framed; its session
+/// token rides some URLs, so the Referer must not carry them anywhere. A
+/// `script-src` policy is deliberately absent: the page's inline script and
+/// handlers would need `'unsafe-inline'`, which protects nothing — XSS is
+/// closed by esc() (see the lints below), not by CSP.
+pub(crate) const STUDIO_HEADERS: &[(&str, &str)] = &[
+    (
+        "Content-Security-Policy",
+        "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'",
+    ),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "no-referrer"),
+    ("X-Content-Type-Options", "nosniff"),
+];
+
+/// Escape text for an HTML text/attribute context.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// The Studio page. The served HTML always carries the Task 9 markers: the
 /// login card license line (`data-license-status`) and the admin users panel
 /// anchor (`data-users-panel`). Content varies: the line renders "Community"
@@ -2074,7 +2106,7 @@ pub(crate) fn studio_html(sso: bool, license: Option<&crate::license::LicenseSta
         }
         None => "Community".to_string(),
     };
-    let mut html = STUDIO_HTML.replace("<!-- LICENSE_STATUS -->", &status);
+    let mut html = STUDIO_HTML.replace("<!-- LICENSE_STATUS -->", &html_escape(&status));
     if sso {
         let anchor = format!("<button onclick=\"doLogin()\">Sign In</button>{SSO_LOGIN_HTML}");
         html = html.replace("<button onclick=\"doLogin()\">Sign In</button>", &anchor);
