@@ -709,6 +709,7 @@ mod tests {
                 name: "Employee".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let ont = OntologyRegistry::new(OntologyDef {
@@ -765,6 +766,7 @@ mod tests {
                 name: "Employee".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let ont = OntologyRegistry::new(OntologyDef {

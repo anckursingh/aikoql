@@ -337,6 +337,7 @@ mod tests {
                 name: "C".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let mappings: Vec<MappingEntry> = (0..300)

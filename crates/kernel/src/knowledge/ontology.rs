@@ -57,6 +57,10 @@ pub struct ClassDef {
     /// Parent class for single inheritance (e.g. `Employee` → parent = `Person`).
     pub parent: Option<String>,
     pub description: Option<String>,
+    /// Names of the `property_defs` this class declares (own properties; a
+    /// subclass also carries its ancestors'). Empty for every class in a
+    /// legacy ontology — see [`OntologyRegistry::class_properties`].
+    pub properties: Vec<String>,
 }
 
 /// A named relationship between two ontology classes.
@@ -234,6 +238,7 @@ impl OntologyDef {
                             name,
                             parent,
                             description,
+                            properties: Vec::new(),
                         },
                     );
                 }
@@ -670,6 +675,7 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
                     "Auto-discovered from {} (source: {})",
                     type_name, source
                 )),
+                properties: Vec::new(),
             },
         );
         for (prop_name, vt) in props {
@@ -772,6 +778,7 @@ mod tests {
                 name: "Person".into(),
                 parent: None,
                 description: Some("A human being".into()),
+                properties: Vec::new(),
             },
         );
         classes.insert(
@@ -780,6 +787,7 @@ mod tests {
                 name: "Employee".into(),
                 parent: Some("Person".into()),
                 description: Some("A person employed by a company".into()),
+                properties: Vec::new(),
             },
         );
         classes.insert(
@@ -788,6 +796,7 @@ mod tests {
                 name: "Manager".into(),
                 parent: Some("Employee".into()),
                 description: Some("An employee who manages others".into()),
+                properties: Vec::new(),
             },
         );
         classes.insert(
@@ -796,6 +805,7 @@ mod tests {
                 name: "Department".into(),
                 parent: None,
                 description: Some("An organizational unit".into()),
+                properties: Vec::new(),
             },
         );
 
@@ -902,6 +912,7 @@ mod tests {
                 name: "A".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let mut relationships = std::collections::BTreeMap::new();
@@ -1208,6 +1219,7 @@ mod tests {
                 name: "A".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let mut props = PropertyMap::new();
@@ -1242,6 +1254,7 @@ mod tests {
                         name: "A".into(),
                         parent: None,
                         description: None,
+                        properties: Vec::new(),
                     },
                 );
                 m
@@ -1283,6 +1296,7 @@ mod tests {
                 name: "Thing".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let mut rels = BTreeMap::new();
@@ -1384,6 +1398,7 @@ mod tests {
                 name: "C".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let mappings: Vec<MappingEntry> = (0..400)
@@ -1435,6 +1450,7 @@ mod tests {
                 name: "C".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let r = OntologyRegistry::new(OntologyDef {
@@ -1793,6 +1809,7 @@ mod tests {
                 name: "A".into(),
                 parent: None,
                 description: Some("has desc".into()),
+                properties: Vec::new(),
             },
         );
         classes.insert(
@@ -1801,6 +1818,7 @@ mod tests {
                 name: "B".into(),
                 parent: Some("A".into()),
                 description: None,
+                properties: Vec::new(),
             },
         );
 
@@ -1850,6 +1868,7 @@ mod tests {
                         name: "E".into(),
                         parent: None,
                         description: None,
+                        properties: Vec::new(),
                     },
                 );
                 m
