@@ -158,6 +158,12 @@ impl OntologyDef {
             if let Some(ref desc) = cd.description {
                 cm.insert("description".into(), Value::Text(desc.clone()));
             }
+            if !cd.properties.is_empty() {
+                cm.insert(
+                    "properties".into(),
+                    Value::List(cd.properties.iter().cloned().map(Value::Text).collect()),
+                );
+            }
             classes_list.push(Value::Map(cm));
         }
         m.insert("classes".into(), Value::List(classes_list));
@@ -190,6 +196,9 @@ impl OntologyDef {
             pm.insert("name".into(), Value::Text(name.clone()));
             pm.insert("type".into(), Value::Text(pd.value_type.clone()));
             pm.insert("required".into(), Value::Bool(pd.required));
+            if pd.nullable {
+                pm.insert("nullable".into(), Value::Bool(true));
+            }
             props_list.push(Value::Map(pm));
         }
         m.insert("property_defs".into(), Value::List(props_list));
@@ -232,13 +241,23 @@ impl OntologyDef {
                         .to_string();
                     let parent = map_get_str(cm, "parent").map(String::from);
                     let description = map_get_str(cm, "description").map(String::from);
+                    let properties = match map_get(cm, "properties") {
+                        Some(Value::List(l)) => l
+                            .iter()
+                            .filter_map(|v| match v {
+                                Value::Text(t) => Some(t.clone()),
+                                _ => None,
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     classes.insert(
                         name.clone(),
                         ClassDef {
                             name,
                             parent,
                             description,
-                            properties: Vec::new(),
+                            properties,
                         },
                     );
                 }
@@ -287,13 +306,15 @@ impl OntologyDef {
                         .to_string();
                     let value_type = map_get_str(pm, "type").unwrap_or("Text").to_string();
                     let required = map_get_bool(pm, "required").unwrap_or(false);
+                    // absent in ontologies stored before the field was encoded
+                    let nullable = map_get_bool(pm, "nullable").unwrap_or(false);
                     property_defs.insert(
                         name.clone(),
                         PropertyDef {
                             name,
                             value_type,
                             required,
-                            nullable: false,
+                            nullable,
                         },
                     );
                 }
@@ -370,6 +391,33 @@ impl OntologyDef {
                     return Err(KError::InvalidObject(format!(
                         "ontology class '{}' has unknown parent '{}'",
                         name, parent
+                    )));
+                }
+            }
+        }
+
+        // Inheritance must be a forest: walking up from any class must end.
+        for name in self.classes.keys() {
+            let mut seen = std::collections::BTreeSet::new();
+            let mut cur = Some(name.as_str());
+            while let Some(c) = cur {
+                if !seen.insert(c) {
+                    return Err(KError::InvalidObject(format!(
+                        "ontology class '{}' has circular inheritance",
+                        name
+                    )));
+                }
+                cur = self.classes.get(c).and_then(|cd| cd.parent.as_deref());
+            }
+        }
+
+        // A class may only declare properties the ontology defines.
+        for (name, cd) in &self.classes {
+            for p in &cd.properties {
+                if !self.property_defs.contains_key(p) {
+                    return Err(KError::InvalidObject(format!(
+                        "ontology class '{}' declares unknown property '{}'",
+                        name, p
                     )));
                 }
             }
@@ -494,11 +542,36 @@ impl OntologyRegistry {
         false
     }
 
-    /// Get all property definitions.
-    /// ponytail: MVP returns all property_defs globally. Per-class property
-    /// assignment and type-level scoping land when Schema gains property_types.
-    pub fn class_properties(&self, _class_name: &str) -> Vec<&PropertyDef> {
-        self.def.property_defs.values().collect()
+    /// The property definitions that apply to `class_name`: those it declares
+    /// plus its ancestors' (a subclass is-a its parents). A legacy ontology —
+    /// no class declares any — keeps the old behavior: every property applies
+    /// to every class.
+    pub fn class_properties(&self, class_name: &str) -> Vec<&PropertyDef> {
+        if self.def.classes.values().all(|c| c.properties.is_empty()) {
+            return self.def.property_defs.values().collect();
+        }
+        let mut out: Vec<&PropertyDef> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        // validate() rejects cycles; the visited set keeps an unvalidated def finite
+        let mut visited = std::collections::HashSet::new();
+        let mut cur = Some(class_name);
+        while let Some(c) = cur {
+            if !visited.insert(c) {
+                break;
+            }
+            let Some(cd) = self.def.classes.get(c) else {
+                break;
+            };
+            for p in &cd.properties {
+                if let Some(pd) = self.def.property_defs.get(p) {
+                    if seen.insert(p.as_str()) {
+                        out.push(pd);
+                    }
+                }
+            }
+            cur = cd.parent.as_deref();
+        }
+        out
     }
 
     /// Resolve a relationship by domain class and relationship name.
