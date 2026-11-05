@@ -853,6 +853,220 @@ fn openapi_spec() -> Result<J, String> {
 mod tests {
     use super::*;
 
+    // ---- Studio hardening M3: one active ontology, saved in place with CAS ----
+
+    fn m3_kernel(tag: &str) -> (crate::Kernel, std::path::PathBuf) {
+        let db = std::env::temp_dir().join(format!("mnemo-m3-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&db);
+        let k = crate::Kernel::open(
+            std::sync::Arc::new(
+                aikoql_storage_v2::AikoqlStorageEngineV2::open(&db).expect("open store"),
+            ),
+            std::sync::Arc::new(crate::SystemClock),
+            0,
+        )
+        .expect("open kernel");
+        (k, db)
+    }
+
+    fn m3_call(
+        k: &crate::Kernel,
+        db: &std::path::Path,
+        method: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> (String, serde_json::Value) {
+        let sessions = Mutex::new(HashMap::new());
+        sessions.lock().unwrap().insert(
+            "tok".into(),
+            crate::HttpSession {
+                username: "admin".into(),
+                roles: vec!["admin".into()],
+                created: std::time::Instant::now(),
+                ttl_secs: 86_400,
+            },
+        );
+        let rate = Mutex::new(crate::rate_limiter::RateLimiter::new(false, 1));
+        let (status, _ct, out) = route_v1(
+            method,
+            path,
+            &body.to_string(),
+            k,
+            &db.to_string_lossy(),
+            &sessions,
+            Some("tok".into()),
+            &rate,
+            None,
+        );
+        (
+            status,
+            serde_json::from_str(&out).unwrap_or(serde_json::json!({"raw": out})),
+        )
+    }
+
+    fn m3_def(ns: &str, class: &str) -> serde_json::Value {
+        serde_json::json!({
+            "namespace": ns, "version": "1.0",
+            "classes": [{"name": class}], "relationships": [], "mappings": [],
+        })
+    }
+
+    fn m3_ontology_kos(k: &crate::Kernel) -> usize {
+        k.scan_by_type(
+            &crate::Subject::with_roles("admin", &["admin"]),
+            crate::ONTOLOGY_TYPE,
+        )
+        .expect("scan")
+        .len()
+    }
+
+    fn m3_cleanup(k: crate::Kernel, db: std::path::PathBuf) {
+        drop(k);
+        let _ = std::fs::remove_dir_all(&db);
+        let _ = std::fs::remove_file(format!("{}.audit.log", db.to_string_lossy()));
+    }
+
+    #[test]
+    fn m3_the_active_ontology_endpoint_agrees_with_the_compile_registry() {
+        let (k, db) = m3_kernel("active");
+        for (ns, class, tags) in [
+            ("manual-ns", "ManualClass", vec![]),
+            ("auto-ns", "AutoClass", vec!["auto-discovered"]), // newer, but manual wins
+        ] {
+            crate::tools::tool_remember(
+                &k,
+                &serde_json::json!({
+                    "subject": "admin", "roles": ["admin"], "type_name": "Ontology",
+                    "tags": tags, "properties": m3_def(ns, class),
+                }),
+            )
+            .expect("remember ontology");
+        }
+        let (status, body) = m3_call(&k, &db, "GET", "/api/v1/ontology", serde_json::json!({}));
+        assert_eq!(status, "200 OK", "{body}");
+        assert_eq!(body["data"]["source"], "manual", "{body}");
+        assert_eq!(
+            body["data"]["properties"]["namespace"], "manual-ns",
+            "{body}"
+        );
+        let reg = crate::http::load_ontology_registry(&k);
+        assert!(
+            reg.resolve_class("ManualClass").is_some() && reg.resolve_class("AutoClass").is_none()
+        );
+        m3_cleanup(k, db);
+    }
+
+    #[test]
+    fn m3_saving_updates_the_one_ontology_in_place() {
+        let (k, db) = m3_kernel("save");
+        let (s1, one) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/ontology",
+            serde_json::json!({"definition": m3_def("ns", "First")}),
+        );
+        assert_eq!(s1, "200 OK", "{one}");
+        let v1 = one["data"]["version"].as_u64().expect("version");
+        let (s2, two) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/ontology",
+            serde_json::json!({"definition": m3_def("ns", "Second"), "expected_version": v1}),
+        );
+        assert_eq!(s2, "200 OK", "{two}");
+        assert_eq!(
+            one["data"]["koid"], two["data"]["koid"],
+            "saved a second KO"
+        );
+        assert!(two["data"]["version"].as_u64() > Some(v1));
+        assert_eq!(
+            m3_ontology_kos(&k),
+            1,
+            "one logical ontology, many versions"
+        );
+        let reg = crate::http::load_ontology_registry(&k);
+        assert!(
+            reg.resolve_class("Second").is_some(),
+            "registry not republished"
+        );
+        m3_cleanup(k, db);
+    }
+
+    #[test]
+    fn m3_a_stale_or_missing_expected_version_cannot_overwrite() {
+        let (k, db) = m3_kernel("cas");
+        let (_, one) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/ontology",
+            serde_json::json!({"definition": m3_def("ns", "First")}),
+        );
+        let v1 = one["data"]["version"].as_u64().expect("version");
+        let (_, two) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/ontology",
+            serde_json::json!({"definition": m3_def("ns", "Second"), "expected_version": v1}),
+        );
+        assert!(two["data"]["version"].is_u64(), "{two}");
+        for (label, body) in [
+            (
+                "stale",
+                serde_json::json!({"definition": m3_def("ns", "Lost"), "expected_version": v1}),
+            ),
+            (
+                "missing",
+                serde_json::json!({"definition": m3_def("ns", "Lost")}),
+            ),
+        ] {
+            let (status, out) = m3_call(&k, &db, "POST", "/api/v1/ontology", body);
+            assert_ne!(
+                status, "200 OK",
+                "{label} expected_version overwrote: {out}"
+            );
+        }
+        let reg = crate::http::load_ontology_registry(&k);
+        assert!(reg.resolve_class("Second").is_some() && reg.resolve_class("Lost").is_none());
+        m3_cleanup(k, db);
+    }
+
+    #[test]
+    fn m3_an_invalid_definition_is_rejected_and_stores_nothing() {
+        let (k, db) = m3_kernel("invalid");
+        let (ok, good) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/ontology",
+            serde_json::json!({"definition": m3_def("ns", "Good")}),
+        );
+        assert_eq!(ok, "200 OK", "{good}");
+        let v = good["data"]["version"].as_u64().expect("version");
+        let bad = serde_json::json!({
+            "namespace": "ns", "version": "1.0",
+            "classes": [{"name": "Orphan", "parent": "NoSuchParent"}],
+        });
+        let (status, out) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/ontology",
+            serde_json::json!({"definition": bad, "expected_version": v}),
+        );
+        assert_ne!(
+            status, "200 OK",
+            "an ontology with an unknown parent was saved: {out}"
+        );
+        let reg = crate::http::load_ontology_registry(&k);
+        assert!(reg.resolve_class("Good").is_some() && reg.resolve_class("Orphan").is_none());
+        assert_eq!(m3_ontology_kos(&k), 1);
+        m3_cleanup(k, db);
+    }
+
     #[test]
     fn s04_get_prove_reads_koid_from_query_string() {
         // POC-4 S-4: the studio calls GET /api/v1/prove?koid=…; the REST
