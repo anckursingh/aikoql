@@ -644,10 +644,13 @@ document.getElementById('login-pass').addEventListener('keydown', e => { if(e.ke
 // ═══════════════════════════════════════════
 // API helper
 // ═══════════════════════════════════════════
+// The session token travels only in this header — never in a URL (history,
+// logs, Referer).
+function authHeaders(extra) {
+  return Object.assign({}, extra || {}, authToken ? {'Authorization': 'Bearer ' + authToken} : {});
+}
 async function api(url) {
-  const sep = url.includes('?') ? '&' : '?';
-  const full = url + (authToken ? sep + 'token=' + encodeURIComponent(authToken) : '');
-  const res = await fetch(full);
+  const res = await fetch(url, {headers: authHeaders()});
   // S-10 (POC-4): a 401 means the server restarted and dropped the session —
   // return to the login overlay instead of leaking the raw body into a panel.
   if (res.status === 401) {
@@ -663,9 +666,7 @@ async function api(url) {
   return res.json();
 }
 async function apiPost(url, body) {
-  const sep = url.includes('?') ? '&' : '?';
-  const full = url + (authToken ? sep + 'token=' + encodeURIComponent(authToken) : '');
-  const res = await fetch(full, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})});
+  const res = await fetch(url, {method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify(body||{})});
   if (!res.ok) {
     let msg = 'HTTP ' + res.status;
     try { const b = await res.json(); if (b.error) msg = b.error; } catch(_) {}
@@ -674,9 +675,7 @@ async function apiPost(url, body) {
   return res.json();
 }
 async function apiPut(url, body) {
-  const sep = url.includes('?') ? '&' : '?';
-  const full = url + (authToken ? sep + 'token=' + encodeURIComponent(authToken) : '');
-  const res = await fetch(full, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})});
+  const res = await fetch(url, {method:'PUT', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify(body||{})});
   if (!res.ok) {
     let msg = 'HTTP ' + res.status;
     try { const b = await res.json(); if (b.error) msg = b.error; } catch(_) {}
@@ -1476,8 +1475,18 @@ async function setUserRoles(sub) {
     loadUsers();
   } catch(e) { document.getElementById('users-msg').innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
-function downloadAuditExport() {
-  location.href = '/api/audit-export' + (authToken ? '?token=' + encodeURIComponent(authToken) : '');
+// fetch + Blob so the download authenticates with the header, not the URL
+async function downloadAuditExport() {
+  try {
+    const res = await fetch('/api/audit-export', {headers: authHeaders()});
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const m = /filename="?([^";]+)"?/.exec(res.headers.get('Content-Disposition') || '');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(await res.blob());
+    a.download = m ? m[1] : 'audit-export.jsonl';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch(e) { alert('Audit export failed: ' + e.message); }
 }
 async function adminCreateBackup() {
   const div = document.getElementById('admin-backup-result');
@@ -1757,8 +1766,7 @@ async function deployBenchmark() {
   msg.innerHTML = 'Deploying...';
   try {
     const body = JSON.stringify({name:name, target_query:query, iterations:parseInt(iterations,10), warmup:parseInt(warmup,10)});
-    const url = '/api/v1/deploy-benchmark' + (authToken ? '?token='+encodeURIComponent(authToken) : '');
-    const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body});
+    const res = await fetch('/api/v1/deploy-benchmark', {method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body});
     const data = await res.json();
     if (data.koid) {
       msg.innerHTML = '<span style="color:var(--green);">Deployed: '+esc(data.koid)+'</span>';

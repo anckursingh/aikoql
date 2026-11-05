@@ -538,10 +538,18 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
             }
         }
     }
-    // From Authorization header: Bearer abc123
+    // From Authorization header: Bearer abc123 (name and scheme are
+    // case-insensitive, RFC 9110 — browsers and proxies vary the casing)
     for line in req.lines() {
-        if let Some(v) = line.strip_prefix("Authorization: Bearer ") {
-            return Some(v.trim().to_string());
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.eq_ignore_ascii_case("authorization") {
+            continue;
+        }
+        let value = value.trim();
+        if value.len() > 7 && value[..7].eq_ignore_ascii_case("bearer ") {
+            return Some(value[7..].trim().to_string());
         }
     }
     None
