@@ -38,68 +38,53 @@ pub(crate) fn current_ontology() -> Option<Arc<OntologyRegistry>> {
     ONTOLOGY_SLOT.get().map(|slot| slot.read().unwrap().clone()) // justified: poison is unrecoverable
 }
 
-/// Load the active ontology from stored Ontology KOs (MRFC-0041).
-/// Prefer manually-curated ontologies over auto-discovered ones.
-/// If multiple exist, pick the latest non-discovered, fall back to discovered.
-pub(crate) fn load_ontology_registry(k: &Kernel) -> Arc<OntologyRegistry> {
+/// The ontology the compiler uses, and the one Studio shows: the newest
+/// *manual* untenanted Ontology KO, else the newest auto-discovered one. A
+/// tenant's own ontology is never the process-wide one. Returns the KO and
+/// its source ("manual" | "auto-discovered").
+pub(crate) fn active_ontology(k: &Kernel) -> Option<(KnowledgeObject, &'static str)> {
     let subj = Subject::with_roles("system", &["admin"]);
-    // Only untenanted ontologies are the process-wide compile registry: a
-    // tenant's own ontology must never govern every other tenant's queries.
-    let shared = k.scan_by_type(&subj, ONTOLOGY_TYPE).map(|kos| {
-        kos.into_iter()
-            .filter(|ko| ko.metadata.tenant.is_none())
-            .collect::<Vec<_>>()
-    });
-    match shared {
-        Ok(kos) if !kos.is_empty() => {
-            let manual: Vec<_> = kos
-                .iter()
-                .filter(|ko| !ko.metadata.tags.contains(&"auto-discovered".to_string()))
-                .collect();
-            let candidate = if !manual.is_empty() {
-                // Prefer the latest manually-created ontology.
-                manual
-                    .into_iter()
-                    .max_by_key(|ko| ko.commit_ts)
-                    .expect("manual is non-empty") // justified: guarded by !manual.is_empty() above
-            } else {
-                // Fall back to latest auto-discovered.
-                kos.iter()
-                    .max_by_key(|ko| ko.commit_ts)
-                    .expect("kos is non-empty") // justified: guarded by the outer Ok(kos) if !kos.is_empty() arm
-            };
-            match OntologyDef::from_ko(candidate) {
-                Ok(def) => {
-                    let source = if candidate
-                        .metadata
-                        .tags
-                        .contains(&"auto-discovered".to_string())
-                    {
-                        "auto-discovered"
-                    } else {
-                        "manual"
-                    };
-                    info!(namespace = %def.namespace, version = %def.version,
-                          classes = def.classes.len(),
-                          mappings = def.mappings.len(),
-                          source = source,
-                          "ontology loaded");
-                    match OntologyRegistry::new(def) {
-                        Ok(r) => Arc::new(r),
-                        Err(e) => {
-                            info!(error = %e, "ontology registry failed to initialize — using empty registry");
-                            Arc::new(OntologyRegistry::empty())
-                        }
-                    }
-                }
+    let shared: Vec<KnowledgeObject> = k
+        .scan_by_type(&subj, ONTOLOGY_TYPE)
+        .ok()?
+        .into_iter()
+        .filter(|ko| ko.metadata.tenant.is_none())
+        .collect();
+    let auto = |ko: &KnowledgeObject| ko.metadata.tags.iter().any(|t| t == "auto-discovered");
+    let newest = |manual: bool| {
+        shared
+            .iter()
+            .filter(|ko| auto(ko) != manual)
+            .max_by_key(|ko| ko.commit_ts)
+            .cloned()
+    };
+    newest(true)
+        .map(|ko| (ko, "manual"))
+        .or_else(|| newest(false).map(|ko| (ko, "auto-discovered")))
+}
+
+pub(crate) fn load_ontology_registry(k: &Kernel) -> Arc<OntologyRegistry> {
+    let Some((candidate, source)) = active_ontology(k) else {
+        info!("no ontology KO found — using empty registry");
+        return Arc::new(OntologyRegistry::empty());
+    };
+    match OntologyDef::from_ko(&candidate) {
+        Ok(def) => {
+            info!(namespace = %def.namespace, version = %def.version,
+                  classes = def.classes.len(),
+                  mappings = def.mappings.len(),
+                  source = source,
+                  "ontology loaded");
+            match OntologyRegistry::new(def) {
+                Ok(r) => Arc::new(r),
                 Err(e) => {
-                    info!(error = %e, "ontology KO found but failed to decode — using empty registry");
+                    info!(error = %e, "ontology registry failed to initialize — using empty registry");
                     Arc::new(OntologyRegistry::empty())
                 }
             }
         }
-        _ => {
-            info!("no ontology KO found — using empty registry");
+        Err(e) => {
+            info!(error = %e, "ontology KO found but failed to decode — using empty registry");
             Arc::new(OntologyRegistry::empty())
         }
     }

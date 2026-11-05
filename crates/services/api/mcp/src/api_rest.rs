@@ -125,6 +125,14 @@ fn route_inner(
             need_auth()?;
             tool_list_backups(db_path)
         }
+        ("GET", "/api/v1/ontology") => {
+            need_auth()?;
+            tool_get_ontology(k, &args())
+        }
+        ("POST", "/api/v1/ontology") => {
+            need_auth()?;
+            tool_save_ontology(k, &args())
+        }
         ("POST", "/api/v1/discover-ontology") => {
             need_auth()?;
             tool_discover_ontology(k, &args())

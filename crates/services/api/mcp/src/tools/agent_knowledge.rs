@@ -666,3 +666,65 @@ pub(crate) fn tool_discover_ontology(k: &Kernel, args: &J) -> Result<J, String> 
     }
     Ok(summary(true, Some(r.koid.to_hex()), Some(r.version), true))
 }
+
+/// GET /api/v1/ontology — the active ontology, exactly as the compiler sees
+/// it (so Studio never shows one ontology while queries compile against
+/// another).
+pub(crate) fn tool_get_ontology(k: &Kernel, _args: &J) -> Result<J, String> {
+    match crate::http::active_ontology(k) {
+        None => Ok(json!({"active": null})),
+        Some((ko, source)) => {
+            let mut j = crate::helpers::ko_json(&ko);
+            j["source"] = json!(source);
+            Ok(j)
+        }
+    }
+}
+
+/// POST /api/v1/ontology — save the manual ontology. The definition is
+/// validated by the kernel decoder first (nothing invalid is stored); an
+/// existing manual ontology is updated in place under a CAS on its version,
+/// so a concurrent or stale editor cannot overwrite it silently.
+pub(crate) fn tool_save_ontology(k: &Kernel, args: &J) -> Result<J, String> {
+    let subject = subject_of(args);
+    let def_json = args
+        .get("definition")
+        .filter(|d| d.is_object())
+        .ok_or("missing argument: definition (an ontology object)")?;
+    let props = crate::helpers::parse_properties(&json!({ "properties": def_json }))?;
+    let def = aikoql_kernel::OntologyDef::from_property_map(&props)
+        .map_err(|e| format!("invalid ontology: {e}"))?;
+    let existing = crate::http::active_ontology(k).filter(|(_, source)| *source == "manual");
+    let metadata = Metadata {
+        type_name: ONTOLOGY_TYPE.into(),
+        tenant: None,
+        schema_version: 1,
+        tags: vec![],
+    };
+    let mut req = match &existing {
+        Some((ko, _)) => {
+            let expected = args
+                .get("expected_version")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| {
+                    format!(
+                        "expected_version required: the current version is {}",
+                        ko.version
+                    )
+                })?;
+            let mut r = RememberRequest::update(subject, ko.koid, metadata);
+            r.expected_version = Some(expected);
+            r
+        }
+        None => RememberRequest::create(subject, metadata),
+    };
+    req.properties = props;
+    let r = k.remember(req).map_err(|e| e.to_string())?;
+    crate::http::install_ontology(crate::http::load_ontology_registry(k));
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "source": "manual",
+        "namespace": def.namespace,
+    }))
+}
