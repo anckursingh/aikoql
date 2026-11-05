@@ -2454,6 +2454,27 @@ mod tests {
     }
 
     #[test]
+    fn the_escape_lint_is_not_bypassable_by_template_literals() {
+        // The lint understands `+` concatenation. A markup template literal
+        // (`<b>${x}</b>`) would slip past it, so the page may not use any until
+        // the lint learns them.
+        assert!(
+            !STUDIO_HTML.contains('`'),
+            "a template literal appeared in the Studio JS — teach studio_js_escapes_* about ${{}}"
+        );
+    }
+
+    #[test]
+    fn the_chunked_view_does_not_claim_to_stream() {
+        // streamQuery() runs the whole query and pages the rows in the browser.
+        assert!(
+            !STUDIO_HTML.contains("📡 Stream") && !STUDIO_HTML.contains("Stream results in chunks"),
+            "the button still advertises streaming"
+        );
+        assert!(STUDIO_HTML.contains("client-side"), "no honest label");
+    }
+
+    #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
         // the client must not claim one.
