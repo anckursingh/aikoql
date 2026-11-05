@@ -1,0 +1,7 @@
+{
+  "name": "aikoql-studio-e2e",
+  "private": true,
+  "description": "Browser e2e for Studio (run by scripts/prepush.sh when Chrome is available; not CI). Uses the system Chrome — no browser download.",
+  "scripts": { "test": "node run.js" },
+  "dependencies": { "playwright-core": "1.49.1" }
+}

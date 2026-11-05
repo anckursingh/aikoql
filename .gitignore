@@ -96,3 +96,4 @@ npm-publish/memory/
 
 # Studio vendored-asset build inputs
 crates/services/api/mcp/assets/studio/node_modules/
+tests/e2e/studio/node_modules/
