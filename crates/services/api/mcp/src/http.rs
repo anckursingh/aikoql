@@ -43,7 +43,14 @@ pub(crate) fn current_ontology() -> Option<Arc<OntologyRegistry>> {
 /// If multiple exist, pick the latest non-discovered, fall back to discovered.
 pub(crate) fn load_ontology_registry(k: &Kernel) -> Arc<OntologyRegistry> {
     let subj = Subject::with_roles("system", &["admin"]);
-    match k.scan_by_type(&subj, ONTOLOGY_TYPE) {
+    // Only untenanted ontologies are the process-wide compile registry: a
+    // tenant's own ontology must never govern every other tenant's queries.
+    let shared = k.scan_by_type(&subj, ONTOLOGY_TYPE).map(|kos| {
+        kos.into_iter()
+            .filter(|ko| ko.metadata.tenant.is_none())
+            .collect::<Vec<_>>()
+    });
+    match shared {
         Ok(kos) if !kos.is_empty() => {
             let manual: Vec<_> = kos
                 .iter()

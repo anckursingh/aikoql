@@ -516,14 +516,32 @@ pub(crate) fn tool_filter_secrets(k: &Kernel, args: &J, db_path: &str) -> Result
 
 // ---- Agent Experience Improvements (MRFC-0040) -------------------------
 
-pub(crate) fn tool_discover_schema(k: &Kernel, _args: &J) -> Result<J, String> {
-    let types = k.list_types().map_err(|e| e.to_string())?;
-    let heads = k.scan_heads().map_err(|e| e.to_string())?;
-    let subject = Subject {
-        name: "schema-discovery".into(),
+/// The tenant a discovery call is confined to: the call's `tenant` argument
+/// (the session forces it for a tenant-scoped caller). None = platform level,
+/// the unscoped admin's view across every tenant.
+fn discovery_tenant(args: &J) -> Result<Option<String>, String> {
+    crate::session::reject_empty_tenant(args)?;
+    Ok(args
+        .get("tenant")
+        .and_then(|t| t.as_str())
+        .map(String::from))
+}
+
+/// Discovery reads as an elevated reader, but a tenant scope still confines
+/// it: the kernel's R9 rule denies a scoped subject every other tenant's rows
+/// (and untenanted ones) even with the admin role.
+fn discovery_subject(tenant: &Option<String>) -> Subject {
+    Subject {
+        name: "ontology-discovery".into(),
         roles: vec!["admin".into()],
-        tenant: None, // unscoped admin — full visibility
-    };
+        tenant: tenant.clone(),
+    }
+}
+
+pub(crate) fn tool_discover_schema(k: &Kernel, args: &J) -> Result<J, String> {
+    let tenant = discovery_tenant(args)?;
+    let subject = discovery_subject(&tenant);
+    let heads = k.scan_heads().map_err(|e| e.to_string())?;
     let mut type_info = serde_json::Map::new();
     let mut type_counts: HashMap<String, usize> = HashMap::new();
     for (koid, _ver, _ts, state) in &heads {
@@ -536,6 +554,15 @@ pub(crate) fn tool_discover_schema(k: &Kernel, _args: &J) -> Result<J, String> {
                 .or_insert(0) += 1;
         }
     }
+    // A tenant-confined caller is told only the types it can see; the
+    // platform view keeps the kernel's full type list.
+    let types: Vec<String> = if tenant.is_some() {
+        let mut t: Vec<String> = type_counts.keys().cloned().collect();
+        t.sort();
+        t
+    } else {
+        k.list_types().map_err(|e| e.to_string())?
+    };
     for t in &types {
         type_info.insert(
             t.clone(),
@@ -546,12 +573,15 @@ pub(crate) fn tool_discover_schema(k: &Kernel, _args: &J) -> Result<J, String> {
 }
 
 /// Discover an ontology from all stored Knowledge Objects (MRFC-0041).
-pub(crate) fn tool_discover_ontology(k: &Kernel, _args: &J) -> Result<J, String> {
-    let subject = Subject {
-        name: "ontology-discovery".into(),
-        roles: vec!["admin".into()],
-        tenant: None, // unscoped admin — full visibility
-    };
+pub(crate) fn tool_discover_ontology(k: &Kernel, args: &J) -> Result<J, String> {
+    let tenant = discovery_tenant(args)?;
+    let subject = discovery_subject(&tenant);
+    // `preview`: return the proposal and write nothing (the Studio shows it
+    // for review before an explicit save).
+    let preview = args
+        .get("preview")
+        .and_then(|p| p.as_bool())
+        .unwrap_or(false);
     let heads = k.scan_heads().map_err(|e| e.to_string())?;
     let mut kos: Vec<KnowledgeObject> = Vec::new();
     for (koid, _ver, _ts, state) in &heads {
@@ -563,17 +593,54 @@ pub(crate) fn tool_discover_ontology(k: &Kernel, _args: &J) -> Result<J, String>
         }
     }
     let def = discover_ontology(&kos);
-    // Auto-save as an Ontology KO.
+    let summary = |saved: bool, koid: Option<String>, version: Option<u64>, changed: bool| {
+        json!({
+            "saved": saved,
+            "preview": preview,
+            "changed": changed,
+            "koid": koid,
+            "version": version,
+            "tenant": tenant,
+            "namespace": def.namespace,
+            "classes": def.classes.len(),
+            "relationships": def.relationships.len(),
+            "mappings": def.mappings.len(),
+            "types_discovered": def.classes.keys().cloned().collect::<Vec<_>>(),
+        })
+    };
+    if preview {
+        return Ok(summary(false, None, None, false));
+    }
     let props = def.to_property_map();
+    // Re-discovery updates the scope's existing auto-discovered Ontology KO
+    // in place (CAS on its version); identical content writes nothing.
+    let existing = k
+        .scan_by_type(&subject, ONTOLOGY_TYPE)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|ko| {
+            ko.metadata.tags.iter().any(|t| t == "auto-discovered") && ko.metadata.tenant == tenant
+        })
+        .max_by_key(|ko| ko.commit_ts);
+    if let Some(ko) = &existing {
+        if ko.properties == props {
+            return Ok(summary(
+                true,
+                Some(ko.koid.to_hex()),
+                Some(ko.version),
+                false,
+            ));
+        }
+    }
     let r = k
         .remember(RememberRequest {
-            context: subject.into(),
-            koid: None,
-            expected_version: Some(0),
-            idempotency_key: Some("auto-discovered-ontology".into()),
+            context: subject.clone().into(),
+            koid: existing.as_ref().map(|ko| ko.koid),
+            expected_version: Some(existing.as_ref().map_or(0, |ko| ko.version)),
+            idempotency_key: None,
             metadata: Metadata {
                 type_name: ONTOLOGY_TYPE.into(),
-                tenant: None,
+                tenant: tenant.clone(),
                 schema_version: 1,
                 tags: vec!["auto-discovered".into()],
             },
@@ -592,16 +659,10 @@ pub(crate) fn tool_discover_ontology(k: &Kernel, _args: &J) -> Result<J, String>
         })
         .map_err(|e| e.to_string())?;
     // S-8 (POC-4): republish the compile-time registry right away — the
-    // query editor resolves the new classes without a server restart.
-    crate::http::install_ontology(crate::http::load_ontology_registry(k));
-    Ok(json!({
-        "saved": true,
-        "koid": r.koid.to_hex(),
-        "version": r.version,
-        "namespace": def.namespace,
-        "classes": def.classes.len(),
-        "relationships": def.relationships.len(),
-        "mappings": def.mappings.len(),
-        "types_discovered": def.classes.keys().cloned().collect::<Vec<_>>(),
-    }))
+    // query editor resolves the new classes without a server restart. A
+    // tenant's ontology is not the process-wide registry.
+    if tenant.is_none() {
+        crate::http::install_ontology(crate::http::load_ontology_registry(k));
+    }
+    Ok(summary(true, Some(r.koid.to_hex()), Some(r.version), true))
 }
