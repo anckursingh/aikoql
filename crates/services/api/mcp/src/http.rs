@@ -1511,6 +1511,11 @@ pub(crate) fn handle_http(
                 crate::license::LICENSE_STATE.get(),
             ),
         ),
+        "/studio/assets/app.js" => (
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            studio::APP_JS.to_string(),
+        ),
         "/studio/assets/editor.js" => (
             "200 OK",
             "application/javascript; charset=utf-8",
