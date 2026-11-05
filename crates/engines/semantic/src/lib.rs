@@ -88,6 +88,12 @@ impl SemanticEngine {
     /// Enrich a single KO: call the provider, build a `SemanticBlock`, and
     /// write it back via `kernel.remember()`.
     fn enrich_one(&self, kernel: &Kernel, ko: &KnowledgeObject) -> KResult<()> {
+        // An ontology definition is schema, not content to embed — and an
+        // enrichment write would re-version it behind its editors' backs,
+        // losing their compare-and-swap on the version they loaded.
+        if ko.metadata.type_name == aikoql_kernel::knowledge::ontology::ONTOLOGY_TYPE {
+            return Ok(());
+        }
         // AG-23b2: the bound model is the enrichment target — skip only when
         // the KO already carries it (that skip IS the migration: a KO under
         // any other model, or none, gets re-embedded). Unbound collections
