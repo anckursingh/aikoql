@@ -218,7 +218,7 @@ fn route_inner(
             // S-8 (POC-4): the studio's manual Save Ontology flow — a
             // remembered Ontology KO republishes the compile-time registry.
             if args.get("type_name").and_then(|t| t.as_str()) == Some("Ontology") {
-                crate::http::install_ontology(crate::http::load_ontology_registry(k));
+                crate::http::refresh_ontologies(k);
             }
             Ok(r)
         }

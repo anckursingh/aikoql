@@ -874,7 +874,7 @@ fn main() {
     // remembers republish through the same path, so the query editor never
     // waits for a restart.
     let ontology = crate::http::load_ontology_registry(&kernel);
-    crate::http::install_ontology(ontology.clone());
+    crate::http::refresh_ontologies(&kernel);
 
     // Optional HTTP metrics endpoint for Prometheus + Kubernetes probes.
     if let Some(ref addr) = metrics_addr {

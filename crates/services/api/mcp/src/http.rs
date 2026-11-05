@@ -47,9 +47,54 @@ pub(crate) fn current_ontology() -> Option<Arc<OntologyRegistry>> {
     ONTOLOGY_SLOT.get().map(|slot| slot.read().unwrap().clone()) // justified: poison is unrecoverable
 }
 
+/// Per-tenant compile registries: only tenants that have an Ontology KO of
+/// their own appear here (so the map is bounded by those tenants, never by
+/// the tenant strings callers send). Replaced wholesale by
+/// [`refresh_ontologies`].
+static TENANT_ONTOLOGIES: OnceLock<RwLock<HashMap<String, Arc<OntologyRegistry>>>> =
+    OnceLock::new();
+
+fn decode_registry(ko: &KnowledgeObject) -> Option<Arc<OntologyRegistry>> {
+    let def = OntologyDef::from_ko(ko).ok()?;
+    OntologyRegistry::new(def).ok().map(Arc::new)
+}
+
+/// Republish every compile registry from the stored Ontology KOs: the global
+/// one and each tenant's own. Called at startup and after any ontology write.
+pub(crate) fn refresh_ontologies(k: &Kernel) {
+    install_ontology(load_ontology_registry(k));
+    let subj = Subject::with_roles("system", &["admin"]);
+    let tenants: std::collections::BTreeSet<String> = k
+        .scan_by_type(&subj, ONTOLOGY_TYPE)
+        .map(|kos| {
+            kos.into_iter()
+                .filter_map(|ko| ko.metadata.tenant)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut map = HashMap::new();
+    for t in tenants {
+        if let Some(reg) = active_ontology_for(k, Some(&t)).and_then(|(ko, _)| decode_registry(&ko))
+        {
+            map.insert(t, reg);
+        }
+    }
+    let slot = TENANT_ONTOLOGIES.get_or_init(|| RwLock::new(HashMap::new()));
+    *slot.write().unwrap() = map; // justified: RwLock poison is unrecoverable
+}
+
 /// The registry a query for `tenant` compiles against: that tenant's own
 /// ontology when it has saved one, else the process-wide (untenanted) one.
-pub(crate) fn registry_for(_tenant: Option<&str>) -> Option<Arc<OntologyRegistry>> {
+/// A lookup for any other tenant string reads, and caches, nothing.
+pub(crate) fn registry_for(tenant: Option<&str>) -> Option<Arc<OntologyRegistry>> {
+    if let Some(t) = tenant {
+        let own = TENANT_ONTOLOGIES
+            .get()
+            .and_then(|slot| slot.read().unwrap().get(t).cloned()); // justified: poison is unrecoverable
+        if own.is_some() {
+            return own;
+        }
+    }
     current_ontology()
 }
 
@@ -57,7 +102,9 @@ pub(crate) fn registry_for(_tenant: Option<&str>) -> Option<Arc<OntologyRegistry
 /// ontology — never by the tenant strings callers supply).
 #[cfg(test)]
 pub(crate) fn tenant_registry_count() -> usize {
-    0
+    TENANT_ONTOLOGIES
+        .get()
+        .map_or(0, |slot| slot.read().unwrap().len()) // justified: poison is unrecoverable
 }
 
 /// The ontology the compiler uses, and the one Studio shows: the newest
@@ -65,16 +112,25 @@ pub(crate) fn tenant_registry_count() -> usize {
 /// tenant's own ontology is never the process-wide one. Returns the KO and
 /// its source ("manual" | "auto-discovered").
 pub(crate) fn active_ontology(k: &Kernel) -> Option<(KnowledgeObject, &'static str)> {
+    active_ontology_for(k, None)
+}
+
+/// The same selection within one scope: `None` = the untenanted (global)
+/// ontologies, `Some(t)` = tenant `t`'s own.
+pub(crate) fn active_ontology_for(
+    k: &Kernel,
+    tenant: Option<&str>,
+) -> Option<(KnowledgeObject, &'static str)> {
     let subj = Subject::with_roles("system", &["admin"]);
-    let shared: Vec<KnowledgeObject> = k
+    let scoped: Vec<KnowledgeObject> = k
         .scan_by_type(&subj, ONTOLOGY_TYPE)
         .ok()?
         .into_iter()
-        .filter(|ko| ko.metadata.tenant.is_none())
+        .filter(|ko| ko.metadata.tenant.as_deref() == tenant)
         .collect();
     let auto = |ko: &KnowledgeObject| ko.metadata.tags.iter().any(|t| t == "auto-discovered");
     let newest = |manual: bool| {
-        shared
+        scoped
             .iter()
             .filter(|ko| auto(ko) != manual)
             .max_by_key(|ko| ko.commit_ts)
@@ -1020,7 +1076,9 @@ pub(crate) fn aikoql_endpoint(
     let schema = SchemaRegistry::new(); // ponytail: empty registry; ontology handles resolution
                                         // S-8 (POC-4): prefer the hot-reloaded registry (published by
                                         // Auto-Discover / REST Ontology remembers) over the startup snapshot.
-    let hot = current_ontology();
+                                        // Per-tenant: the caller's tenant (its session scope, else the requested
+                                        // one) compiles against its own ontology, falling back to the global.
+    let hot = registry_for(subject.tenant.as_deref().or(tenant));
     let ont = hot.as_deref().unwrap_or(ontology);
     let plans = match aikoql_compiler::parser::compile_with_ontology_scoped(
         query,

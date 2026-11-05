@@ -658,12 +658,10 @@ pub(crate) fn tool_discover_ontology(k: &Kernel, args: &J) -> Result<J, String> 
             referential_policy: ReferentialPolicy::default(),
         })
         .map_err(|e| e.to_string())?;
-    // S-8 (POC-4): republish the compile-time registry right away — the
+    // S-8 (POC-4): republish the compile-time registries right away — the
     // query editor resolves the new classes without a server restart. A
-    // tenant's ontology is not the process-wide registry.
-    if tenant.is_none() {
-        crate::http::install_ontology(crate::http::load_ontology_registry(k));
-    }
+    // tenant's ontology governs only that tenant's queries.
+    crate::http::refresh_ontologies(k);
     Ok(summary(true, Some(r.koid.to_hex()), Some(r.version), true))
 }
 
@@ -720,7 +718,7 @@ pub(crate) fn tool_save_ontology(k: &Kernel, args: &J) -> Result<J, String> {
     };
     req.properties = props;
     let r = k.remember(req).map_err(|e| e.to_string())?;
-    crate::http::install_ontology(crate::http::load_ontology_registry(k));
+    crate::http::refresh_ontologies(k);
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
