@@ -1032,10 +1032,12 @@ mod tests {
             ),
         ] {
             let (status, out) = m3_call(&k, &db, "POST", "/api/v1/ontology", body);
-            assert_ne!(
-                status, "200 OK",
-                "{label} expected_version overwrote: {out}"
-            );
+            let want = if label == "stale" {
+                "409 Conflict"
+            } else {
+                "400 Bad Request"
+            };
+            assert_eq!(status, want, "{label} expected_version: {out}");
         }
         let reg = crate::http::load_ontology_registry(&k);
         assert!(reg.resolve_class("Second").is_some() && reg.resolve_class("Lost").is_none());
@@ -1065,10 +1067,7 @@ mod tests {
             "/api/v1/ontology",
             serde_json::json!({"definition": bad, "expected_version": v}),
         );
-        assert_ne!(
-            status, "200 OK",
-            "an ontology with an unknown parent was saved: {out}"
-        );
+        assert_eq!(status, "400 Bad Request", "unknown parent: {out}");
         let reg = crate::http::load_ontology_registry(&k);
         assert!(reg.resolve_class("Good").is_some() && reg.resolve_class("Orphan").is_none());
         assert_eq!(m3_ontology_kos(&k), 1);
