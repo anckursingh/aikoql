@@ -2480,6 +2480,23 @@ mod tests {
     }
 
     #[test]
+    fn ontology_panel_reads_the_active_ontology_and_saves_with_cas() {
+        // The panel shows what the compiler uses (GET /api/v1/ontology, not
+        // results[0] of a MATCH) and saves in place under expected_version.
+        assert!(
+            !STUDIO_HTML.contains("MATCH%20Ontology"),
+            "the panel must not pick an arbitrary Ontology row"
+        );
+        let a = STUDIO_HTML
+            .find("async function saveOntology()")
+            .expect("saveOntology");
+        let body = &STUDIO_HTML[a..a + 1800];
+        assert!(body.contains("/api/v1/ontology"), "{body}");
+        assert!(body.contains("expected_version"), "{body}");
+        assert!(!body.contains("/api/v1/remember"), "{body}");
+    }
+
+    #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
         // the client must not claim one.
