@@ -1291,17 +1291,21 @@ async function loadOntologyPanel() {
   }
 }
 
-async function discoverOntology() {
+// Discovery is a proposal: the first click previews (nothing is written), the
+// Save button it offers calls again with save=true.
+async function discoverOntology(save) {
   const msg = document.getElementById('ontology-save-msg');
-  msg.innerHTML = '<span style="color:var(--muted);">Discovering from all stored KOs...</span>';
+  msg.innerHTML = '<span style="color:var(--muted);">Discovering from stored KOs...</span>';
   try {
-    const url = '/api/v1/discover-ontology' + (authToken ? '?token=' + encodeURIComponent(authToken) : '');
-    const res = await fetch(url, { method: 'POST' });
-    const data = await res.json();
-    if (data.error) { msg.innerHTML = '<span style="color:var(--red);">Error: '+esc(data.error)+'</span>'; return; }
+    const data = await apiPost('/api/v1/discover-ontology', {preview: !save});
     const d = data.data || data;
-    msg.innerHTML = '<span style="color:var(--green);">✓ Discovered: '+esc(d.classes)+' classes, '+esc(d.relationships)+' relationships, '+esc(d.mappings)+' mappings from '+esc((d.types_discovered||[]).length)+' types.</span>';
-    loadOntologyPanel();
+    const html = esc(d.classes)+' classes, '+esc(d.relationships)+' relationships, '+esc(d.mappings)+' mappings from '+esc((d.types_discovered||[]).length)+' types';
+    if (save) {
+      msg.innerHTML = '<span style="color:var(--green);">✓ Saved: '+html+esc(d.changed===false?' (unchanged)':'')+'.</span>';
+      loadOntologyPanel();
+    } else {
+      msg.innerHTML = '<span style="color:var(--accent);">Proposal: '+html+' — not saved yet.</span> <button class="btn btn-pri btn-sm" onclick="discoverOntology(true)">Save discovered ontology</button>';
+    }
   } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
 
