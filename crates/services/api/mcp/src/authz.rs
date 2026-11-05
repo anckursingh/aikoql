@@ -60,14 +60,23 @@ pub(crate) fn check_scope(
     tool: &str,
     args: &serde_json::Value,
 ) -> Result<(), (i64, String)> {
-    if !roles.iter().any(|r| r == READ_SCOPE_ROLE) {
+    let read_scoped = roles.iter().any(|r| r == READ_SCOPE_ROLE);
+    // Enterprise (Task 6): the viewer role is read-only through `aikoql`
+    // too (only a MATCH reads). Community mode (no user store) leaves the
+    // role name uninterpreted — v0.4.0 behavior byte-for-byte.
+    let viewer = crate::session::users().is_some() && roles.iter().any(|r| r == "viewer");
+    if !read_scoped && !viewer {
         return Ok(());
     }
     let denied = |what: &str| {
-        Err((
-            -32001,
-            format!("the token's scope is mcp:read — {what} (sign in again with mcp:write)"),
-        ))
+        if read_scoped {
+            Err((
+                -32001,
+                format!("the token's scope is mcp:read — {what} (sign in again with mcp:write)"),
+            ))
+        } else {
+            Err((-32001, format!("the viewer role is read-only — {what}")))
+        }
     };
     if !READ_TOOLS.contains(&tool) {
         return denied(&format!("tool '{tool}' writes"));
@@ -144,6 +153,55 @@ pub(crate) fn check_capability(
             }
             return Ok(());
         }
+    }
+
+    // Enterprise (Task 6): the viewer role reaches read tools only — the
+    // same READ_TOOLS allowlist an mcp:read token carries (fail-closed).
+    // Community mode (no user store) leaves the role name uninterpreted,
+    // so v0.4.0 behavior is byte-for-byte unchanged.
+    if crate::session::users().is_some()
+        && roles.iter().any(|r| r == "viewer")
+        && !READ_TOOLS.contains(&tool)
+    {
+        return Err((
+            -32001,
+            format!("capability denied: viewer role is read-only — tool '{tool}' writes"),
+        ));
+    }
+    Ok(())
+}
+
+/// Task 6: a REST gate refusal — the HTTP status and message ride here.
+pub(crate) enum ApiError {
+    Forbidden(&'static str),
+}
+
+impl ApiError {
+    pub(crate) fn status(&self) -> u16 {
+        match self {
+            ApiError::Forbidden(_) => 403,
+        }
+    }
+    pub(crate) fn message(&self) -> &'static str {
+        match self {
+            ApiError::Forbidden(m) => m,
+        }
+    }
+}
+
+/// Task 6: the REST write gate. `admin` always passes; `admin_only`
+/// requires admin; otherwise any non-viewer passes (a viewer may read but
+/// never write). Community mode (no user store) has no gate — v0.4.0
+/// behavior byte-for-byte.
+pub(crate) fn check_rest(roles: &[String], admin_only: bool) -> Result<(), ApiError> {
+    if crate::session::users().is_none() || roles.iter().any(|r| r == "admin") {
+        return Ok(());
+    }
+    if admin_only {
+        return Err(ApiError::Forbidden("admin role required"));
+    }
+    if roles.iter().any(|r| r == "viewer") {
+        return Err(ApiError::Forbidden("viewer role is read-only"));
     }
     Ok(())
 }

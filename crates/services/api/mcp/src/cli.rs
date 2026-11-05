@@ -19,7 +19,7 @@ pub(crate) fn print_usage() {
         "  serve [OPTIONS] [DB]   Start MCP server (default: stdio mode)\n",
         "  backup [DB]            Create a verified backup\n",
         "  restore BACKUP [DB]    Restore from a backup\n",
-        "  audit [DB]             Print encryption compliance report\n",
+        "  audit [--export-jsonl PATH] [DB]  Compliance report; --export-jsonl streams the audit log (licensed)\n",
         "  keygen [PATH]          Generate an encryption master key\n",
         "  status [DB]            Health, metrics, and ABI version of a knowledge base\n",
         "  query <AIKOQL> [DB]    Run one aikoql statement (CREATE/MATCH/...)\n",
@@ -307,7 +307,10 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     std::process::exit(1);
                 });
                 match crate::engine::roll_deks(db, &cfg.encryption) {
-                    Ok(n) => println!("{}", serde_json::json!({"rolled": true, "objects": n, "db": db})),
+                    Ok(n) => println!(
+                        "{}",
+                        serde_json::json!({"rolled": true, "objects": n, "db": db})
+                    ),
                     Err(e) => {
                         eprintln!("key roll-deks: {e}");
                         std::process::exit(1);
@@ -334,9 +337,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     eprintln!("{e}");
                     std::process::exit(1);
                 });
-                if let Err(e) =
-                    crate::engine::install_to_kms(&cfg.encryption, region.as_deref())
-                {
+                if let Err(e) = crate::engine::install_to_kms(&cfg.encryption, region.as_deref()) {
                     eprintln!("key install: {e}");
                     std::process::exit(1);
                 }
@@ -353,7 +354,9 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 eprintln!("change-passphrase re-wraps the master key file under a new passphrase");
                 eprintln!("(the master key itself does not change).");
                 eprintln!("roll-deks mints fresh tenant data keys and re-encrypts every encrypted");
-                eprintln!("field under them (one committed version per object). Stop the server first.");
+                eprintln!(
+                    "field under them (one committed version per object). Stop the server first."
+                );
                 eprintln!("install wraps the master key under a new AWS KMS CMK (aikoql/<db>) —");
                 eprintln!("AWS IAM gates every later open, the passphrase stops gating.");
                 std::process::exit(2);
@@ -369,7 +372,26 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             true
         }
         Some("audit") => {
-            run_audit(arg_after.unwrap_or(DEFAULT_DB_PATH));
+            // Task 7: audit [--export-jsonl PATH] [DB] — the export is
+            // license-gated inside run_audit (enterprise audit-export flag).
+            let tail: Vec<&str> = subcmd_idx
+                .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
+                .unwrap_or_default();
+            let (mut db, mut export) = (None, None);
+            let mut it = tail.iter();
+            while let Some(a) = it.next() {
+                match *a {
+                    "--export-jsonl" => match it.next() {
+                        Some(p) => export = Some(p.to_string()),
+                        None => {
+                            eprintln!("--export-jsonl requires a path");
+                            std::process::exit(2);
+                        }
+                    },
+                    _ => db = Some(a.to_string()),
+                }
+            }
+            run_audit(db.as_deref().unwrap_or(DEFAULT_DB_PATH), export.as_deref());
             true
         }
         Some("ingest-dir") => {

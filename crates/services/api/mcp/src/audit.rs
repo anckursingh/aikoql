@@ -31,9 +31,14 @@ pub(crate) fn tool_detail(name: &str, args: &J) -> String {
 static AUDIT: std::sync::OnceLock<std::sync::Mutex<Option<(String, std::fs::File)>>> =
     std::sync::OnceLock::new();
 
+/// `{db_path}.audit.log` — the one audit log path for this db.
+pub(crate) fn audit_log_path(db_path: &str) -> String {
+    format!("{db_path}.audit.log")
+}
+
 /// Append a JSON line to the audit log.
 pub(crate) fn audit_log(db_path: &str, agent_id: &str, tool: &str, outcome: &str, detail: &str) {
-    let log_path = format!("{}.audit.log", db_path);
+    let log_path = audit_log_path(db_path);
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -59,5 +64,41 @@ pub(crate) fn audit_log(db_path: &str, agent_id: &str, tool: &str, outcome: &str
     }
     if let Some((_, f)) = guard.as_mut() {
         let _ = writeln!(f, "{}", entry);
+    }
+}
+
+/// Enterprise audit retention (Task 7): startup rotation. Rewrite the
+/// audit log keeping only entries whose `ts` (unix seconds) is at or past
+/// `now - retention_days * 86400`. A line that does not parse (or lacks a
+/// numeric ts) is kept — rotation must never destroy evidence it cannot
+/// date. Called once at serve start, license-gated in main.rs; community
+/// mode never rotates (byte-for-byte v0.4.0).
+pub(crate) fn rotate(db_path: &str, retention_days: u64) {
+    let log_path = audit_log_path(db_path);
+    let text = match std::fs::read_to_string(&log_path) {
+        Ok(t) => t,
+        Err(_) => return, // no log yet — nothing to rotate
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let cutoff = now.saturating_sub(retention_days.saturating_mul(86_400));
+    let kept: String = text
+        .lines()
+        .filter(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .and_then(|v| v.get("ts").and_then(|t| t.as_u64()))
+                .map(|ts| ts >= cutoff)
+                .unwrap_or(true)
+        })
+        .flat_map(|l| [l, "\n"])
+        .collect();
+    if kept == text {
+        return; // nothing expired — leave the file byte-for-byte
+    }
+    if let Err(e) = std::fs::write(&log_path, &kept) {
+        tracing::warn!(path = %log_path, "audit retention rotation failed: {e}");
     }
 }

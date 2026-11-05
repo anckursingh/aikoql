@@ -46,18 +46,20 @@ impl KmsOps for MockKms {
             .lock()
             .unwrap()
             .push(format!("create_key:{alias}"));
-        Ok(format!("arn:aws:kms:eu-north-1:123456789012:key/mock-{}", *n))
+        Ok(format!(
+            "arn:aws:kms:eu-north-1:123456789012:key/mock-{}",
+            *n
+        ))
     }
 
     fn encrypt(&self, key_id: &str, plaintext: &[u8]) -> Result<Vec<u8>, String> {
         let mut wraps = self.wraps.lock().unwrap();
         let pad = wraps.entry(key_id.into()).or_insert_with(|| {
-            (0..plaintext.len()).map(|i| (i * 7 + 3) as u8).collect::<Vec<u8>>()
+            (0..plaintext.len())
+                .map(|i| (i * 7 + 3) as u8)
+                .collect::<Vec<u8>>()
         });
-        self.calls
-            .lock()
-            .unwrap()
-            .push(format!("encrypt:{key_id}"));
+        self.calls.lock().unwrap().push(format!("encrypt:{key_id}"));
         Ok(plaintext
             .iter()
             .zip(pad.iter())
@@ -73,10 +75,7 @@ impl KmsOps for MockKms {
             .get(key_id)
             .cloned()
             .ok_or("the CMK has no key material (wrong key or region)")?;
-        self.calls
-            .lock()
-            .unwrap()
-            .push(format!("decrypt:{key_id}"));
+        self.calls.lock().unwrap().push(format!("decrypt:{key_id}"));
         Ok(ciphertext
             .iter()
             .zip(pad.iter())
@@ -132,8 +131,14 @@ fn aws02_a_tampered_pointer_file_fails_closed() {
     let last = torn.len() - 1;
     torn[last] ^= 0x01;
     std::fs::write(&path, &torn).unwrap();
-    assert!(kms.master_key("pw").is_err(), "a flipped byte must not yield a key");
-    assert!(kms.master_key("pw").is_err(), "and never caches the bad read");
+    assert!(
+        kms.master_key("pw").is_err(),
+        "a flipped byte must not yield a key"
+    );
+    assert!(
+        kms.master_key("pw").is_err(),
+        "and never caches the bad read"
+    );
 }
 
 // --- aws03 — rotate mints a fresh key and re-wraps it under the same CMK -------

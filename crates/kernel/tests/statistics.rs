@@ -303,11 +303,7 @@ fn cbo_a07_analyze_builds_a_range_histogram_and_estimates() {
     // [300, 700): 400 of 1000 rows — quantile buckets estimate within one
     // bucket (1000/64 ≈ 15.6 rows) of the true 0.40
     let f = stats
-        .range_fraction(
-            "salary",
-            Some(&Value::Int(300)),
-            Some(&Value::Int(700)),
-        )
+        .range_fraction("salary", Some(&Value::Int(300)), Some(&Value::Int(700)))
         .expect("a histogram for the orderable salary");
     assert!((f - 0.40).abs() < 0.03, "{f}");
     // open upper end: [900, +∞) = 100 rows
@@ -318,16 +314,11 @@ fn cbo_a07_analyze_builds_a_range_histogram_and_estimates() {
     // a mixed-domain property never builds a histogram (Null is never
     // range-ordered)
     let mut req = RememberRequest::create(alice(), meta("Employee"));
-    req.properties
-        .insert("salary".into(), Value::Null);
+    req.properties.insert("salary".into(), Value::Null);
     k.remember(req).unwrap();
     let stats = k.analyze("Employee").unwrap();
     assert_eq!(
-        stats.range_fraction(
-            "salary",
-            Some(&Value::Int(0)),
-            Some(&Value::Int(100))
-        ),
+        stats.range_fraction("salary", Some(&Value::Int(0)), Some(&Value::Int(100))),
         None,
         "a mixed-domain property has no histogram"
     );

@@ -763,7 +763,11 @@ pub fn decode_ke(buf: &[u8]) -> KResult<KnowledgeEvent> {
         note: d.opt_str()?,
         // AG-30: appended after `note` — rows written before the field
         // existed decode leniently as None (the P5-M20 pattern).
-        audit_signature: if d.remaining() > 0 { d.opt_sig64()? } else { None },
+        audit_signature: if d.remaining() > 0 {
+            d.opt_sig64()?
+        } else {
+            None
+        },
     };
     d.finish()?;
     Ok(ke)

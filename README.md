@@ -39,6 +39,30 @@ under the same license. The community edition is the full server;
 enterprise tiers (on-prem or managed on S3/MinIO/Cloudflare R2) add
 SSO, RBAC, audit logs, and support SLAs.
 
+## Enterprise tier
+
+Same binary, licensed features. Without a valid key the server runs as the
+community edition — nothing is taken away.
+
+- **License** — offline-verified ed25519 key at `.aikoql-license` in the
+  data dir, or a path from `AIKOQL_LICENSE`. An invalid/expired key degrades
+  to community mode with a warning (72h expiry grace). Features:
+  `oidc-sso` (implies `multi-user`), `multi-user`, `audit-export`.
+- **SSO and roles** — OIDC SSO on both the Studio login and the MCP OAuth
+  sign-in (`AIKOQL_OIDC_ISSUER`, `AIKOQL_OIDC_CLIENT_ID`,
+  `AIKOQL_OIDC_CLIENT_SECRET`, `AIKOQL_OIDC_REDIRECT_URI`,
+  `AIKOQL_OIDC_ROLES_CLAIM`). Roles: `admin`, `viewer` (read-only), looked
+  up live on every request. `AIKOQL_ADMIN_PASSWORD` seeds the bootstrap
+  break-glass admin on first start only.
+- **Audit export** — retention rotation (`AIKOQL_AUDIT_RETENTION_DAYS`,
+  default 90) plus JSONL export via `aikoql-mcp audit --export-jsonl PATH`
+  and the Studio admin panel.
+- **v1 limitation** — enterprise multi-user is single-node; HA
+  (`--replicate-listen`, failover) + multi-user is unsupported.
+
+Full usage doc — key issuance, the admin API, ops notes:
+[docs/ENTERPRISE-TIERS.md](docs/ENTERPRISE-TIERS.md).
+
 - **Quickstart** — install, start, ingest, query, add sources, build a
   knowledge-backed agent, debug: [QUICKSTART.md](QUICKSTART.md)
 - **Examples** — the seven-step hello-agent flow in runnable form:

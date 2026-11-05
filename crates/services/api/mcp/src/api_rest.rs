@@ -49,6 +49,21 @@ pub fn route_v1(
         );
     }
 
+    // Enterprise (Task 6): REST writes go through the role gate — a viewer
+    // session may read but never write. The gate resolves the session's
+    // LIVE roles (the user store is authoritative); in community mode it
+    // passes, so v0.4.0 behavior is unchanged. Only the write set is
+    // gated: read POSTs (aikoql MATCH, find-similar, traverse, list-*
+    // twins, ...) stay reachable for viewers.
+    if method == "POST" && (is_write_route(clean_path, &folded_body) || is_admin_route(clean_path))
+    {
+        if let Some(roles) = crate::http::live_roles(token.as_deref(), sessions) {
+            if let Err(e) = crate::authz::check_rest(&roles, is_admin_route(clean_path)) {
+                return json_response(e.status(), &json!({"error": e.message()}));
+            }
+        }
+    }
+
     let result: Result<J, String> = route_inner(
         method,
         clean_path,
@@ -450,6 +465,238 @@ fn route_inner(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Enterprise (Task 8): the admin API — /api/license plus the user routes.
+// Root-level paths (outside /api/v1, which stays the untouched v0.4.0
+// surface) and outside route_v1's rate limiter, like the rest of the
+// root surface. The T6 admin-only gate applies directly here: these routes
+// are never in route_v1's POST-only gate.
+// ---------------------------------------------------------------------------
+
+/// The admin API: GET /api/license (any authenticated session) and
+/// GET/POST /api/users plus PUT /api/users/{sub}/roles (admin only).
+pub fn route_admin(
+    method: &str,
+    route: &str,
+    body: &str,
+    sessions: &Mutex<HashMap<String, crate::HttpSession>>,
+    token: Option<&str>,
+) -> (String, String, String) {
+    let err = |code: u16, msg: String| json_response(code, &json!({"error": msg}));
+    // Every route here needs an authenticated session — /api/license
+    // included (the license state is not public).
+    if let Err(msg) = check_auth(token, sessions) {
+        return err(401, msg);
+    }
+    match (method, route) {
+        // any authenticated session: the process license, or community
+        ("GET", "/api/license") => json_response(200, &license_payload()),
+        ("GET", "/api/users") => {
+            if let Err(r) = admin_only(token, sessions) {
+                return r;
+            }
+            let rows = match with_store(|s| s.list_users()) {
+                Ok(rows) => rows,
+                Err(r) => return r,
+            };
+            let users: Vec<J> = rows
+                .iter()
+                .map(|u| {
+                    json!({
+                        "id": u.id,
+                        "sub": u.sub,
+                        "name": u.name,
+                        "roles": u.roles,
+                        "created_at": u.created_at,
+                    })
+                })
+                .collect();
+            json_response(200, &json!({"users": users}))
+        }
+        ("POST", "/api/users") => {
+            if let Err(r) = admin_only(token, sessions) {
+                return r;
+            }
+            let j: J = match serde_json::from_str(body) {
+                Ok(j) => j,
+                Err(e) => return err(400, format!("bad JSON: {e}")),
+            };
+            let sub = match j
+                .get("sub")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                Some(s) => s,
+                None => return err(400, "missing sub".into()),
+            };
+            // Final review I-4: the bootstrap admin row is reserved — an
+            // upsert here would overwrite it and brick the next restart's
+            // seed INSERT.
+            if sub == crate::users::ADMIN_SUB {
+                return err(400, format!("reserved sub '{sub}'"));
+            }
+            let name = j.get("name").and_then(|v| v.as_str());
+            let mut roles: Vec<String> = roles_of_json(&j).unwrap_or_default();
+            // Final review I-3: v1 roles are {admin, viewer} — anything
+            // else would pass check_rest as "not viewer" and grant writes.
+            if let Err(r) = validate_roles(&roles) {
+                return r;
+            }
+            // Final review N-1: an empty set (absent, [], or non-strings
+            // only) must not fail open — it normalizes to viewer, the
+            // stripped state (same as an unknown claim).
+            if roles.is_empty() {
+                roles = vec!["viewer".to_string()];
+            }
+            match with_store(|s| s.upsert_oidc_user(sub, name, &roles)) {
+                Ok(()) => json_response(200, &json!({"data": {"sub": sub, "roles": roles}})),
+                Err(r) => r,
+            }
+        }
+        ("PUT", p) if p.starts_with("/api/users/") && p.ends_with("/roles") => {
+            if let Err(r) = admin_only(token, sessions) {
+                return r;
+            }
+            let sub = p
+                .trim_start_matches("/api/users/")
+                .trim_end_matches("/roles");
+            let j: J = match serde_json::from_str(body) {
+                Ok(j) => j,
+                Err(e) => return err(400, format!("bad JSON: {e}")),
+            };
+            let mut roles: Vec<String> = match roles_of_json(&j) {
+                Some(r) => r,
+                None => return err(400, "missing roles".into()),
+            };
+            // Final review I-3: v1 roles are {admin, viewer} — anything
+            // else would pass check_rest as "not viewer" and grant writes.
+            if let Err(r) = validate_roles(&roles) {
+                return r;
+            }
+            // Final review N-1: an empty set must not fail open — it
+            // normalizes to viewer, the stripped state.
+            if roles.is_empty() {
+                roles = vec!["viewer".to_string()];
+            }
+            match with_store(|s| {
+                // the row must exist — a bare UPDATE would silently no-op
+                if s.roles_of(sub)?.is_none() {
+                    return Ok(None);
+                }
+                s.set_roles(sub, &roles)?;
+                Ok(Some(()))
+            }) {
+                Ok(Some(())) => json_response(200, &json!({"data": {"sub": sub, "roles": roles}})),
+                Ok(None) => json_response(404, &json!({"error": "user not found"})),
+                Err(r) => r,
+            }
+        }
+        _ => json_response(404, &json!({"error": "Not Found"})),
+    }
+}
+
+/// Task 8: the wire `roles` array of a user-route body — strings only.
+/// None when the field is absent or not an array of strings.
+fn roles_of_json(j: &J) -> Option<Vec<String>> {
+    j.get("roles").and_then(|v| v.as_array()).map(|a| {
+        a.iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect()
+    })
+}
+
+/// Final review I-3: the admin API stores only v1 roles. An unknown value
+/// would pass `check_rest` as "not viewer" (a write grant), so the
+/// boundary refuses it with a 400.
+fn validate_roles(roles: &[String]) -> Result<(), (String, String, String)> {
+    for r in roles {
+        if r != "admin" && r != "viewer" {
+            return Err(json_response(
+                400,
+                &json!({"error": format!("invalid role '{r}' (admin or viewer)")}),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Task 8's admin-only gate: the session's LIVE store roles (a revocation
+/// takes effect on the next call), admin required — the same check_rest
+/// the T6 REST write gate uses. With no user store it refuses: only the
+/// flag-gated enterprise surfaces (route_audit_export) reach here
+/// store-less; community route_v1 calls check_rest directly.
+fn admin_only(
+    token: Option<&str>,
+    sessions: &Mutex<HashMap<String, crate::HttpSession>>,
+) -> Result<(), (String, String, String)> {
+    if crate::session::users().is_none() {
+        return Err(json_response(403, &json!({"error": "admin role required"})));
+    }
+    let roles = crate::http::live_roles(token, sessions).unwrap_or_default();
+    crate::authz::check_rest(&roles, true)
+        .map_err(|e| json_response(e.status(), &json!({"error": e.message()})))
+}
+
+/// Run `f` against the shared user store. The "user store unavailable"
+/// error covers community mode (no multi-user store is ever opened there).
+fn with_store<T>(
+    f: impl FnOnce(&crate::users::UserStore) -> rusqlite::Result<T>,
+) -> Result<T, (String, String, String)> {
+    let store = crate::session::users()
+        .ok_or_else(|| json_response(500, &json!({"error": "user store unavailable"})))?;
+    let guard = store.lock().unwrap(); // justified: Mutex poison is unrecoverable
+    f(&guard).map_err(|e| json_response(500, &json!({"error": format!("user store: {e}")})))
+}
+
+/// Task 9: GET /api/audit-export — the retention-trimmed audit log as a
+/// JSONL attachment. Admin-only (the same T6/T8 gate); http.rs dispatches
+/// here only under the audit-export license flag, so unlicensed servers
+/// keep the v0.4.0 plain 404.
+pub fn route_audit_export(
+    sessions: &Mutex<HashMap<String, crate::HttpSession>>,
+    token: Option<&str>,
+    db_path: &str,
+) -> (String, String, Vec<(String, String)>, String) {
+    if let Err(msg) = check_auth(token, sessions) {
+        let (s, ct, b) = json_response(401, &json!({"error": msg}));
+        return (s, ct, Vec::new(), b);
+    }
+    if let Err(r) = admin_only(token, sessions) {
+        let (s, ct, b) = r;
+        return (s, ct, Vec::new(), b);
+    }
+    match crate::admin::audit_jsonl(db_path) {
+        Ok(bytes) => (
+            "200 OK".to_string(),
+            "application/x-ndjson".to_string(),
+            vec![(
+                "Content-Disposition".to_string(),
+                "attachment; filename=\"aikoql-audit.jsonl\"".to_string(),
+            )],
+            bytes,
+        ),
+        Err(e) => {
+            let (s, ct, b) = json_response(500, &json!({"error": e}));
+            (s, ct, Vec::new(), b)
+        }
+    }
+}
+
+/// Task 8: the /api/license payload — the license fields on the wire.
+/// Community (no LICENSE_STATE) reports tier "community" with empty
+/// org/features and no expiry.
+fn license_payload() -> J {
+    let Some(state) = crate::license::LICENSE_STATE.get() else {
+        return json!({"tier": "community", "org": "", "features": [], "expires": null});
+    };
+    let features = crate::license::feature_flags(&state.features);
+    let expires = state
+        .expires
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs());
+    json!({"tier": "enterprise", "org": state.org, "features": features, "expires": expires})
+}
+
 pub fn cors_preflight() -> (String, String, String) {
     (
         "204 No Content".to_string(),
@@ -461,7 +708,7 @@ pub fn cors_preflight() -> (String, String, String) {
 pub fn cors_headers() -> Vec<(&'static str, &'static str)> {
     vec![
         ("Access-Control-Allow-Origin", "*"),
-        ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+        ("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS"),
         (
             "Access-Control-Allow-Headers",
             "Content-Type, Authorization",
@@ -469,11 +716,67 @@ pub fn cors_headers() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
+/// Task 6: the mutating POST routes the role gate closes for viewers —
+/// every POST in route_inner that writes. Fail-closed: the set must stay
+/// complete. Read POSTs (aikoql MATCH, find-similar, traverse, explain,
+/// prove, reason/infer/predict, evaluate-policies, job-status, list-*
+/// twins, eval/*, agent/* reports) stay reachable.
+fn is_write_route(path: &str, body: &str) -> bool {
+    // aikoql is query-aware: a MATCH reads, every other statement writes.
+    if path == "/api/v1/aikoql" {
+        let q: J = serde_json::from_str(body).unwrap_or(J::Null);
+        let query = q.get("query").and_then(|q| q.as_str()).unwrap_or("");
+        return !matches!(
+            aikoql_compiler::parser::parse(query),
+            Ok(aikoql_compiler::parser::ast::Statement::Match(_))
+        );
+    }
+    matches!(
+        path,
+        "/api/v1/discover-ontology"
+            | "/api/v1/remember"
+            | "/api/v1/forget"
+            | "/api/v1/evolve"
+            | "/api/v1/verify"
+            | "/api/v1/relate"
+            | "/api/v1/deploy-program"
+            | "/api/v1/execute-program"
+            | "/api/v1/deploy-policy"
+            | "/api/v1/deploy-workflow"
+            | "/api/v1/deploy-trigger"
+            | "/api/v1/add-dependency"
+            | "/api/v1/deploy-agent"
+            | "/api/v1/execute-agent"
+            | "/api/v1/deploy-connector"
+            | "/api/v1/deploy-view"
+            | "/api/v1/deploy-report"
+            | "/api/v1/deploy-benchmark"
+            | "/api/v1/execute-workflow"
+            | "/api/v1/check-triggers"
+            | "/api/v1/approve-job"
+            | "/api/v1/documents"
+            | "/api/v1/documents/compile"
+            | "/api/v1/agent/memory-store"
+            | "/api/v1/agent/memory-update"
+            | "/api/v1/agent/memory-delete"
+    )
+}
+
+/// Task 6: the REST routes the role gate keeps admin-only — the
+/// storage-admin operations (tools/admin.rs).
+fn is_admin_route(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/v1/backup" | "/api/v1/restore" | "/api/v1/verify-backup"
+    )
+}
+
 fn json_response(code: u16, body: &J) -> (String, String, String) {
     let status = match code {
         200 => "200 OK",
         400 => "400 Bad Request",
         401 => "401 Unauthorized",
+        403 => "403 Forbidden",
         404 => "404 Not Found",
         429 => "429 Too Many Requests",
         _ => "500 Internal Server Error",

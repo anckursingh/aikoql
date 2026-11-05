@@ -601,19 +601,33 @@ mod tests {
 
         // Not-yet-migrated fields still decrypt (previous-generation fallback).
         let mut read = gen0.clone();
-        assert_eq!(fc.decrypt_fields("acme", "t", &mut read, &policy).unwrap(), 1);
+        assert_eq!(
+            fc.decrypt_fields("acme", "t", &mut read, &policy).unwrap(),
+            1
+        );
         assert_eq!(read.get("salary"), Some(&Value::Text("s3cret".into())));
 
         // The walk migrates them: one field moved, under new ciphertext,
         // and a second run is a no-op.
         let mut walk = gen0.clone();
-        assert_eq!(fc.reencrypt_fields("acme", "t", &mut walk, &policy).unwrap(), 1);
+        assert_eq!(
+            fc.reencrypt_fields("acme", "t", &mut walk, &policy)
+                .unwrap(),
+            1
+        );
         assert_ne!(walk.get("salary"), gen0.get("salary"), "new ciphertext");
-        assert_eq!(fc.reencrypt_fields("acme", "t", &mut walk, &policy).unwrap(), 0);
+        assert_eq!(
+            fc.reencrypt_fields("acme", "t", &mut walk, &policy)
+                .unwrap(),
+            0
+        );
 
         // A migrated field decrypts under the current generation.
         let mut read2 = walk.clone();
-        assert_eq!(fc.decrypt_fields("acme", "t", &mut read2, &policy).unwrap(), 1);
+        assert_eq!(
+            fc.decrypt_fields("acme", "t", &mut read2, &policy).unwrap(),
+            1
+        );
         assert_eq!(read2.get("salary"), Some(&Value::Text("s3cret".into())));
     }
 }

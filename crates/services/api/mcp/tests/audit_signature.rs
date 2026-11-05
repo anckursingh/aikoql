@@ -185,8 +185,16 @@ fn as04_a_signing_server_chains_a_signature_per_committed_event() {
         last = Some((seq, hash));
     }
     let (seq, hash) = last.unwrap();
-    assert_eq!(hash, hex(pack["audit_chain"].as_str().unwrap()), "the chain tail is the signed head");
-    assert_eq!(seq, pack["journal_seq"].as_u64().unwrap(), "the signed tail seq is the head seq");
+    assert_eq!(
+        hash,
+        hex(pack["audit_chain"].as_str().unwrap()),
+        "the chain tail is the signed head"
+    );
+    assert_eq!(
+        seq,
+        pack["journal_seq"].as_u64().unwrap(),
+        "the signed tail seq is the head seq"
+    );
 
     // A tampered event hash breaks that event's signature.
     let row = &sigs[0];

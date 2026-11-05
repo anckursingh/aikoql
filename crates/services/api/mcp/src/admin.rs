@@ -109,7 +109,11 @@ pub(crate) fn run_restore(backup_dir: &str, target_path: &str) {
         target_path, info.rows_restored, info.generation
     );
 }
-pub(crate) fn run_audit(db_path: &str) {
+pub(crate) fn run_audit(db_path: &str, export_jsonl: Option<&str>) {
+    if let Some(out) = export_jsonl {
+        export_audit_jsonl(db_path, out);
+        return;
+    }
     let (kernel, _admin) = match engine::open_kernel_auto(db_path) {
         Ok((k, admin)) => (k, admin),
         Err(e) => {
@@ -132,6 +136,80 @@ pub(crate) fn run_audit(db_path: &str) {
             std::process::exit(1);
         }
     }
+}
+
+/// Task 7: `audit --export-jsonl PATH` — stream the local audit log
+/// (JSONL, one object per line) to PATH. Gated on the license's
+/// audit-export flag: without a verified license the command fails closed
+/// (exit 2) before creating the file.
+fn export_audit_jsonl(db_path: &str, out: &str) {
+    // The subcommand path never runs config::load, so resolve the license
+    // the same way: AIKOQL_LICENSE wins, else next to the database.
+    let license_path = std::env::var("AIKOQL_LICENSE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| format!("{db_path}/.aikoql-license"));
+    let licensed = std::fs::read(&license_path)
+        .ok()
+        .and_then(|bytes| crate::license::verify_license(&bytes).ok())
+        .is_some_and(|s| s.features.audit_export);
+    if !licensed {
+        eprintln!("enterprise feature: audit export");
+        std::process::exit(2);
+    }
+    let log_path = crate::audit::audit_log_path(db_path);
+    // Refuse to export onto the live log itself (or an alias of it) —
+    // create(truncate)-then-copy of the source is a silent evidence wipe.
+    if same_file(out, &log_path) {
+        eprintln!("export refused: {out} is the live audit log");
+        std::process::exit(2);
+    }
+    let mut from = std::fs::File::open(&log_path).unwrap_or_else(|e| {
+        eprintln!("open audit log {log_path}: {e}");
+        std::process::exit(1);
+    });
+    let mut to = std::fs::File::create(out).unwrap_or_else(|e| {
+        eprintln!("create export {out}: {e}");
+        std::process::exit(1);
+    });
+    if let Err(e) = std::io::copy(&mut from, &mut to) {
+        eprintln!("export: {e}");
+        std::process::exit(1);
+    }
+    println!("Exported audit log to: {out}");
+}
+
+/// Task 9: the audit log's content for the HTTP export route — the same
+/// bytes `audit --export-jsonl` streams. The HTTP response is a full
+/// in-memory String anyway, so read_to_string matches the transport.
+pub(crate) fn audit_jsonl(db_path: &str) -> Result<String, String> {
+    let log_path = crate::audit::audit_log_path(db_path);
+    std::fs::read_to_string(&log_path).map_err(|e| format!("open audit log {log_path}: {e}"))
+}
+
+/// Is `a` the same file as `b`? Canonical paths catch a direct path and
+/// symlinks; the inode/dev pair also catches a hardlink alias.
+fn same_file(a: &str, b: &str) -> bool {
+    if let (Ok(ca), Ok(cb)) = (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        if ca == cb {
+            return true;
+        }
+    }
+    same_inode(a, b)
+}
+
+#[cfg(unix)]
+fn same_inode(a: &str, b: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(ma), Ok(mb)) => ma.ino() == mb.ino() && ma.dev() == mb.dev(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_inode(_a: &str, _b: &str) -> bool {
+    false // canonicalize still catches direct paths and symlinks
 }
 pub(crate) fn run_report(path: &str) {
     eprintln!("Analyzing directory: {}\n", path);

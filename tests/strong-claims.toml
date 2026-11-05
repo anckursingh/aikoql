@@ -41,13 +41,13 @@ evidence = "run001_overload_queue_wait_is_measured_and_bounded"
 
 [[claim]]
 file = "crates/kernel/src/catalog.rs"
-line = 553
+line = 585
 text = "// ponytail: the open-time convergence is O(committed heads) per"
 evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
 
 [[claim]]
 file = "crates/kernel/src/catalog.rs"
-line = 554
+line = 586
 text = "// crashed declaration — bounded by the crash itself, not the"
 evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
 
@@ -59,7 +59,7 @@ evidence = "idx4_002_restart_replays_only_events_after_the_checkpoint"
 
 [[claim]]
 file = "crates/kernel/src/index/property.rs"
-line = 308
+line = 344
 text = "// P5-M17b — the O(1) freshness proof. rebuild stamps the head it"
 evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
 
@@ -131,7 +131,7 @@ evidence = "predecessor_boundary_cases"
 
 [[claim]]
 file = "crates/kernel/src/transaction/kernel.rs"
-line = 347
+line = 351
 text = "/// Retried calls with the same key commit exactly once (MRFC-0011 req 10)."
 evidence = "t06_idempotent_retry_commits_exactly_once"
 
@@ -774,19 +774,19 @@ evidence = "vs_scan_005_a_filtered_query_widens_the_pool_until_k_survive"
 
 [[claim]]
 file = "crates/kernel/src/index/coordinator.rs"
-line = 213
+line = 219
 text = "// AG-20: a bounded pool, widened 4x while the guards leave fewer"
 evidence = "vs_scan_004_a_top_k_query_asks_the_index_for_a_bounded_pool"
 
 [[claim]]
 file = "crates/kernel/src/index/coordinator.rs"
-line = 301
+line = 334
 text = "// AG-20: with indexes, hybrid fusions score the union of a bounded"
 evidence = "vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool"
 
 [[claim]]
 file = "crates/kernel/src/index/coordinator.rs"
-line = 302
+line = 335
 text = "// vector pool and a bounded text pool, widened 4x while fewer than k"
 evidence = "vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool"
 
@@ -810,13 +810,13 @@ evidence = "vs_scan_008_hybrid_asks_both_indexes_for_a_bounded_pool"
 
 [[claim]]
 file = "crates/kernel/src/index/property.rs"
-line = 135
+line = 159
 text = "/// idx6-001 seam: maintenance must stay O(1) per row, not O(index))."
 evidence = "idx6_001_maintenance_does_not_sweep_the_index"
 
 [[claim]]
 file = "crates/kernel/src/index/property.rs"
-line = 568
+line = 604
 text = "// --- AG-21 — idx6-001: maintenance is O(1) per row. RED: upsert swept"
 evidence = "idx6_001_maintenance_does_not_sweep_the_index"
 
@@ -837,3 +837,27 @@ file = "crates/storage/aikoql-v2/tests/scan_from.rs"
 line = 5
 text = "//! every tail read was O(journal). The observable is the engine's own"
 evidence = "sf001_scan_from_seeks_instead_of_scanning_the_prefix"
+
+[[claim]]
+file = "crates/kernel/tests/coordination.rs"
+line = 3
+text = "//! task is claimed exactly once; leases are wall-clock so an agent's death"
+evidence = "ag41_n_agents_claim_m_tasks_exactly_once"
+
+[[claim]]
+file = "crates/kernel/tests/coordination.rs"
+line = 55
+text = "// ---- the gate: N agents, M tasks, exactly-once ---------------------------------"
+evidence = "ag41_n_agents_claim_m_tasks_exactly_once"
+
+[[claim]]
+file = "crates/kernel/tests/coordination.rs"
+line = 87
+text = "// Every task claimed, exactly once, by exactly one agent."
+evidence = "ag41_n_agents_claim_m_tasks_exactly_once"
+
+[[claim]]
+file = "crates/kernel/tests/filtered_ann.rs"
+line = 109
+text = "/// Guard: the unfiltered path keeps the bounded pool (one 512-candidate"
+evidence = "ag20b_unfiltered_query_keeps_the_bounded_pool"

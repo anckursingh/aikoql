@@ -28,11 +28,13 @@ mod http;
 mod imports;
 mod ingest;
 mod knowledge_runtime;
+mod license;
 mod mcp_http;
 mod model;
 mod native;
 mod oauth;
 mod observability;
+mod oidc;
 mod prompts;
 mod protocol;
 mod rate_limiter;
@@ -47,6 +49,7 @@ mod tls;
 mod tool_registry;
 mod tools;
 mod transport;
+mod users;
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -303,6 +306,36 @@ fn main() {
         }
     }
 
+    // Enterprise licensing (Task 2): verify once at serve start. A valid
+    // license arms the enterprise features (Tasks 5/7/8/9); anything else —
+    // missing file, unreadable, tampered, expired — degrades to community
+    // mode with the reason in the log. Never a crash, never a default
+    // license (fail closed).
+    match std::fs::read(&cfg.license_path) {
+        Ok(bytes) => match license::verify_license(&bytes) {
+            Ok(state) => {
+                info!(org = %state.org, "enterprise license accepted");
+                let _ = license::LICENSE_STATE.set(state);
+            }
+            Err(e) => {
+                warn!(path = %cfg.license_path, "license rejected: {e}; running community mode")
+            }
+        },
+        Err(e) => warn!(
+            path = %cfg.license_path,
+            "license rejected: cannot read file: {e}; running community mode"
+        ),
+    }
+
+    // Enterprise audit retention (Task 7): startup rotation, gated on the
+    // license's audit-export flag — community mode never touches the log.
+    if license::LICENSE_STATE
+        .get()
+        .is_some_and(|s| s.features.audit_export)
+    {
+        audit::rotate(&db_path, cfg.audit_retention_days);
+    }
+
     // P3-M1 (§53–54): build the HTTP login resolver once — argon2id hashes
     // verified per login, bootstrap admin hashed here (the plaintext then
     // drops out of scope) — and fail closed on an armed-but-credentialless
@@ -521,6 +554,39 @@ fn main() {
                 std::process::exit(1);
             }
         };
+    // Enterprise multi-user (Task 3): only a verified multi-user license
+    // opens the user store — community mode never creates users.db. The
+    // store lives in the data dir, which the kernel has just opened. First
+    // start seeds the bootstrap admin from AIKOQL_ADMIN_PASSWORD; with no
+    // admin to seed or claim, serve refuses (exit 2 — an operator fix, not
+    // a runtime failure).
+    if license::LICENSE_STATE
+        .get()
+        .is_some_and(|s| s.features.multi_user)
+    {
+        let store_path = std::path::PathBuf::from(format!("{db_path}/users.db"));
+        let store = match users::UserStore::open(&store_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("multi-user user store {}: {e}", store_path.display());
+                std::process::exit(1);
+            }
+        };
+        if !store.has_admin() {
+            let Some(pw) = cfg.admin_password.as_deref() else {
+                eprintln!("multi-user requires a bootstrap admin (set AIKOQL_ADMIN_PASSWORD)");
+                std::process::exit(2);
+            };
+            if let Err(e) = store.seed_bootstrap_admin(pw) {
+                eprintln!("multi-user user store: seed bootstrap admin: {e}");
+                std::process::exit(1);
+            }
+        }
+        // Final review I-1: publish the handle process-wide so every serve
+        // surface sees the store — MCP over TCP gates viewers even without
+        // a metrics listener (serve_metrics' open_users is then a no-op).
+        crate::session::set_users(Arc::new(Mutex::new(store)));
+    }
     if let (Some(slot), Some(a)) = (&ha_slot, &admin) {
         let _ = slot.set(a.clone()); // the renewer can now fence writes
     }

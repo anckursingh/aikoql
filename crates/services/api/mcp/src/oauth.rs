@@ -335,11 +335,14 @@ impl OAuth {
             ("POST", "/oauth/register") => self.register(body),
             ("GET", "/oauth/authorize") => {
                 let q = parse_form(path.split_once('?').map_or("", |(_, q)| q));
-                self.authorize_page(&q, headers, None)
+                // Enterprise SSO (Task 5): an IdP replaces the password form;
+                // without one the v0.4.0 page renders unchanged.
+                match crate::oidc::gate() {
+                    Some(_) => self.redirect_to_idp(&q, headers),
+                    None => self.authorize_page(&q, headers, None),
+                }
             }
-            ("POST", "/oauth/authorize") => {
-                self.authorize(&parse_form(body), headers, client_ip)
-            }
+            ("POST", "/oauth/authorize") => self.authorize(&parse_form(body), headers, client_ip),
             ("POST", "/oauth/token") => self.token(&parse_form(body), headers),
             _ => return None,
         })
@@ -353,8 +356,13 @@ impl OAuth {
             return None;
         }
         // the login's current roles, narrowed by the scope; a removed login
-        // is refused
-        let roles = scoped_roles(&g.scope, self.logins.roles_of(&g.user)?);
+        // is refused. Enterprise (Task 5): the user store's roles are
+        // authoritative, per request; logins not in it (config-file users)
+        // keep the AuthResolver path.
+        let roles = crate::session::users()
+            .and_then(|store| store.lock().unwrap().roles_of(&g.user).ok().flatten()) // justified: Mutex poison is unrecoverable
+            .or_else(|| self.logins.roles_of(&g.user));
+        let roles = scoped_roles(&g.scope, roles?);
         Some(OAuthIdentity {
             principal: format!("oauth:{}:{}", g.client_id, g.user),
             user: g.user,
@@ -587,6 +595,83 @@ impl OAuth {
         )
     }
 
+    /// GET /oauth/authorize under SSO (Task 5): the same request checks as
+    /// the password form, then a 302 to the IdP. The original request is
+    /// kept in the flow registry so /oidc/callback can resume it.
+    fn redirect_to_idp(&self, q: &HashMap<String, String>, headers: &str) -> Reply {
+        let (_, resource) = match self.check_request(q, headers) {
+            Ok(c) => c,
+            Err(r) => return r,
+        };
+        let get = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
+        // an unsupported scope goes back to the client (as the POST does)
+        let Some(scope) = normalize_scope(get("scope")) else {
+            return redirect_to(
+                get("redirect_uri"),
+                &[("error", "invalid_scope")],
+                q.get("state"),
+            );
+        };
+        let verifier = crate::oidc::pkce_verifier();
+        let state = crate::session::oidc_flows().begin(
+            verifier.clone(),
+            Some(crate::session::PendingAuthorize {
+                client_id: get("client_id").to_string(),
+                redirect_uri: get("redirect_uri").to_string(),
+                code_challenge: get("code_challenge").to_string(),
+                state: q.get("state").cloned(),
+                resource,
+                scope,
+            }),
+        );
+        // the caller checked gate() is Some — the statics are process-wide
+        let Some(provider) = crate::oidc::gate() else {
+            return self.authorize_page(q, headers, None);
+        };
+        match provider.authorize_url(&state, &verifier) {
+            Ok(url) => {
+                let mut h = no_store();
+                h.push(("Location", url));
+                ("302 Found", h, "text/plain", String::new())
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "OIDC authorize URL failed");
+                page("500 Internal Server Error", "Sign-in error", &e.to_string())
+            }
+        }
+    }
+
+    /// The IdP callback's resume half (Task 5): the verified SSO login gets
+    /// an authorization code exactly like the password form's Allow.
+    pub(crate) fn finish_sso(
+        &self,
+        pending: &crate::session::PendingAuthorize,
+        user: &str,
+    ) -> Reply {
+        let code = random_token();
+        let mut codes = self.codes.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        let now = Instant::now();
+        codes.retain(|_, c| c.expires > now);
+        codes.insert(
+            code.clone(),
+            Code {
+                client_id: pending.client_id.clone(),
+                redirect_uri: pending.redirect_uri.clone(),
+                challenge: pending.code_challenge.clone(),
+                resource: pending.resource.clone(),
+                user: user.to_string(),
+                scope: pending.scope.clone(),
+                expires: now + CODE_TTL,
+            },
+        );
+        drop(codes);
+        redirect_to(
+            &pending.redirect_uri,
+            &[("code", &code)],
+            pending.state.as_ref(),
+        )
+    }
+
     /// POST /oauth/authorize: the login; a code back to the client.
     fn authorize(&self, f: &HashMap<String, String>, headers: &str, client_ip: IpAddr) -> Reply {
         let (_, resource) = match self.check_request(f, headers) {
@@ -617,7 +702,27 @@ impl OAuth {
             h.push(("Retry-After", wait.to_string()));
             return ("429 Too Many Requests", h, ctype, body);
         }
-        if self.logins.verify(user, get("password")).is_none() {
+        // Enterprise break-glass (Task 5): with multi-user on, the bootstrap
+        // admin verifies against the users.db hash — AIKOQL_ADMIN_PASSWORD
+        // only seeded it. A config-file admin ([auth].users) keeps its
+        // v0.4.0 password as the fallback; the env bootstrap entry is never
+        // consulted. Config-file users keep the AuthResolver path.
+        let verified = if user == crate::users::ADMIN_SUB {
+            match crate::session::users() {
+                Some(store) => {
+                    store
+                        .lock()
+                        .unwrap() // justified: Mutex poison is unrecoverable
+                        .verify_admin_password(get("password"))
+                        .unwrap_or(false)
+                        || self.logins.verify_config(user, get("password")).is_some()
+                }
+                None => self.logins.verify(user, get("password")).is_some(),
+            }
+        } else {
+            self.logins.verify(user, get("password")).is_some()
+        };
+        if !verified {
             self.logins.ip_failure(client_ip);
             return self.authorize_page(f, headers, Some("The username or password is wrong."));
         }
@@ -692,10 +797,11 @@ impl OAuth {
                 };
                 // rotated: the old refresh token dies in the same batch
                 batch.del(token_key(P_REFRESH, get("refresh_token")));
-                if old.expires <= now
-                    || old.client_id != get("client_id")
-                    || self.logins.roles_of(&old.user).is_none()
-                {
+                // Enterprise: the grant's user may live in the user store
+                let known = crate::session::users()
+                    .and_then(|store| store.lock().unwrap().roles_of(&old.user).ok().flatten()) // justified: Mutex poison is unrecoverable
+                    .or_else(|| self.logins.roles_of(&old.user));
+                if old.expires <= now || old.client_id != get("client_id") || known.is_none() {
                     return oauth_error(
                         "400 Bad Request",
                         "invalid_grant",
@@ -1241,7 +1347,11 @@ mod tests {
             .collect()
         };
         for _ in 0..5 {
-            assert_eq!(o.authorize(&form("wrong"), H, "127.0.0.1".parse().unwrap()).0, "401 Unauthorized");
+            assert_eq!(
+                o.authorize(&form("wrong"), H, "127.0.0.1".parse().unwrap())
+                    .0,
+                "401 Unauthorized"
+            );
         }
         let r = o.authorize(&form("pw"), H, "127.0.0.1".parse().unwrap());
         assert_eq!(r.0, "429 Too Many Requests");
@@ -1352,7 +1462,14 @@ mod tests {
             "only the document's redirect URIs"
         );
         let meta = o
-            .route("GET", "/.well-known/oauth-authorization-server", "", H, "", "127.0.0.1".parse().unwrap())
+            .route(
+                "GET",
+                "/.well-known/oauth-authorization-server",
+                "",
+                H,
+                "",
+                "127.0.0.1".parse().unwrap(),
+            )
             .unwrap();
         let meta: J = serde_json::from_str(&meta.3).unwrap();
         assert_eq!(meta["client_id_metadata_document_supported"], json!(true));
