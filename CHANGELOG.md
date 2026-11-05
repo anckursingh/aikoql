@@ -5,6 +5,63 @@ Format: <https://keepachangelog.com/>-inspired, but terser. This file starts
 at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 (`git log v0.1.0..v0.1.19`).
 
+## [Unreleased]
+
+### Security
+
+- **Studio escapes every untrusted value before it reaches markup**: stored
+  KO fields, type/tenant names, ontology text, document metadata and API/compile
+  error text (which echoes the query) were concatenated into `innerHTML` raw.
+  218 lines now pass through `esc()`, inline handlers read `data-*` attributes
+  instead of splicing values into JS strings, the graph tooltip is DOM text
+  nodes, and an exhaustive unit-test lint fails the build on any new
+  unescaped operand. Verified in a real browser against a hostile record.
+- **Studio no longer puts the session token in a URL**: every request sends
+  `Authorization: Bearer`; the audit export is a fetch + Blob download. The
+  server now matches the header name and scheme case-insensitively. `?token=`
+  still works for existing non-Studio clients.
+- **Studio's scripts are vendored, not loaded from a CDN**: CodeMirror and
+  vis-network are built from pinned versions into the binary and served at
+  `/studio/assets/*` (works air-gapped). The Studio page carries a CSP that
+  confines scripts and connections to its own origin, plus `X-Frame-Options`,
+  `Referrer-Policy: no-referrer` and `nosniff`.
+- **Tenant-confined ontology and schema discovery**: `discover_ontology` /
+  `discover_schema` honour the call's `tenant` (the session forces it for a
+  tenant-scoped caller): the kernel's tenant rule now confines the scan, where
+  before every call ran as an unscoped admin and could read, and bake into an
+  ontology, other tenants' data. A tenant's ontology is saved with its tenant
+  and is never the process-wide compile registry. The unscoped admin keeps the
+  platform-level view.
+
+### Added
+
+- `discover_ontology` takes `preview: true` (the proposal, nothing written);
+  Studio's Auto-Discover now shows the proposal and saves only on an explicit
+  second click.
+- `GET`/`POST /api/v1/ontology`: the active ontology exactly as the compiler
+  sees it, and a save that validates the definition, updates the ontology in
+  place under a CAS on `expected_version`, and republishes the registry.
+- Kernel: class-scoped ontology properties (`ClassDef.properties`;
+  `class_properties()` returns own + inherited), circular-inheritance and
+  unknown-property validation; `nullable` now round-trips.
+- Studio query editor: an AIKOQL tokenizer (not the PostgreSQL dialect) and
+  completion for the live schema's types/properties and the active
+  ontology's classes.
+- `scripts/prepush.sh`: runs every CI gate that can run locally before a push.
+
+### Fixed
+
+- Re-running discovery replayed the first result (fixed idempotency key); it
+  now updates the scope's auto-discovered ontology in place and writes nothing
+  when unchanged.
+- Studio and the compiler could show/use different ontologies; both now use
+  one selection (`active_ontology`).
+- REST answers a lost CAS with `409 Conflict` and an invalid/incomplete
+  ontology save with `400` (both were `500`).
+- The Studio "Stream" button chunked client-side; it is now labelled so.
+- `mcp_http` harness and the e2e dogfood/restart scripts no longer race
+  (server readiness / process exit).
+
 ## [0.4.0] — 2026-11-03 (community launch: public repo, all registries)
 
 ### Security
