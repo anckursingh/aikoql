@@ -14,6 +14,9 @@ pub struct DocumentSource<'a> {
     pub asset_dir: Option<&'a str>,
     /// HLD §54/§55 limits and enable flags the extraction runs under.
     pub policy: &'a crate::ProcessingPolicy,
+    /// One batch: pages `first..=last` (1-based) only, with their real page
+    /// numbers. `None` = the whole document.
+    pub pages: Option<(u32, u32)>,
 }
 
 /// Physical extraction for one family of formats (HLD §27/§28: no model,
@@ -67,10 +70,23 @@ impl ExtractorRegistry {
     }
 
     pub fn extract(&self, source: &DocumentSource) -> Result<DocumentModel, String> {
-        let doc = match self.extractor_for(source.mime_type) {
+        let mut doc = match self.extractor_for(source.mime_type) {
             Some(e) => e.extract(source)?,
             None => return Err(format!("unsupported mime type: {}", source.mime_type)),
         };
+        // PDF reads only the range; other formats are cut down here.
+        // shortcut: a non-PDF batch extracts the whole file and keeps the
+        // range (O(batches x document)); fine while only PDF runs OCR.
+        if let Some((first, last)) = source.pages {
+            doc.pages
+                .retain(|p| (first..=last).contains(&p.page_number));
+            let want = last.saturating_sub(first) as usize + 1;
+            if first == 0 || first > last || doc.pages.len() != want {
+                return Err(format!("page range {first}-{last} is outside the document"));
+            }
+            doc.page_count = doc.pages.len() as u32;
+            doc.total_chars = doc.pages.iter().map(|p| p.char_count).sum();
+        }
         // Every format meets the document-level limits (pages, images).
         source.policy.check_document(&doc)?;
         Ok(doc)
@@ -92,7 +108,7 @@ impl DocumentExtractor for PdfExtractor {
         mime == "application/pdf"
     }
     fn extract(&self, s: &DocumentSource) -> Result<DocumentModel, String> {
-        crate::extract_pdf(s.path, s.asset_dir, s.policy)
+        crate::extract_pdf(s.path, s.asset_dir, s.policy, s.pages)
     }
 }
 

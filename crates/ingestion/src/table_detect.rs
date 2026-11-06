@@ -383,14 +383,23 @@ pub(crate) fn parse_pdftotext_tsv(tsv: &str) -> Vec<Vec<OcrWord>> {
 
 /// Word boxes of every page of a PDF via `pdftotext -tsv`; `None` when
 /// poppler is missing, fails or exceeds `timeout_secs`.
-pub(crate) fn pdf_page_words(path: &str, timeout_secs: u64) -> Option<Vec<Vec<OcrWord>>> {
+/// `range` limits it to pages first..=last (still indexed by real page).
+pub(crate) fn pdf_page_words(
+    path: &str,
+    timeout_secs: u64,
+    range: Option<(u32, u32)>,
+) -> Option<Vec<Vec<OcrWord>>> {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let out = std::env::temp_dir().join(format!(
         "aikoql-pdftsv-{}-{}.tsv",
         std::process::id(),
         SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    let mut child = std::process::Command::new("pdftotext")
+    let mut cmd = std::process::Command::new("pdftotext");
+    if let Some((first, last)) = range {
+        cmd.args(["-f", &first.to_string(), "-l", &last.to_string()]);
+    }
+    let mut child = cmd
         .args(["-tsv", "-enc", "UTF-8"])
         .arg(path)
         .arg(&out)

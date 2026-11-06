@@ -127,8 +127,11 @@ impl ProcessingPolicy {
 }
 
 /// Page ranges (1-based, inclusive) of at most `max_pages` pages each.
-pub fn plan_batches(_pages: usize, _max_pages: usize) -> Vec<(u32, u32)> {
-    Vec::new()
+pub fn plan_batches(pages: usize, max_pages: usize) -> Vec<(u32, u32)> {
+    let max = max_pages.max(1);
+    (0..pages.div_ceil(max))
+        .map(|i| ((i * max + 1) as u32, ((i + 1) * max).min(pages) as u32))
+        .collect()
 }
 
 /// Raster image size from the file header — no decoding. PNG, GIF, BMP,

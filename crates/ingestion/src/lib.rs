@@ -377,34 +377,75 @@ pub fn extract_document_with_policy(
         mime_type,
         asset_dir,
         policy,
+        pages: None,
     })
 }
 
 /// Pages as the extractor counts them (PDF pages, sheets, slides), with no
 /// limit applied — the batch plan for an over-limit document.
-pub fn document_page_count(_file_path: &str, _mime_type: &str) -> Result<usize, String> {
-    Err("not implemented".into())
+pub fn document_page_count(file_path: &str, mime_type: &str) -> Result<usize, String> {
+    if mime_type == "application/pdf" {
+        return std::panic::catch_unwind(|| lopdf::Document::load(file_path))
+            .map_err(|_| "pdf load panicked".to_string())?
+            .map(|d| d.get_pages().len())
+            .map_err(|e| format!("pdf load: {e}"));
+    }
+    // The other formats are cheap to read whole (no OCR runs here).
+    let lifted = ProcessingPolicy {
+        max_pages: usize::MAX,
+        max_image_count: usize::MAX,
+        max_visual_assets: usize::MAX,
+        enable_ocr: false,
+        ..Default::default()
+    };
+    extract_document_with_policy(file_path, mime_type, None, &lifted).map(|d| d.pages.len())
 }
 
 /// Pages `first..=last` of a document under `policy`: one batch.
 pub fn extract_document_pages(
-    _file_path: &str,
-    _mime_type: &str,
-    _asset_dir: Option<&str>,
-    _policy: &ProcessingPolicy,
-    _first: u32,
-    _last: u32,
+    file_path: &str,
+    mime_type: &str,
+    asset_dir: Option<&str>,
+    policy: &ProcessingPolicy,
+    first: u32,
+    last: u32,
 ) -> Result<DocumentModel, String> {
-    Err("not implemented".into())
+    ExtractorRegistry::with_defaults().extract(&DocumentSource {
+        path: file_path,
+        mime_type,
+        asset_dir,
+        policy,
+        pages: Some((first, last)),
+    })
 }
 
 /// Batch results, in page order, as one document.
-pub fn merge_batches(_batches: Vec<DocumentModel>) -> DocumentModel {
+pub fn merge_batches(batches: Vec<DocumentModel>) -> DocumentModel {
+    let mut pages = Vec::new();
+    let mut ocr: Option<OcrStats> = None;
+    for b in batches {
+        pages.extend(b.pages);
+        if let Some(s) = b.ocr_stats {
+            let m = ocr.get_or_insert_with(OcrStats::default);
+            // confidence is averaged over the pages OCR read
+            let (n0, n1) = (m.pages_ocr_succeeded as f32, s.pages_ocr_succeeded as f32);
+            if n0 + n1 > 0.0 {
+                m.average_confidence =
+                    (m.average_confidence * n0 + s.average_confidence * n1) / (n0 + n1);
+            }
+            m.pages_ocr_attempted += s.pages_ocr_attempted;
+            m.pages_ocr_succeeded += s.pages_ocr_succeeded;
+            m.pages_ocr_failed += s.pages_ocr_failed;
+            m.ocr_unavailable |= s.ocr_unavailable;
+            m.ocr_disabled |= s.ocr_disabled;
+        }
+    }
+    pages.sort_by_key(|p| p.page_number);
     DocumentModel {
-        page_count: 0,
-        pages: Vec::new(),
-        total_chars: 0,
-        ocr_stats: None,
+        page_count: pages.len() as u32,
+        total_chars: pages.iter().map(|p| p.char_count).sum(),
+        pages,
+        ocr_stats: ocr,
     }
 }
 
@@ -542,7 +583,10 @@ fn extract_pdf(
     path: &str,
     asset_dir: Option<&str>,
     policy: &ProcessingPolicy,
+    range: Option<(u32, u32)>,
 ) -> Result<DocumentModel, String> {
+    // One batch reads pages first..=last only; page numbers stay real.
+    let first = range.map_or(1, |r| r.0);
     // Text extraction is best-effort: an image-only (scanned) PDF produces no
     // text, and unusual encodings can fail — neither should prevent asset
     // extraction. Failure degrades to empty native pages, and the whole call
@@ -555,12 +599,21 @@ fn extract_pdf(
     let mut text_pages: Vec<String> = match std::panic::catch_unwind(|| {
         let doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
         let page_count = doc.get_pages().len();
+        let last = match range {
+            Some((a, b)) if a == 0 || a > b || b as usize > page_count => {
+                return Err(format!(
+                    "page range {a}-{b} is outside the document's {page_count} pages"
+                ))
+            }
+            Some((_, b)) => b,
+            None => page_count as u32,
+        };
         // Refuse before extracting anything (HLD §54 max page count).
-        policy.check_pages(page_count)?;
+        policy.check_pages((last + 1).saturating_sub(first) as usize)?;
         let mut pages = Vec::with_capacity(page_count);
         // extract_text_chunks returns one chunk per font run (Tf), not per
         // page — join each page's chunks ourselves.
-        for page_number in 1..=page_count as u32 {
+        for page_number in first..=last {
             let mut text = String::new();
             for r in doc.extract_text_chunks(&[page_number]) {
                 match r {
@@ -577,7 +630,7 @@ fn extract_pdf(
         Ok::<_, String>(pages)
     }) {
         Ok(Ok(pages)) => pages,
-        Ok(Err(e)) if policy::is_limit_error(&e) => return Err(e),
+        Ok(Err(e)) if policy::is_limit_error(&e) || e.starts_with("page range") => return Err(e),
         Ok(Err(e)) => {
             eprintln!("pdf load failed: {e} — continuing without native text");
             Vec::new()
@@ -602,7 +655,7 @@ fn extract_pdf(
         .map(|(i, page_text)| {
             let trimmed = page_text.trim().to_string();
             PageModel {
-                page_number: i as u32 + 1,
+                page_number: first + i as u32,
                 char_count: trimmed.len(),
                 text: trimmed,
                 source: "native".into(),
@@ -616,12 +669,17 @@ fn extract_pdf(
     // already carrying pipe rows (a structural parser's dialect) is left
     // alone; no poppler → flat text only.
     if native_pages.iter().any(|p| !p.text.is_empty()) {
-        if let Some(words) = table_detect::pdf_page_words(path, 30) {
-            for (page, words) in native_pages.iter_mut().zip(words) {
+        let last = native_pages.last().map_or(first, |p| p.page_number);
+        if let Some(words) = table_detect::pdf_page_words(path, 30, range.map(|_| (first, last))) {
+            // indexed by the real page number (poppler numbers -f/-l pages so)
+            for page in native_pages.iter_mut() {
+                let Some(words) = words.get(page.page_number as usize - 1) else {
+                    continue;
+                };
                 if page.text.lines().any(|l| l.trim_start().starts_with('|')) {
                     continue;
                 }
-                if let Some(text) = table_detect::text_with_tables(&words) {
+                if let Some(text) = table_detect::text_with_tables(words) {
                     page.char_count = text.len();
                     page.text = text;
                 }
@@ -634,8 +692,13 @@ fn extract_pdf(
     // content-addressed assets. PR-N adds vector-drawn figure/chart graphics
     // as SVG assets (page text needed for the visual-marker filter).
     let page_texts: Vec<String> = native_pages.iter().map(|p| p.text.clone()).collect();
-    let images_by_page =
-        extract_pdf_images(path, asset_dir, &page_texts, policy.max_image_dimension)?;
+    let images_by_page = extract_pdf_images(
+        path,
+        asset_dir,
+        &page_texts,
+        policy.max_image_dimension,
+        (first, range.map_or(u32::MAX, |r| r.1)),
+    )?;
     for (page_idx, images) in images_by_page.into_iter().enumerate() {
         if let Some(page) = native_pages.get_mut(page_idx) {
             page.images = images;
@@ -1240,6 +1303,7 @@ fn extract_pdf_images(
     asset_dir: Option<&str>,
     page_texts: &[String],
     max_dimension: u32,
+    (first, last): (u32, u32),
 ) -> Result<Vec<Vec<DocumentImage>>, String> {
     let mut pages: Vec<Vec<DocumentImage>> = Vec::new();
     let doc = match lopdf::Document::load(path) {
@@ -1251,6 +1315,9 @@ fn extract_pdf_images(
     // page order. Images are attached by index to the native pages above.
     for (page_idx, page_id) in doc.get_pages().values().enumerate() {
         let page_num = page_idx as u32 + 1;
+        if page_num < first || page_num > last {
+            continue;
+        }
         let page = match doc.get_object(*page_id) {
             Ok(lopdf::Object::Dictionary(d)) => d.clone(),
             _ => continue,
@@ -1338,7 +1405,8 @@ fn extract_pdf_images(
         // captures them. The drawing ops become one minimal SVG asset; the
         // visual classifier adopts it for asset-less chart nodes on this
         // page. Marker filter: only pages whose text names a figure/chart.
-        if has_visual_marker(page_texts.get(page_idx).map(|s| s.as_str()).unwrap_or("")) {
+        let text = page_texts.get((page_num - first) as usize);
+        if has_visual_marker(text.map(|s| s.as_str()).unwrap_or("")) {
             let mut ops: Vec<lopdf::content::Operation> = Vec::new();
             for stream in &streams {
                 let bytes = stream

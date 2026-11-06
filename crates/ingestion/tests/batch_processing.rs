@@ -239,6 +239,7 @@ fn a_batch_is_held_to_max_pages_and_the_per_batch_limits() {
         ..Default::default()
     };
     let single = extract_document(&deck, PPTX, None).unwrap();
+    let mut outcomes = Vec::new();
     for p in &single.pages {
         let n = p.page_number;
         let r = extract_document_pages(&deck, PPTX, None, &no_images, n, n);
@@ -249,7 +250,12 @@ fn a_batch_is_held_to_max_pages_and_the_per_batch_limits() {
             Ok(d) => assert!(!raster && d.pages[0].page_number == n, "slide {n}"),
             Err(e) => assert!(raster && e.contains("max_image_count"), "slide {n}: {e}"),
         }
+        outcomes.push(raster);
     }
+    assert!(
+        outcomes.contains(&true) && outcomes.contains(&false),
+        "the deck has slides with and without images: {outcomes:?}"
+    );
     // out-of-range pages are an error, not an empty success
     assert!(extract_document_pages(&deck, PPTX, None, &two, 5, 5).is_err());
 }
