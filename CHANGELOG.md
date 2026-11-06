@@ -7,6 +7,29 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Document extraction quality
+- Typed entities without a model: the default analyzer types organisations (legal forms and
+  organisation nouns), people (honorifics, name particles, common given names) and places (a built-in
+  gazetteer), and recognises money, email, URL, phone, IBAN (checksum-validated) and percentages, plus
+  "12 May 2025" / "15/09/2025" dates. Names no longer run across commas, honorifics or line breaks, and a
+  bare two-word phrase is no longer guessed to be a `Person`. Entity evidence carries extractor `rules`,
+  model `rules-v1` and a text span.
+- Tables are detected in PDFs (from the text layer's word boxes; needs poppler's `pdftotext`) and in
+  scanned images (from Tesseract's word boxes) and reach compile as structured tables with cell-cited facts.
+  Skewed scans are not handled yet.
+- New formats: XLSX (each sheet a table), CSV/TSV (delimiter sniffing, quoted fields) and PPTX (slide
+  text, speaker notes, tables, pictures). Uploads are classified by file extension when the browser
+  sends a blank or legacy type; Studio's file picker lists the supported formats.
+- Extractors sit behind a `DocumentExtractor` / `ExtractorRegistry` seam (`extract_document` unchanged).
+- Ingestion limits in a new `[ingestion]` config table: `max_pages`, `max_image_count`,
+  `max_visual_assets`, `max_image_dimension` (read from image headers), `max_ocr_seconds` (per document),
+  `enable_ocr`, `enable_visual_analysis`. A document over a limit is stored with status
+  `limit_exceeded` and the reason; compiling it is a 400. New status `ocr_disabled`.
+- The secret filter no longer redacts text containing "asia" (Asia Pacific, Malaysia) as an AWS key; it
+  matches a whole AKIA/ASIA access-key-id token.
+- An extraction-quality benchmark with hand-written ground truth (`extraction_quality_bench`) ratchets
+  the numbers; `scripts/bench-vs-docling.py` compares with Docling when it is installed.
+
 ### Image documents
 - PNG, JPEG, TIFF, BMP, GIF and WebP upload as one-page documents: the image is stored as an asset and
   Tesseract (when it is on the server's PATH; `pdftoppm` is not needed for images) supplies the text.

@@ -79,8 +79,12 @@ def docling_metrics():
         by_page = {}
         for t in doc.tables:
             page = t.prov[0].page_no if t.prov else 1
-            df = t.export_to_dataframe()
-            grid = [list(map(str, df.columns))] + [list(map(str, r)) for r in df.values.tolist()]
+            df = t.export_to_dataframe(doc=doc)
+            body = [list(map(str, r)) for r in df.values.tolist()]
+            # No detected header: pandas numbers the columns 0..n-1 — the
+            # first body row is then the header, not the column index.
+            numbered = list(df.columns) == list(range(len(df.columns)))
+            grid = body if numbered else [list(map(str, df.columns))] + body
             by_page.setdefault(page, []).append(grid)
         for t in gt["tables"]:
             best = max((cell_accuracy(g, t["rows"]) for g in by_page.get(t["page"], [])), default=0.0)
