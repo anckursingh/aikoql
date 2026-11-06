@@ -76,6 +76,12 @@ impl SecretKind {
     }
 }
 
+/// Redact secrets from free text: each whitespace-separated token that
+/// looks like a secret becomes `[REDACTED:<KIND>]`; the rest is verbatim.
+pub fn redact_text(text: &str) -> String {
+    text.to_string()
+}
+
 /// Scan and redact secrets from a KnowledgeIr.
 /// Returns the redacted IR and a list of findings.
 pub fn filter_secrets(ir: &KnowledgeIr) -> (KnowledgeIr, Vec<SecretFinding>) {
@@ -417,6 +423,21 @@ fn is_likely_token(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn redact_text_hides_aws_key_email_jwt_and_keeps_asia_pacific() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop";
+        let out = redact_text(&format!(
+            "key AKIAIOSFODNN7EXAMPLE mail bob@example.com jwt {jwt} region Asia Pacific Malaysia"
+        ));
+        assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"), "{out}");
+        assert!(!out.contains("bob@example.com"), "{out}");
+        assert!(!out.contains("eyJhbGci"), "{out}");
+        assert!(out.contains("[REDACTED:AWS_KEY]"), "{out}");
+        assert!(out.contains("[REDACTED:EMAIL]"), "{out}");
+        assert!(out.contains("[REDACTED:JWT_TOKEN]"), "{out}");
+        assert!(out.ends_with("region Asia Pacific Malaysia"), "{out}");
+    }
+
     use super::*;
 
     #[test]
