@@ -22,6 +22,15 @@ pub(crate) struct ChatConfig {
 
 impl ChatConfig {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        if !(self.url.starts_with("http://") || self.url.starts_with("https://")) {
+            return Err("url must start with http:// or https://".into());
+        }
+        if self.model.trim().is_empty() {
+            return Err("model must not be empty".into());
+        }
+        if self.timeout_secs == 0 {
+            return Err("timeout_secs must be at least 1".into());
+        }
         Ok(())
     }
 }
