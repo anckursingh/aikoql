@@ -196,8 +196,9 @@ My calls (builder may refine, owner may override):
   after trimming and case/whitespace normalisation (the prompt asks the model
   to quote context statements, so claims are quotes). No fuzzy matching:
   paraphrase in a claim is a refusal. The free-text `answer` is not matched.
-  Each `evidence_id` must be a retrieved koid (fallback results use their
-  koid as the evidence id). If the training repo's `grounding.py` disagrees,
+  Evidence is attributed by the server: the model is shown statements, not
+  koids, so its `evidence_ids` are ignored and each verified claim carries the
+  koid(s) of the retrieved fact(s) it matched (owner decision 2026-11-06). If the training repo's `grounding.py` disagrees,
   the server's check wins and the difference is documented. Expect the
   small model to be refused often at first; that is the safe failure.
 - **Statement of an object without a `statement` field.** Render

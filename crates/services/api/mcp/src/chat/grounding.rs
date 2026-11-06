@@ -1,5 +1,5 @@
 //! Server-side grounding check: a model answer is only trusted when every
-//! claim quotes a retrieved fact and cites a retrieved koid.
+//! claim quotes a retrieved fact; the evidence is attributed by the server.
 
 use super::context::Fact;
 use super::protocol::{AnswerReply, Claim};
@@ -11,10 +11,11 @@ fn norm(s: &str) -> String {
         .to_lowercase()
 }
 
-/// `Ok` for a refusal, or when every claim quotes a retrieved statement
-/// (trim/case/whitespace-normalised, no fuzzy match) and cites at least one
-/// evidence id, all of which are retrieved koids. The free-text `answer` is
-/// not matched.
+/// A refusal passes with no claims. Otherwise every claim must quote a
+/// retrieved statement (trim/case/whitespace-normalised, no fuzzy match), and
+/// the returned claims carry the koids of the facts they matched. The
+/// model's own `evidence_ids` are ignored: it is shown statements, not
+/// koids, so it cannot know them. The free-text `answer` is not matched.
 pub(crate) fn verify(answer: &AnswerReply, facts: &[Fact]) -> Result<Vec<Claim>, String> {
     if answer.refusal_reason.is_some() {
         return Ok(Vec::new());
@@ -22,33 +23,28 @@ pub(crate) fn verify(answer: &AnswerReply, facts: &[Fact]) -> Result<Vec<Claim>,
     if answer.claims.is_empty() {
         return Err("grounded answer has no claims".into());
     }
-    let statements: Vec<String> = facts.iter().map(|f| norm(&f.statement)).collect();
-    for c in &answer.claims {
-        if !statements.contains(&norm(&c.statement)) {
-            return Err(format!(
-                "claim not found in retrieved facts: {}",
-                c.statement
-            ));
-        }
-        if c.evidence_ids.is_empty() {
-            return Err("claim cites no evidence".into());
-        }
-        if let Some(bad) = c
-            .evidence_ids
-            .iter()
-            .find(|id| !facts.iter().any(|f| &f.koid == *id))
-        {
-            return Err(format!("evidence id was not retrieved: {bad}"));
-        }
-    }
-    Ok(answer
+    answer
         .claims
         .iter()
-        .map(|c| Claim {
-            statement: c.statement.clone(),
-            evidence_ids: c.evidence_ids.clone(),
+        .map(|c| {
+            let want = norm(&c.statement);
+            let evidence_ids: Vec<String> = facts
+                .iter()
+                .filter(|f| norm(&f.statement) == want)
+                .map(|f| f.koid.clone())
+                .collect();
+            if evidence_ids.is_empty() {
+                return Err(format!(
+                    "claim not found in retrieved facts: {}",
+                    c.statement
+                ));
+            }
+            Ok(Claim {
+                statement: c.statement.clone(),
+                evidence_ids,
+            })
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]

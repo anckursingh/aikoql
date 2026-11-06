@@ -51,13 +51,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // A scripted OpenAI-style model. It answers the query skill with a fixed
 // MATCH (or a refusal for "unknowable") and the answer skill with a claim that
-// quotes the one Company fact and cites its koid (state.companyKoid).
+// quotes the one Company fact; the evidence id it cites is made up, because
+// a real model is shown statements, not koids (the server attributes them).
 function startChatStub(state) {
   const http = require('http');
   const queryFor = q => /unknowable/.test(q) ? { query: null, refusal_reason: 'cannot be answered' } : { query: 'MATCH Company RETURN *', refusal_reason: null };
   const answerFor = q => ({
     answer: /hostile/.test(q) ? HOSTILE : 'Acme is a company.', grounded: true,
-    claims: [{ statement: 'Company Acme: name=Acme', evidence_ids: [state.companyKoid] }], refusal_reason: null,
+    claims: [{ statement: 'Company Acme: name=Acme', evidence_ids: ['model-cannot-know-koids'] }], refusal_reason: null,
   });
   return new Promise(resolve => {
     const srv = http.createServer((req, resp) => {
@@ -248,6 +249,8 @@ async function main() {
     await page.locator('#ask-result summary').click({ timeout: 2000 }).catch(() => {});
     await page.locator('#ask-result a[data-click="openInInspector"]').first().click({ timeout: 2000 }).catch(() => {});
     await page.waitForTimeout(700);
+    ok('claim evidence is the real koid the server matched, not the model\'s id',
+      await page.evaluate(k => { const a = document.querySelector('#ask-result a[data-click="openInInspector"]'); return !!a && a.dataset.koid === k; }, chatState.companyKoid));
     ok('a koid link opens the Inspector',
       await page.evaluate(() => document.getElementById('panel-inspector').classList.contains('active') && document.getElementById('inspector-search-input').value.length > 8));
     await page.locator('button[data-panel="ask"]').click({ timeout: 2000 }).catch(() => {}); await page.waitForTimeout(500);

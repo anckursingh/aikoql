@@ -50,8 +50,8 @@ fn answer_from_model(
     let reply = model.generate(&protocol::build_answer_prompt(question, &statements))?;
     let answer = protocol::parse_answer_reply(&reply)
         .map_err(|e| format!("model answer was malformed: {e}"))?;
-    let _ = grounding::verify(&answer, facts).map_err(|_| NOT_SUPPORTED.to_string())?;
-    Ok(answer)
+    let claims = grounding::verify(&answer, facts).map_err(|_| NOT_SUPPORTED.to_string())?;
+    Ok(AnswerReply { claims, ..answer })
 }
 
 pub(crate) const NOT_CONFIGURED: &str =
