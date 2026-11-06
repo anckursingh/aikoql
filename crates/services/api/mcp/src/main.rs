@@ -16,6 +16,8 @@ mod archive;
 mod audit;
 mod authz;
 mod aws_kms;
+#[allow(dead_code)] // wired in Task 7
+mod chat;
 mod cli;
 mod config;
 mod dispatcher;

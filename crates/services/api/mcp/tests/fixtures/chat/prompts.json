@@ -1,0 +1,50 @@
+{
+ "query": [
+  {
+   "question": "Who holds card 4111?",
+   "prompt": "Question: Who holds card 4111?\nReply with exactly one JSON object, no other text:\n{\"query\": \"<aikoql query>\"}\nIf the question cannot be answered from a knowledge graph, reply:\n{\"query\": null, \"refusal_reason\": \"<short reason>\"}\n"
+  },
+  {
+   "question": "What is 1+1?",
+   "prompt": "Question: What is 1+1?\nReply with exactly one JSON object, no other text:\n{\"query\": \"<aikoql query>\"}\nIf the question cannot be answered from a knowledge graph, reply:\n{\"query\": null, \"refusal_reason\": \"<short reason>\"}\n"
+  },
+  {
+   "question": "Wer hält die Karte? ü中😀",
+   "prompt": "Question: Wer hält die Karte? ü中😀\nReply with exactly one JSON object, no other text:\n{\"query\": \"<aikoql query>\"}\nIf the question cannot be answered from a knowledge graph, reply:\n{\"query\": null, \"refusal_reason\": \"<short reason>\"}\n"
+  },
+  {
+   "question": "Quote \"this\" and {braces}",
+   "prompt": "Question: Quote \"this\" and {braces}\nReply with exactly one JSON object, no other text:\n{\"query\": \"<aikoql query>\"}\nIf the question cannot be answered from a knowledge graph, reply:\n{\"query\": null, \"refusal_reason\": \"<short reason>\"}\n"
+  }
+ ],
+ "answer": [
+  {
+   "question": "Who holds card 4111?",
+   "statements": [],
+   "prompt": "Question: Who holds card 4111?\n\nKnowledge context:\n\n\nAnswer the question from the context above. Reply with exactly one JSON object, no other text:\n{\"answer\": \"<answer>\", \"grounded\": true,\n \"claims\": [{\"statement\": \"<a context statement supporting the answer>\", \"evidence_ids\": [\"<evidence id>\"]}],\n \"refusal_reason\": null}\nIf the context does not contain the answer, reply:\n{\"answer\": \"UNKNOWN: <short reason>\", \"grounded\": false, \"claims\": [], \"refusal_reason\": \"<short reason>\"}\n"
+  },
+  {
+   "question": "What is 1+1?",
+   "statements": [
+    "Alice Chen holds card 4111"
+   ],
+   "prompt": "Question: What is 1+1?\n\nKnowledge context:\n- Alice Chen holds card 4111\n\nAnswer the question from the context above. Reply with exactly one JSON object, no other text:\n{\"answer\": \"<answer>\", \"grounded\": true,\n \"claims\": [{\"statement\": \"<a context statement supporting the answer>\", \"evidence_ids\": [\"<evidence id>\"]}],\n \"refusal_reason\": null}\nIf the context does not contain the answer, reply:\n{\"answer\": \"UNKNOWN: <short reason>\", \"grounded\": false, \"claims\": [], \"refusal_reason\": \"<short reason>\"}\n"
+  },
+  {
+   "question": "Wer hält die Karte? ü中😀",
+   "statements": [
+    "a",
+    "b é",
+    "c\nd"
+   ],
+   "prompt": "Question: Wer hält die Karte? ü中😀\n\nKnowledge context:\n- a\n- b é\n- c\nd\n\nAnswer the question from the context above. Reply with exactly one JSON object, no other text:\n{\"answer\": \"<answer>\", \"grounded\": true,\n \"claims\": [{\"statement\": \"<a context statement supporting the answer>\", \"evidence_ids\": [\"<evidence id>\"]}],\n \"refusal_reason\": null}\nIf the context does not contain the answer, reply:\n{\"answer\": \"UNKNOWN: <short reason>\", \"grounded\": false, \"claims\": [], \"refusal_reason\": \"<short reason>\"}\n"
+  },
+  {
+   "question": "Quote \"this\" and {braces}",
+   "statements": [
+    "only one"
+   ],
+   "prompt": "Question: Quote \"this\" and {braces}\n\nKnowledge context:\n- only one\n\nAnswer the question from the context above. Reply with exactly one JSON object, no other text:\n{\"answer\": \"<answer>\", \"grounded\": true,\n \"claims\": [{\"statement\": \"<a context statement supporting the answer>\", \"evidence_ids\": [\"<evidence id>\"]}],\n \"refusal_reason\": null}\nIf the context does not contain the answer, reply:\n{\"answer\": \"UNKNOWN: <short reason>\", \"grounded\": false, \"claims\": [], \"refusal_reason\": \"<short reason>\"}\n"
+  }
+ ]
+}
