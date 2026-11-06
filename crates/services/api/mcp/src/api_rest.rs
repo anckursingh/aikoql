@@ -1126,6 +1126,77 @@ mod tests {
     }
 
     #[test]
+    fn m8_an_image_reports_its_ocr_outcome_through_ingest_and_compile() {
+        use base64::Engine;
+        let (k, db) = m3_kernel("image-ocr");
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let ingest = |filename: &str, mime: &str, content: String| {
+            let (s, body) = m3_call(
+                &k,
+                &db,
+                "POST",
+                "/api/v1/documents",
+                serde_json::json!({"filename": filename, "mime_type": mime, "content_base64": content}),
+            );
+            assert_eq!(s, "200 OK", "{body}");
+            body["data"].clone()
+        };
+        let compile = |koid: &serde_json::Value| {
+            m3_call(
+                &k,
+                &db,
+                "POST",
+                "/api/v1/documents/compile",
+                serde_json::json!({ "koid": koid }),
+            )
+        };
+        let has_tesseract = aikoql_ingestion::tool_available("tesseract");
+        // a browser that sends no type, or octet-stream: the extension decides
+        let fixtures = [
+            (
+                "scan.png",
+                "",
+                &include_bytes!("../../../../ingestion/tests/fixtures/ocr-text.png")[..],
+                "image/png",
+            ),
+            (
+                "scan.jpg",
+                "application/octet-stream",
+                &include_bytes!("../../../../ingestion/tests/fixtures/ocr-text.jpg")[..],
+                "image/jpeg",
+            ),
+        ];
+        for (name, sent, bytes, want) in fixtures {
+            let d = ingest(name, sent, b64(bytes));
+            assert_eq!(d["page_count"], 1, "{name}: {d}");
+            let (s, c) = compile(&d["koid"]);
+            assert_eq!(s, "200 OK", "{name}: {c}");
+            let c = &c["data"];
+            assert_eq!(c["mime_type"], want, "{name}");
+            assert_eq!(c["extraction_status"], d["status"], "{name}: {c}");
+            if has_tesseract {
+                assert_eq!(d["status"], "ocr_complete", "{name}: {d}");
+                assert!(d["char_count"].as_i64().unwrap() > 0, "{name}: {d}");
+                assert!(c["total_chars"].as_i64().unwrap() > 0, "{name}");
+                assert!(
+                    c.to_string().contains("Utrecht"),
+                    "{name}: OCR text compiled"
+                );
+            } else {
+                eprintln!("m8 image-ocr: tesseract absent — asserting the unavailable branch");
+                assert_eq!(d["status"], "ocr_unavailable", "{name}: {d}");
+                assert_eq!(d["char_count"], 0, "{name}: {d}");
+                assert_eq!(c["total_chars"], 0, "{name}");
+            }
+        }
+        // a zero-byte image: stored, but compiling it is bad input, not a 500
+        let d = ingest("empty.png", "image/png", String::new());
+        let (s, body) = compile(&d["koid"]);
+        assert_eq!(s, "400 Bad Request", "{body}");
+        m3_cleanup(k, db);
+    }
+
+    #[test]
     fn m3_a_stale_or_missing_expected_version_cannot_overwrite() {
         let _serial = crate::http::ontology_serial();
         let (k, db) = m3_kernel("cas");

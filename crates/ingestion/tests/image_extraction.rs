@@ -4,9 +4,10 @@
 //! never hard-fails the document.
 
 use aikoql_ingestion::{
-    compile_document_mock_with_assets, extract_document, extract_image_with, OcrPageResult,
-    OcrProvider,
+    compile_document_mock_with_assets, extract_document, extract_image_with, tool_available,
+    OcrPageResult, OcrProvider, TesseractCli,
 };
+use std::sync::Mutex;
 
 // 1x1 PNG
 const PNG: &[u8] = &[
@@ -128,4 +129,160 @@ fn im004_an_image_document_compiles() {
 fn im005_other_types_stay_unsupported() {
     let err = extract_document("/nonexistent", "application/zip", None).unwrap_err();
     assert!(err.contains("unsupported mime type"), "{err}");
+}
+
+#[test]
+fn im006_no_ocr_tool_is_reported_as_ocr_unavailable_not_extracted() {
+    let d = scratch("006");
+    let img = d.join("scan.png");
+    std::fs::write(&img, PNG).unwrap();
+    let missing = TesseractCli {
+        tesseract_path: Some("/nonexistent/tesseract".into()),
+        pdftoppm_path: None,
+    };
+    let doc = extract_image_with(&missing, img.to_str().unwrap(), "image/png", None).unwrap();
+    assert_eq!(doc.pages[0].text, "");
+    assert_eq!(doc.pages[0].images.len(), 1, "the image is still kept");
+    let status = doc.ocr_stats.as_ref().map(|s| s.status());
+    assert_eq!(
+        status,
+        Some("ocr_unavailable"),
+        "an image with no OCR tool must say so, not claim `extracted`"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn im007_ocr_that_reads_no_text_is_not_counted_as_a_success() {
+    let d = scratch("007");
+    let img = d.join("blank.png");
+    std::fs::write(&img, PNG).unwrap();
+    let doc =
+        extract_image_with(&Fake(Ok("   ")), img.to_str().unwrap(), "image/png", None).unwrap();
+    let stats = doc.ocr_stats.as_ref().unwrap();
+    // parity with the PDF path: attempted, neither succeeded nor failed
+    assert_eq!(stats.pages_ocr_attempted, 1);
+    assert_eq!(stats.pages_ocr_succeeded, 0);
+    assert_eq!(doc.pages[0].text, "");
+    assert_eq!(doc.pages[0].source, "native");
+    assert_eq!(doc.pages[0].ocr_confidence, None);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn im008_only_formats_the_ocr_engine_reads_are_accepted() {
+    let d = scratch("008");
+    let img = d.join("x.img");
+    std::fs::write(&img, PNG).unwrap();
+    let p = img.to_str().unwrap();
+    for ok in [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "image/tiff",
+    ] {
+        assert!(extract_document(p, ok, None).is_ok(), "{ok} must extract");
+    }
+    for bad in ["image/heic", "image/avif", "image/x-icon", "image/svg+xml"] {
+        let err = extract_document(p, bad, None).unwrap_err();
+        assert!(err.contains("unsupported mime type"), "{bad}: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Records each OCR work dir and whether it existed during the call.
+struct Recorder(Mutex<Vec<String>>);
+
+impl OcrProvider for Recorder {
+    fn name(&self) -> &str {
+        "recorder"
+    }
+    fn available(&self) -> bool {
+        true
+    }
+    fn recognize(&self, _: &str, _: &str, work_dir: &str) -> Result<OcrPageResult, String> {
+        assert!(std::path::Path::new(work_dir).is_dir());
+        self.0.lock().unwrap().push(work_dir.to_string());
+        Err("recorded".into())
+    }
+}
+
+#[test]
+fn im009_each_ocr_call_gets_its_own_work_dir_and_it_is_removed() {
+    let d = scratch("009");
+    let img = d.join("same.png");
+    std::fs::write(&img, PNG).unwrap();
+    let rec = Recorder(Mutex::new(vec![]));
+    for _ in 0..2 {
+        extract_image_with(&rec, img.to_str().unwrap(), "image/png", None).unwrap();
+    }
+    let dirs = rec.0.into_inner().unwrap();
+    // the same image ingested and compiled at once must not share (and
+    // delete) one work dir
+    assert_ne!(dirs[0], dirs[1]);
+    for w in &dirs {
+        assert!(
+            !std::path::Path::new(w).exists(),
+            "work dir left behind: {w}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn im010_an_empty_image_is_bad_input() {
+    let d = scratch("010");
+    let img = d.join("empty.png");
+    std::fs::write(&img, b"").unwrap();
+    let err = extract_document(img.to_str().unwrap(), "image/png", None).unwrap_err();
+    // "bad" is what the REST layer maps to 400
+    assert!(err.starts_with("bad image"), "{err}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Real Tesseract on committed PNG/JPEG fixtures with known text. Needs only
+/// `tesseract` — a standalone image is never rasterized, so `pdftoppm` is not
+/// required. Skips (passes with a note) when tesseract is not on PATH.
+#[test]
+fn im011_real_tesseract_reads_png_and_jpeg_and_the_text_reaches_compile() {
+    if !tool_available("tesseract") {
+        eprintln!("Skipping im011: tesseract not on PATH (brew install tesseract)");
+        return;
+    }
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for (file, mime) in [
+        ("ocr-text.png", "image/png"),
+        ("ocr-text.jpg", "image/jpeg"),
+    ] {
+        let d = scratch(&format!("011-{file}"));
+        let assets = d.join("assets");
+        let path = fixtures.join(file);
+        let doc =
+            extract_document(path.to_str().unwrap(), mime, Some(assets.to_str().unwrap())).unwrap();
+        let page = &doc.pages[0];
+        eprintln!(
+            "im011 {file}: {:?} confidence {:?}",
+            page.text, page.ocr_confidence
+        );
+        for word in ["Invoice", "Acme", "Utrecht", "42", "EUR"] {
+            assert!(
+                page.text.contains(word),
+                "{file}: {word} not in {:?}",
+                page.text
+            );
+        }
+        assert_eq!(page.source, "ocr");
+        assert!(page.ocr_confidence.unwrap() > 50.0);
+        assert_eq!(doc.ocr_stats.as_ref().unwrap().status(), "ocr_complete");
+        assert_eq!(doc.total_chars, page.text.len());
+        let cr = compile_document_mock_with_assets(&doc, &[], Some(assets.to_str().unwrap()));
+        let chunks = serde_json::to_string(&cr.embedded_chunks).unwrap();
+        assert!(
+            chunks.contains("Utrecht"),
+            "OCR text must reach the compiled chunks"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

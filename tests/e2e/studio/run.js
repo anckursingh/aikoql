@@ -201,13 +201,20 @@ async function main() {
     ok(`every visible delegated control reacts (${reactions.length} clicked)`, reactions.length >= 15 && reactions.every(r => r[1]), 'dead: ' + reactions.filter(r => !r[1]).map(r => r[0]).join(', ') + ` (clicked ${reactions.length})`);
     ok('no control was visible but unclickable', unclickable.length === 0, unclickable.join(' ; '));
 
-    // ---- documents: upload, a real status badge, a clean compile error -----
+    // ---- documents: a real PNG with known text — the visible OCR outcome ---
+    // The server inherits this PATH, so the branch asserted is the one it takes.
+    const hasTess = (process.env.PATH || '').split(path.delimiter).some(d => d && fs.existsSync(path.join(d, 'tesseract')));
     await page.click('button[data-panel="documents"]'); await page.waitForTimeout(700);
-    await page.setInputFiles('#doc-file-input', { name: 'shot.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgo=', 'base64') });
-    await page.click('[data-click="ingestDocument"]'); await page.waitForTimeout(2000);
+    await page.setInputFiles('#doc-file-input', { name: 'scan.png', mimeType: 'image/png', buffer: fs.readFileSync(path.join(ROOT, 'crates/ingestion/tests/fixtures/ocr-text.png')) });
+    await page.click('[data-click="ingestDocument"]'); await page.waitForTimeout(3000);
+    const ingestMsg = await page.innerText('#doc-ingest-result');
     ok('ingested document is listed with a rendered status badge', await page.evaluate(() => !!document.querySelector('#documents-list td .badge') && !/<span/.test(document.getElementById('documents-list').innerText)), await page.innerText('#documents-list'));
-    await page.click('[data-click="compileDocument"]'); await page.waitForTimeout(1500);
-    ok('an uploaded image compiles', /Compilation Results/.test(await page.innerText('#doc-compile-result')) && !/Compile failed/.test(await page.innerText('#doc-compile-result')), await page.innerText('#doc-compile-result'));
+    ok(hasTess ? 'image ingest reports the text OCR read' : 'image ingest says OCR is unavailable', hasTess ? /ocr_complete/.test(ingestMsg) && /characters of text read by OCR/.test(ingestMsg) : /OCR is not available/.test(ingestMsg), ingestMsg);
+    await page.click('[data-click="compileDocument"]'); await page.waitForTimeout(3000);
+    // textContent: the IR sits in collapsed <details>, which innerText omits
+    const compiled = await page.textContent('#doc-compile-result');
+    ok('an uploaded image compiles', /Compilation Results/.test(compiled) && !/Compile failed/.test(compiled), compiled);
+    ok(hasTess ? 'the OCR text reaches the compiled result' : 'the compiled result says OCR is unavailable', hasTess ? /Utrecht/.test(compiled) : /OCR is not available/.test(compiled), compiled);
 
     // ---- admin buttons that need a licence/side effect ---------------------
     await page.click('button[data-panel="admin"]'); await page.waitForTimeout(900);
