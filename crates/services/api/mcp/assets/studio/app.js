@@ -1321,8 +1321,7 @@ async function loadDocuments() {
     let html = '<table class="data-table"><thead><tr><th>KOID</th><th>Filename</th><th>Type</th><th>Size</th><th>Status</th><th>SHA-256</th><th>Actions</th></tr></thead><tbody>';
     for (const doc of docs) {
       const sz = doc.size_bytes < 1024 ? doc.size_bytes+' B' : doc.size_bytes < 1048576 ? (doc.size_bytes/1024).toFixed(1)+' KB' : (doc.size_bytes/1048576).toFixed(1)+' MB';
-      const badge = esc(doc.status === 'ingested' ? '<span class="badge badge-ok">ingested</span>' : '<span class="badge">')+esc(doc.status)+'</span>';
-      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td>'+esc(badge)+'</td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" data-click="compileDocument">Compile</button></td></tr>';
+      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td><span class="badge '+esc(doc.status === 'extracted' ? 'badge-green' : '')+'">'+esc(doc.status)+'</span></td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" data-click="compileDocument">Compile</button></td></tr>';
     }
     html += '</tbody></table>';
     el.innerHTML = html;

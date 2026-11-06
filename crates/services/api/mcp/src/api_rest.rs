@@ -82,6 +82,7 @@ pub fn route_v1(
                 409 // a CAS on expected_version lost the race
             } else if msg.contains("missing")
                 || msg.contains("bad")
+                || msg.contains("unsupported mime type")
                 || msg.starts_with("invalid ontology")
                 || msg.starts_with("expected_version required")
             {
