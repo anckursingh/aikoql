@@ -80,7 +80,11 @@ pub fn route_v1(
         Err(msg) => {
             // 409: a CAS on expected_version lost the race, or a document's
             // batches are still running / were cut short by a restart
-            let code = if msg.contains("VERSION_CONFLICT")
+            let code = if msg == crate::chat::NOT_CONFIGURED {
+                503
+            } else if msg.starts_with("question must be") {
+                400
+            } else if msg.contains("VERSION_CONFLICT")
                 || msg.starts_with(crate::tools::ingestion::STILL_PROCESSING)
                 || msg.starts_with(crate::tools::ingestion::INTERRUPTED)
             {
@@ -140,6 +144,14 @@ fn route_inner(
         ("GET", "/api/v1/backups") => {
             need_auth()?;
             tool_list_backups(db_path)
+        }
+        ("POST", "/api/v1/chat") => {
+            need_auth()?;
+            crate::chat::tool_chat(k, &args(), db_path)
+        }
+        ("GET", "/api/v1/chat/status") => {
+            need_auth()?;
+            Ok(crate::chat::chat_status())
         }
         ("GET", "/api/v1/ontology") => {
             need_auth()?;
@@ -805,6 +817,7 @@ fn json_response(code: u16, body: &J) -> (String, String, String) {
         404 => "404 Not Found",
         409 => "409 Conflict",
         429 => "429 Too Many Requests",
+        503 => "503 Service Unavailable",
         _ => "500 Internal Server Error",
     };
     (

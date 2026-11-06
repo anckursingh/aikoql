@@ -54,20 +54,91 @@ fn answer_from_model(
     Ok(answer)
 }
 
+pub(crate) const NOT_CONFIGURED: &str =
+    "chat is not configured — add a [chat] table to aikoql.toml";
+
+fn question_of(args: &crate::J) -> Result<&str, String> {
+    args.get("question")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|q| (1..=2000).contains(&q.chars().count()))
+        .ok_or_else(|| "question must be 1-2000 characters".to_string())
+}
+
+/// ASCII-only and short: `audit_log` cuts its detail at 200 bytes with a
+/// raw slice, which would panic inside a multi-byte character.
+fn audit_safe(s: &str) -> String {
+    s.chars().filter(char::is_ascii_graphic).take(40).collect()
+}
+
 /// REST/MCP entry: validates the question, then runs the flow against the
 /// configured model and writes one id-only audit line.
-pub(crate) fn tool_chat(_k: &Kernel, _args: &crate::J, _db_path: &str) -> Result<crate::J, String> {
-    Err("todo".into())
+pub(crate) fn tool_chat(k: &Kernel, args: &crate::J, db_path: &str) -> Result<crate::J, String> {
+    question_of(args)?;
+    let cfg = client::CHAT_CONFIG.get().ok_or(NOT_CONFIGURED)?;
+    tool_chat_with(
+        k,
+        &client::HttpModel::new(cfg.clone()),
+        &cfg.model,
+        args,
+        db_path,
+    )
+}
+
+/// `{enabled, model, reachable}` for the Studio Ask panel.
+pub(crate) fn chat_status() -> crate::J {
+    match client::CHAT_CONFIG.get() {
+        None => json!({"enabled": false, "model": null, "reachable": null}),
+        Some(c) => json!({
+            "enabled": true,
+            "model": c.model,
+            "reachable": client::reachable(&c.url, std::time::Duration::from_secs(2)),
+        }),
+    }
 }
 
 pub(crate) fn tool_chat_with(
-    _k: &Kernel,
-    _model: &dyn Generate,
-    _model_id: &str,
-    _args: &crate::J,
-    _db_path: &str,
+    k: &Kernel,
+    model: &dyn Generate,
+    model_id: &str,
+    args: &crate::J,
+    db_path: &str,
 ) -> Result<crate::J, String> {
-    Err("todo".into())
+    let question = question_of(args)?;
+    let who = crate::session::subject_of(args);
+    let record = run_chat(
+        k,
+        model,
+        model_id,
+        &who.name,
+        &who.roles,
+        who.tenant.as_deref(),
+        question,
+    );
+    let reason = record["refusal_reason"].as_str().unwrap_or("");
+    let outcome = if reason.starts_with("model ") {
+        "error"
+    } else if record["refused"] == true {
+        "refused"
+    } else {
+        "answered"
+    };
+    let koids: Vec<&str> = record["retrieved"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .collect();
+    let detail = format!(
+        "context={} ms={} model={} tenant={} koids={}",
+        record["context_source"].as_str().unwrap_or(""),
+        record["ms"],
+        audit_safe(model_id),
+        audit_safe(who.tenant.as_deref().unwrap_or("-")),
+        koids.join(","),
+    );
+    crate::audit::audit_log(db_path, &who.name, "chat", outcome, &detail);
+    Ok(record)
 }
 
 /// The whole flow: model query -> scoped read -> retrieval fallback ->

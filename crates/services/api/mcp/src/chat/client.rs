@@ -42,8 +42,24 @@ impl ChatConfig {
 }
 
 /// Short-timeout TCP connect to the endpoint's host:port.
-pub(crate) fn reachable(_url: &str, _timeout: Duration) -> bool {
-    false
+pub(crate) fn reachable(url: &str, timeout: Duration) -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let hostport = rest.split('/').next().unwrap_or("");
+    if hostport.is_empty() {
+        return false;
+    }
+    let addr = if hostport.contains(':') && !hostport.ends_with(']') {
+        hostport.to_string()
+    } else {
+        format!("{hostport}:{}", if scheme == "https" { 443 } else { 80 })
+    };
+    addr.to_socket_addrs()
+        .ok()
+        .and_then(|mut a| a.next())
+        .is_some_and(|a| TcpStream::connect_timeout(&a, timeout).is_ok())
 }
 
 /// One prompt in, one completion out.
