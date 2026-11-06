@@ -248,8 +248,7 @@ fn detect_secret(text: &str) -> Option<SecretKind> {
     }
 
     // AWS keys
-    if contains_pattern(text, "AKIA")
-        || contains_pattern(text, "ASIA")
+    if has_aws_access_key_id(text)
         || (contains_pattern(text, "aws_access_key") || contains_pattern(text, "AWS_ACCESS_KEY"))
     {
         return Some(SecretKind::AwsKey);
@@ -301,6 +300,18 @@ fn detect_secret(text: &str) -> Option<SecretKind> {
     }
 
     None
+}
+
+/// An AWS access key id: AKIA (long-term) or ASIA (temporary) followed by
+/// 16 uppercase letters/digits, as a whole token — never a substring of
+/// prose ("Asia Pacific", "Malaysia").
+fn has_aws_access_key_id(text: &str) -> bool {
+    text.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+        w.len() == 20
+            && (w.starts_with("AKIA") || w.starts_with("ASIA"))
+            && w.bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    })
 }
 
 fn contains_pattern(text: &str, pattern: &str) -> bool {
