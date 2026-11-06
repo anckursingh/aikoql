@@ -167,6 +167,15 @@ async function main() {
     ok('second save updates in place (CAS)', /revision 2/.test(await page.innerText('#ontology-save-msg')), await page.innerText('#ontology-save-msg'));
     const stale = await fetch(BASE + '/api/v1/ontology', { method: 'POST', headers: H, body: JSON.stringify({ definition: JSON.parse(def('9')), expected_version: 1 }) });
     ok('stale expected_version -> 409', stale.status === 409, stale.status);
+    // switching tenant must swap the editor to that tenant's ontology (empty if
+    // none), never leave another scope's text to be saved over it
+    await page.evaluate(() => { const s = document.getElementById('ontology-tenant'); s.add(new Option('acme', 'acme')); });
+    await page.selectOption('#ontology-tenant', 'acme'); await page.waitForTimeout(700);
+    ok('tenant switch empties the editor when that tenant has no ontology', (await page.inputValue('#ontology-yaml-input')) === '', await page.inputValue('#ontology-yaml-input'));
+    await page.fill('#ontology-yaml-input', def('t1').replace('e2e-ns', 'acme-ns')); await page.click('[data-click="saveOntology"]'); await page.waitForTimeout(1200);
+    ok('tenant save loads its own definition back', /acme-ns/.test(await page.inputValue('#ontology-yaml-input')), await page.inputValue('#ontology-yaml-input'));
+    await page.selectOption('#ontology-tenant', ''); await page.waitForTimeout(700);
+    ok('switching back to Global shows the global ontology', /e2e-ns/.test(await page.inputValue('#ontology-yaml-input')), await page.inputValue('#ontology-yaml-input'));
 
     // ---- sweep: every delegated control, in every panel, must REACT -------
     const SKIP = new Set(['logout', 'adminRestoreBackup', 'signInSso', 'downloadAuditExport']);
