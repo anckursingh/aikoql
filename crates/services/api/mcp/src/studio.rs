@@ -305,7 +305,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
         </div>
         <div class="card">
           <h3>Create / Replace Ontology</h3>
-          <p style="font-size:11px;color:var(--muted);margin-bottom:8px;">Paste an ontology definition as YAML-like JSON. Existing ontology will be replaced.</p>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:8px;">Paste an ontology definition as YAML-like JSON. Saves to the tenant chosen above (Global by default); an existing ontology there is replaced.</p>
           <textarea id="ontology-yaml-input" style="width:100%;min-height:240px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:10px;font-size:11px;font-family:'JetBrains Mono',monospace;" placeholder='{
   "namespace": "enterprise",
   "version": "1.0",

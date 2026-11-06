@@ -722,7 +722,7 @@ async function discoverOntology(save) {
 
 async function saveOntology() {
   const msg = document.getElementById('ontology-save-msg');
-  if (document.getElementById('ontology-tenant').value) { msg.innerHTML = '<span style="color:var(--red);">Tenant ontologies are read-only here — switch to Global to save.</span>'; return; }
+  const tenant = document.getElementById('ontology-tenant').value;
   msg.innerHTML = '<span style="color:var(--muted);">Saving...</span>';
   try {
     const raw = document.getElementById('ontology-yaml-input').value.trim();
@@ -734,6 +734,7 @@ async function saveOntology() {
     // validates the definition and answers with the new revision. The
     // identity comes from the bearer token, not from this body.
     const payload = {definition: def};
+    if (tenant) payload.tenant = tenant;
     if (ontologySource === 'manual') payload.expected_version = ontologyVersion;
     const r = await apiPost('/api/v1/ontology', payload);
     const d = r.data || r;

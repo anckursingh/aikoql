@@ -685,7 +685,9 @@ pub(crate) fn tool_get_ontology(k: &Kernel, args: &J) -> Result<J, String> {
 /// existing manual ontology is updated in place under a CAS on its version,
 /// so a concurrent or stale editor cannot overwrite it silently.
 pub(crate) fn tool_save_ontology(k: &Kernel, args: &J) -> Result<J, String> {
-    let subject = subject_of(args);
+    let tenant = discovery_tenant(args)?;
+    let mut subject = subject_of(args);
+    subject.tenant = tenant.clone();
     let def_json = args
         .get("definition")
         .filter(|d| d.is_object())
@@ -693,10 +695,11 @@ pub(crate) fn tool_save_ontology(k: &Kernel, args: &J) -> Result<J, String> {
     let props = crate::helpers::parse_properties(&json!({ "properties": def_json }))?;
     let def = aikoql_kernel::OntologyDef::from_property_map(&props)
         .map_err(|e| format!("invalid ontology: {e}"))?;
-    let existing = crate::http::active_ontology(k).filter(|(_, source)| *source == "manual");
+    let existing = crate::http::active_ontology_for(k, tenant.as_deref())
+        .filter(|(_, source)| *source == "manual");
     let metadata = Metadata {
         type_name: ONTOLOGY_TYPE.into(),
-        tenant: None,
+        tenant,
         schema_version: 1,
         tags: vec![],
     };
