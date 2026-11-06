@@ -1644,3 +1644,46 @@ fn url_decode_handles_utf8_a_trailing_escape_and_never_panics() {
         "no panic on '%' before a multi-byte character"
     );
 }
+
+/// Studio asks for `/api/graph?type=aikoql%3Adocument`; the filter must be
+/// percent-decoded or a namespaced type lists "No objects" despite its count.
+#[test]
+fn graph_api_type_and_tenant_filters_are_percent_decoded() {
+    let db = tmp_db("graph-pct");
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let seed = crate::Subject::with_roles("seed", &["admin"]);
+    let mut req = crate::RememberRequest::create(
+        seed,
+        crate::Metadata {
+            type_name: "aikoql:document".into(),
+            tenant: Some("acme corp".into()),
+            schema_version: 1,
+            tags: vec![],
+        },
+    );
+    req.properties
+        .insert("name".into(), crate::Value::Text("d".into()));
+    k.remember(req).expect("seed");
+    let admin = crate::Subject::with_roles("alice", &["admin"]);
+    for q in [
+        "/api/graph?type=aikoql%3Adocument",
+        "/api/graph?type=aikoql:document",
+        "/api/graph?type=aikoql%3Adocument&tenant=acme%20corp",
+        "/api/graph?type=aikoql%3Adocument&tenant=acme+corp",
+    ] {
+        let s = crate::http::graph_api(&k, q, &admin).expect("graph");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["nodes"].as_array().unwrap().len(), 1, "{q}: {s}");
+    }
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+}
