@@ -97,6 +97,11 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); heig
 .badge-green { background: rgba(92,216,156,0.15); color: var(--green); }
 .badge-red { background: rgba(240,85,106,0.15); color: var(--red); }
 .badge-orange { background: rgba(240,160,96,0.15); color: var(--orange); }
+.batch-notice { border-color: var(--accent); }
+.batch-notice h4 { margin-bottom: 6px; }
+.progress { height: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin: 8px 0 4px; }
+.progress-bar { height: 100%; background: var(--accent); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
 table { width: 100%; border-collapse: collapse; font-size: 11px; }
 th { background: rgba(108,199,240,0.06); color: var(--accent); padding: 6px 10px; text-align: left; font-weight: 600; position: sticky; top: 0; }
 td { padding: 5px 10px; border-bottom: 1px solid var(--border); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1321,10 +1321,16 @@ async function loadDocuments() {
     let html = '<table class="data-table"><thead><tr><th>KOID</th><th>Filename</th><th>Type</th><th>Size</th><th>Status</th><th>SHA-256</th><th>Actions</th></tr></thead><tbody>';
     for (const doc of docs) {
       const sz = doc.size_bytes < 1024 ? doc.size_bytes+' B' : doc.size_bytes < 1048576 ? (doc.size_bytes/1024).toFixed(1)+' KB' : (doc.size_bytes/1048576).toFixed(1)+' MB';
-      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td><span class="badge '+esc(doc.status === 'extracted' || doc.status === 'ocr_complete' ? 'badge-green' : doc.status === 'ocr_unavailable' || doc.status === 'ocr_partial' || doc.status === 'ocr_disabled' ? 'badge-orange' : doc.status === 'limit_exceeded' ? 'badge-red' : '')+'" title="'+esc(ocrNotice(doc.status, doc.char_count))+'">'+esc(doc.status)+'</span></td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" data-click="compileDocument">Compile</button></td></tr>';
+      const busy = doc.status === 'processing' || doc.status === 'interrupted';
+      const shown = doc.status === 'processing' ? doc.status+' '+(doc.batches_done||0)+'/'+(doc.batches_total||0) : doc.status;
+      const compileTip = doc.status === 'processing' ? 'Still processing in batches — Compile is available once every batch has finished.' : 'Processing was interrupted — upload the file again to finish it.';
+      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td><span class="badge '+esc(doc.status === 'extracted' || doc.status === 'ocr_complete' ? 'badge-green' : doc.status === 'ocr_unavailable' || doc.status === 'ocr_partial' || doc.status === 'ocr_disabled' || doc.status === 'partial' ? 'badge-orange' : doc.status === 'limit_exceeded' || doc.status === 'interrupted' ? 'badge-red' : doc.status === 'processing' ? 'badge-cyan' : '')+'" title="'+esc(doc.message || ocrNotice(doc.status, doc.char_count))+'">'+esc(shown)+'</span></td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" data-click="compileDocument" '+esc(busy ? 'disabled' : '')+' title="'+esc(busy ? compileTip : 'Run the document compiler')+'">Compile</button></td></tr>';
     }
     html += '</tbody></table>';
     el.innerHTML = html;
+    // back on the panel with a document still in batches: keep watching it
+    const running = docs.find(d => d.status === 'processing');
+    if (running && !batchWatch) watchBatches(running.koid);
   } catch(e) { el.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
@@ -1334,8 +1340,57 @@ function ocrNotice(status, chars) {
   if (status === 'ocr_complete') return chars > 0 ? chars+' characters of text read by OCR.' : 'OCR found no text in this document.';
   if (status === 'ocr_partial') return 'OCR failed on part of this document; what could not be read has no text.';
   if (status === 'ocr_disabled') return 'No text extracted: OCR is switched off in this server\'s [ingestion] settings. The file is stored.';
-  if (status === 'limit_exceeded') return 'Not extracted: the document exceeds a server ingestion limit ([ingestion] settings). The file is stored.';
+  if (status === 'limit_exceeded') return 'Not extracted: the document exceeds a server ingestion limit ([ingestion] settings) and cannot be split into batches. The file is stored.';
+  if (status === 'processing') return 'Large document: it is being processed in batches. Please wait until it finishes before compiling.';
+  if (status === 'partial') return 'Some batches of this document failed; the other pages were read. Upload the file again to retry.';
+  if (status === 'interrupted') return 'Processing was interrupted by a server restart. Upload the file again to finish it.';
   return '';
+}
+
+// Over-limit documents are read in batches on the server: show progress
+// until every batch is done. One watch at a time; it stops when the
+// document finishes or the user leaves the Documents panel (coming back
+// resumes it from loadDocuments).
+let batchWatch = null;
+function watchBatches(koid) {
+  if (batchWatch) clearTimeout(batchWatch.timer);
+  const me = batchWatch = { koid, timer: null };
+  const msg = document.getElementById('doc-ingest-result');
+  const tick = async () => {
+    if (batchWatch !== me) return;
+    if (!document.getElementById('panel-documents').classList.contains('active')) { batchWatch = null; return; }
+    let d;
+    try { const r = await api('/api/v1/documents/'+encodeURIComponent(koid)+'/status'); d = r.data || r; }
+    catch(e) { batchWatch = null; msg.innerHTML = '<div class="error-text">Could not read the processing status: '+esc(e.message)+'</div>'; return; }
+    if (batchWatch !== me) return;
+    renderBatches(msg, d);
+    if (d.status === 'processing') { me.timer = setTimeout(tick, 2000); return; }
+    batchWatch = null;
+    loadDocuments();
+  };
+  tick();
+}
+function renderBatches(el, d) {
+  const total = d.batches_total || 0, done = d.batches_done || 0;
+  const pct = total ? Math.round(100 * done / total) : 0;
+  const failed = (d.batches || []).filter(b => b.status === 'failed').length;
+  let h;
+  if (d.status === 'processing') h = '<h4>⏳ Large document — processing in batches</h4><div>'+esc(d.message || '')+'</div><div style="margin-top:4px;color:var(--orange);">Please keep this page open and wait until it finishes. Compile becomes available when every batch is done.</div>';
+  else if (d.status === 'partial') h = '<h4 style="color:var(--orange);">Finished — '+esc(failed)+' of '+esc(total)+' batches failed</h4><div>'+esc(d.message || '')+'</div>';
+  else if (d.status === 'interrupted') h = '<h4 style="color:var(--red);">Processing was interrupted</h4><div>'+esc(d.message || '')+'</div>';
+  else h = '<h4 style="color:var(--green);">✓ Done — all '+esc(total)+' batches processed</h4><div>'+esc(d.filename || 'The document')+' is ready ('+esc(d.char_count || 0)+' characters from '+esc(d.page_count || 0)+' pages). You can compile it now.</div>';
+  let html = '<div class="card batch-notice" data-batch-status="'+esc(d.status)+'">'+h;
+  html += '<div class="progress" role="progressbar" aria-label="Batches processed" aria-valuemin="0" aria-valuemax="'+esc(total)+'" aria-valuenow="'+esc(done)+'"><div class="progress-bar" style="width:'+esc(pct)+'%;"></div></div>';
+  html += '<div style="font-size:11px;color:var(--muted);">Batch '+esc(done)+' of '+esc(total)+' done · '+esc(d.pages_done || 0)+' of '+esc(d.page_count || 0)+' pages</div>';
+  if ((d.batches || []).length) {
+    html += '<table class="data-table" style="margin-top:8px;"><thead><tr><th>Pages</th><th>Result</th><th>Characters</th><th>Images</th><th>Tables</th></tr></thead><tbody>';
+    for (const b of d.batches) {
+      const bad = b.status === 'failed';
+      html += '<tr><td>'+esc(b.first_page)+'–'+esc(b.last_page)+'</td><td><span class="badge '+esc(bad ? 'badge-red' : 'badge-green')+'">'+esc(b.status)+'</span> <span style="color:var(--red);">'+esc(bad ? b.error || '' : '')+'</span></td><td>'+esc(bad ? '' : b.char_count)+'</td><td>'+esc(bad ? '' : b.images)+'</td><td>'+esc(bad ? '' : b.tables)+'</td></tr>';
+    }
+    html += '</tbody></table>';
+  }
+  el.innerHTML = html + '</div>';
 }
 
 async function ingestDocument() {
@@ -1357,13 +1412,14 @@ async function ingestDocument() {
     msg.innerHTML = 'Ingesting...';
     const data = await apiPost('/api/v1/documents', {filename: file.name, content_base64: base64, mime_type: file.type || 'application/octet-stream'});
     const d = data.data || data;
+    fileInput.value = '';
+    if (d.status === 'processing') { watchBatches(d.koid); setTimeout(() => loadDocuments(), 500); return; }
     const sz = d.size_bytes < 1024 ? d.size_bytes+' B' : (d.size_bytes/1024).toFixed(1)+' KB';
     const note = ocrNotice(d.status, d.char_count);
     let html = '<span style="color:var(--green);">✓ Ingested: '+esc(d.koid)+' ('+esc(d.status)+', '+esc(sz)+', SHA-256: '+esc(d.sha256.substring(0,16))+'...)</span>';
     if (note) html += '<div style="margin-top:4px;color:var(--'+esc(d.char_count > 0 ? 'muted' : 'orange')+');">'+esc(note)+'</div>';
     if (d.error) html += '<div style="margin-top:4px;color:var(--red);">'+esc(d.error)+'</div>';
     msg.innerHTML = html;
-    fileInput.value = '';
     setTimeout(() => loadDocuments(), 500);
   } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
 }
