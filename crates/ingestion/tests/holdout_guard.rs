@@ -18,7 +18,12 @@ fn results() -> Value {
 }
 
 fn sha(file: &str) -> String {
-    let b = std::fs::read(format!("{DIR}/{file}")).unwrap();
+    // Line endings normalised: a Windows checkout (autocrlf) must hash the same.
+    let b: Vec<u8> = std::fs::read(format!("{DIR}/{file}"))
+        .unwrap()
+        .into_iter()
+        .filter(|&c| c != b'\r')
+        .collect();
     Sha256::digest(&b)
         .iter()
         .map(|x| format!("{x:02x}"))
