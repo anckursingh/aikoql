@@ -1,6 +1,12 @@
 //! Model endpoint configuration (`[chat]`) and, later, the OpenAI-style client.
 
 use serde::Deserialize;
+use serde_json::json;
+use std::io::Read;
+use std::time::Duration;
+
+/// Cap on the model's reply body.
+const MAX_BODY: usize = 256 * 1024;
 
 /// Set once at startup when `[chat]` is present; absent = chat disabled.
 pub(crate) static CHAT_CONFIG: std::sync::OnceLock<ChatConfig> = std::sync::OnceLock::new();
@@ -52,8 +58,57 @@ impl HttpModel {
 }
 
 impl Generate for HttpModel {
-    fn generate(&self, _prompt: &str) -> Result<String, String> {
-        Err("model unreachable".into())
+    fn generate(&self, prompt: &str) -> Result<String, String> {
+        let base = self.cfg.url.trim_end_matches('/');
+        let url = if base.ends_with("/chat/completions") {
+            base.to_string()
+        } else {
+            format!("{base}/v1/chat/completions")
+        };
+        let mut req = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(self.cfg.timeout_secs))
+            .build()
+            .post(&url);
+        if let Some(name) = &self.cfg.api_key_env {
+            let key = std::env::var(name)
+                .map_err(|_| format!("model api key env var {name} is not set"))?;
+            req = req.set("Authorization", &format!("Bearer {key}"));
+        }
+        let resp = req
+            .send_json(json!({
+                "model": self.cfg.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+            }))
+            .map_err(|e| match e {
+                ureq::Error::Status(code, _) => format!("model returned HTTP {code}"),
+                ureq::Error::Transport(t) if t.to_string().contains("timed out") => {
+                    "model timed out".into()
+                }
+                ureq::Error::Transport(_) => "model unreachable".into(),
+            })?;
+        let mut body = Vec::new();
+        resp.into_reader()
+            .take(MAX_BODY as u64 + 1)
+            .read_to_end(&mut body)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::TimedOut {
+                    "model timed out".to_string()
+                } else {
+                    "model unreachable".to_string()
+                }
+            })?;
+        if body.len() > MAX_BODY {
+            return Err("model reply too large".into());
+        }
+        serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| {
+                v["choices"][0]["message"]["content"]
+                    .as_str()
+                    .map(String::from)
+            })
+            .ok_or_else(|| "model reply was not JSON".into())
     }
 }
 
