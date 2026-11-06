@@ -1217,6 +1217,41 @@ mod tests {
     }
 
     #[test]
+    fn m10_office_and_tabular_formats_are_extracted_and_compile_with_tables() {
+        let office = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../ingestion/tests/fixtures/office"
+        );
+        let read = |f: &str| std::fs::read(format!("{office}/{f}")).expect("fixture");
+        let (k, db) = m3_kernel("office");
+        // Browsers send "" or a legacy type for these; the extension decides.
+        for (file, sent, pages) in [
+            ("workbook.xlsx", "", 2),
+            ("contacts.csv", "application/vnd.ms-excel", 1),
+            ("deck.pptx", "application/octet-stream", 4),
+            ("metrics.tsv", "", 1),
+        ] {
+            let (status, body) = m9_ingest(&k, &db, file, sent, &read(file));
+            assert_eq!(status, "200 OK", "{file}: {body}");
+            assert_eq!(body["data"]["status"], "extracted", "{file}: {body}");
+            assert_eq!(body["data"]["page_count"], pages, "{file}: {body}");
+            let (status, compiled) = m3_call(
+                &k,
+                &db,
+                "POST",
+                "/api/v1/documents/compile",
+                serde_json::json!({ "koid": body["data"]["koid"] }),
+            );
+            assert_eq!(status, "200 OK", "{file}: {compiled}");
+            assert!(
+                compiled.to_string().contains("TableCell"),
+                "{file}: table cells reach compile as cell-cited facts: {compiled}"
+            );
+        }
+        m3_cleanup(k, db);
+    }
+
+    #[test]
     fn m9_an_image_type_no_extractor_reads_is_refused_at_upload() {
         let (k, db) = m3_kernel("heic");
         let (status, body) = m9_ingest(&k, &db, "IMG_0001.heic", "image/heic", b"ftypheic");

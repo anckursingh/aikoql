@@ -371,6 +371,59 @@ def raster_images():
         f.write("\n")
 
 
+OFFICE = os.path.join(OUT, "..", "office")
+
+
+def office_fixtures():
+    """XLSX / CSV / TSV / PPTX fixtures for the M4 extractors."""
+    import openpyxl
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    os.makedirs(OFFICE, exist_ok=True)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sales"
+    for row in [["Region", "Q1", "Q2"], ["North America", 1200, 1350], ["Europe", 980, 1020.5]]:
+        ws.append(row)
+    staff = wb.create_sheet("Staff")
+    for row in [["Name", "Team", "Location"], ["Alice Smith", "Billing", "Amsterdam"],
+                ["Bob Johnson", None, "London"], ["Carol White", "Ledger", "Berlin"]]:
+        staff.append(row)
+    staff.merge_cells("B2:B3")  # vertical merge: Bob is in Billing too
+    wb.save(os.path.join(OFFICE, "workbook.xlsx"))
+
+    with open(os.path.join(OFFICE, "contacts.csv"), "w", newline="") as f:
+        f.write('\ufeffName;Company;Note\n'
+                '"Smith, Alice";Acme Corporation;"Said ""hello"" twice"\n'
+                'Bob Johnson;Globex Industries;"Line one\nline two"\n'
+                'Carol White;Initech;\n')
+    with open(os.path.join(OFFICE, "metrics.tsv"), "w") as f:
+        f.write("Metric\tValue\nUptime\t99.9%\nLatency\t120 ms\n")
+
+    prs = Presentation()
+    s1 = prs.slides.add_slide(prs.slide_layouts[0])
+    s1.shapes.title.text = "Quarterly Review"
+    s1.placeholders[1].text = "Northwind Trading B.V."
+    s2 = prs.slides.add_slide(prs.slide_layouts[1])
+    s2.shapes.title.text = "Highlights"
+    body = s2.placeholders[1].text_frame
+    body.text = "Revenue grew 12%"
+    body.add_paragraph().text = "Opened an office in Berlin"
+    s2.notes_slide.notes_text_frame.text = "Mention the Rotterdam warehouse."
+    s3 = prs.slides.add_slide(prs.slide_layouts[5])
+    s3.shapes.title.text = "Sales by region"
+    tbl = s3.shapes.add_table(3, 3, Inches(1), Inches(2), Inches(6), Inches(1.5)).table
+    for r, row in enumerate([["Region", "Q1", "Q2"], ["North America", "1,200", "1,350"],
+                             ["Europe", "980", "1,020"]]):
+        for c, v in enumerate(row):
+            tbl.cell(r, c).text = v
+    s4 = prs.slides.add_slide(prs.slide_layouts[5])
+    s4.shapes.title.text = "Warehouse"
+    s4.shapes.add_picture(os.path.join(OUT, "scanned-letter.png"), Inches(1), Inches(2), width=Inches(4))
+    prs.save(os.path.join(OFFICE, "deck.pptx"))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     invoice_pdf()
@@ -378,6 +431,7 @@ def main():
     holdout_txt()
     if "--no-raster" not in sys.argv:
         raster_images()
+        office_fixtures()
     print("wrote", os.path.normpath(OUT))
 
 

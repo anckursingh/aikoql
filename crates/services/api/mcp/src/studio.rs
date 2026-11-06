@@ -909,6 +909,23 @@ mod tests {
     }
 
     #[test]
+    fn documents_panel_lists_the_extractable_formats() {
+        let page = page_for_tests();
+        for fmt in [
+            "PDF", "DOCX", "XLSX", "PPTX", "CSV", "TSV", "HTML", "TXT", "PNG",
+        ] {
+            assert!(
+                page.contains(&format!("{fmt},")) || page.contains(&format!("{fmt} ")),
+                "Documents panel does not list {fmt}"
+            );
+        }
+        assert!(
+            page.contains("accept=\""),
+            "the file picker offers the supported types"
+        );
+    }
+
+    #[test]
     fn studio_handlers_take_data_from_dataset_not_js_strings() {
         // `onclick="f(\''+x+'\')"` splices data into a JS string inside an
         // attribute: a `'` or entity in x breaks out. Handlers read
