@@ -41,6 +41,11 @@ impl ChatConfig {
     }
 }
 
+/// Short-timeout TCP connect to the endpoint's host:port.
+pub(crate) fn reachable(_url: &str, _timeout: Duration) -> bool {
+    false
+}
+
 /// One prompt in, one completion out.
 pub(crate) trait Generate {
     fn generate(&self, prompt: &str) -> Result<String, String>;
@@ -125,6 +130,16 @@ mod tests {
             api_key_env: None,
             timeout_secs: 5,
         }
+    }
+
+    #[test]
+    fn reachable_probes_the_url_host_and_port() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/chat/completions", l.local_addr().unwrap());
+        assert!(reachable(&url, Duration::from_secs(2)));
+        drop(l);
+        assert!(!reachable(&url, Duration::from_secs(2)));
+        assert!(!reachable("not a url", Duration::from_secs(1)));
     }
 
     #[test]

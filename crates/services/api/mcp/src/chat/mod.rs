@@ -54,6 +54,22 @@ fn answer_from_model(
     Ok(answer)
 }
 
+/// REST/MCP entry: validates the question, then runs the flow against the
+/// configured model and writes one id-only audit line.
+pub(crate) fn tool_chat(_k: &Kernel, _args: &crate::J, _db_path: &str) -> Result<crate::J, String> {
+    Err("todo".into())
+}
+
+pub(crate) fn tool_chat_with(
+    _k: &Kernel,
+    _model: &dyn Generate,
+    _model_id: &str,
+    _args: &crate::J,
+    _db_path: &str,
+) -> Result<crate::J, String> {
+    Err("todo".into())
+}
+
 /// The whole flow: model query -> scoped read -> retrieval fallback ->
 /// model answer -> server-side grounding check. Returns the response record.
 pub(crate) fn run_chat(
@@ -296,5 +312,63 @@ mod tests {
             prompts[1]
         );
         assert!(prompts[1].contains("[REDACTED:AWS_KEY]"), "{}", prompts[1]);
+    }
+
+    fn tmp_db(tag: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("aikoql-chat-{tag}-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn m10_audit_line_has_ids_and_no_answer_text() {
+        let (k, acme) = setup();
+        let db = tmp_db("audit");
+        let m = StubModel::new(vec![q("MATCH Note RETURN *"), answer(STMT, &acme)]);
+        let args = json!({"question": "zebra policy?", "subject": "alice", "tenant": "acme"});
+        let r = tool_chat_with(&k, &m, "stub", &args, &db).unwrap();
+        assert_eq!(r["refused"], false, "{r}");
+        let log = std::fs::read_to_string(crate::audit::audit_log_path(&db)).unwrap();
+        let _ = std::fs::remove_file(crate::audit::audit_log_path(&db));
+        let line = log.lines().last().unwrap();
+        assert!(line.contains("\"tool\":\"chat\""), "{line}");
+        assert!(line.contains("\"outcome\":\"answered\""), "{line}");
+        assert!(line.contains(&acme), "{line}");
+        assert!(!line.contains("Zebras are allowed"), "{line}");
+    }
+
+    #[test]
+    fn m10_audit_survives_a_multibyte_tenant() {
+        let (k, _) = setup();
+        let db = tmp_db("audit-mb");
+        let m = StubModel::new(vec![Err("model unreachable".into())]);
+        let t = "é".repeat(150);
+        let args = json!({"question": "q", "subject": "alice", "tenant": t});
+        let r = tool_chat_with(&k, &m, "stub", &args, &db).unwrap();
+        let _ = std::fs::remove_file(crate::audit::audit_log_path(&db));
+        assert_eq!(r["refused"], true);
+    }
+
+    #[test]
+    fn tool_chat_scopes_to_the_tenant_argument() {
+        let (k, acme) = setup();
+        let db = tmp_db("scope");
+        let m = StubModel::new(vec![q_refuse(), answer(STMT, &acme)]);
+        let args = json!({"question": "zebra", "subject": "alice", "tenant": "acme"});
+        let r = tool_chat_with(&k, &m, "stub", &args, &db).unwrap();
+        let _ = std::fs::remove_file(crate::audit::audit_log_path(&db));
+        assert_eq!(koids(&r), std::slice::from_ref(&acme), "{r}");
+    }
+
+    #[test]
+    fn question_length_is_validated_before_anything_else() {
+        let (k, _) = setup();
+        let m = StubModel::new(vec![]);
+        for bad in [json!(""), json!("   "), json!("x".repeat(2001)), json!(5)] {
+            let e = tool_chat_with(&k, &m, "stub", &json!({"question": bad}), "x").unwrap_err();
+            assert!(e.starts_with("question must be"), "{e}");
+        }
+        assert!(m.prompts.lock().unwrap().is_empty());
     }
 }
