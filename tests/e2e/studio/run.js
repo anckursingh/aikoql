@@ -201,6 +201,14 @@ async function main() {
     ok(`every visible delegated control reacts (${reactions.length} clicked)`, reactions.length >= 15 && reactions.every(r => r[1]), 'dead: ' + reactions.filter(r => !r[1]).map(r => r[0]).join(', ') + ` (clicked ${reactions.length})`);
     ok('no control was visible but unclickable', unclickable.length === 0, unclickable.join(' ; '));
 
+    // ---- documents: upload, a real status badge, a clean compile error -----
+    await page.click('button[data-panel="documents"]'); await page.waitForTimeout(700);
+    await page.setInputFiles('#doc-file-input', { name: 'shot.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgo=', 'base64') });
+    await page.click('[data-click="ingestDocument"]'); await page.waitForTimeout(2000);
+    ok('ingested document is listed with a rendered status badge', await page.evaluate(() => !!document.querySelector('#documents-list td .badge') && !/<span/.test(document.getElementById('documents-list').innerText)), await page.innerText('#documents-list'));
+    await page.click('[data-click="compileDocument"]'); await page.waitForTimeout(1500);
+    ok('compiling an unsupported type says why, not HTTP 500', /unsupported mime type/.test(await page.innerText('#doc-compile-result')) && !/HTTP 500/.test(await page.innerText('#doc-compile-result')), await page.innerText('#doc-compile-result'));
+
     // ---- admin buttons that need a licence/side effect ---------------------
     await page.click('button[data-panel="admin"]'); await page.waitForTimeout(900);
     await page.click('[data-click="adminCreateBackup"]'); await page.waitForTimeout(900);
