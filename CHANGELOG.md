@@ -18,6 +18,13 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   characters OCR read. The compile result carries `extraction_status` and `total_chars`, and
   `document_list` carries `char_count`.
 
+### Document upload hardening
+- Image types no extractor reads (HEIC, AVIF, ICO) are refused at upload with "convert the image to PNG or JPEG".
+- Re-uploading an image whose OCR was missing or failing re-runs extraction and updates the same document
+  (`ocr_unavailable`/`ocr_partial` -> `ocr_complete`).
+- `POST /api/v1/documents` answers 413 for a declared body over 64 MiB, before reading it.
+- A tesseract run is killed after `timeout_secs` (default 120).
+
 ### Studio session cookie
 - Password login also sets `aikoql_session` (`HttpOnly; SameSite=Strict; Path=/`, `Secure` behind an
   `X-Forwarded-Proto: https` proxy); Studio no longer keeps the token in script. A cookie-authenticated

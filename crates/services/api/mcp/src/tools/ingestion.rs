@@ -20,6 +20,12 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
         _ => aikoql_ingestion::mime_from_extension(filename),
     };
     let mime_type = mime_type.as_str();
+    // An image no extractor reads would only fail later, at compile: say so now.
+    if mime_type.starts_with("image/") && !aikoql_ingestion::is_raster_image(mime_type) {
+        return Err(format!(
+            "unsupported mime type: {mime_type} — convert the image to PNG or JPEG"
+        ));
+    }
 
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
@@ -38,6 +44,57 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
         for doc in &docs {
             if let Some(Value::Text(existing_hash)) = doc.properties.get("sha256") {
                 if existing_hash == &hash {
+                    // Ingested while OCR was missing or failing: try again, so a
+                    // re-upload after installing Tesseract picks the text up.
+                    let stale = matches!(
+                        doc.properties.get("status"),
+                        Some(Value::Text(s)) if s == "ocr_unavailable" || s == "ocr_partial"
+                    );
+                    if stale {
+                        let artifact_dir = format!("{}.artifacts", db_path);
+                        std::fs::create_dir_all(&artifact_dir)
+                            .map_err(|e| format!("artifact dir: {}", e))?;
+                        let artifact_path = format!("{}/{}", artifact_dir, hash);
+                        if !std::path::Path::new(&artifact_path).exists() {
+                            std::fs::write(&artifact_path, &bytes)
+                                .map_err(|e| format!("write artifact: {}", e))?;
+                        }
+                        let (pages, chars, status, ocr_stats) = extract_for_ingest(
+                            &artifact_dir,
+                            &artifact_path,
+                            &hash,
+                            filename,
+                            mime_type,
+                        );
+                        let was = match doc.properties.get("status") {
+                            Some(Value::Text(s)) => s.as_str(),
+                            _ => "",
+                        };
+                        if status != was {
+                            k.refresh_document_extraction(
+                                &doc.koid,
+                                pages,
+                                chars,
+                                status,
+                                &subject_of(args),
+                            )
+                            .map_err(|e| e.to_string())?;
+                            let mut resp = json!({
+                                "koid": doc.koid.to_hex(),
+                                "sha256": hash,
+                                "size_bytes": size_bytes,
+                                "page_count": pages,
+                                "char_count": chars,
+                                "status": status,
+                                "duplicate": true,
+                                "message": "Document already exists; its extraction was refreshed"
+                            });
+                            if let Some(stats) = ocr_stats {
+                                resp["ocr_stats"] = stats;
+                            }
+                            return Ok(resp);
+                        }
+                    }
                     return Ok(json!({
                         "koid": doc.koid.to_hex(),
                         "sha256": hash,
@@ -58,10 +115,48 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
         std::fs::write(&artifact_path, &bytes).map_err(|e| format!("write artifact: {}", e))?;
     }
 
-    // D1/D2: Extract text from the stored artifact.
+    let (page_count, char_count, status, ocr_stats) =
+        extract_for_ingest(&artifact_dir, &artifact_path, &hash, filename, mime_type);
+
+    let r = k
+        .deploy_document(
+            filename,
+            mime_type,
+            &hash,
+            size_bytes,
+            page_count,
+            char_count,
+            status,
+            &subject_of(args),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut resp = json!({
+        "koid": r.koid.to_hex(),
+        "sha256": hash,
+        "size_bytes": size_bytes,
+        "page_count": page_count,
+        "char_count": char_count,
+        "status": status
+    });
+    if let Some(ref stats) = ocr_stats {
+        resp["ocr_stats"] = stats.clone();
+    }
+    Ok(resp)
+}
+
+/// D1/D2: extract text from the stored artifact; returns (pages, chars,
+/// status, OCR stats). Extraction failure still ingests the document.
+fn extract_for_ingest(
+    artifact_dir: &str,
+    artifact_path: &str,
+    hash: &str,
+    filename: &str,
+    mime_type: &str,
+) -> (i64, i64, &'static str, Option<J>) {
     let asset_dir = format!("{}.assets", artifact_path);
     let (page_count, char_count, status, ocr_stats) =
-        match aikoql_ingestion::extract_document(&artifact_path, mime_type, Some(&asset_dir)) {
+        match aikoql_ingestion::extract_document(artifact_path, mime_type, Some(&asset_dir)) {
             Ok(doc) => {
                 // Store extracted text alongside the original artifact.
                 let extracted_path = format!("{}/{}.extracted.txt", artifact_dir, hash);
@@ -99,32 +194,7 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
                 (0i64, 0i64, "ingested", None)
             }
         };
-
-    let r = k
-        .deploy_document(
-            filename,
-            mime_type,
-            &hash,
-            size_bytes,
-            page_count,
-            char_count,
-            status,
-            &subject_of(args),
-        )
-        .map_err(|e| e.to_string())?;
-
-    let mut resp = json!({
-        "koid": r.koid.to_hex(),
-        "sha256": hash,
-        "size_bytes": size_bytes,
-        "page_count": page_count,
-        "char_count": char_count,
-        "status": status
-    });
-    if let Some(ref stats) = ocr_stats {
-        resp["ocr_stats"] = stats.clone();
-    }
-    Ok(resp)
+    (page_count, char_count, status, ocr_stats)
 }
 
 pub(crate) fn tool_document_list(k: &Kernel, args: &J) -> Result<J, String> {

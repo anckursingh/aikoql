@@ -636,6 +636,9 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
     session_cookie(req)
 }
 
+/// Largest `POST /api/v1/documents` body (base64 JSON, so ~48 MiB of file).
+const MAX_DOCUMENT_BODY: usize = 64 * 1024 * 1024;
+
 const SESSION_COOKIE: &str = "aikoql_session";
 
 /// The Studio session cookie value, if the request carries one.
@@ -1382,6 +1385,20 @@ pub(crate) fn handle_http(
         if line.to_lowercase().starts_with("content-length:") {
             content_len = line.split(':').nth(1).and_then(|s| s.trim().parse().ok());
         }
+    }
+    // A document upload is read whole into memory (base64 in JSON): refuse an
+    // oversized declared body before reading any of it.
+    if route == "/api/v1/documents" && content_len.is_some_and(|cl| cl > MAX_DOCUMENT_BODY) {
+        crate::mcp_http::write_reply(
+            stream,
+            (
+                "413 Payload Too Large",
+                vec![],
+                "text/plain; charset=utf-8",
+                format!("a document upload is at most {MAX_DOCUMENT_BODY} bytes"),
+            ),
+        );
+        return;
     }
     // MCP over Streamable HTTP and its OAuth endpoints: bodies are capped
     // before they are read

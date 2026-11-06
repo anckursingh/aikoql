@@ -216,6 +216,10 @@ async function main() {
     ok('an uploaded image compiles', /Compilation Results/.test(compiled) && !/Compile failed/.test(compiled), compiled);
     ok(hasTess ? 'the OCR text reaches the compiled result' : 'the compiled result says OCR is unavailable', hasTess ? /Utrecht/.test(compiled) : /OCR is not available/.test(compiled), compiled);
 
+    await page.setInputFiles('#doc-file-input', { name: 'IMG_0001.heic', mimeType: 'image/heic', buffer: Buffer.from('ftypheic') });
+    await page.click('[data-click="ingestDocument"]'); await page.waitForTimeout(1200);
+    ok('an unsupported image type is refused at upload with a way forward', /convert the image to PNG or JPEG/.test(await page.innerText('#doc-ingest-result')), await page.innerText('#doc-ingest-result'));
+
     // ---- admin buttons that need a licence/side effect ---------------------
     await page.click('button[data-panel="admin"]'); await page.waitForTimeout(900);
     await page.click('[data-click="adminCreateBackup"]'); await page.waitForTimeout(900);

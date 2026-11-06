@@ -179,7 +179,7 @@ impl OcrProvider for TesseractCli {
         let tsv_path = format!("{}.tsv", output_base);
 
         // Run tesseract: produce both plain text and TSV.
-        let status = self
+        let mut child = self
             .tesseract_cmd()
             .arg(image_path)
             .arg(&output_base)
@@ -188,9 +188,24 @@ impl OcrProvider for TesseractCli {
             .arg("txt")
             .arg("tsv")
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .status()
+            .stderr(std::process::Stdio::null())
+            .spawn()
             .map_err(|e| format!("tesseract not found: {}", e))?;
+        // A hung tesseract must not hold an ingest request forever.
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(self.timeout_secs);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    child.kill().ok();
+                    child.wait().ok();
+                    return Err(format!("tesseract timed out after {}s", self.timeout_secs));
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+                Err(e) => return Err(format!("tesseract wait: {}", e)),
+            }
+        };
 
         if !status.success() {
             return Err("tesseract exited with error".into());

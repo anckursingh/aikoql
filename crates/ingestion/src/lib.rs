@@ -353,7 +353,7 @@ pub fn extract_document(
 
 /// Raster formats Tesseract/Leptonica read — the set `mime_from_extension`
 /// maps. SVG is XML, not a bitmap; HEIC/AVIF/ICO are not read by Leptonica.
-fn is_raster_image(mime: &str) -> bool {
+pub fn is_raster_image(mime: &str) -> bool {
     matches!(
         mime,
         "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/bmp" | "image/tiff"
