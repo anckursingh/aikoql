@@ -273,16 +273,21 @@
       "actions": [
         {
           "CreateKO": {
-            "class_name": "Person",
+            "class_name": "Thing",
             "entity_name": "Annual Report",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 13,
+                    "start_offset": 0
+                  }
+                }
               }
             ],
             "properties": [
@@ -300,7 +305,7 @@
               ],
               [
                 "type",
-                "Person"
+                "Thing"
               ]
             ]
           }
@@ -313,10 +318,15 @@
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 16,
+                    "start_offset": 0
+                  }
+                }
               }
             ],
             "properties": [
@@ -339,10 +349,15 @@
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 2,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 17,
+                    "start_offset": 0
+                  }
+                }
               }
             ],
             "properties": [
@@ -359,46 +374,21 @@
         },
         {
           "CreateKO": {
-            "class_name": "Person",
-            "entity_name": "Value Growth",
-            "evidence": [
-              {
-                "confidence": 0.8500000238418579,
-                "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
-                "page": 3,
-                "source": null
-              }
-            ],
-            "properties": [
-              [
-                "numeric_value",
-                "Float"
-              ],
-              [
-                "date",
-                "DateTime"
-              ],
-              [
-                "type",
-                "Person"
-              ]
-            ]
-          }
-        },
-        {
-          "CreateKO": {
             "class_name": "Organization",
             "entity_name": "Gamma Partners",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 3,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 14,
+                    "start_offset": 0
+                  }
+                }
               }
             ],
             "properties": [
@@ -412,10 +402,10 @@
       ],
       "document_id": null,
       "stats": {
-        "creates": 5,
+        "creates": 4,
         "needs_review": 0,
         "skips": 0,
-        "total_actions": 5,
+        "total_actions": 4,
         "total_conflicts": 0,
         "updates": 0
       }
@@ -950,7 +940,6 @@
             "Annual Report",
             "Acme Corporation",
             "Globex Industries",
-            "Value Growth",
             "Gamma Partners"
           ],
           "phase": "D4-semantic-ir",
@@ -958,45 +947,57 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 13,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 16,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 17,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 3,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 3,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 14,
+                  "start_offset": 0
+                }
+              }
             }
           ],
-          "step": "Extracted 5 entities from document text"
+          "step": "Extracted 4 entities from document text"
         },
         {
           "entities": [],
@@ -1073,24 +1074,22 @@
             "Annual Report",
             "Acme Corporation",
             "Globex Industries",
-            "Value Growth",
             "Gamma Partners"
           ],
           "phase": "D6-resolution",
           "source": [],
-          "step": "Resolved 5 entities: 0 matched, 0 ambiguous, 5 unmatched"
+          "step": "Resolved 4 entities: 0 matched, 0 ambiguous, 4 unmatched"
         },
         {
           "entities": [
             "Annual Report",
             "Acme Corporation",
             "Globex Industries",
-            "Value Growth",
             "Gamma Partners"
           ],
           "phase": "D7-reconcile",
           "source": [],
-          "step": "Reconciled: 5 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+          "step": "Reconciled: 4 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
         }
       ]
     },
@@ -1373,26 +1372,36 @@
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 13,
+                "start_offset": 0
+              }
+            }
           },
           "mentions": [
             "Annual Report"
           ],
           "name": "Annual Report",
-          "type_hint": "Person"
+          "type_hint": "Thing"
         },
         {
           "confidence": 0.8500000238418579,
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 16,
+                "start_offset": 0
+              }
+            }
           },
           "mentions": [
             "Acme Corporation overview follows."
@@ -1405,10 +1414,15 @@
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 2,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 17,
+                "start_offset": 0
+              }
+            }
           },
           "mentions": [
             "Globex Industries revenue reached $10M."
@@ -1421,26 +1435,15 @@
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 3,
-            "source": null
-          },
-          "mentions": [
-            "Value Growth"
-          ],
-          "name": "Value Growth",
-          "type_hint": "Person"
-        },
-        {
-          "confidence": 0.8500000238418579,
-          "evidence": {
-            "confidence": 0.8500000238418579,
-            "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
-            "page": 3,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 14,
+                "start_offset": 0
+              }
+            }
           },
           "mentions": [
             "Gamma Partners expect continued growth."
@@ -1549,23 +1552,20 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 3,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 13,
+                  "start_offset": 0
+                }
+              }
             }
           ],
-          "name": "Person",
-          "parent": "Person",
-          "signal_count": 2
+          "name": "Thing",
+          "parent": null,
+          "signal_count": 1
         },
         {
           "confidence": 0.8500000238418579,
@@ -1574,26 +1574,41 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 16,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 17,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 3,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 14,
+                  "start_offset": 0
+                }
+              }
             }
           ],
           "name": "Organization",
@@ -1605,7 +1620,7 @@
       "method": "ir-discovery-mock",
       "properties": [
         {
-          "class_name": "Person",
+          "class_name": "Thing",
           "confidence": 0.8500000238418579,
           "evidence": [
             {
@@ -1644,7 +1659,7 @@
           "value_type": "Float"
         },
         {
-          "class_name": "Person",
+          "class_name": "Thing",
           "confidence": 0.8500000238418579,
           "evidence": [
             {
@@ -1678,23 +1693,28 @@
         "ambiguous_count": 0,
         "average_confidence": 0.0,
         "matched_count": 0,
-        "total_entities": 5,
-        "unmatched_count": 5
+        "total_entities": 4,
+        "unmatched_count": 4
       },
       "unmatched": [
         {
           "candidates": [],
           "confidence": 0.0,
           "entity_name": "Annual Report",
-          "entity_type": "Person",
+          "entity_type": "Thing",
           "evidence": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 13,
+                  "start_offset": 0
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -1709,10 +1729,15 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 16,
+                  "start_offset": 0
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -1727,28 +1752,15 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
-            }
-          ],
-          "matched_koid": null,
-          "needs_creation": true
-        },
-        {
-          "candidates": [],
-          "confidence": 0.0,
-          "entity_name": "Value Growth",
-          "entity_type": "Person",
-          "evidence": [
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 3,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 17,
+                  "start_offset": 0
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -1763,10 +1775,15 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 3,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 14,
+                  "start_offset": 0
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -1789,7 +1806,7 @@
         },
         {
           "duration_us": 0,
-          "item_count": 10,
+          "item_count": 9,
           "phase": "D4-ir"
         },
         {
@@ -1799,12 +1816,12 @@
         },
         {
           "duration_us": 0,
-          "item_count": 5,
+          "item_count": 4,
           "phase": "D6-resolution"
         },
         {
           "duration_us": 0,
-          "item_count": 5,
+          "item_count": 4,
           "phase": "D7-reconcile"
         },
         {

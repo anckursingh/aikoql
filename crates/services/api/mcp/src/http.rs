@@ -22,6 +22,15 @@ use std::sync::RwLock;
 /// `aikoql_endpoint` prefers it over the startup snapshot it is handed.
 static ONTOLOGY_SLOT: OnceLock<RwLock<Arc<OntologyRegistry>>> = OnceLock::new();
 
+/// Tests that install into (or read back from) the process-wide registry slot
+/// take this lock: parallel tests would otherwise overwrite each other's slot
+/// between a publish and its assertion.
+#[cfg(test)]
+pub(crate) fn ontology_serial() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub(crate) fn install_ontology(reg: Arc<OntologyRegistry>) {
     match ONTOLOGY_SLOT.get() {
         Some(slot) => {
@@ -38,61 +47,122 @@ pub(crate) fn current_ontology() -> Option<Arc<OntologyRegistry>> {
     ONTOLOGY_SLOT.get().map(|slot| slot.read().unwrap().clone()) // justified: poison is unrecoverable
 }
 
-/// Load the active ontology from stored Ontology KOs (MRFC-0041).
-/// Prefer manually-curated ontologies over auto-discovered ones.
-/// If multiple exist, pick the latest non-discovered, fall back to discovered.
-pub(crate) fn load_ontology_registry(k: &Kernel) -> Arc<OntologyRegistry> {
+/// Per-tenant compile registries: only tenants that have an Ontology KO of
+/// their own appear here (so the map is bounded by those tenants, never by
+/// the tenant strings callers send). Replaced wholesale by
+/// [`refresh_ontologies`].
+static TENANT_ONTOLOGIES: OnceLock<RwLock<HashMap<String, Arc<OntologyRegistry>>>> =
+    OnceLock::new();
+
+fn decode_registry(ko: &KnowledgeObject) -> Option<Arc<OntologyRegistry>> {
+    let def = OntologyDef::from_ko(ko).ok()?;
+    OntologyRegistry::new(def).ok().map(Arc::new)
+}
+
+/// Republish every compile registry from the stored Ontology KOs: the global
+/// one and each tenant's own. Called at startup and after any ontology write.
+pub(crate) fn refresh_ontologies(k: &Kernel) {
+    install_ontology(load_ontology_registry(k));
     let subj = Subject::with_roles("system", &["admin"]);
-    match k.scan_by_type(&subj, ONTOLOGY_TYPE) {
-        Ok(kos) if !kos.is_empty() => {
-            let manual: Vec<_> = kos
-                .iter()
-                .filter(|ko| !ko.metadata.tags.contains(&"auto-discovered".to_string()))
-                .collect();
-            let candidate = if !manual.is_empty() {
-                // Prefer the latest manually-created ontology.
-                manual
-                    .into_iter()
-                    .max_by_key(|ko| ko.commit_ts)
-                    .expect("manual is non-empty") // justified: guarded by !manual.is_empty() above
-            } else {
-                // Fall back to latest auto-discovered.
-                kos.iter()
-                    .max_by_key(|ko| ko.commit_ts)
-                    .expect("kos is non-empty") // justified: guarded by the outer Ok(kos) if !kos.is_empty() arm
-            };
-            match OntologyDef::from_ko(candidate) {
-                Ok(def) => {
-                    let source = if candidate
-                        .metadata
-                        .tags
-                        .contains(&"auto-discovered".to_string())
-                    {
-                        "auto-discovered"
-                    } else {
-                        "manual"
-                    };
-                    info!(namespace = %def.namespace, version = %def.version,
-                          classes = def.classes.len(),
-                          mappings = def.mappings.len(),
-                          source = source,
-                          "ontology loaded");
-                    match OntologyRegistry::new(def) {
-                        Ok(r) => Arc::new(r),
-                        Err(e) => {
-                            info!(error = %e, "ontology registry failed to initialize — using empty registry");
-                            Arc::new(OntologyRegistry::empty())
-                        }
-                    }
-                }
+    let tenants: std::collections::BTreeSet<String> = k
+        .scan_by_type(&subj, ONTOLOGY_TYPE)
+        .map(|kos| {
+            kos.into_iter()
+                .filter_map(|ko| ko.metadata.tenant)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut map = HashMap::new();
+    for t in tenants {
+        if let Some(reg) = active_ontology_for(k, Some(&t)).and_then(|(ko, _)| decode_registry(&ko))
+        {
+            map.insert(t, reg);
+        }
+    }
+    let slot = TENANT_ONTOLOGIES.get_or_init(|| RwLock::new(HashMap::new()));
+    *slot.write().unwrap() = map; // justified: RwLock poison is unrecoverable
+}
+
+/// The registry a query for `tenant` compiles against: that tenant's own
+/// ontology when it has saved one, else the process-wide (untenanted) one.
+/// A lookup for any other tenant string reads, and caches, nothing.
+pub(crate) fn registry_for(tenant: Option<&str>) -> Option<Arc<OntologyRegistry>> {
+    if let Some(t) = tenant {
+        let own = TENANT_ONTOLOGIES
+            .get()
+            .and_then(|slot| slot.read().unwrap().get(t).cloned()); // justified: poison is unrecoverable
+        if own.is_some() {
+            return own;
+        }
+    }
+    current_ontology()
+}
+
+/// How many per-tenant registries are held (bounded by tenants that have an
+/// ontology — never by the tenant strings callers supply).
+#[cfg(test)]
+pub(crate) fn tenant_registry_count() -> usize {
+    TENANT_ONTOLOGIES
+        .get()
+        .map_or(0, |slot| slot.read().unwrap().len()) // justified: poison is unrecoverable
+}
+
+/// The ontology the compiler uses, and the one Studio shows: the newest
+/// *manual* untenanted Ontology KO, else the newest auto-discovered one. A
+/// tenant's own ontology is never the process-wide one. Returns the KO and
+/// its source ("manual" | "auto-discovered").
+pub(crate) fn active_ontology(k: &Kernel) -> Option<(KnowledgeObject, &'static str)> {
+    active_ontology_for(k, None)
+}
+
+/// The same selection within one scope: `None` = the untenanted (global)
+/// ontologies, `Some(t)` = tenant `t`'s own.
+pub(crate) fn active_ontology_for(
+    k: &Kernel,
+    tenant: Option<&str>,
+) -> Option<(KnowledgeObject, &'static str)> {
+    let subj = Subject::with_roles("system", &["admin"]);
+    let scoped: Vec<KnowledgeObject> = k
+        .scan_by_type(&subj, ONTOLOGY_TYPE)
+        .ok()?
+        .into_iter()
+        .filter(|ko| ko.metadata.tenant.as_deref() == tenant)
+        .collect();
+    let auto = |ko: &KnowledgeObject| ko.metadata.tags.iter().any(|t| t == "auto-discovered");
+    let newest = |manual: bool| {
+        scoped
+            .iter()
+            .filter(|ko| auto(ko) != manual)
+            .max_by_key(|ko| ko.commit_ts)
+            .cloned()
+    };
+    newest(true)
+        .map(|ko| (ko, "manual"))
+        .or_else(|| newest(false).map(|ko| (ko, "auto-discovered")))
+}
+
+pub(crate) fn load_ontology_registry(k: &Kernel) -> Arc<OntologyRegistry> {
+    let Some((candidate, source)) = active_ontology(k) else {
+        info!("no ontology KO found — using empty registry");
+        return Arc::new(OntologyRegistry::empty());
+    };
+    match OntologyDef::from_ko(&candidate) {
+        Ok(def) => {
+            info!(namespace = %def.namespace, version = %def.version,
+                  classes = def.classes.len(),
+                  mappings = def.mappings.len(),
+                  source = source,
+                  "ontology loaded");
+            match OntologyRegistry::new(def) {
+                Ok(r) => Arc::new(r),
                 Err(e) => {
-                    info!(error = %e, "ontology KO found but failed to decode — using empty registry");
+                    info!(error = %e, "ontology registry failed to initialize — using empty registry");
                     Arc::new(OntologyRegistry::empty())
                 }
             }
         }
-        _ => {
-            info!("no ontology KO found — using empty registry");
+        Err(e) => {
+            info!(error = %e, "ontology KO found but failed to decode — using empty registry");
             Arc::new(OntologyRegistry::empty())
         }
     }
@@ -116,6 +186,9 @@ pub(crate) fn serve_metrics(
             return;
         }
     };
+    // Logged only once the socket is bound and listening — the "started" line
+    // in spawn_metrics precedes the bind, so it cannot gate a client.
+    info!(addr = %addr, "metrics HTTP server listening");
     let sessions: Arc<Mutex<HashMap<String, HttpSession>>> = Arc::new(Mutex::new(HashMap::new()));
     // Enterprise (Task 5): the serving handle on the user store main.rs
     // opened (users.db); None in community mode.
@@ -224,7 +297,7 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
                         detail = v == "1" || v == "true";
                     }
                     "type" => {
-                        type_filter = Some(v.to_string());
+                        type_filter = Some(url_decode(v));
                     }
                     _ => {}
                 }
@@ -241,7 +314,7 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
         qs.split('&')
             .filter_map(|p| p.split_once('='))
             .find(|(k, _)| *k == "tenant")
-            .map(|(_, v)| v.to_string())
+            .map(|(_, v)| url_decode(v))
     });
 
     let heads = k.scan_heads().map_err(|e| format!("scan: {}", e))?;
@@ -546,13 +619,72 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
             }
         }
     }
-    // From Authorization header: Bearer abc123
+    // From Authorization header: Bearer abc123 (name and scheme are
+    // case-insensitive, RFC 9110 — browsers and proxies vary the casing)
     for line in req.lines() {
-        if let Some(v) = line.strip_prefix("Authorization: Bearer ") {
-            return Some(v.trim().to_string());
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.eq_ignore_ascii_case("authorization") {
+            continue;
+        }
+        let value = value.trim();
+        if value.len() > 7 && value[..7].eq_ignore_ascii_case("bearer ") {
+            return Some(value[7..].trim().to_string());
         }
     }
-    None
+    session_cookie(req)
+}
+
+/// Largest `POST /api/v1/documents` body (base64 JSON, so ~48 MiB of file).
+const MAX_DOCUMENT_BODY: usize = 64 * 1024 * 1024;
+
+const SESSION_COOKIE: &str = "aikoql_session";
+
+/// The Studio session cookie value, if the request carries one.
+fn session_cookie(req: &str) -> Option<String> {
+    req.lines()
+        .filter_map(|l| l.split_once(':'))
+        .filter(|(n, _)| n.eq_ignore_ascii_case("cookie"))
+        .flat_map(|(_, v)| v.split(';'))
+        .find_map(|pair| {
+            let (k, v) = pair.trim().split_once('=')?;
+            (k == SESSION_COOKIE && !v.is_empty()).then(|| v.to_string())
+        })
+}
+
+fn has_header(req: &str, name: &str) -> bool {
+    req.lines()
+        .filter_map(|l| l.split_once(':'))
+        .any(|(n, _)| n.eq_ignore_ascii_case(name))
+}
+
+/// CSRF guard: a write whose only credential is the ambient session cookie
+/// must carry the custom `X-Aikoql-Csrf` header. A cross-site page cannot
+/// add a custom header without a CORS preflight (which this server answers
+/// without credentials support), and SameSite=Strict already withholds the
+/// cookie from cross-site requests; this is the second layer.
+fn cookie_write_without_csrf(method: &str, path: &str, req: &str) -> bool {
+    !matches!(method, "GET" | "HEAD" | "OPTIONS")
+        // login is credential-based and ignores any cookie: a stale one must
+        // not lock the sign-in form out
+        && path.split('?').next() != Some("/api/login")
+        && !path.contains("token=")
+        && !has_header(req, "authorization")
+        && session_cookie(req).is_some()
+        && !has_header(req, "x-aikoql-csrf")
+}
+
+/// `Set-Cookie` for a session (`ttl` seconds) or, with `ttl` 0, its removal.
+/// `Secure` only behind a TLS-terminating proxy that says so.
+fn session_cookie_header(token: &str, ttl: u64, req: &str) -> String {
+    let secure = req.lines().filter_map(|l| l.split_once(':')).any(|(n, v)| {
+        n.eq_ignore_ascii_case("x-forwarded-proto") && v.trim().eq_ignore_ascii_case("https")
+    });
+    format!(
+        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={ttl}{}",
+        if secure { "; Secure" } else { "" }
+    )
 }
 
 /// P3-M1 (§53): HTTP login credentials. Users come from [auth].users with
@@ -998,7 +1130,9 @@ pub(crate) fn aikoql_endpoint(
     let schema = SchemaRegistry::new(); // ponytail: empty registry; ontology handles resolution
                                         // S-8 (POC-4): prefer the hot-reloaded registry (published by
                                         // Auto-Discover / REST Ontology remembers) over the startup snapshot.
-    let hot = current_ontology();
+                                        // Per-tenant: the caller's tenant (its session scope, else the requested
+                                        // one) compiles against its own ontology, falling back to the global.
+    let hot = registry_for(subject.tenant.as_deref().or(tenant));
     let ont = hot.as_deref().unwrap_or(ontology);
     let plans = match aikoql_compiler::parser::compile_with_ontology_scoped(
         query,
@@ -1252,6 +1386,20 @@ pub(crate) fn handle_http(
             content_len = line.split(':').nth(1).and_then(|s| s.trim().parse().ok());
         }
     }
+    // A document upload is read whole into memory (base64 in JSON): refuse an
+    // oversized declared body before reading any of it.
+    if route == "/api/v1/documents" && content_len.is_some_and(|cl| cl > MAX_DOCUMENT_BODY) {
+        crate::mcp_http::write_reply(
+            stream,
+            (
+                "413 Payload Too Large",
+                vec![],
+                "text/plain; charset=utf-8",
+                format!("a document upload is at most {MAX_DOCUMENT_BODY} bytes"),
+            ),
+        );
+        return;
+    }
     // MCP over Streamable HTTP and its OAuth endpoints: bodies are capped
     // before they are read
     if (route == "/mcp" || route.starts_with("/oauth/"))
@@ -1316,6 +1464,21 @@ pub(crate) fn handle_http(
 
     // Extract token from query string or Authorization header.
     let token = extract_token(path, &req);
+
+    if cookie_write_without_csrf(method, path, &req) {
+        let body = json!({"error": "missing X-Aikoql-Csrf header"}).to_string();
+        let mut resp = format!(
+            "HTTP/1.0 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        for (k, v) in api_rest::cors_headers() {
+            resp.push_str(&format!("{}: {}\r\n", k, v));
+        }
+        resp.push_str("\r\n");
+        resp.push_str(&body);
+        let _ = stream.write_all(resp.as_bytes());
+        return;
+    }
 
     // CORS preflight.
     if method == "OPTIONS" {
@@ -1417,6 +1580,7 @@ pub(crate) fn handle_http(
         return;
     }
 
+    let mut set_cookie: Option<String> = None;
     let (status, content_type, body) = match route {
         "/ui" => (
             "200 OK",
@@ -1430,6 +1594,21 @@ pub(crate) fn handle_http(
                 crate::oidc::gate().is_some(),
                 crate::license::LICENSE_STATE.get(),
             ),
+        ),
+        "/studio/assets/app.js" => (
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            studio::APP_JS.to_string(),
+        ),
+        "/studio/assets/editor.js" => (
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            studio::EDITOR_JS.to_string(),
+        ),
+        "/studio/assets/vis-network.js" => (
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            studio::VIS_JS.to_string(),
         ),
         "/health" => {
             let uptime = SERVER_START
@@ -1452,13 +1631,40 @@ pub(crate) fn handle_http(
         }
         "/api/login" if method == "POST" => {
             match handle_login(&body_str, sessions, auth, client_ip) {
-                Ok(token) => (
-                    "200 OK",
-                    "application/json",
-                    json!({"token": token}).to_string(),
-                ),
+                Ok(token) => {
+                    set_cookie = Some(session_cookie_header(&token, auth.ttl_secs(), &req));
+                    (
+                        "200 OK",
+                        "application/json",
+                        json!({"token": token}).to_string(),
+                    )
+                }
                 Err((status, e)) => (status, "application/json", json!({"error": e}).to_string()),
             }
+        }
+        // who the cookie/Bearer session is, so Studio can resume after a reload
+        "/api/session" if method == "GET" => match validate_token(token.as_deref(), sessions) {
+            Some(s) => (
+                "200 OK",
+                "application/json",
+                json!({"username": s.name, "roles": s.roles}).to_string(),
+            ),
+            None => (
+                "401 Unauthorized",
+                "application/json",
+                json!({"error": "login required"}).to_string(),
+            ),
+        },
+        "/api/logout" if method == "POST" => {
+            if let Some(t) = token.as_deref() {
+                sessions.lock().unwrap().remove(t); // justified: Mutex poison is unrecoverable
+            }
+            set_cookie = Some(session_cookie_header("", 0, &req));
+            (
+                "200 OK",
+                "application/json",
+                json!({"ok": true}).to_string(),
+            )
         }
         // P3-M1 (auth005/auth006): the pre-v1 route aliases are part of the
         // same surface — session required, and graph runs as the session's
@@ -1557,6 +1763,14 @@ pub(crate) fn handle_http(
     // CORS headers on all responses.
     for (k, v) in api_rest::cors_headers() {
         resp.push_str(&format!("{}: {}\r\n", k, v));
+    }
+    if let Some(c) = &set_cookie {
+        resp.push_str(&format!("Set-Cookie: {c}\r\n"));
+    }
+    if matches!(route, "/" | "/studio") {
+        for (k, v) in studio::STUDIO_HEADERS {
+            resp.push_str(&format!("{}: {}\r\n", k, v));
+        }
     }
     resp.push_str("\r\n");
     resp.push_str(&body);
@@ -1794,4 +2008,43 @@ pub(crate) fn spawn_metrics(
             kernel, ontology, &addr, &db_path, rate_limit, auth, admin, tls, mcp,
         )
     });
+}
+
+#[cfg(test)]
+mod token_tests {
+    use super::extract_token;
+
+    #[test]
+    fn bearer_header_name_is_case_insensitive() {
+        // Header names are case-insensitive (RFC 9110); a client that sends
+        // `authorization:` must authenticate like one that sends `Authorization:`.
+        for name in ["Authorization", "authorization", "AUTHORIZATION"] {
+            let req = format!("GET /api/x HTTP/1.1\r\nHost: h\r\n{name}: Bearer tok-1\r\n\r\n");
+            assert_eq!(
+                extract_token("/api/x", &req).as_deref(),
+                Some("tok-1"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_session_cookie_is_the_last_resort_after_header_and_query() {
+        let cookie = "GET /x HTTP/1.1\r\nCookie: a=1; aikoql_session=ck-1; b=2\r\n\r\n";
+        assert_eq!(extract_token("/x", cookie).as_deref(), Some("ck-1"));
+        let both =
+            "GET /x HTTP/1.1\r\ncookie: aikoql_session=ck-1\r\nAuthorization: Bearer hd-1\r\n\r\n";
+        assert_eq!(extract_token("/x", both).as_deref(), Some("hd-1"));
+        assert_eq!(extract_token("/x?token=q-1", both).as_deref(), Some("q-1"));
+        let other = "GET /x HTTP/1.1\r\nCookie: aikoql_sessionx=no\r\n\r\n";
+        assert_eq!(extract_token("/x", other), None);
+    }
+
+    #[test]
+    fn query_token_still_works_for_existing_clients() {
+        assert_eq!(
+            extract_token("/api/x?token=abc", "GET /api/x?token=abc HTTP/1.0\r\n\r\n").as_deref(),
+            Some("abc")
+        );
+    }
 }

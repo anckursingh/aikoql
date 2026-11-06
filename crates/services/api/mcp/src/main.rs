@@ -281,6 +281,7 @@ fn main() {
     // PRR-3: local model store override (default ~/.aikoql/models).
     // AG-01: once per process (serve runs once)
     crate::tool_registry::CORE_PROFILE.get_or_init(|| cfg.tool_profile == "core");
+    crate::tools::ingestion::INGEST_POLICY.get_or_init(|| cfg.ingestion_policy.clone());
     let model_dir_flag = cfg.model_dir;
     let model_auto_install = cfg.model_auto_install;
     MEMORY_DIR.set(memory_dir).ok();
@@ -737,6 +738,14 @@ fn main() {
     // AG-10: memories still only on disk join the knowledge base, once —
     // on a node that writes (a standby or replica gets them replicated)
     if !serving_standby && role != replication::Role::Fenced {
+        // batches a previous process was running never finish: say so
+        match crate::tools::ingestion::interrupt_unfinished_documents(&kernel) {
+            0 => {}
+            n => warn!(
+                documents = n,
+                "documents left processing by the last run marked interrupted — upload them again"
+            ),
+        }
         if let Some(dir) = MEMORY_DIR.get() {
             match crate::tools::import_memory_dir(&kernel, dir) {
                 Ok(0) => {}
@@ -874,7 +883,7 @@ fn main() {
     // remembers republish through the same path, so the query editor never
     // waits for a restart.
     let ontology = crate::http::load_ontology_registry(&kernel);
-    crate::http::install_ontology(ontology.clone());
+    crate::http::refresh_ontologies(&kernel);
 
     // Optional HTTP metrics endpoint for Prometheus + Kubernetes probes.
     if let Some(ref addr) = metrics_addr {

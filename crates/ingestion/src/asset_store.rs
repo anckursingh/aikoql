@@ -6,7 +6,8 @@
 
 use std::path::Path;
 
-/// MIME type for a file name, from its extension. Unknown → octet-stream.
+/// MIME type for a file name, from its extension: images and every
+/// extractable document type. Unknown → octet-stream.
 pub fn mime_from_extension(name: &str) -> String {
     let ext = Path::new(name)
         .extension()
@@ -20,6 +21,15 @@ pub fn mime_from_extension(name: &str) -> String {
         "webp" => "image/webp",
         "bmp" => "image/bmp",
         "tif" | "tiff" => "image/tiff",
+        "pdf" => "application/pdf",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "csv" => "text/csv",
+        "tsv" => "text/tab-separated-values",
+        "html" | "htm" => "text/html",
+        "md" | "markdown" => "text/markdown",
+        "txt" => "text/plain",
         _ => "application/octet-stream",
     }
     .to_string()

@@ -1,0 +1,141 @@
+{
+  "mime": "application/pdf",
+  "entities": [
+    {
+      "text": "Northwind Trading B.V.",
+      "type": "Organization"
+    },
+    {
+      "text": "Amsterdam",
+      "type": "Location"
+    },
+    {
+      "text": "Netherlands",
+      "type": "Location"
+    },
+    {
+      "text": "2026-03-14",
+      "type": "Date"
+    },
+    {
+      "text": "Contoso Ltd",
+      "type": "Organization"
+    },
+    {
+      "text": "London",
+      "type": "Location"
+    },
+    {
+      "text": "United Kingdom",
+      "type": "Location"
+    },
+    {
+      "text": "Emma Clarke",
+      "type": "Person"
+    },
+    {
+      "text": "emma.clarke@contoso.example",
+      "type": "Email"
+    },
+    {
+      "text": "+44 20 7946 0958",
+      "type": "Phone"
+    },
+    {
+      "text": "EUR 150.00",
+      "type": "Money"
+    },
+    {
+      "text": "EUR 1,500.00",
+      "type": "Money"
+    },
+    {
+      "text": "EUR 499.00",
+      "type": "Money"
+    },
+    {
+      "text": "EUR 998.00",
+      "type": "Money"
+    },
+    {
+      "text": "EUR 320.50",
+      "type": "Money"
+    },
+    {
+      "text": "EUR 45.00",
+      "type": "Money"
+    },
+    {
+      "text": "EUR 540.00",
+      "type": "Money"
+    },
+    {
+      "text": "EUR 3,358.50",
+      "type": "Money"
+    },
+    {
+      "text": "EUR 705.29",
+      "type": "Money"
+    },
+    {
+      "text": "EUR 4,063.79",
+      "type": "Money"
+    },
+    {
+      "text": "21%",
+      "type": "Percentage"
+    },
+    {
+      "text": "NL91 ABNA 0417 1643 00",
+      "type": "Iban"
+    },
+    {
+      "text": "April 13, 2026",
+      "type": "Date"
+    },
+    {
+      "text": "Northwind Trading",
+      "type": "Organization"
+    }
+  ],
+  "tables": [
+    {
+      "page": 1,
+      "rows": [
+        [
+          "Description",
+          "Qty",
+          "Unit price",
+          "Amount"
+        ],
+        [
+          "Consulting services",
+          "10",
+          "EUR 150.00",
+          "EUR 1,500.00"
+        ],
+        [
+          "Software licence",
+          "2",
+          "EUR 499.00",
+          "EUR 998.00"
+        ],
+        [
+          "Travel expenses",
+          "1",
+          "EUR 320.50",
+          "EUR 320.50"
+        ],
+        [
+          "Support plan",
+          "12",
+          "EUR 45.00",
+          "EUR 540.00"
+        ]
+      ]
+    }
+  ],
+  "no_table_pages": [
+    2
+  ]
+}

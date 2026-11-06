@@ -94,3 +94,14 @@ level = "info"
 
 # Log format: text, json
 format = "text"
+
+# Document ingestion limits (HLD §54/§55). A document over a limit is stored
+# with status "limit_exceeded" and the reason; compile answers 400. Defaults:
+# [ingestion]
+# max_pages = 2000             # PDF pages, sheets or slides per document
+# max_image_count = 1000       # raster images per document
+# max_visual_assets = 2000     # raster + vector assets per document
+# max_image_dimension = 20000  # longest image side, px (read from headers)
+# max_ocr_seconds = 600        # OCR wall-clock budget per document
+# enable_ocr = true            # false: scans are stored without OCR text
+# enable_visual_analysis = true

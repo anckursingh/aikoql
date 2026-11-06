@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Pre-push gate: run every CI check that can run on a dev machine, so a push
 # costs one CI round, not five. Mirrors ci.yml's lint, helm and
-# dependency-dag jobs plus the Linux test step. Runs ALL gates and
+# dependency-dag jobs plus the Linux test step, and — when a Chrome is
+# available — the Studio browser e2e. Runs ALL gates and
 # summarises (the disposition-head gate is expected red until the dogfood
 # re-stamp is the tip). Windows-only, Docker/MinIO and coverage jobs are
 # left to CI.
@@ -53,6 +54,20 @@ if [ "$fast" = 1 ]; then
 else
   # shellcheck disable=SC2046 # the skip list is meant to word-split
   gate "cargo test" cargo test --workspace -- $(bash scripts/skip-list.sh)
+fi
+
+# Optional: the Studio browser e2e (a real Chrome clicks every control; with CSP
+# script-src 'self' a missed handler silently does nothing, which no unit test
+# sees). Skipped, with the reason, when there is no Chrome / playwright-core.
+# Never part of CI. Exit 77 from the harness = skipped.
+if [ -f tests/e2e/studio/run.js ]; then
+  echo "=== studio e2e"
+  cargo build -q -p aikoql-mcp
+  node tests/e2e/studio/run.js
+  rc=$?
+  if [ "$rc" = 0 ]; then echo "--- ok: studio e2e"
+  elif [ "$rc" = 77 ]; then skipped+=("studio e2e (no browser / binary / playwright-core — see its message)")
+  else failed+=("studio e2e"); echo "--- FAILED: studio e2e"; fi
 fi
 
 skip "Windows, Docker, connector, k8s, coverage, perf jobs" "CI only"

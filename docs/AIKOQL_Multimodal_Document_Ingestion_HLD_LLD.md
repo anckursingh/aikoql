@@ -1,12 +1,53 @@
 # AIKOQL Multimodal Document Ingestion --- HLD + LLD
 
-**Status:** Architecture proposal based on the current
-`feature/mvp-launch` implementation and PR #1\
+**Status:** Implemented design — the architecture of the shipped
+`crates/ingestion` (PR #1 and the PR-A…PR-R series are merged; this
+document is no longer a proposal). §0 records what is done, what is
+mock-only and what is not started, verified against the code on
+2026-11-06; §61 records the market-gap analysis and the measured
+extraction-quality numbers.\
 **Repository:** `anckursingh/aikoql`\
-**PR:** #1 --- v0.2 encryption-at-rest + v0.3 Agent Knowledge OS
-roadmap\
 **Audience:** AIKOQL maintainers, Rust engineers, architects,
 contributors
+
+------------------------------------------------------------------------
+
+## 0. Implementation status (verified against the code, 2026-11-06)
+
+"Done" = in the default build and exercised by tests; "mock-only" = the
+seam exists and the default implementation is a deterministic rule/mock
+(by design: no mandatory model, Invariants 7 and 10); "optional" = behind a
+cargo feature and env configuration, never in the default build.
+
+| HLD item | State | Where |
+|---|---|---|
+| §6/§8/§9–§13 SourceSpan, VisualAssetRef, AstPayload, Table/Chart/Diagram/Formula/Image payloads | done | `source.rs`, `ast.rs` |
+| §9 tables: DOCX, HTML, markdown | done | `lib.rs` (`docx_table`, `parse_html_structure`), `ast.rs` |
+| §9 tables: PDF text layer and scans (word-box detection) | done (rule-based; needs poppler `pdftotext` for PDFs and tesseract for scans, degrades to flat text without them) | `table_detect.rs` |
+| §9 tables: XLSX sheets, CSV/TSV, PPTX slide tables | done | `office.rs` |
+| §13/§29 embedded images as content-addressed assets (PDF raster + vector, DOCX media, PPTX media, standalone images) | done | `lib.rs`, `office.rs`, `asset_store.rs` |
+| §15/§16 KnowledgeFragment + rule boundary detector | done | `fragment.rs`, `boundary.rs` |
+| §16/§39 transformer boundary scorer | optional (`transform` feature) | `transform.rs` |
+| §18/§20 SemanticAnalyzer with typed provenance | done; default analyzer is rule-based (`rules-v1` typed entities: org/person/location from cues + gazetteer, money, email, URL, phone, IBAN, percentage; dates) — no relation typing beyond co-occurrence `related_to`, no event rules | `ir.rs`, `ner.rs` |
+| §21/§22 RetrievalProjector, chunking as a projection | done | `chunking.rs` |
+| §23 modality-aware embeddings | mock-only (`MockEmbeddingProvider`, `MockMultimodalEmbeddingProvider`); remote provider optional (`remote_emb`) | `embedding.rs`, `multimodal_embedding.rs`, `remote_emb.rs` |
+| §24 visual index | done over mock visual embeddings | `visual_index.rs` |
+| §25/§47/§48 pipeline phases, CompilationResult | done | `pipeline.rs` |
+| §27 DocumentExtractor + ExtractorRegistry | done (PDF, DOCX, XLSX, PPTX, HTML, CSV/TSV, text, raster images) | `extractors.rs` |
+| §29 PDF: native text, geometry, images, vector graphics, tables, OCR fallback per page | done (chart/figure classification is the mock classifier) | `lib.rs`, `ocr.rs`, `table_detect.rs` |
+| §30 DOCX structure (paragraphs, headings via styles, tables, hyperlinks, images, page breaks) | done; captions and drawing relationships beyond images not modelled | `lib.rs` |
+| §31 HTML structure | done (string-scan parser, no DOM dependency) | `lib.rs` |
+| §32/§33 VisualClassifier, Chart/Diagram/Image analyzers | mock-only by default; VLM analyzers optional (`vlm` feature) | `visual.rs`, `vlm.rs` |
+| §40 `thiserror` error model | not started — extraction errors are `String`; policy limits are classified by the `limit exceeded:` prefix (`is_limit_error`) | `policy.rs` |
+| §41 async architecture | not started (synchronous pipeline) | — |
+| §43 caching beyond content-addressed assets | not started | — |
+| §45 incremental ingestion (page/asset level) | done | `pipeline.rs::compile_document_incremental`, `ingest_incremental.rs` |
+| §53 evaluation: golden suite, retrieval, semantic quality, extraction quality vs ground truth | done | `tests/multimodal_golden.rs`, `retrieval_quality.rs`, `semantic_extraction_quality.rs`, `extraction_quality_bench.rs` |
+| §54 asset limits: file size | done (64 MiB upload cap, HTTP layer) | `services/api/mcp/src/http.rs` |
+| §54 asset limits: pages, image count, image dimensions, OCR time | done (`ProcessingPolicy`, `[ingestion]` server config) | `policy.rs` |
+| §54 over-limit documents | done: a document over `max_pages` is read in background batches of `max_pages` pages (per-batch image/asset/OCR-time limits), progress on the document KO, compile merges the batches; see the §54 note | `policy.rs`, `extractors.rs`, `services/api/mcp/src/tools/ingestion.rs` |
+| §54 asset limits: VLM calls | field only (`max_model_calls`); no model runs in the default path | `policy.rs` |
+| §55 ProcessingPolicy | done: `enable_ocr`, `enable_visual_analysis`, all `max_*` limits enforced; `enable_chart_analysis`, `enable_diagram_analysis`, `enable_transformer_boundaries` carried, not enforced (the default analyzers are cheap rules; the transformer is not in the default build) | `policy.rs`, `pipeline.rs` |
 
 ------------------------------------------------------------------------
 
@@ -92,9 +133,8 @@ projection.
 
 # 2. What exists today
 
-PR #1 is open against `main`, with `feature/mvp-launch` as the head. It
-includes encryption-at-rest work and the v0.3 Agent Knowledge OS
-maturity roadmap.
+*(Historical, as of the proposal: PR #1 was then open against `main`. It
+has since merged; §0 is the current status.)*
 
 The current ingestion crate already describes itself as a
 document-to-Knowledge-Object pipeline and exposes:
@@ -2575,6 +2615,35 @@ maximum OCR time
 maximum VLM calls
 ```
 
+**Implementation note (batched processing).** Every limit is enforced by
+`ProcessingPolicy`; a hit is an error naming the limit, never a silent
+truncation. A multi-page document (PDF pages, sheets, slides, DOCX page
+breaks) refused by any limit is not refused whole: it is stored at once with
+status `processing` and read by a background worker in batches of at most
+`max_pages` pages (`plan_batches`, `extract_document_pages`). Per-batch
+limits apply per batch — `max_image_count`, `max_visual_assets`,
+`max_image_dimension` and one `max_ocr_seconds` deadline per batch; a batch
+still over a limit is split in half (in page order, `batches_total` grows)
+until it fits, so only a single page that cannot fit fails. PDF
+reads only the batch's pages (text, `pdftotext -f/-l` word boxes, images,
+OCR) with their real page numbers; the other formats are extracted whole
+and cut to the range (cheap: no OCR). The document KO carries
+`batches_total`, `batches_done`, `pages_done`; each finished batch's result
+(page range, status, characters, images, tables) is in
+`{hash}.batches.json` and its pages in `{hash}.batch-F-L.json`.
+`document_status`/`document_list`/REST report them with a message. A failed
+batch is recorded with its error and the others are kept (status
+`partial`); `document_compile` merges the stored batches in page order (no
+re-extraction) and lists `failed_batches`. Compile while `processing` is a
+409 naming the batch; a restart marks unfinished documents `interrupted`
+(409 at compile; a re-upload processes them again). A merged batch run
+equals the single-pass extraction (`tests/batch_processing.rs`).
+
+Not split, still refused as `limit_exceeded`: single-page documents — a
+single image, CSV/TSV, HTML, text, a one-page PDF — over a limit (there is
+nothing to split). Splitting re-runs extraction (and OCR) for the halves of
+a batch that hit a limit, so an OCR-time hit costs up to ~2x per split.
+
 ------------------------------------------------------------------------
 
 # 55. Performance model
@@ -2623,6 +2692,12 @@ pub struct ProcessingPolicy {
 ```
 
 This is essential for a self-hosted database.
+
+**Implementation note.** `ProcessingPolicy` (`policy.rs`) carries the §54
+limits as well (`max_pages`, `max_image_count`, `max_image_dimension`,
+`max_ocr_seconds`) and is set from `[ingestion]`. For a document read in
+batches (§54 note) every limit applies per batch, so a large document costs
+at most one batch's worth of OCR time and memory per extraction call.
 
 ------------------------------------------------------------------------
 
@@ -3036,3 +3111,76 @@ Indexes
 
 This should be the stable architectural contract for the next stage of
 AIKOQL.
+
+------------------------------------------------------------------------
+
+# 61. Market-gap analysis and measured extraction quality (2026-11-06)
+
+Compared with market document parsers (Docling, Unstructured, LlamaParse,
+Azure Document Intelligence, Textract), the gaps found in the code were:
+
+1. The default analyzer typed entities by name shape: any two capitalised
+   words were a `Person` ("Utrecht International Center" →
+   "Utrecht International", `Person`), with no typed values.
+2. No benchmark measured extraction against ground truth.
+3. Tables were structured only for DOCX/HTML/markdown — none for PDFs or
+   scans, although OCR word boxes and the PDF text layer were available.
+4. `extract_document` was a hard-coded mime match; no XLSX, CSV or PPTX.
+5. No `ProcessingPolicy`; the §54 page/image/OCR-time limits were not
+   enforced.
+
+What changed (all deterministic, offline, no model): `ner.rs` rule typing
+and value recognisers (`rules-v1` provenance with a text span);
+`table_detect.rs` word-box table detection; `extractors.rs` registry and
+`office.rs` XLSX/CSV/TSV/PPTX; `policy.rs` limits.
+
+## 61.1 Benchmark
+
+`crates/ingestion/tests/extraction_quality_bench.rs` over
+`tests/fixtures/extraction-bench/` (generated by
+`scripts/gen-extraction-bench-fixtures.py`, ground truth written by hand):
+an invoice PDF (ruled table + a two-column prose page), a typed-entity text,
+a held-out entity text written after the rules and never used to tune them,
+clean and 1.2°-skewed table scans and a scanned letter. `results.json` keeps
+the pre-change baseline and the ratchet floor the test enforces.
+Tesseract 5.5.4, poppler 26.11.0, macOS.
+
+| metric | before | after | Docling 2.148.0 |
+|---|---|---|---|
+| typed entity precision (tuned corpus) | 0.172 | 1.000 | N/A (no entity typing) |
+| typed entity recall (tuned corpus) | 0.220 | 0.980 | N/A |
+| typed entity precision (held-out text) | 0.280 | 0.750 | N/A |
+| typed entity recall (held-out text) | 0.333 | 0.857 | N/A |
+| table cell accuracy, PDF | 0.000 | 1.000 | 1.000 |
+| table cell accuracy, scans (clean, skewed) | 0.000 (0, 0) | 0.500 (1.0, 0.0) | 1.000 (1.0, 1.0) |
+| false-positive tables (prose pages) | 0 | 0 | 0 |
+| OCR character accuracy (Tesseract; Docling uses its own OCR and table-ordered text export) | 0.880 | 0.880 | 0.796 |
+
+The golden suite's entity precision moved 0.670 → 0.792 (recall 0.958
+unchanged); retrieval pins are unchanged.
+
+## 61.2 Honest limits
+
+- The tuned-corpus entity numbers are on text the rules were developed
+  against; the held-out row is the generalisation estimate, and the
+  corpus is small (5 fixtures). Misses on the held-out text: Nordic
+  `AS` legal form, an unlisted given name (`Tomasz`), `Kraków`, a
+  sentence-initial role word (`Chair Anna Lindqvist`).
+- Organisations without a cue word (`Rabobank`) are not typed.
+- Table detection fails on skewed scans (rows drift across lines), on
+  header cells spanning columns, on rows with a single filled cell and on
+  long-text cells; ruling lines are not used. PDF detection needs poppler.
+- Emails are recognised but then redacted by the R8 secret filter in the
+  compile output (by policy); the benchmark scores the analyzer stage.
+- XLSX date serials print as numbers; sheets and CSVs are not size-capped
+  beyond the upload limit and `max_pages`.
+- Not compared: Unstructured, LlamaParse, Azure DI, Textract (not run).
+  Docling was run via `scripts/bench-vs-docling.py` (same scorers; its
+  layout/table models are downloaded on first run). Docling reads the
+  skewed scan's table correctly where AikoQL's rule detector does not: on
+  scanned tables Docling is ahead; on the native PDF table they tie; typed
+  entities have no Docling counterpart. A first run of the script scored
+  Docling's scans 0 because header-less tables were mis-read by the script
+  itself (pandas column numbers taken as a header row) — fixed before
+  these numbers were taken.
+

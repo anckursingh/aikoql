@@ -18,6 +18,7 @@
 use crate::ast::{BlockType, DocumentAst};
 use crate::boundary::{KnowledgeBoundaryDetector, RuleBoundaryDetector};
 use crate::fragment::{FragmentContent, FragmentModality, KnowledgeFragment};
+use crate::ner::RULES_MODEL;
 use crate::source::EvidenceSource;
 use crate::visual::{MODEL_CHART, MODEL_DIAGRAM, MODEL_FORMULA, MODEL_IMAGE};
 use aikoql_kernel::ContentTrust;
@@ -310,6 +311,16 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
 }
 
 impl MockSemanticAnalyzer {
+    /// Value recognisers carry their own calibrated confidence; names keep
+    /// the analyzer's configured one.
+    fn rule_confidence(&self, m: &crate::ner::Match) -> f32 {
+        if crate::ner::VALUE_KINDS.contains(&m.kind) {
+            m.confidence
+        } else {
+            self.confidence
+        }
+    }
+
     /// AST fallback (pre-fragment behavior, kept for fail-soft parity).
     fn analyze_ast(&self, ast: &DocumentAst) -> KnowledgeIr {
         let mut ir = KnowledgeIr {
@@ -325,32 +336,36 @@ impl MockSemanticAnalyzer {
             let page_num = (pi + 1) as u32;
             let page_text = collect_text(&page.children);
 
-            // Extract entities: capitalized multi-word phrases
-            for entity_name in extract_capitalized_phrases(&page_text) {
-                if !ir.entities.iter().any(|e| e.name == entity_name) {
+            // Entities: rule-typed names and values (ner.rs).
+            for m in rule_entities(&page_text) {
+                if !ir.entities.iter().any(|e| e.name == m.name) {
                     let mentions: Vec<String> = page
                         .children
                         .iter()
-                        .filter(|c| c.text.as_deref().unwrap_or_default().contains(&entity_name))
+                        .filter(|c| c.text.as_deref().unwrap_or_default().contains(&m.name))
                         .map(|c| c.text.clone().unwrap_or_default())
                         .collect();
+                    let confidence = self.rule_confidence(&m);
                     ir.entities.push(EntityCandidate {
-                        name: entity_name.clone(),
-                        type_hint: guess_type(&entity_name),
+                        type_hint: Some(m.kind.into()),
                         mentions: if mentions.is_empty() {
-                            vec![entity_name.clone()]
+                            vec![m.name.clone()]
                         } else {
                             mentions
                         },
-                        confidence: self.confidence,
+                        confidence,
                         evidence: Evidence {
                             document_id: None,
                             page: Some(page_num),
-                            source: None,
-                            extractor: extractor.clone(),
-                            model: Some("mock-v1".into()),
-                            confidence: self.confidence,
+                            source: Some(EvidenceSource::TextSpan {
+                                start_offset: m.start,
+                                end_offset: m.end,
+                            }),
+                            extractor: RULES_EXTRACTOR.into(),
+                            model: Some(RULES_MODEL.into()),
+                            confidence,
                         },
+                        name: m.name,
                     });
                 }
             }
@@ -410,7 +425,7 @@ impl MockSemanticAnalyzer {
                     let entities_in_para: Vec<&String> = ir
                         .entities
                         .iter()
-                        .filter(|e| paragraph.contains(&e.name))
+                        .filter(|e| is_named(e) && paragraph.contains(&e.name))
                         .map(|e| &e.name)
                         .collect();
 
@@ -478,23 +493,34 @@ impl MockSemanticAnalyzer {
                 texts.push(crate::chunking::fragment_text(frag));
             }
             for text in &texts {
-                for entity_name in extract_capitalized_phrases(text) {
-                    if !ir.entities.iter().any(|e| e.name == entity_name) {
+                for m in rule_entities(text) {
+                    if !ir.entities.iter().any(|e| e.name == m.name) {
                         let mentions: Vec<String> = fragments
                             .iter()
                             .map(crate::chunking::fragment_text)
-                            .filter(|t| t.contains(&entity_name))
+                            .filter(|t| t.contains(&m.name))
                             .collect();
+                        let confidence = self.rule_confidence(&m);
+                        let mut evidence = fragment_evidence(frag, RULES_EXTRACTOR, confidence);
+                        evidence.model = Some(RULES_MODEL.into());
+                        // Region provenance when the fragment has geometry,
+                        // else the span inside the fragment's text.
+                        if evidence.source.is_none() {
+                            evidence.source = Some(EvidenceSource::TextSpan {
+                                start_offset: m.start,
+                                end_offset: m.end,
+                            });
+                        }
                         ir.entities.push(EntityCandidate {
-                            name: entity_name.clone(),
-                            type_hint: guess_type(&entity_name),
+                            type_hint: Some(m.kind.into()),
                             mentions: if mentions.is_empty() {
-                                vec![entity_name.clone()]
+                                vec![m.name.clone()]
                             } else {
                                 mentions
                             },
-                            confidence: self.confidence,
-                            evidence: fragment_evidence(frag, &extractor, self.confidence),
+                            confidence,
+                            evidence,
+                            name: m.name,
                         });
                     }
                 }
@@ -821,7 +847,7 @@ impl MockSemanticAnalyzer {
                     let entities_in: Vec<&String> = ir
                         .entities
                         .iter()
-                        .filter(|e| text.contains(&e.name))
+                        .filter(|e| is_named(e) && text.contains(&e.name))
                         .map(|e| &e.name)
                         .collect();
                     for i in 0..entities_in.len() {
@@ -962,125 +988,55 @@ fn split_cell_bodies(text: &str) -> Vec<String> {
     }
 }
 
-/// Extract capitalized multi-word phrases (potential named entities).
-///
-/// Uses a sliding window of 2–3 words within runs of consecutive capitalized
-/// words. This avoids merging distinct entities like "Acme Corporation" and
-/// "Annual Report" into one long phrase.
+/// Capitalised-phrase names (potential named entities) — the rule
+/// recogniser's names, values and dates masked out (ner.rs). Used for fact
+/// anchoring, so anchors and entity names stay the same strings.
 fn extract_capitalized_phrases(text: &str) -> Vec<String> {
-    let mut entities: Vec<String> = Vec::new();
-    // Split and clean trailing punctuation from each word.
-    let raw_words: Vec<&str> = text.split_whitespace().collect();
-    let words: Vec<String> = raw_words
-        .iter()
-        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string())
-        .collect();
-
-    let mut i = 0;
-    while i < words.len() {
-        let w = &words[i];
-        if w.len() >= 2 && w.chars().next().is_some_and(|c| c.is_uppercase()) {
-            // Find the end of this capitalized run.
-            let mut end = i + 1;
-            while end < words.len() {
-                let next = &words[end];
-                if next.len() >= 2 && next.chars().next().is_some_and(|c| c.is_uppercase()) {
-                    end += 1;
-                } else {
-                    break;
-                }
-            }
-            let run_len = end - i;
-            // Emit 2-word sliding windows within the run.
-            if run_len >= 2 {
-                for start in i..(end - 1) {
-                    let name = words[start..start + 2].join(" ");
-                    if name.len() > 4 && !entities.contains(&name) {
-                        entities.push(name);
-                    }
-                }
-            }
-            // Emit 3-word sliding windows within the run.
-            if run_len >= 3 {
-                for start in i..(end - 2) {
-                    let name = words[start..start + 3].join(" ");
-                    if name.len() > 4 && !entities.contains(&name) {
-                        entities.push(name);
-                    }
-                }
-            }
-            i = end;
-        } else {
-            i += 1;
-        }
-    }
-    entities
+    crate::ner::recognize_names(text, &value_and_date_spans(text))
+        .into_iter()
+        .map(|m| m.name)
+        .collect()
 }
 
-/// Guess an ontology type from the entity name using keyword heuristics.
-fn guess_type(name: &str) -> Option<String> {
-    let lower = name.to_lowercase();
-    let org_keywords = [
-        "inc",
-        "corp",
-        "ltd",
-        "llc",
-        "company",
-        "corporation",
-        "group",
-        "holdings",
-        "enterprise",
-        "industries",
-        "solutions",
-        "technologies",
-        "systems",
-        "bank",
-        "insurance",
-        "capital",
-        "partners",
-        "consulting",
-    ];
-    let person_keywords = ["dr.", "mr.", "mrs.", "ms.", "prof.", "sir"];
-    let location_keywords = [
-        "city",
-        "town",
-        "county",
-        "state",
-        "province",
-        "district",
-        "region",
-        "street",
-        "avenue",
-        "road",
-        "lane",
-        "boulevard",
-        "drive",
-        "court",
-        "place",
-        "square",
-    ];
+/// Extractor name on rule-derived entity candidates.
+const RULES_EXTRACTOR: &str = "rules";
 
-    for kw in &org_keywords {
-        if lower.contains(kw) {
-            return Some("Organization".into());
-        }
+/// Typed values plus typed names for one text unit.
+fn rule_entities(text: &str) -> Vec<crate::ner::Match> {
+    let values = crate::ner::recognize_values(text);
+    let mut skip: Vec<(usize, usize)> = values.iter().map(|m| (m.start, m.end)).collect();
+    skip.extend(date_spans(text));
+    let mut out = values;
+    out.extend(crate::ner::recognize_names(text, &skip));
+    out
+}
+
+fn value_and_date_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans: Vec<(usize, usize)> = crate::ner::recognize_values(text)
+        .iter()
+        .map(|m| (m.start, m.end))
+        .collect();
+    spans.extend(date_spans(text));
+    spans
+}
+
+/// Byte spans of every occurrence of every date pattern in `text`.
+fn date_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    for d in extract_date_patterns(text) {
+        spans.extend(
+            text.match_indices(d.as_str())
+                .map(|(i, m)| (i, i + m.len())),
+        );
     }
-    for kw in &person_keywords {
-        if lower.starts_with(kw) {
-            return Some("Person".into());
-        }
-    }
-    for kw in &location_keywords {
-        if lower.contains(kw) {
-            return Some("Location".into());
-        }
-    }
-    // Default: check if it looks like a person (two words, first is short-ish)
-    let parts: Vec<&str> = name.split_whitespace().collect();
-    if parts.len() == 2 && parts[0].len() <= 15 {
-        return Some("Person".into());
-    }
-    Some("Thing".into())
+    spans
+}
+
+/// Named (not typed-value) entity: only these co-occur into relations.
+fn is_named(e: &EntityCandidate) -> bool {
+    !e.type_hint
+        .as_deref()
+        .is_some_and(|t| crate::ner::VALUE_KINDS.contains(&t))
 }
 
 /// Find date-like patterns in text.
@@ -1116,6 +1072,28 @@ fn extract_date_patterns(text: &str) -> Vec<String> {
     let words: Vec<&str> = text.split_whitespace().collect();
     for (i, w) in words.iter().enumerate() {
         let w_clean = w.trim_matches(|c: char| !c.is_alphanumeric());
+        let is_year = |s: &str| s.len() == 4 && s.chars().all(|c| c.is_ascii_digit());
+        let is_day = |s: &str| {
+            (1..=2).contains(&s.len())
+                && s.chars().all(|c| c.is_ascii_digit())
+                && s.parse::<u32>().is_ok_and(|d| (1..=31).contains(&d))
+        };
+        // "DD Month YYYY" (e.g. "12 May 2025") — wins over "Month YYYY".
+        if months.contains(&w_clean) && i > 0 && i + 1 < words.len() {
+            let prev = words[i - 1].trim_matches(|c: char| !c.is_alphanumeric());
+            let next = words[i + 1].trim_matches(|c: char| !c.is_alphanumeric());
+            if is_day(prev) && is_year(next) {
+                dates.push(format!("{} {} {}", prev, w_clean, next));
+                continue;
+            }
+        }
+        // "DD/MM/YYYY", "MM/DD/YYYY", "DD.MM.YYYY"
+        for sep in ['/', '.'] {
+            let parts: Vec<&str> = w_clean.split(sep).collect();
+            if parts.len() == 3 && is_day(parts[0]) && is_day(parts[1]) && is_year(parts[2]) {
+                dates.push(w_clean.to_string());
+            }
+        }
         // "Month YYYY" or "Month DD, YYYY"
         if months.contains(&w_clean) && i + 1 < words.len() {
             let next = words[i + 1].trim_matches(|c: char| !c.is_alphanumeric());
@@ -1223,6 +1201,37 @@ fn parse_iso_date(text: &str) -> (Option<String>, Option<String>) {
                 let end_day = month_end_day(end_month, parts[1]).unwrap_or("31");
                 let end = format!("{}-{}-{}T23:59:59Z", parts[1], end_month, end_day);
                 return (Some(start), Some(end));
+            }
+        }
+    }
+
+    // "DD Month YYYY"
+    if parts.len() == 3 {
+        if let Some(month) = months_map.get(parts[1]) {
+            if parts[0].chars().all(|c| c.is_ascii_digit()) && parts[2].len() == 4 {
+                let day = format!("{:0>2}", parts[0]);
+                return (
+                    Some(format!("{}-{}-{}T00:00:00Z", parts[2], month, day)),
+                    Some(format!("{}-{}-{}T23:59:59Z", parts[2], month, day)),
+                );
+            }
+        }
+    }
+
+    // Numeric "DD/MM/YYYY" / "DD.MM.YYYY"; "MM/DD/YYYY" only when the
+    // first field cannot be a month. Both fields ≤ 12 reads day-first.
+    for sep in ['/', '.'] {
+        let f: Vec<&str> = text.split(sep).collect();
+        if f.len() == 3 && f[2].len() == 4 {
+            if let (Ok(a), Ok(b)) = (f[0].parse::<u32>(), f[1].parse::<u32>()) {
+                let (day, month) = if b > 12 { (b, a) } else { (a, b) };
+                if (1..=12).contains(&month) && (1..=31).contains(&day) {
+                    let d = format!("{}-{:02}-{:02}", f[2], month, day);
+                    return (
+                        Some(format!("{d}T00:00:00Z")),
+                        Some(format!("{d}T23:59:59Z")),
+                    );
+                }
             }
         }
     }

@@ -102,6 +102,12 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/share/powershell /usr/share/swift 2>/dev/null || true
           df -h /
+      # Poppler only (no tesseract): PDF table detection reads pdftotext word
+      # positions, so without it the PDF table cell of the extraction-quality
+      # ratchet silently skips. Tesseract stays off CI — its version moves
+      # the OCR accuracy floor (measured on 5.5.4).
+      - name: Install poppler-utils
+        run: sudo apt-get install -y --no-install-recommends poppler-utils
       # sfm009_large_wal_snapshot_has_bounded_rss (PR6-R3-003): same RSS-cell
       # gating as the Windows job — local-suite test, skipped on CI runners.
       # Skip list derived from tests/gated.toml (PR6-F2 / P0-2).

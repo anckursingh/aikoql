@@ -1,0 +1,42 @@
+{
+  "_about": "Extraction-quality ratchet (tests/extraction_quality_bench.rs). 'baseline' = measured before the rule-based typing / table-detection work (commit range M1, 2026-11-06) and is never edited. 'floor' is the ratchet: each milestone that improves a metric raises it; the test fails when a metric drops below its floor (table_false_positives is a ceiling). Tool versions: tesseract 5.5.4, poppler pdftotext 26.11.0. The holdout keys were added with M2: holdout-entities.txt was written after the rules and scored once on the pre-M2 code for its baseline. Decision 2026-11-06: the held-out corpus is the OFFICIAL target ('official'); its SHA-256 is pinned ('holdout_sha256') and tests/holdout_guard.rs fails if it changes or if a held-out name is hard-coded in src/ner.rs beyond the generic vocabulary already present at freeze ('holdout_known_vocab_overlap'). The tuned-corpus entity_* floors are regression guards only.",
+  "baseline": {
+    "entity_precision": 0.172,
+    "entity_recall": 0.22,
+    "table_cell_accuracy_pdf": 0.0,
+    "table_cell_accuracy_scan": 0.0,
+    "table_false_positives": 0,
+    "ocr_char_accuracy": 0.88,
+    "entity_precision_holdout": 0.28,
+    "entity_recall_holdout": 0.333
+  },
+  "floor": {
+    "entity_precision": 1.0,
+    "entity_recall": 0.98,
+    "table_cell_accuracy_pdf": 1.0,
+    "table_cell_accuracy_scan": 0.5,
+    "table_false_positives": 0,
+    "ocr_char_accuracy": 0.88,
+    "entity_precision_holdout": 0.75,
+    "entity_recall_holdout": 0.857
+  },
+  "official": [
+    "entity_precision_holdout",
+    "entity_recall_holdout"
+  ],
+  "holdout_sha256": {
+    "holdout-entities.txt": "e4fa5a52d9ed34a4e6705ab499b1569726bc78accaef3c6c542904533a5152d7",
+    "holdout-entities.txt.gt.json": "45dfa4aa8f8ae3088e84e0a1581c87bdf37b5a684e6f481742f8336a145ecfa5"
+  },
+  "holdout_known_vocab_overlap": [
+    "Ltd",
+    "Copenhagen",
+    "Anna",
+    "AS",
+    "Oslo",
+    "Norway",
+    "Ingrid",
+    "Bank",
+    "Warsaw"
+  ]
+}

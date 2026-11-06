@@ -269,66 +269,27 @@
       "actions": [
         {
           "CreateKO": {
-            "class_name": "Person",
+            "class_name": "Thing",
             "entity_name": "Fiscal Quarter",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 14,
+                    "start_offset": 0
+                  }
+                }
               }
             ],
             "properties": [
               [
                 "type",
-                "Person"
-              ]
-            ]
-          }
-        },
-        {
-          "CreateKO": {
-            "class_name": "Person",
-            "entity_name": "Total Revenue",
-            "evidence": [
-              {
-                "confidence": 0.8500000238418579,
-                "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
-                "page": 1,
-                "source": null
-              }
-            ],
-            "properties": [
-              [
-                "type",
-                "Person"
-              ]
-            ]
-          }
-        },
-        {
-          "CreateKO": {
-            "class_name": "Person",
-            "entity_name": "Revenue Q1",
-            "evidence": [
-              {
-                "confidence": 0.8500000238418579,
-                "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
-                "page": 1,
-                "source": null
-              }
-            ],
-            "properties": [
-              [
-                "type",
-                "Person"
+                "Thing"
               ]
             ]
           }
@@ -336,15 +297,20 @@
         {
           "CreateKO": {
             "class_name": "Thing",
-            "entity_name": "Total Revenue Q1",
+            "entity_name": "Total Revenue",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 30,
+                    "start_offset": 17
+                  }
+                }
               }
             ],
             "properties": [
@@ -358,10 +324,10 @@
       ],
       "document_id": null,
       "stats": {
-        "creates": 4,
+        "creates": 2,
         "needs_review": 0,
         "skips": 0,
-        "total_actions": 4,
+        "total_actions": 2,
         "total_conflicts": 0,
         "updates": 0
       }
@@ -546,46 +512,38 @@
         {
           "entities": [
             "Fiscal Quarter",
-            "Total Revenue",
-            "Revenue Q1",
-            "Total Revenue Q1"
+            "Total Revenue"
           ],
           "phase": "D4-semantic-ir",
           "source": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 14,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 30,
+                  "start_offset": 17
+                }
+              }
             }
           ],
-          "step": "Extracted 4 entities from document text"
+          "step": "Extracted 2 entities from document text"
         },
         {
           "entities": [],
@@ -658,29 +616,25 @@
           "entities": [],
           "phase": "D5-ontology",
           "source": [],
-          "step": "Discovered 2 classes, 2 properties, 0 relationships"
+          "step": "Discovered 1 class, 2 properties, 0 relationships"
         },
         {
           "entities": [
             "Fiscal Quarter",
-            "Total Revenue",
-            "Revenue Q1",
-            "Total Revenue Q1"
+            "Total Revenue"
           ],
           "phase": "D6-resolution",
           "source": [],
-          "step": "Resolved 4 entities: 0 matched, 0 ambiguous, 4 unmatched"
+          "step": "Resolved 2 entities: 0 matched, 0 ambiguous, 2 unmatched"
         },
         {
           "entities": [
             "Fiscal Quarter",
-            "Total Revenue",
-            "Revenue Q1",
-            "Total Revenue Q1"
+            "Total Revenue"
           ],
           "phase": "D7-reconcile",
           "source": [],
-          "step": "Reconciled: 4 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+          "step": "Reconciled: 2 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
         }
       ]
     },
@@ -949,65 +903,43 @@
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 14,
+                "start_offset": 0
+              }
+            }
           },
           "mentions": [
             "Figure 1: Revenue bar chart by quarter\nRevenue in USD millions\nFiscal Quarter\nTotal Revenue\nTotal Revenue",
             "Fiscal Quarter | Total Revenue\nQ1 | 1200\nQ2 | 1500"
           ],
           "name": "Fiscal Quarter",
-          "type_hint": "Person"
+          "type_hint": "Thing"
         },
         {
           "confidence": 0.8500000238418579,
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 30,
+                "start_offset": 17
+              }
+            }
           },
           "mentions": [
             "Figure 1: Revenue bar chart by quarter\nRevenue in USD millions\nFiscal Quarter\nTotal Revenue\nTotal Revenue",
             "Fiscal Quarter | Total Revenue\nQ1 | 1200\nQ2 | 1500"
           ],
           "name": "Total Revenue",
-          "type_hint": "Person"
-        },
-        {
-          "confidence": 0.8500000238418579,
-          "evidence": {
-            "confidence": 0.8500000238418579,
-            "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
-            "page": 1,
-            "source": null
-          },
-          "mentions": [
-            "Revenue Q1"
-          ],
-          "name": "Revenue Q1",
-          "type_hint": "Person"
-        },
-        {
-          "confidence": 0.8500000238418579,
-          "evidence": {
-            "confidence": 0.8500000238418579,
-            "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
-            "page": 1,
-            "source": null
-          },
-          "mentions": [
-            "Total Revenue Q1"
-          ],
-          "name": "Total Revenue Q1",
           "type_hint": "Thing"
         }
       ],
@@ -1118,48 +1050,33 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 14,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
-            }
-          ],
-          "name": "Person",
-          "parent": "Person",
-          "signal_count": 3
-        },
-        {
-          "confidence": 0.8500000238418579,
-          "description": "Discovered from entity 'Total Revenue Q1'",
-          "evidence": [
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 30,
+                  "start_offset": 17
+                }
+              }
             }
           ],
           "name": "Thing",
           "parent": null,
-          "signal_count": 1
+          "signal_count": 2
         }
       ],
       "document_id": null,
@@ -1261,23 +1178,28 @@
         "ambiguous_count": 0,
         "average_confidence": 0.0,
         "matched_count": 0,
-        "total_entities": 4,
-        "unmatched_count": 4
+        "total_entities": 2,
+        "unmatched_count": 2
       },
       "unmatched": [
         {
           "candidates": [],
           "confidence": 0.0,
           "entity_name": "Fiscal Quarter",
-          "entity_type": "Person",
+          "entity_type": "Thing",
           "evidence": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 14,
+                  "start_offset": 0
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -1287,51 +1209,20 @@
           "candidates": [],
           "confidence": 0.0,
           "entity_name": "Total Revenue",
-          "entity_type": "Person",
-          "evidence": [
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
-            }
-          ],
-          "matched_koid": null,
-          "needs_creation": true
-        },
-        {
-          "candidates": [],
-          "confidence": 0.0,
-          "entity_name": "Revenue Q1",
-          "entity_type": "Person",
-          "evidence": [
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
-            }
-          ],
-          "matched_koid": null,
-          "needs_creation": true
-        },
-        {
-          "candidates": [],
-          "confidence": 0.0,
-          "entity_name": "Total Revenue Q1",
           "entity_type": "Thing",
           "evidence": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 30,
+                  "start_offset": 17
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -1354,22 +1245,22 @@
         },
         {
           "duration_us": 0,
-          "item_count": 9,
+          "item_count": 7,
           "phase": "D4-ir"
         },
         {
           "duration_us": 0,
-          "item_count": 4,
+          "item_count": 3,
           "phase": "D5-ontology"
         },
         {
           "duration_us": 0,
-          "item_count": 4,
+          "item_count": 2,
           "phase": "D6-resolution"
         },
         {
           "duration_us": 0,
-          "item_count": 4,
+          "item_count": 2,
           "phase": "D7-reconcile"
         },
         {

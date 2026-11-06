@@ -5,6 +5,157 @@ Format: <https://keepachangelog.com/>-inspired, but terser. This file starts
 at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 (`git log v0.1.0..v0.1.19`).
 
+## [Unreleased]
+
+### Large documents
+- A multi-page document over an `[ingestion]` limit (`max_pages`, image/asset counts, image size, OCR time)
+  is no longer refused: it is stored at once (status `processing`) and read in background batches of
+  `max_pages` pages, with the limits applied per batch; a batch still over a limit is split in half until it
+  fits, so only a page that cannot fit fails. `document_status`, `document_list` and REST report `batches_total`, `batches_done`, `pages_done`,
+  every finished batch's result and a plain-language message; a failed batch is recorded and the rest kept
+  (status `partial`). `document_compile` while processing returns 409 ("batch 2 of 5 is running — wait"),
+  and afterwards compiles every batch in page order with the real page numbers. A server restart marks
+  unfinished documents `interrupted`; uploading the file again finishes them. Documents within the limit are
+  unchanged. Not split (still `limit_exceeded`): single-page documents — an image, CSV/TSV, HTML, text, a
+  one-page PDF.
+- Studio: an over-limit upload shows a notice ("This document is large … please keep this page open"), a
+  progress bar and each batch's result as it lands, polling every 2 s; Compile stays disabled with an
+  explanation until it is done, then a success message (or a readable partial/failure message). Polling
+  stops when the document finishes or you leave the Documents panel, and resumes when you come back.
+
+### Fixed
+- PDF table cells of the extraction-quality ratchet and `table_detection` now skip unless `pdftotext` supports
+  `-tsv` (`pdf_words_available()`), not merely exists: the Windows CI runner has a `pdftotext` that scored 0.000.
+- Studio Knowledge Explorer showed "No objects of type aikoql:document found" for a type that has objects:
+  `/api/graph` did not percent-decode its `type` and `tenant` filters, so any type containing `:` never matched.
+
+### Document extraction quality
+- The held-out entity corpus is now the official target: frozen by SHA-256, its `*_holdout` metrics are the
+  named gates, and a test fails if a held-out name is hard-coded in the rules. The Linux CI job installs
+  poppler-utils so the PDF table-detection cell of the ratchet runs in CI (verified locally: the whole
+  ingestion suite passes with poppler present and tesseract absent).
+- Seeded fuzz and generated-accuracy tests (`tests/fuzz_accuracy.rs`): random text, word boxes and mutated
+  XLSX/PPTX/CSV/PDF/PNG bytes must never panic; generated grids are recovered cell for cell (300/300,
+  accuracy 1.0), generated prose never yields a table, generated people/organisations/places are typed at
+  precision and recall 1.0, and every single-digit IBAN corruption is rejected. It found a real bug: word
+  boxes with extreme coordinates overflowed table detection; such boxes are now ignored.
+- Typed entities without a model: the default analyzer types organisations (legal forms and
+  organisation nouns), people (honorifics, name particles, common given names) and places (a built-in
+  gazetteer), and recognises money, email, URL, phone, IBAN (checksum-validated) and percentages, plus
+  "12 May 2025" / "15/09/2025" dates. Names no longer run across commas, honorifics or line breaks, and a
+  bare two-word phrase is no longer guessed to be a `Person`. Entity evidence carries extractor `rules`,
+  model `rules-v1` and a text span.
+- Tables are detected in PDFs (from the text layer's word boxes; needs poppler's `pdftotext`) and in
+  scanned images (from Tesseract's word boxes) and reach compile as structured tables with cell-cited facts.
+  Skewed scans are not handled yet.
+- New formats: XLSX (each sheet a table), CSV/TSV (delimiter sniffing, quoted fields) and PPTX (slide
+  text, speaker notes, tables, pictures). Uploads are classified by file extension when the browser
+  sends a blank or legacy type; Studio's file picker lists the supported formats.
+- Extractors sit behind a `DocumentExtractor` / `ExtractorRegistry` seam (`extract_document` unchanged).
+- Ingestion limits in a new `[ingestion]` config table: `max_pages`, `max_image_count`,
+  `max_visual_assets`, `max_image_dimension` (read from image headers), `max_ocr_seconds` (per document),
+  `enable_ocr`, `enable_visual_analysis`. A document over a limit is stored with status
+  `limit_exceeded` and the reason; compiling it is a 400. New status `ocr_disabled`.
+- The secret filter no longer redacts text containing "asia" (Asia Pacific, Malaysia) as an AWS key; it
+  matches a whole AKIA/ASIA access-key-id token.
+- An extraction-quality benchmark with hand-written ground truth (`extraction_quality_bench`) ratchets
+  the numbers; `scripts/bench-vs-docling.py` compares with Docling when it is installed.
+
+### Image documents
+- PNG, JPEG, TIFF, BMP, GIF and WebP upload as one-page documents: the image is stored as an asset and
+  Tesseract (when it is on the server's PATH; `pdftoppm` is not needed for images) supplies the text.
+  Other `image/*` types (HEIC, AVIF, ICO, SVG) and zero-byte images are stored at ingest with status
+  `ingested` and compiling them is a 400 (not a 500). An empty or `application/octet-stream` mime
+  falls back to the file extension, and each OCR call uses its own work dir.
+- New document status `ocr_unavailable` when no OCR tool could run (it was reported as `extracted` with
+  no text). Studio says so on ingest, on the list badge and on the compile result, and shows how many
+  characters OCR read. The compile result carries `extraction_status` and `total_chars`, and
+  `document_list` carries `char_count`.
+
+### Document upload hardening
+- Image types no extractor reads (HEIC, AVIF, ICO) are refused at upload with "convert the image to PNG or JPEG".
+- Re-uploading an image whose OCR was missing or failing re-runs extraction and updates the same document
+  (`ocr_unavailable`/`ocr_partial` -> `ocr_complete`).
+- `POST /api/v1/documents` answers 413 for a declared body over 64 MiB, before reading it.
+- A tesseract run is killed after `timeout_secs` (default 120).
+
+### Studio session cookie
+- Password login also sets `aikoql_session` (`HttpOnly; SameSite=Strict; Path=/`, `Secure` behind an
+  `X-Forwarded-Proto: https` proxy); Studio no longer keeps the token in script. A cookie-authenticated
+  write must carry `X-Aikoql-Csrf` (403 otherwise); Bearer clients are unchanged. `POST /api/logout`
+  ends the session and clears the cookie. A dead session on `/api/v1` now answers 401, not 500.
+  The SSO hand-off still uses a Bearer token.
+
+### Security
+
+- **Studio escapes every untrusted value before it reaches markup**: stored
+  KO fields, type/tenant names, ontology text, document metadata and API/compile
+  error text (which echoes the query) were concatenated into `innerHTML` raw.
+  218 lines now pass through `esc()`, inline handlers read `data-*` attributes
+  instead of splicing values into JS strings, the graph tooltip is DOM text
+  nodes, and an exhaustive unit-test lint fails the build on any new
+  unescaped operand. Verified in a real browser against a hostile record.
+- **Studio no longer puts the session token in a URL**: every request sends
+  `Authorization: Bearer`; the audit export is a fetch + Blob download. The
+  server now matches the header name and scheme case-insensitively. `?token=`
+  still works for existing non-Studio clients.
+- **Studio's scripts are vendored, not loaded from a CDN**: CodeMirror and
+  vis-network are built from pinned versions into the binary and served at
+  `/studio/assets/*` (works air-gapped). The Studio page carries a CSP that
+  confines scripts and connections to its own origin, plus `X-Frame-Options`,
+  `Referrer-Policy: no-referrer` and `nosniff`.
+- **Studio has no inline script or inline event handler, and the CSP says so**:
+  the 43 inline `on*=` handlers became delegated `data-click` / `data-change` /
+  `data-input` actions against a closed allowlist, the application script is
+  served from `/studio/assets/app.js`, and `script-src` is now `'self'` (an
+  injected inline script is blocked, not just discouraged). A real-Chrome e2e
+  (`tests/e2e/studio`, run by `scripts/prepush.sh`) clicks every control.
+- **Tenant-confined ontology and schema discovery**: `discover_ontology` /
+  `discover_schema` honour the call's `tenant` (the session forces it for a
+  tenant-scoped caller): the kernel's tenant rule now confines the scan, where
+  before every call ran as an unscoped admin and could read, and bake into an
+  ontology, other tenants' data. A tenant's ontology is saved with its tenant
+  and is never the process-wide compile registry. The unscoped admin keeps the
+  platform-level view.
+
+### Added
+
+- **Per-tenant compile registries**: REST/Studio queries for a tenant compile
+  against that tenant's own ontology (when it has one), else the global one.
+  Held only for tenants that have an ontology, so tenant strings from callers
+  never grow server state. (A tenant with none still falls back to the global
+  ontology, which an unscoped admin discovery may have built from every
+  tenant's data — a product decision, not changed here.)
+- `discover_ontology` takes `preview: true` (the proposal, nothing written);
+  Studio's Auto-Discover now shows the proposal and saves only on an explicit
+  second click.
+- `GET`/`POST /api/v1/ontology`: the active ontology exactly as the compiler
+  sees it, and a save that validates the definition, updates the ontology in
+  place under a CAS on `expected_version`, and republishes the registry.
+- Kernel: class-scoped ontology properties (`ClassDef.properties`;
+  `class_properties()` returns own + inherited), circular-inheritance and
+  unknown-property validation; `nullable` now round-trips.
+- Studio query editor: an AIKOQL tokenizer (not the PostgreSQL dialect) and
+  completion for the live schema's types/properties and the active
+  ontology's classes.
+- `scripts/prepush.sh`: runs every CI gate that can run locally before a push.
+
+### Fixed
+
+- The semantic enricher no longer embeds (and so re-versions) an `Ontology`
+  definition: it wrote version 2 about a second after every save, so the next
+  save lost its compare-and-swap with `VERSION_CONFLICT`.
+- Re-running discovery replayed the first result (fixed idempotency key); it
+  now updates the scope's auto-discovered ontology in place and writes nothing
+  when unchanged.
+- Studio and the compiler could show/use different ontologies; both now use
+  one selection (`active_ontology`).
+- REST answers a lost CAS with `409 Conflict` and an invalid/incomplete
+  ontology save with `400` (both were `500`).
+- The Studio "Stream" button chunked client-side; it is now labelled so.
+- `mcp_http` harness and the e2e dogfood/restart scripts no longer race
+  (server readiness / process exit).
+
 ## [0.4.0] — 2026-11-03 (community launch: public repo, all registries)
 
 ### Security

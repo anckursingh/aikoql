@@ -88,6 +88,12 @@ impl SemanticEngine {
     /// Enrich a single KO: call the provider, build a `SemanticBlock`, and
     /// write it back via `kernel.remember()`.
     fn enrich_one(&self, kernel: &Kernel, ko: &KnowledgeObject) -> KResult<()> {
+        // An ontology definition is schema, not content to embed — and an
+        // enrichment write would re-version it behind its editors' backs,
+        // losing their compare-and-swap on the version they loaded.
+        if ko.metadata.type_name == aikoql_kernel::knowledge::ontology::ONTOLOGY_TYPE {
+            return Ok(());
+        }
         // AG-23b2: the bound model is the enrichment target — skip only when
         // the KO already carries it (that skip IS the migration: a KO under
         // any other model, or none, gets re-embedded). Unbound collections
@@ -403,6 +409,30 @@ mod tests {
             ko.semantic.as_ref().unwrap().embedding_model.as_deref(),
             Some("existing-model")
         );
+    }
+
+    // Studio hardening: an Ontology definition is schema, not content. The
+    // enricher re-versioned every saved ontology ~1s after the write, so an
+    // editor's compare-and-swap (expected_version) lost to the engine and the
+    // user's next save failed with VERSION_CONFLICT for no reason of their own.
+    #[test]
+    fn semantic_engine_does_not_re_version_ontology_definitions() {
+        let k = mk();
+        let subj = Subject::with_roles("admin", &["admin"]);
+        let onto = remember_body(&k, &subj, "Ontology", "a definition");
+        let fact = remember_body(&k, &subj, "fact", "cats are great");
+
+        let engine = Arc::new(SemanticEngine::new(Arc::new(MockProvider)));
+        let sched = Scheduler::new();
+        sched.register(engine);
+        sched.start_all(&k).unwrap();
+
+        // control: ordinary content IS enriched, so the engine really ran
+        let f = k.get(&subj, &fact).unwrap();
+        assert!(f.semantic.is_some() && f.version == 2, "engine did not run");
+        let o = k.get(&subj, &onto).unwrap();
+        assert!(o.semantic.is_none(), "an Ontology definition was embedded");
+        assert_eq!(o.version, 1, "an Ontology definition was re-versioned");
     }
 
     // ---- AG-23b2: per-collection model bindings drive enrichment ----

@@ -68,6 +68,9 @@ pub(crate) struct RuntimeConfig {
     /// AG-01: the listed tool surface — "full" (every tool) or "core" (a
     /// small set + tools_more). Listing only; calls are governed by roles.
     pub tool_profile: String,
+    /// HLD §54/§55: `[ingestion]` limits and enable flags for document
+    /// extraction and compile (defaults: `ProcessingPolicy::default()`).
+    pub ingestion_policy: aikoql_ingestion::ProcessingPolicy,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -158,6 +161,8 @@ struct TomlConfig {
     rate_limit: Option<TomlRateLimit>,
     embedding: Option<TomlEmbedding>,
     logging: Option<TomlLogging>,
+    /// Missing keys keep their defaults; unknown keys are rejected.
+    ingestion: Option<aikoql_ingestion::ProcessingPolicy>,
 }
 
 #[derive(Deserialize, Default)]
@@ -348,6 +353,7 @@ pub(crate) fn load(
         ha_node: None,
         ha_ttl_ms: 10_000,
         tool_profile: "full".into(),
+        ingestion_policy: aikoql_ingestion::ProcessingPolicy::default(),
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -421,6 +427,12 @@ pub(crate) fn load(
                 cfg.tool_profile =
                     tool_profile(&v).map_err(|e| format!("config {path}: server.{e}"))?;
             }
+        }
+        if let Some(policy) = t.ingestion {
+            policy
+                .validate()
+                .map_err(|e| format!("config {path}: ingestion.{e}"))?;
+            cfg.ingestion_policy = policy;
         }
         if let Some(a) = t.auth {
             if let Some(users) = a.users {
@@ -1269,6 +1281,28 @@ employee = ["salary", "ssn"]
         assert_eq!(cfg.db_path, "/env/db"); // env > TOML (database)
         assert_eq!(cfg.embedding_provider.as_deref(), Some("openai")); // env > TOML (embedding)
         assert_eq!(cfg.metrics_addr.as_deref(), Some("127.0.0.1:2000")); // CLI > all (server)
+    }
+
+    #[test]
+    fn ingestion_policy_from_toml() {
+        let d = load_bare(&argv(&["aikoql-mcp"])).unwrap().ingestion_policy;
+        assert_eq!(d, aikoql_ingestion::ProcessingPolicy::default());
+        let p = tmp_toml(
+            "[ingestion]\nmax_pages = 10\nmax_image_dimension = 4000\nenable_ocr = false\nmax_ocr_seconds = 30\n",
+        );
+        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap();
+        assert_eq!(cfg.ingestion_policy.max_pages, 10);
+        assert_eq!(cfg.ingestion_policy.max_image_dimension, 4000);
+        assert!(!cfg.ingestion_policy.enable_ocr);
+        assert_eq!(cfg.ingestion_policy.max_ocr_seconds, 30);
+        assert_eq!(cfg.ingestion_policy.max_image_count, d.max_image_count);
+        let bad = tmp_toml("[ingestion]\nmax_pagez = 10\n");
+        assert!(load_t(&argv(&["aikoql-mcp", "--config", &bad]), None, None).is_err());
+        let zero = tmp_toml("[ingestion]\nmax_pages = 0\n");
+        assert!(
+            load_t(&argv(&["aikoql-mcp", "--config", &zero]), None, None).is_err(),
+            "a zero page limit would refuse every document"
+        );
     }
 
     #[test]

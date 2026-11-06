@@ -845,7 +845,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         Some("schema") => {
             let db = arg_after.unwrap_or(DEFAULT_DB_PATH);
             run_verb(db, |k, _admin| {
-                crate::tools::agent_knowledge::tool_discover_schema(k)
+                crate::tools::agent_knowledge::tool_discover_schema(k, &serde_json::json!({}))
             });
             true
         }

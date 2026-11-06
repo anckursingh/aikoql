@@ -5088,6 +5088,52 @@ impl Kernel {
     }
 
     /// List all ingested documents.
+    /// Record a new extraction result on an existing document (a re-upload
+    /// after OCR became available): same KO, next version, CAS on the version
+    /// just read. Content trust stays `Untrusted`, as at ingest.
+    pub fn refresh_document_extraction(
+        &self,
+        koid: &KOID,
+        page_count: i64,
+        char_count: i64,
+        status: &str,
+        subject: &Subject,
+    ) -> KResult<Remembered> {
+        self.set_document_properties(
+            koid,
+            PropertyMap::from([
+                ("page_count".into(), Value::Int(page_count)),
+                ("char_count".into(), Value::Int(char_count)),
+                ("status".into(), Value::Text(status.into())),
+            ]),
+            subject,
+        )
+    }
+
+    /// Merge `updates` into a document's properties (batch progress, a new
+    /// status): same KO, next version, CAS on the version just read.
+    pub fn set_document_properties(
+        &self,
+        koid: &KOID,
+        updates: PropertyMap,
+        subject: &Subject,
+    ) -> KResult<Remembered> {
+        let ko = self.get(KnowledgeContext::from(subject.clone()), koid)?;
+        let mut props = ko.properties.clone();
+        props.extend(updates);
+        let mut extensions = ExtensionMap::new();
+        extensions.insert(
+            KnowledgeObject::EXT_CONTENT_TRUST.into(),
+            Value::Text(ContentTrust::Untrusted.as_str().into()),
+        );
+        let mut req = RememberRequest::update(subject.clone(), *koid, ko.metadata.clone());
+        req.expected_version = Some(ko.version);
+        req.properties = props;
+        req.security = Some(ko.security.clone());
+        req.extensions = extensions;
+        self.remember_trusted(req)
+    }
+
     pub fn list_documents(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
         self.scan_by_type(subject, "aikoql:document")
     }

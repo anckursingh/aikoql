@@ -64,6 +64,7 @@ fn enterprise_ontology() -> OntologyRegistry {
             name: "Person".into(),
             parent: None,
             description: Some("A human being".into()),
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -72,6 +73,7 @@ fn enterprise_ontology() -> OntologyRegistry {
             name: "Employee".into(),
             parent: Some("Person".into()),
             description: Some("Employed person".into()),
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -80,6 +82,7 @@ fn enterprise_ontology() -> OntologyRegistry {
             name: "Department".into(),
             parent: None,
             description: Some("Organizational unit".into()),
+            properties: Vec::new(),
         },
     );
 
