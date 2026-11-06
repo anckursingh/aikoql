@@ -160,3 +160,28 @@ fn ck004_logout_clears_the_cookie_and_ends_the_session() {
     );
     assert_eq!(after.status, 401, "session survived logout: {}", after.body);
 }
+
+#[test]
+fn ck005_logging_in_again_with_a_stale_cookie_still_works() {
+    // The browser keeps the cookie across a server restart or an expired
+    // session; the login form must still be able to replace it.
+    let srv = serve("005");
+    let (_, pair, _) = login(srv.port);
+    let stale = http(
+        srv.port,
+        "POST",
+        "/api/login",
+        &[("Cookie", &pair)],
+        r#"{"username":"admin","password":"pw"}"#,
+    );
+    assert_eq!(stale.status, 200, "{}", stale.body);
+    assert!(stale.header("set-cookie").is_some());
+    let bad = http(
+        srv.port,
+        "POST",
+        "/api/login",
+        &[("Cookie", "aikoql_session=dead")],
+        r#"{"username":"admin","password":"wrong"}"#,
+    );
+    assert_eq!(bad.status, 401, "{}", bad.body);
+}
