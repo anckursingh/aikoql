@@ -297,7 +297,7 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
                         detail = v == "1" || v == "true";
                     }
                     "type" => {
-                        type_filter = Some(v.to_string());
+                        type_filter = Some(url_decode(v));
                     }
                     _ => {}
                 }
@@ -314,7 +314,7 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
         qs.split('&')
             .filter_map(|p| p.split_once('='))
             .find(|(k, _)| *k == "tenant")
-            .map(|(_, v)| v.to_string())
+            .map(|(_, v)| url_decode(v))
     });
 
     let heads = k.scan_heads().map_err(|e| format!("scan: {}", e))?;

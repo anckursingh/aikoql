@@ -236,6 +236,12 @@ async function main() {
     ok('Compile is enabled once every batch has finished', await page.evaluate(() => [...document.querySelectorAll('#documents-list tr')].some(r => /deck\.pptx/.test(r.innerText) && !r.querySelector('[data-click="compileDocument"]').disabled)), await page.innerText('#documents-list'));
     const polledDone = statusCalls(); await page.waitForTimeout(4500);
     ok('status polling stops when the document is done', statusCalls() === polledDone, `${polledDone} -> ${statusCalls()}`);
+    // a namespaced type (aikoql:document) must list its objects, not "No objects"
+    await page.click('button[data-panel="explorer"]'); await page.waitForTimeout(900);
+    await page.click('#explorer-tree-content .tree-item.type-node[data-type="aikoql:document"]'); await page.waitForTimeout(900);
+    const docObjs = await page.innerText('#explorer-detail');
+    ok('Explorer lists the objects of a namespaced type (aikoql:document)', !/No objects of type/.test(docObjs) && /objects\)/.test(docObjs), docObjs.slice(0, 200));
+    await page.click('button[data-panel="documents"]'); await page.waitForTimeout(600);
 
     // mid-flight, made deterministic: the server answers "batch 1 of 3"
     const FAKE = 'ff00000000000000000000000000beef';

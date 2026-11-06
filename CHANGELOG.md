@@ -23,6 +23,10 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   explanation until it is done, then a success message (or a readable partial/failure message). Polling
   stops when the document finishes or you leave the Documents panel, and resumes when you come back.
 
+### Fixed
+- Studio Knowledge Explorer showed "No objects of type aikoql:document found" for a type that has objects:
+  `/api/graph` did not percent-decode its `type` and `tenant` filters, so any type containing `:` never matched.
+
 ### Document extraction quality
 - The held-out entity corpus is now the official target: frozen by SHA-256, its `*_holdout` metrics are the
   named gates, and a test fails if a held-out name is hard-coded in the rules. The Linux CI job installs
