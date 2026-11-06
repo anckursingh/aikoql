@@ -5,7 +5,9 @@
 //! (raster + vector assets), `max_image_dimension` (read from headers, never
 //! by decoding), `max_ocr_seconds` (one deadline per document). A limit hit
 //! is an error starting with [`LIMIT_EXCEEDED`] naming the limit — never a
-//! panic and never a silent truncation.
+//! panic and never a silent truncation. A document over `max_pages` is read
+//! in batches of `max_pages` pages ([`plan_batches`]) by the server; every
+//! limit then applies per batch.
 //!
 //! Carried but not enforced here: `enable_chart_analysis`,
 //! `enable_diagram_analysis` (the default analyzers are cheap rules),

@@ -45,6 +45,7 @@ cargo feature and env configuration, never in the default build.
 | §53 evaluation: golden suite, retrieval, semantic quality, extraction quality vs ground truth | done | `tests/multimodal_golden.rs`, `retrieval_quality.rs`, `semantic_extraction_quality.rs`, `extraction_quality_bench.rs` |
 | §54 asset limits: file size | done (64 MiB upload cap, HTTP layer) | `services/api/mcp/src/http.rs` |
 | §54 asset limits: pages, image count, image dimensions, OCR time | done (`ProcessingPolicy`, `[ingestion]` server config) | `policy.rs` |
+| §54 over-limit documents | done: a document over `max_pages` is read in background batches of `max_pages` pages (per-batch image/asset/OCR-time limits), progress on the document KO, compile merges the batches; see the §54 note | `policy.rs`, `extractors.rs`, `services/api/mcp/src/tools/ingestion.rs` |
 | §54 asset limits: VLM calls | field only (`max_model_calls`); no model runs in the default path | `policy.rs` |
 | §55 ProcessingPolicy | done: `enable_ocr`, `enable_visual_analysis`, all `max_*` limits enforced; `enable_chart_analysis`, `enable_diagram_analysis`, `enable_transformer_boundaries` carried, not enforced (the default analyzers are cheap rules; the transformer is not in the default build) | `policy.rs`, `pipeline.rs` |
 
@@ -2613,6 +2614,33 @@ maximum image count
 maximum OCR time
 maximum VLM calls
 ```
+
+**Implementation note (batched processing).** Every limit is enforced by
+`ProcessingPolicy`; a hit is an error naming the limit, never a silent
+truncation. A document whose page count (PDF pages, sheets, slides, DOCX
+page breaks) is over `max_pages` is not refused: it is stored at once with
+status `processing` and read by a background worker in batches of at most
+`max_pages` pages (`plan_batches`, `extract_document_pages`). Per-batch
+limits apply per batch — `max_image_count`, `max_visual_assets`,
+`max_image_dimension` and one `max_ocr_seconds` deadline per batch. PDF
+reads only the batch's pages (text, `pdftotext -f/-l` word boxes, images,
+OCR) with their real page numbers; the other formats are extracted whole
+and cut to the range (cheap: no OCR). The document KO carries
+`batches_total`, `batches_done`, `pages_done`; each finished batch's result
+(page range, status, characters, images, tables) is in
+`{hash}.batches.json` and its pages in `{hash}.batch-F-L.json`.
+`document_status`/`document_list`/REST report them with a message. A failed
+batch is recorded with its error and the others are kept (status
+`partial`); `document_compile` merges the stored batches in page order (no
+re-extraction) and lists `failed_batches`. Compile while `processing` is a
+409 naming the batch; a restart marks unfinished documents `interrupted`
+(409 at compile; a re-upload processes them again). A merged batch run
+equals the single-pass extraction (`tests/batch_processing.rs`).
+
+Not split, still refused as `limit_exceeded`: a document within `max_pages`
+that exceeds an image/asset/OCR-time limit (one batch would fail the same
+way), and formats with no pages to split — a single image, CSV/TSV, HTML,
+text.
 
 ------------------------------------------------------------------------
 
