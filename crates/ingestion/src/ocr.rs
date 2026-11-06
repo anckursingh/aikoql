@@ -510,7 +510,8 @@ pub fn ocr_pdf_pages_with(
             // OCR the rasterized page.
             match provider.recognize(&png_path, "eng", work_dir) {
                 Ok(result) => {
-                    let trimmed = result.text.trim().to_string();
+                    let trimmed = crate::table_detect::text_with_tables(&result.words)
+                        .unwrap_or_else(|| result.text.trim().to_string());
                     let char_count = trimmed.len();
                     if char_count > 0 {
                         stats.pages_ocr_succeeded += 1;

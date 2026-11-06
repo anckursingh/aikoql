@@ -866,10 +866,12 @@ fn build_table_node(lines: &[&str], _text: &str) -> AstNode {
     let mut rows = Vec::new();
     for line in lines {
         let cells: Vec<&str> = if line.contains('|') {
-            line.split('|')
-                .map(|c| c.trim())
-                .filter(|c| !c.is_empty())
-                .collect()
+            // Strip the outer pipes only: an empty interior cell keeps its
+            // column (detected tables and DOCX gridSpan emit them).
+            let t = line.trim();
+            let t = t.strip_prefix('|').unwrap_or(t);
+            let t = t.strip_suffix('|').unwrap_or(t);
+            t.split('|').map(|c| c.trim()).collect()
         } else {
             line.split_whitespace().collect()
         };

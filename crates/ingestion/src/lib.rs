@@ -121,6 +121,10 @@ pub use ocr::{
     TesseractCli,
 };
 
+// M3: deterministic table detection from word boxes (PDF text layer, OCR).
+mod table_detect;
+pub use table_detect::{detect_tables, text_with_tables, DetectedTable};
+
 mod asset_store;
 pub use asset_store::{content_hash, load_asset, mime_from_extension, store_asset};
 
@@ -399,7 +403,8 @@ pub fn extract_image_with(
             stats.pages_ocr_succeeded = 1;
             stats.average_confidence = r.confidence.max(0.0);
             (
-                r.text.trim().to_string(),
+                table_detect::text_with_tables(&r.words)
+                    .unwrap_or_else(|| r.text.trim().to_string()),
                 "ocr",
                 (r.confidence >= 0.0).then_some(r.confidence),
             )
@@ -499,6 +504,23 @@ fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, Str
             }
         })
         .collect();
+
+    // HLD §9/§29: table detection from the text layer's word boxes. A page
+    // already carrying pipe rows (a structural parser's dialect) is left
+    // alone; no poppler → flat text only.
+    if native_pages.iter().any(|p| !p.text.is_empty()) {
+        if let Some(words) = table_detect::pdf_page_words(path, 30) {
+            for (page, words) in native_pages.iter_mut().zip(words) {
+                if page.text.lines().any(|l| l.trim_start().starts_with('|')) {
+                    continue;
+                }
+                if let Some(text) = table_detect::text_with_tables(&words) {
+                    page.char_count = text.len();
+                    page.text = text;
+                }
+            }
+        }
+    }
 
     // HLD §29: embedded-image extraction via lopdf. Raster streams (JPEG/JPX/
     // CCITT/Flate) and vector-only content streams all become persisted,

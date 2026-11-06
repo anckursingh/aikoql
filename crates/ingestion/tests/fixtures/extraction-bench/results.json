@@ -13,8 +13,8 @@
   "floor": {
     "entity_precision": 1.0,
     "entity_recall": 0.98,
-    "table_cell_accuracy_pdf": 0.9,
-    "table_cell_accuracy_scan": 0.45,
+    "table_cell_accuracy_pdf": 1.0,
+    "table_cell_accuracy_scan": 0.5,
     "table_false_positives": 0,
     "ocr_char_accuracy": 0.88,
     "entity_precision_holdout": 0.75,
