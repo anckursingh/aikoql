@@ -98,6 +98,10 @@ async function main() {
     await page.waitForSelector('#login-overlay', { state: 'hidden', timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(1500);
     ok('login button works (delegated click)', await page.isHidden('#login-overlay'));
+    const jar = await page.context().cookies();
+    const sess = jar.find(c => c.name === 'aikoql_session');
+    ok('session is an HttpOnly SameSite=Strict cookie', !!sess && sess.httpOnly && sess.sameSite === 'Strict', JSON.stringify(sess));
+    ok('script cannot read the session', !(await page.evaluate(() => document.cookie)).includes('aikoql_session') && (await page.evaluate(() => typeof authToken === 'undefined' || authToken === null)));
     ok('vendored scripts loaded', await page.evaluate(() => typeof vis !== 'undefined' && !!document.querySelector('#query-editor .cm-editor')));
 
     // ---- query panel -------------------------------------------------------

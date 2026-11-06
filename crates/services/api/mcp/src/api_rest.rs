@@ -88,7 +88,10 @@ pub fn route_v1(
                 400
             } else if msg.contains("not found") || msg.contains("NotFound") {
                 404
-            } else if msg.contains("AccessDenied") || msg.contains("login") {
+            } else if msg.contains("AccessDenied")
+                || msg.contains("login")
+                || msg == "invalid session"
+            {
                 401
             } else {
                 500

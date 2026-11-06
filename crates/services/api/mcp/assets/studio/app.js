@@ -29,7 +29,7 @@ async function doLogin() {
     const res = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:u, password:p}) });
     const data = await res.json();
     if (data.token) {
-      authToken = data.token; currentUser = u;
+      currentUser = u; // the session itself is the HttpOnly cookie the login set
       document.getElementById('login-overlay').style.display = 'none';
       document.getElementById('app').style.display = 'flex';
       document.getElementById('user-badge').textContent = u + (u==='admin'?' (admin)':'');
@@ -37,16 +37,21 @@ async function doLogin() {
     } else { document.getElementById('login-error').textContent = data.error || 'Login failed'; }
   } catch(e) { document.getElementById('login-error').textContent = 'Connection error: ' + e.message; }
 }
-function logout() { if (graphNetwork) { graphNetwork.destroy(); graphNetwork = null; } showLogin(); }
+function logout() {
+  if (graphNetwork) { graphNetwork.destroy(); graphNetwork = null; }
+  fetch('/api/logout', {method: 'POST', headers: authHeaders()}).catch(() => {}).finally(showLogin);
+}
 document.getElementById('login-pass').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
 
 // ═══════════════════════════════════════════
 // API helper
 // ═══════════════════════════════════════════
-// The session token travels only in this header — never in a URL (history,
-// logs, Referer).
+// The session is an HttpOnly cookie script cannot read; every request also
+// carries the custom CSRF header the server requires of cookie-authenticated
+// writes. authToken is set only by the SSO hand-off (a Bearer fallback) —
+// and never travels in a URL (history, logs, Referer).
 function authHeaders(extra) {
-  return Object.assign({}, extra || {}, authToken ? {'Authorization': 'Bearer ' + authToken} : {});
+  return Object.assign({'X-Aikoql-Csrf': '1'}, extra || {}, authToken ? {'Authorization': 'Bearer ' + authToken} : {});
 }
 async function api(url) {
   const res = await fetch(url, {headers: authHeaders()});

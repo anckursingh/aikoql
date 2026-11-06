@@ -7,6 +7,13 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Studio session cookie
+- Password login also sets `aikoql_session` (`HttpOnly; SameSite=Strict; Path=/`, `Secure` behind an
+  `X-Forwarded-Proto: https` proxy); Studio no longer keeps the token in script. A cookie-authenticated
+  write must carry `X-Aikoql-Csrf` (403 otherwise); Bearer clients are unchanged. `POST /api/logout`
+  ends the session and clears the cookie. A dead session on `/api/v1` now answers 401, not 500.
+  The SSO hand-off still uses a Bearer token.
+
 ### Security
 
 - **Studio escapes every untrusted value before it reaches markup**: stored

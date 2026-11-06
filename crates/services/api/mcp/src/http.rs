@@ -633,7 +633,52 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
             return Some(value[7..].trim().to_string());
         }
     }
-    None
+    session_cookie(req)
+}
+
+const SESSION_COOKIE: &str = "aikoql_session";
+
+/// The Studio session cookie value, if the request carries one.
+fn session_cookie(req: &str) -> Option<String> {
+    req.lines()
+        .filter_map(|l| l.split_once(':'))
+        .filter(|(n, _)| n.eq_ignore_ascii_case("cookie"))
+        .flat_map(|(_, v)| v.split(';'))
+        .find_map(|pair| {
+            let (k, v) = pair.trim().split_once('=')?;
+            (k == SESSION_COOKIE && !v.is_empty()).then(|| v.to_string())
+        })
+}
+
+fn has_header(req: &str, name: &str) -> bool {
+    req.lines()
+        .filter_map(|l| l.split_once(':'))
+        .any(|(n, _)| n.eq_ignore_ascii_case(name))
+}
+
+/// CSRF guard: a write whose only credential is the ambient session cookie
+/// must carry the custom `X-Aikoql-Csrf` header. A cross-site page cannot
+/// add a custom header without a CORS preflight (which this server answers
+/// without credentials support), and SameSite=Strict already withholds the
+/// cookie from cross-site requests; this is the second layer.
+fn cookie_write_without_csrf(method: &str, path: &str, req: &str) -> bool {
+    !matches!(method, "GET" | "HEAD" | "OPTIONS")
+        && !path.contains("token=")
+        && !has_header(req, "authorization")
+        && session_cookie(req).is_some()
+        && !has_header(req, "x-aikoql-csrf")
+}
+
+/// `Set-Cookie` for a session (`ttl` seconds) or, with `ttl` 0, its removal.
+/// `Secure` only behind a TLS-terminating proxy that says so.
+fn session_cookie_header(token: &str, ttl: u64, req: &str) -> String {
+    let secure = req.lines().filter_map(|l| l.split_once(':')).any(|(n, v)| {
+        n.eq_ignore_ascii_case("x-forwarded-proto") && v.trim().eq_ignore_ascii_case("https")
+    });
+    format!(
+        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={ttl}{}",
+        if secure { "; Secure" } else { "" }
+    )
 }
 
 /// P3-M1 (§53): HTTP login credentials. Users come from [auth].users with
@@ -1400,6 +1445,21 @@ pub(crate) fn handle_http(
     // Extract token from query string or Authorization header.
     let token = extract_token(path, &req);
 
+    if cookie_write_without_csrf(method, path, &req) {
+        let body = json!({"error": "missing X-Aikoql-Csrf header"}).to_string();
+        let mut resp = format!(
+            "HTTP/1.0 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        for (k, v) in api_rest::cors_headers() {
+            resp.push_str(&format!("{}: {}\r\n", k, v));
+        }
+        resp.push_str("\r\n");
+        resp.push_str(&body);
+        let _ = stream.write_all(resp.as_bytes());
+        return;
+    }
+
     // CORS preflight.
     if method == "OPTIONS" {
         let (status, ct, body) = api_rest::cors_preflight();
@@ -1500,6 +1560,7 @@ pub(crate) fn handle_http(
         return;
     }
 
+    let mut set_cookie: Option<String> = None;
     let (status, content_type, body) = match route {
         "/ui" => (
             "200 OK",
@@ -1550,13 +1611,27 @@ pub(crate) fn handle_http(
         }
         "/api/login" if method == "POST" => {
             match handle_login(&body_str, sessions, auth, client_ip) {
-                Ok(token) => (
-                    "200 OK",
-                    "application/json",
-                    json!({"token": token}).to_string(),
-                ),
+                Ok(token) => {
+                    set_cookie = Some(session_cookie_header(&token, auth.ttl_secs(), &req));
+                    (
+                        "200 OK",
+                        "application/json",
+                        json!({"token": token}).to_string(),
+                    )
+                }
                 Err((status, e)) => (status, "application/json", json!({"error": e}).to_string()),
             }
+        }
+        "/api/logout" if method == "POST" => {
+            if let Some(t) = token.as_deref() {
+                sessions.lock().unwrap().remove(t); // justified: Mutex poison is unrecoverable
+            }
+            set_cookie = Some(session_cookie_header("", 0, &req));
+            (
+                "200 OK",
+                "application/json",
+                json!({"ok": true}).to_string(),
+            )
         }
         // P3-M1 (auth005/auth006): the pre-v1 route aliases are part of the
         // same surface — session required, and graph runs as the session's
@@ -1655,6 +1730,9 @@ pub(crate) fn handle_http(
     // CORS headers on all responses.
     for (k, v) in api_rest::cors_headers() {
         resp.push_str(&format!("{}: {}\r\n", k, v));
+    }
+    if let Some(c) = &set_cookie {
+        resp.push_str(&format!("Set-Cookie: {c}\r\n"));
     }
     if matches!(route, "/" | "/studio") {
         for (k, v) in studio::STUDIO_HEADERS {
