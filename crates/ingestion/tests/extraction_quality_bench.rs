@@ -26,7 +26,8 @@
 //! Ratchet: `results.json` holds the pre-improvement `baseline` (never
 //! edited) and the `floor` each later milestone raises. A metric below its
 //! floor (or false positives above the ceiling) fails. Cells whose tool is
-//! missing (tesseract, pdftotext) skip with a note — CI has neither.
+//! missing (tesseract, pdftotext) skip with a note — the Linux CI job installs
+//! poppler-utils (so the PDF table cell runs there) but not tesseract.
 
 use aikoql_ingestion::{
     document_model_to_ast, document_model_to_ir, extract_document, tool_available, AstNode,

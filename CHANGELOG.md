@@ -8,6 +8,10 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 ## [Unreleased]
 
 ### Document extraction quality
+- The held-out entity corpus is now the official target: frozen by SHA-256, its `*_holdout` metrics are the
+  named gates, and a test fails if a held-out name is hard-coded in the rules. The Linux CI job installs
+  poppler-utils so the PDF table-detection cell of the ratchet runs in CI (verified locally: the whole
+  ingestion suite passes with poppler present and tesseract absent).
 - Seeded fuzz and generated-accuracy tests (`tests/fuzz_accuracy.rs`): random text, word boxes and mutated
   XLSX/PPTX/CSV/PDF/PNG bytes must never panic; generated grids are recovered cell for cell (300/300,
   accuracy 1.0), generated prose never yields a table, generated people/organisations/places are typed at
