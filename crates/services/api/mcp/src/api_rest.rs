@@ -1088,6 +1088,40 @@ mod tests {
     }
 
     #[test]
+    fn m8_compiling_an_unsupported_document_type_is_a_client_error() {
+        let (k, db) = m3_kernel("compile-png");
+        let (s, ingested) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/documents",
+            serde_json::json!({
+                "filename": "shot.png", "mime_type": "image/png",
+                // PNG signature: enough bytes to be stored, nothing to extract
+                "content_base64": "iVBORw0KGgo=",
+            }),
+        );
+        assert_eq!(s, "200 OK", "{ingested}");
+        let koid = ingested["data"]["koid"].clone();
+        let (status, body) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/documents/compile",
+            serde_json::json!({ "koid": koid }),
+        );
+        assert_eq!(status, "400 Bad Request", "{body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("unsupported mime type"),
+            "{body}"
+        );
+        m3_cleanup(k, db);
+    }
+
+    #[test]
     fn m3_a_stale_or_missing_expected_version_cannot_overwrite() {
         let _serial = crate::http::ontology_serial();
         let (k, db) = m3_kernel("cas");
