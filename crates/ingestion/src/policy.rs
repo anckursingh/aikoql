@@ -126,6 +126,11 @@ impl ProcessingPolicy {
     }
 }
 
+/// Page ranges (1-based, inclusive) of at most `max_pages` pages each.
+pub fn plan_batches(_pages: usize, _max_pages: usize) -> Vec<(u32, u32)> {
+    Vec::new()
+}
+
 /// Raster image size from the file header — no decoding. PNG, GIF, BMP,
 /// JPEG (SOF marker scan) and WebP (VP8/VP8L/VP8X). `None` = unknown.
 // shortcut: TIFF (IFD walk) is not read, so a TIFF passes the dimension

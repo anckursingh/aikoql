@@ -129,7 +129,9 @@ pub use table_detect::{detect_tables, text_with_tables, DetectedTable};
 mod extractors;
 // HLD §55 ProcessingPolicy + §54 asset limits (M5).
 mod policy;
-pub use policy::{image_dimensions, is_limit_error, ProcessingPolicy, LIMIT_EXCEEDED};
+pub use policy::{
+    image_dimensions, is_limit_error, plan_batches, ProcessingPolicy, LIMIT_EXCEEDED,
+};
 mod office;
 pub use extractors::{DocumentExtractor, DocumentSource, ExtractorRegistry};
 
@@ -376,6 +378,34 @@ pub fn extract_document_with_policy(
         asset_dir,
         policy,
     })
+}
+
+/// Pages as the extractor counts them (PDF pages, sheets, slides), with no
+/// limit applied — the batch plan for an over-limit document.
+pub fn document_page_count(_file_path: &str, _mime_type: &str) -> Result<usize, String> {
+    Err("not implemented".into())
+}
+
+/// Pages `first..=last` of a document under `policy`: one batch.
+pub fn extract_document_pages(
+    _file_path: &str,
+    _mime_type: &str,
+    _asset_dir: Option<&str>,
+    _policy: &ProcessingPolicy,
+    _first: u32,
+    _last: u32,
+) -> Result<DocumentModel, String> {
+    Err("not implemented".into())
+}
+
+/// Batch results, in page order, as one document.
+pub fn merge_batches(_batches: Vec<DocumentModel>) -> DocumentModel {
+    DocumentModel {
+        page_count: 0,
+        pages: Vec::new(),
+        total_chars: 0,
+        ocr_stats: None,
+    }
 }
 
 /// Raster formats Tesseract/Leptonica read — the set `mime_from_extension`
