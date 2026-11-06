@@ -4,6 +4,15 @@
 use crate::helpers::commit_ts_millis;
 use crate::session::*;
 use crate::{json, Kernel, KnowledgeContext, Value, J, KOID};
+/// HLD §54/§55 ingestion limits, set once at startup from `[ingestion]`
+/// (the CORE_PROFILE pattern); defaults when unset (tests, subcommands).
+pub(crate) static INGEST_POLICY: std::sync::OnceLock<aikoql_ingestion::ProcessingPolicy> =
+    std::sync::OnceLock::new();
+
+fn ingest_policy() -> aikoql_ingestion::ProcessingPolicy {
+    INGEST_POLICY.get().cloned().unwrap_or_default()
+}
+
 pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let filename = args
         .get("filename")
@@ -62,12 +71,19 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
                             std::fs::write(&artifact_path, &bytes)
                                 .map_err(|e| format!("write artifact: {}", e))?;
                         }
-                        let (pages, chars, status, ocr_stats) = extract_for_ingest(
+                        let Extracted {
+                            pages,
+                            chars,
+                            status,
+                            ocr_stats,
+                            ..
+                        } = extract_for_ingest_with(
                             &artifact_dir,
                             &artifact_path,
                             &hash,
                             filename,
                             mime_type,
+                            &ingest_policy(),
                         );
                         let was = match doc.properties.get("status") {
                             Some(Value::Text(s)) => s.as_str(),
@@ -118,8 +134,20 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
         std::fs::write(&artifact_path, &bytes).map_err(|e| format!("write artifact: {}", e))?;
     }
 
-    let (page_count, char_count, status, ocr_stats) =
-        extract_for_ingest(&artifact_dir, &artifact_path, &hash, filename, mime_type);
+    let Extracted {
+        pages: page_count,
+        chars: char_count,
+        status,
+        ocr_stats,
+        error,
+    } = extract_for_ingest_with(
+        &artifact_dir,
+        &artifact_path,
+        &hash,
+        filename,
+        mime_type,
+        &ingest_policy(),
+    );
 
     let r = k
         .deploy_document(
@@ -145,59 +173,93 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
     if let Some(ref stats) = ocr_stats {
         resp["ocr_stats"] = stats.clone();
     }
+    if let Some(e) = error {
+        resp["error"] = json!(e);
+    }
     Ok(resp)
 }
 
-/// D1/D2: extract text from the stored artifact; returns (pages, chars,
-/// status, OCR stats). Extraction failure still ingests the document.
-fn extract_for_ingest(
+/// Outcome of extraction at ingest. `error` is set for a policy limit
+/// (status `limit_exceeded`): the document is stored, the reason reported.
+pub(crate) struct Extracted {
+    pub pages: i64,
+    pub chars: i64,
+    pub status: &'static str,
+    pub ocr_stats: Option<J>,
+    pub error: Option<String>,
+}
+
+/// D1/D2: extract text from the stored artifact under `policy`.
+/// Extraction failure still ingests the document.
+pub(crate) fn extract_for_ingest_with(
     artifact_dir: &str,
     artifact_path: &str,
     hash: &str,
     filename: &str,
     mime_type: &str,
-) -> (i64, i64, &'static str, Option<J>) {
+    policy: &aikoql_ingestion::ProcessingPolicy,
+) -> Extracted {
     let asset_dir = format!("{}.assets", artifact_path);
-    let (page_count, char_count, status, ocr_stats) =
-        match aikoql_ingestion::extract_document(artifact_path, mime_type, Some(&asset_dir)) {
-            Ok(doc) => {
-                // Store extracted text alongside the original artifact.
-                let extracted_path = format!("{}/{}.extracted.txt", artifact_dir, hash);
-                let extracted_text: String = doc
-                    .pages
-                    .iter()
-                    .map(|p| format!("--- Page {} [{}] ---\n{}", p.page_number, p.source, p.text))
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                std::fs::write(&extracted_path, &extracted_text).ok();
+    match aikoql_ingestion::extract_document_with_policy(
+        artifact_path,
+        mime_type,
+        Some(&asset_dir),
+        policy,
+    ) {
+        Ok(doc) => {
+            // Store extracted text alongside the original artifact.
+            let extracted_path = format!("{}/{}.extracted.txt", artifact_dir, hash);
+            let extracted_text: String = doc
+                .pages
+                .iter()
+                .map(|p| format!("--- Page {} [{}] ---\n{}", p.page_number, p.source, p.text))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            std::fs::write(&extracted_path, &extracted_text).ok();
 
-                // Derive granular status from OCR stats.
-                let status = match &doc.ocr_stats {
-                    Some(stats) => stats.status(),
-                    None => "extracted",
-                };
-                let ocr_stats_json = doc.ocr_stats.as_ref().map(|s| {
-                    json!({
-                        "pages_ocr_attempted": s.pages_ocr_attempted,
-                        "pages_ocr_succeeded": s.pages_ocr_succeeded,
-                        "pages_ocr_failed": s.pages_ocr_failed,
-                        "average_confidence": s.average_confidence,
-                    })
-                });
-                (
-                    doc.page_count as i64,
-                    doc.total_chars as i64,
-                    status,
-                    ocr_stats_json,
-                )
+            // Derive granular status from OCR stats.
+            let status = match &doc.ocr_stats {
+                Some(stats) => stats.status(),
+                None => "extracted",
+            };
+            let ocr_stats = doc.ocr_stats.as_ref().map(|s| {
+                json!({
+                    "pages_ocr_attempted": s.pages_ocr_attempted,
+                    "pages_ocr_succeeded": s.pages_ocr_succeeded,
+                    "pages_ocr_failed": s.pages_ocr_failed,
+                    "average_confidence": s.average_confidence,
+                })
+            });
+            Extracted {
+                pages: doc.page_count as i64,
+                chars: doc.total_chars as i64,
+                status,
+                ocr_stats,
+                error: None,
             }
-            Err(e) => {
-                // Unsupported format or extraction failed — still ingest the doc.
-                tracing::warn!("extraction skipped for {}: {}", filename, e);
-                (0i64, 0i64, "ingested", None)
+        }
+        Err(e) if aikoql_ingestion::is_limit_error(&e) => {
+            tracing::warn!("extraction refused for {}: {}", filename, e);
+            Extracted {
+                pages: 0,
+                chars: 0,
+                status: "limit_exceeded",
+                ocr_stats: None,
+                error: Some(e),
             }
-        };
-    (page_count, char_count, status, ocr_stats)
+        }
+        Err(e) => {
+            // Unsupported format or extraction failed — still ingest the doc.
+            tracing::warn!("extraction skipped for {}: {}", filename, e);
+            Extracted {
+                pages: 0,
+                chars: 0,
+                status: "ingested",
+                ocr_stats: None,
+                error: None,
+            }
+        }
+    }
 }
 
 pub(crate) fn tool_document_list(k: &Kernel, args: &J) -> Result<J, String> {
@@ -318,9 +380,20 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
         })
     } else {
         let asset_dir = format!("{}.assets", artifact_path);
-        let doc = aikoql_ingestion::extract_document(&artifact_path, &mime_type, Some(&asset_dir))
-            .map_err(|e| format!("extract for compile: {}", e))?;
-        let cr = aikoql_ingestion::compile_document_mock_with_assets(&doc, &[], Some(&asset_dir));
+        let policy = ingest_policy();
+        let doc = aikoql_ingestion::extract_document_with_policy(
+            &artifact_path,
+            &mime_type,
+            Some(&asset_dir),
+            &policy,
+        )
+        .map_err(|e| format!("extract for compile: {}", e))?;
+        let cr = aikoql_ingestion::compile_document_mock_with_policy(
+            &doc,
+            &[],
+            Some(&asset_dir),
+            &policy,
+        );
         let mut v = serde_json::to_value(&cr).map_err(|e| format!("serialize: {}", e))?;
         // lets a client say why a compile came back empty (e.g. no OCR tool)
         v["extraction_status"] = json!(doc.ocr_stats.as_ref().map_or("extracted", |s| s.status()));

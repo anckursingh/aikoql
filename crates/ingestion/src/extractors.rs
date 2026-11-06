@@ -12,6 +12,8 @@ pub struct DocumentSource<'a> {
     pub path: &'a str,
     pub mime_type: &'a str,
     pub asset_dir: Option<&'a str>,
+    /// HLD §54/§55 limits and enable flags the extraction runs under.
+    pub policy: &'a crate::ProcessingPolicy,
 }
 
 /// Physical extraction for one family of formats (HLD §27/§28: no model,
@@ -65,10 +67,13 @@ impl ExtractorRegistry {
     }
 
     pub fn extract(&self, source: &DocumentSource) -> Result<DocumentModel, String> {
-        match self.extractor_for(source.mime_type) {
-            Some(e) => e.extract(source),
-            None => Err(format!("unsupported mime type: {}", source.mime_type)),
-        }
+        let doc = match self.extractor_for(source.mime_type) {
+            Some(e) => e.extract(source)?,
+            None => return Err(format!("unsupported mime type: {}", source.mime_type)),
+        };
+        // Every format meets the document-level limits (pages, images).
+        source.policy.check_document(&doc)?;
+        Ok(doc)
     }
 }
 
@@ -87,7 +92,7 @@ impl DocumentExtractor for PdfExtractor {
         mime == "application/pdf"
     }
     fn extract(&self, s: &DocumentSource) -> Result<DocumentModel, String> {
-        crate::extract_pdf(s.path, s.asset_dir)
+        crate::extract_pdf(s.path, s.asset_dir, s.policy)
     }
 }
 

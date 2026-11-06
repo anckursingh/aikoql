@@ -83,6 +83,7 @@ pub fn route_v1(
             } else if msg.contains("missing")
                 || msg.contains("bad")
                 || msg.contains("unsupported mime type")
+                || aikoql_ingestion::is_limit_error(&msg)
                 || msg.starts_with("invalid ontology")
                 || msg.starts_with("expected_version required")
             {

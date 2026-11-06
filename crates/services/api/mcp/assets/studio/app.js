@@ -1321,7 +1321,7 @@ async function loadDocuments() {
     let html = '<table class="data-table"><thead><tr><th>KOID</th><th>Filename</th><th>Type</th><th>Size</th><th>Status</th><th>SHA-256</th><th>Actions</th></tr></thead><tbody>';
     for (const doc of docs) {
       const sz = doc.size_bytes < 1024 ? doc.size_bytes+' B' : doc.size_bytes < 1048576 ? (doc.size_bytes/1024).toFixed(1)+' KB' : (doc.size_bytes/1048576).toFixed(1)+' MB';
-      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td><span class="badge '+esc(doc.status === 'extracted' || doc.status === 'ocr_complete' ? 'badge-green' : doc.status === 'ocr_unavailable' || doc.status === 'ocr_partial' ? 'badge-orange' : '')+'" title="'+esc(ocrNotice(doc.status, doc.char_count))+'">'+esc(doc.status)+'</span></td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" data-click="compileDocument">Compile</button></td></tr>';
+      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td><span class="badge '+esc(doc.status === 'extracted' || doc.status === 'ocr_complete' ? 'badge-green' : doc.status === 'ocr_unavailable' || doc.status === 'ocr_partial' || doc.status === 'ocr_disabled' ? 'badge-orange' : doc.status === 'limit_exceeded' ? 'badge-red' : '')+'" title="'+esc(ocrNotice(doc.status, doc.char_count))+'">'+esc(doc.status)+'</span></td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" data-click="compileDocument">Compile</button></td></tr>';
     }
     html += '</tbody></table>';
     el.innerHTML = html;
@@ -1333,6 +1333,8 @@ function ocrNotice(status, chars) {
   if (status === 'ocr_unavailable') return 'No text extracted: OCR is not available on this server (install Tesseract to read text in images). The file is stored.';
   if (status === 'ocr_complete') return chars > 0 ? chars+' characters of text read by OCR.' : 'OCR found no text in this document.';
   if (status === 'ocr_partial') return 'OCR failed on part of this document; what could not be read has no text.';
+  if (status === 'ocr_disabled') return 'No text extracted: OCR is switched off in this server\'s [ingestion] settings. The file is stored.';
+  if (status === 'limit_exceeded') return 'Not extracted: the document exceeds a server ingestion limit ([ingestion] settings). The file is stored.';
   return '';
 }
 
@@ -1359,6 +1361,7 @@ async function ingestDocument() {
     const note = ocrNotice(d.status, d.char_count);
     let html = '<span style="color:var(--green);">✓ Ingested: '+esc(d.koid)+' ('+esc(d.status)+', '+esc(sz)+', SHA-256: '+esc(d.sha256.substring(0,16))+'...)</span>';
     if (note) html += '<div style="margin-top:4px;color:var(--'+esc(d.char_count > 0 ? 'muted' : 'orange')+');">'+esc(note)+'</div>';
+    if (d.error) html += '<div style="margin-top:4px;color:var(--red);">'+esc(d.error)+'</div>';
     msg.innerHTML = html;
     fileInput.value = '';
     setTimeout(() => loadDocuments(), 500);

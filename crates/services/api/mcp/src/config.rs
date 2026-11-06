@@ -68,6 +68,9 @@ pub(crate) struct RuntimeConfig {
     /// AG-01: the listed tool surface — "full" (every tool) or "core" (a
     /// small set + tools_more). Listing only; calls are governed by roles.
     pub tool_profile: String,
+    /// HLD §54/§55: `[ingestion]` limits and enable flags for document
+    /// extraction and compile (defaults: `ProcessingPolicy::default()`).
+    pub ingestion_policy: aikoql_ingestion::ProcessingPolicy,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -158,6 +161,8 @@ struct TomlConfig {
     rate_limit: Option<TomlRateLimit>,
     embedding: Option<TomlEmbedding>,
     logging: Option<TomlLogging>,
+    /// Missing keys keep their defaults; unknown keys are rejected.
+    ingestion: Option<aikoql_ingestion::ProcessingPolicy>,
 }
 
 #[derive(Deserialize, Default)]
@@ -348,6 +353,7 @@ pub(crate) fn load(
         ha_node: None,
         ha_ttl_ms: 10_000,
         tool_profile: "full".into(),
+        ingestion_policy: aikoql_ingestion::ProcessingPolicy::default(),
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -421,6 +427,12 @@ pub(crate) fn load(
                 cfg.tool_profile =
                     tool_profile(&v).map_err(|e| format!("config {path}: server.{e}"))?;
             }
+        }
+        if let Some(policy) = t.ingestion {
+            policy
+                .validate()
+                .map_err(|e| format!("config {path}: ingestion.{e}"))?;
+            cfg.ingestion_policy = policy;
         }
         if let Some(a) = t.auth {
             if let Some(users) = a.users {

@@ -127,6 +127,9 @@ pub use table_detect::{detect_tables, text_with_tables, DetectedTable};
 
 // HLD §27: extractor registry + the XLSX/PPTX/CSV extractors (M4).
 mod extractors;
+// HLD §55 ProcessingPolicy + §54 asset limits (M5).
+mod policy;
+pub use policy::{image_dimensions, is_limit_error, ProcessingPolicy, LIMIT_EXCEEDED};
 mod office;
 pub use extractors::{DocumentExtractor, DocumentSource, ExtractorRegistry};
 
@@ -215,9 +218,9 @@ mod pipeline;
 pub use pipeline::{
     compile_document, compile_document_incremental, compile_document_mock,
     compile_document_mock_with_assets, compile_document_mock_with_detector,
-    compile_document_with_detector, diff_document_models, reproject_document, AssetChange,
-    CompilationResult, DocumentDelta, EvidenceNode, EvidenceTrail, ImageDelta, PhaseStats,
-    PipelineStats,
+    compile_document_mock_with_policy, compile_document_with_detector, diff_document_models,
+    reproject_document, AssetChange, CompilationResult, DocumentDelta, EvidenceNode, EvidenceTrail,
+    ImageDelta, PhaseStats, PipelineStats,
 };
 
 // Phase A1: Markdown-to-Knowledge Compiler
@@ -351,10 +354,27 @@ pub fn extract_document(
     mime_type: &str,
     asset_dir: Option<&str>,
 ) -> Result<DocumentModel, String> {
+    extract_document_with_policy(
+        file_path,
+        mime_type,
+        asset_dir,
+        &ProcessingPolicy::default(),
+    )
+}
+
+/// `extract_document` under an explicit `ProcessingPolicy` (HLD §54/§55):
+/// a limit hit is an error naming the limit (`is_limit_error`).
+pub fn extract_document_with_policy(
+    file_path: &str,
+    mime_type: &str,
+    asset_dir: Option<&str>,
+    policy: &ProcessingPolicy,
+) -> Result<DocumentModel, String> {
     ExtractorRegistry::with_defaults().extract(&DocumentSource {
         path: file_path,
         mime_type,
         asset_dir,
+        policy,
     })
 }
 
@@ -377,11 +397,51 @@ pub fn extract_image_with(
     mime_type: &str,
     asset_dir: Option<&str>,
 ) -> Result<DocumentModel, String> {
+    extract_image_with_policy(
+        provider,
+        path,
+        mime_type,
+        asset_dir,
+        &ProcessingPolicy::default(),
+    )
+}
+
+/// `extract_image_with` under a `ProcessingPolicy`: the header-declared
+/// size is checked before any OCR, OCR can be switched off, and OCR time
+/// is bounded by `max_ocr_seconds`.
+pub fn extract_image_with_policy(
+    provider: &dyn OcrProvider,
+    path: &str,
+    mime_type: &str,
+    asset_dir: Option<&str>,
+    policy: &ProcessingPolicy,
+) -> Result<DocumentModel, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("read image: {}", e))?;
     if bytes.is_empty() {
         return Err("bad image: empty file".into());
     }
+    if let Some((w, h)) = image_dimensions(&bytes) {
+        policy.check_dimensions(w, h, "the image")?;
+    }
     let image = pdf_asset_image(&bytes, mime_type, 1, asset_dir, "image file");
+    if !policy.enable_ocr {
+        return Ok(DocumentModel {
+            page_count: 1,
+            pages: vec![PageModel {
+                page_number: 1,
+                text: String::new(),
+                char_count: 0,
+                source: "native".into(),
+                ocr_confidence: None,
+                images: vec![image],
+            }],
+            total_chars: 0,
+            ocr_stats: Some(OcrStats {
+                ocr_disabled: true,
+                ..Default::default()
+            }),
+        });
+    }
 
     // A per-call dir: the same image may be ingested and compiled at once.
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -391,8 +451,18 @@ pub fn extract_image_with(
         SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&work_dir).ok();
+    let started = std::time::Instant::now();
     let ocr = provider.recognize(path, "eng", &work_dir.to_string_lossy());
     std::fs::remove_dir_all(&work_dir).ok();
+    let timed_out = ocr
+        .as_ref()
+        .is_err_and(|e| e.starts_with("tesseract timed out"));
+    if timed_out || started.elapsed().as_secs_f64() > policy.max_ocr_seconds as f64 {
+        return Err(policy::exceeded(
+            "max_ocr_seconds",
+            format!("OCR took longer than {}s", policy.max_ocr_seconds),
+        ));
+    }
 
     let mut stats = OcrStats {
         pages_ocr_attempted: 1,
@@ -438,7 +508,11 @@ pub fn extract_image_with(
     })
 }
 
-fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, String> {
+fn extract_pdf(
+    path: &str,
+    asset_dir: Option<&str>,
+    policy: &ProcessingPolicy,
+) -> Result<DocumentModel, String> {
     // Text extraction is best-effort: an image-only (scanned) PDF produces no
     // text, and unusual encodings can fail — neither should prevent asset
     // extraction. Failure degrades to empty native pages, and the whole call
@@ -451,6 +525,8 @@ fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, Str
     let mut text_pages: Vec<String> = match std::panic::catch_unwind(|| {
         let doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
         let page_count = doc.get_pages().len();
+        // Refuse before extracting anything (HLD §54 max page count).
+        policy.check_pages(page_count)?;
         let mut pages = Vec::with_capacity(page_count);
         // extract_text_chunks returns one chunk per font run (Tf), not per
         // page — join each page's chunks ourselves.
@@ -471,6 +547,7 @@ fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, Str
         Ok::<_, String>(pages)
     }) {
         Ok(Ok(pages)) => pages,
+        Ok(Err(e)) if policy::is_limit_error(&e) => return Err(e),
         Ok(Err(e)) => {
             eprintln!("pdf load failed: {e} — continuing without native text");
             Vec::new()
@@ -527,7 +604,8 @@ fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, Str
     // content-addressed assets. PR-N adds vector-drawn figure/chart graphics
     // as SVG assets (page text needed for the visual-marker filter).
     let page_texts: Vec<String> = native_pages.iter().map(|p| p.text.clone()).collect();
-    let images_by_page = extract_pdf_images(path, asset_dir, &page_texts);
+    let images_by_page =
+        extract_pdf_images(path, asset_dir, &page_texts, policy.max_image_dimension)?;
     for (page_idx, images) in images_by_page.into_iter().enumerate() {
         if let Some(page) = native_pages.get_mut(page_idx) {
             page.images = images;
@@ -545,7 +623,8 @@ fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, Str
     ));
     std::fs::create_dir_all(&work_dir).ok();
 
-    let result = ocr::ocr_pdf_pages(path, &native_pages, &work_dir.to_string_lossy());
+    let result =
+        ocr::ocr_pdf_pages_policy(path, &native_pages, &work_dir.to_string_lossy(), policy);
 
     // Clean up work dir (best-effort).
     std::fs::remove_dir_all(&work_dir).ok();
@@ -556,6 +635,7 @@ fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, Str
             doc.ocr_stats = Some(stats);
             Ok(doc)
         }
+        Err(e) if policy::is_limit_error(&e) => Err(e),
         Err(e) => {
             eprintln!("OCR pipeline error: {} — using native text only", e);
             let pages: Vec<PageModel> = native_pages
@@ -1129,11 +1209,12 @@ fn extract_pdf_images(
     path: &str,
     asset_dir: Option<&str>,
     page_texts: &[String],
-) -> Vec<Vec<DocumentImage>> {
+    max_dimension: u32,
+) -> Result<Vec<Vec<DocumentImage>>, String> {
     let mut pages: Vec<Vec<DocumentImage>> = Vec::new();
     let doc = match lopdf::Document::load(path) {
         Ok(d) => d,
-        Err(_) => return pages,
+        Err(_) => return Ok(pages),
     };
 
     // get_pages() is a BTreeMap keyed by page number — iteration order is
@@ -1175,6 +1256,23 @@ fn extract_pdf_images(
                         .unwrap_or(false);
                     if !is_image {
                         continue;
+                    }
+                    // HLD §54: the declared size, checked before decoding.
+                    let dim = |k: &[u8]| {
+                        stream
+                            .dict
+                            .get(k)
+                            .ok()
+                            .and_then(|o| o.as_i64().ok())
+                            .unwrap_or(0)
+                            .clamp(0, u32::MAX as i64) as u32
+                    };
+                    let (w, h) = (dim(b"Width"), dim(b"Height"));
+                    if w.max(h) > max_dimension {
+                        return Err(policy::exceeded(
+                            "max_image_dimension",
+                            format!("a page {page_num} image is {w}x{h} px > {max_dimension} px"),
+                        ));
                     }
                     let (mime, bytes) = pdf_image_asset(&stream);
                     images.push(pdf_asset_image(
@@ -1240,7 +1338,7 @@ fn extract_pdf_images(
         }
         pages.push(images);
     }
-    pages
+    Ok(pages)
 }
 
 /// Decode one image XObject into (mime, bytes) without adding an image-codec

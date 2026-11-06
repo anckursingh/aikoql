@@ -78,11 +78,17 @@ pub struct OcrStats {
     /// Omitted when false, so existing payloads and goldens are unchanged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ocr_unavailable: bool,
+    /// OCR was needed but `ProcessingPolicy.enable_ocr` is off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ocr_disabled: bool,
 }
 
 impl OcrStats {
     /// Derive the document-level status from OCR statistics.
     pub fn status(&self) -> &'static str {
+        if self.ocr_disabled {
+            return "ocr_disabled";
+        }
         if self.ocr_unavailable {
             return "ocr_unavailable";
         }
@@ -430,28 +436,66 @@ fn rasterize_with(
 // Mixed PDF pipeline (uses OcrProvider trait)
 // ---------------------------------------------------------------------------
 
-/// Process a PDF that may have scanned pages.
-///
-/// 1. Uses existing native text extraction (via `native_pages` from lopdf's
-///    per-page `extract_text_chunks`).
-/// 2. For pages with insufficient native text, rasterizes + OCRs via the provider.
-/// 3. Returns a merged page list with source tags and confidence scores.
-/// 4. Returns OCR statistics for status derivation.
-pub fn ocr_pdf_pages(
+/// Process a PDF that may have scanned pages: pages with too little native
+/// text are rasterized (pdftoppm) and OCR'd, under a `ProcessingPolicy`:
+/// OCR off → pages needing OCR
+/// keep their native text and the stats say `ocr_disabled`; one
+/// `max_ocr_seconds` deadline covers every page (a limit error, not a
+/// partial result).
+pub(crate) fn ocr_pdf_pages_policy(
     pdf_path: &str,
     native_pages: &[PageModel],
     work_dir: &str,
+    policy: &crate::ProcessingPolicy,
 ) -> Result<(DocumentModel, OcrStats), String> {
-    let provider = TesseractCli::new();
-    ocr_pdf_pages_with(&provider, pdf_path, native_pages, work_dir)
+    if !policy.enable_ocr {
+        let stats = OcrStats {
+            ocr_disabled: native_pages
+                .iter()
+                .any(|p| page_needs_ocr(&p.text, OCR_THRESHOLD)),
+            ..Default::default()
+        };
+        let pages = native_pages.to_vec();
+        let total_chars = pages.iter().map(|p| p.char_count).sum();
+        return Ok((
+            DocumentModel {
+                page_count: pages.len() as u32,
+                pages,
+                total_chars,
+                ocr_stats: None,
+            },
+            stats,
+        ));
+    }
+    let provider = TesseractCli {
+        timeout_secs: policy.max_ocr_seconds.max(1),
+        ..TesseractCli::new()
+    };
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(policy.max_ocr_seconds);
+    ocr_pdf_pages_inner(
+        &provider,
+        pdf_path,
+        native_pages,
+        work_dir,
+        Some((deadline, policy.max_ocr_seconds)),
+    )
 }
 
-/// Same as `ocr_pdf_pages` but with a custom OCR provider.
-pub fn ocr_pdf_pages_with(
+fn ocr_deadline_error(secs: u64) -> String {
+    crate::policy::exceeded(
+        "max_ocr_seconds",
+        format!("OCR took longer than {secs}s for this document"),
+    )
+}
+
+/// The page loop; `deadline` = (instant, budget seconds) when bounded.
+fn ocr_pdf_pages_inner(
     provider: &dyn OcrProvider,
     pdf_path: &str,
     native_pages: &[PageModel],
     work_dir: &str,
+    deadline: Option<(std::time::Instant, u64)>,
 ) -> Result<(DocumentModel, OcrStats), String> {
     let mut stats = OcrStats::default();
 
@@ -477,6 +521,11 @@ pub fn ocr_pdf_pages_with(
 
     for page in native_pages {
         if page_needs_ocr(&page.text, OCR_THRESHOLD) {
+            if let Some((d, secs)) = deadline {
+                if std::time::Instant::now() >= d {
+                    return Err(ocr_deadline_error(secs));
+                }
+            }
             stats.pages_ocr_attempted += 1;
 
             // Rasterize this page.
@@ -508,7 +557,17 @@ pub fn ocr_pdf_pages_with(
             };
 
             // OCR the rasterized page.
-            match provider.recognize(&png_path, "eng", work_dir) {
+            let recognized = provider.recognize(&png_path, "eng", work_dir);
+            if let Some((d, secs)) = deadline {
+                let timed_out = recognized
+                    .as_ref()
+                    .is_err_and(|e| e.starts_with("tesseract timed out"));
+                if timed_out || std::time::Instant::now() > d {
+                    std::fs::remove_file(&png_path).ok();
+                    return Err(ocr_deadline_error(secs));
+                }
+            }
+            match recognized {
                 Ok(result) => {
                     let trimmed = crate::table_detect::text_with_tables(&result.words)
                         .unwrap_or_else(|| result.text.trim().to_string());

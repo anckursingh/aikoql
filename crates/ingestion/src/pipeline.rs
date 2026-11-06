@@ -377,6 +377,55 @@ pub fn compile_document_with_detector(
     existing_kos: &[KnowledgeBaseEntry],
     asset_dir: Option<&str>,
 ) -> CompilationResult {
+    compile_with_policy(
+        doc,
+        analyzer,
+        resolver,
+        reconciler,
+        projector,
+        embedder,
+        detector,
+        existing_kos,
+        asset_dir,
+        &crate::ProcessingPolicy::default(),
+    )
+}
+
+/// The mock pipeline under a `ProcessingPolicy` (HLD §55): visual analysis
+/// and the image OCR fill run only when the policy enables them.
+pub fn compile_document_mock_with_policy(
+    doc: &DocumentModel,
+    existing_kos: &[KnowledgeBaseEntry],
+    asset_dir: Option<&str>,
+    policy: &crate::ProcessingPolicy,
+) -> CompilationResult {
+    compile_with_policy(
+        doc,
+        &crate::MockSemanticAnalyzer::new(),
+        &MockEntityResolver::new(),
+        &MockKnowledgeReconciler::new(),
+        &HeadingProjector::new(),
+        &MockEmbeddingProvider::new(),
+        &RuleBoundaryDetector,
+        existing_kos,
+        asset_dir,
+        policy,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_with_policy(
+    doc: &DocumentModel,
+    analyzer: &dyn SemanticAnalyzer,
+    resolver: &dyn EntityResolver,
+    reconciler: &dyn KnowledgeReconciler,
+    projector: &dyn RetrievalProjector,
+    embedder: &dyn EmbeddingProvider,
+    detector: &dyn KnowledgeBoundaryDetector,
+    existing_kos: &[KnowledgeBaseEntry],
+    asset_dir: Option<&str>,
+    policy: &crate::ProcessingPolicy,
+) -> CompilationResult {
     let t0 = time_now();
 
     // D3: DocumentModel → DocumentAst (+ PR-F visual classification:
@@ -388,13 +437,19 @@ pub fn compile_document_with_detector(
     // fill (HLD §33: OCR only if needed — provider gates itself).
     // PR-O: the analyzer set is VLM-backed when the vlm feature + env are
     // present, mock otherwise (visual::pipeline_analyzers).
-    let analyzers = crate::visual::pipeline_analyzers(asset_dir);
-    crate::visual::classify_visuals_with_analyzers(
-        &mut ast,
-        asset_dir,
-        Some(&crate::ocr::TesseractCli::new()),
-        &analyzers,
-    );
+    if policy.enable_visual_analysis {
+        let analyzers = crate::visual::pipeline_analyzers(asset_dir);
+        let tesseract = crate::ocr::TesseractCli {
+            timeout_secs: policy.max_ocr_seconds.max(1),
+            ..crate::ocr::TesseractCli::new()
+        };
+        let ocr: Option<&dyn crate::ocr::OcrProvider> = if policy.enable_ocr {
+            Some(&tesseract)
+        } else {
+            None
+        };
+        crate::visual::classify_visuals_with_analyzers(&mut ast, asset_dir, ocr, &analyzers);
+    }
     let dt_ast = time_now() - t_ast;
 
     // D4-fragments: DocumentAst → KnowledgeFragment[] (semantic segmentation).

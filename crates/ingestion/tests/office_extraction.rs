@@ -195,6 +195,7 @@ fn registry_selects_by_mime_and_accepts_custom_extractors() {
             path: "abc",
             mime_type: "application/x-upper",
             asset_dir: None,
+            policy: &aikoql_ingestion::ProcessingPolicy::default(),
         })
         .unwrap();
     assert_eq!(doc.pages[0].text, "ABC");
