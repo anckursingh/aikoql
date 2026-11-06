@@ -11,6 +11,14 @@ pub(crate) struct Fact {
 
 pub(crate) const MAX_FACTS: usize = 8;
 pub(crate) const MAX_CONTEXT_CHARS: usize = 2000;
+/// One property value never takes more than this, so a long `mentions` dump
+/// cannot swallow the whole budget.
+const MAX_VALUE_CHARS: usize = 200;
+
+/// Ingestion bookkeeping that tells a model nothing about the subject.
+fn is_internal(key: &str) -> bool {
+    matches!(key, "confidence" | "type_hint") || key.starts_with("evidence_")
+}
 
 /// Render result rows as facts. Rows without a koid or any content are
 /// skipped; every statement is secret-scrubbed; the total is bounded.
@@ -46,9 +54,16 @@ fn render(row: &serde_json::Value) -> Option<String> {
         .get("properties")?
         .as_object()
         .filter(|p| !p.is_empty())?;
-    let text = |v: &serde_json::Value| match v {
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
+    let text = |v: &serde_json::Value| {
+        let t = match v {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        if t.chars().count() > MAX_VALUE_CHARS {
+            format!("{}…", t.chars().take(MAX_VALUE_CHARS).collect::<String>())
+        } else {
+            t
+        }
     };
     let label = ["name", "title", "label"]
         .iter()
@@ -60,6 +75,7 @@ fn render(row: &serde_json::Value) -> Option<String> {
     }
     let mut body: Vec<String> = props
         .iter()
+        .filter(|(k, _)| !is_internal(k))
         .map(|(k, v)| format!("{k}={}", text(v)))
         .collect();
     body.sort();
