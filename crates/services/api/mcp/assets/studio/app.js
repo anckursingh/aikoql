@@ -1321,11 +1321,19 @@ async function loadDocuments() {
     let html = '<table class="data-table"><thead><tr><th>KOID</th><th>Filename</th><th>Type</th><th>Size</th><th>Status</th><th>SHA-256</th><th>Actions</th></tr></thead><tbody>';
     for (const doc of docs) {
       const sz = doc.size_bytes < 1024 ? doc.size_bytes+' B' : doc.size_bytes < 1048576 ? (doc.size_bytes/1024).toFixed(1)+' KB' : (doc.size_bytes/1048576).toFixed(1)+' MB';
-      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td><span class="badge '+esc(doc.status === 'extracted' ? 'badge-green' : '')+'">'+esc(doc.status)+'</span></td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" data-click="compileDocument">Compile</button></td></tr>';
+      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td><span class="badge '+esc(doc.status === 'extracted' || doc.status === 'ocr_complete' ? 'badge-green' : doc.status === 'ocr_unavailable' || doc.status === 'ocr_partial' ? 'badge-orange' : '')+'" title="'+esc(ocrNotice(doc.status, doc.char_count))+'">'+esc(doc.status)+'</span></td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" data-click="compileDocument">Compile</button></td></tr>';
     }
     html += '</tbody></table>';
     el.innerHTML = html;
   } catch(e) { el.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
+}
+
+// What a document's OCR outcome means for its text, in words ('' = nothing to add).
+function ocrNotice(status, chars) {
+  if (status === 'ocr_unavailable') return 'No text extracted: OCR is not available on this server (install Tesseract to read text in images). The file is stored.';
+  if (status === 'ocr_complete') return chars > 0 ? chars+' characters of text read by OCR.' : 'OCR found no text in this document.';
+  if (status === 'ocr_partial') return 'OCR failed on part of this document; what could not be read has no text.';
+  return '';
 }
 
 async function ingestDocument() {
@@ -1348,7 +1356,10 @@ async function ingestDocument() {
     const data = await apiPost('/api/v1/documents', {filename: file.name, content_base64: base64, mime_type: file.type || 'application/octet-stream'});
     const d = data.data || data;
     const sz = d.size_bytes < 1024 ? d.size_bytes+' B' : (d.size_bytes/1024).toFixed(1)+' KB';
-    msg.innerHTML = '<span style="color:var(--green);">✓ Ingested: '+esc(d.koid)+' ('+esc(d.status)+', '+esc(sz)+', SHA-256: '+esc(d.sha256.substring(0,16))+'...)</span>';
+    const note = ocrNotice(d.status, d.char_count);
+    let html = '<span style="color:var(--green);">✓ Ingested: '+esc(d.koid)+' ('+esc(d.status)+', '+esc(sz)+', SHA-256: '+esc(d.sha256.substring(0,16))+'...)</span>';
+    if (note) html += '<div style="margin-top:4px;color:var(--'+esc(d.char_count > 0 ? 'muted' : 'orange')+');">'+esc(note)+'</div>';
+    msg.innerHTML = html;
     fileInput.value = '';
     setTimeout(() => loadDocuments(), 500);
   } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
@@ -1380,6 +1391,9 @@ async function compileDocument(koid) {
     };
 
     let html = '<div class="card" style="margin-bottom:12px;"><h4>🔬 Compilation Results</h4>';
+    if (r.extraction_status && !r.total_chars) {
+      html += '<div style="margin-bottom:8px;color:var(--orange);">'+esc(ocrNotice(r.extraction_status, 0) || 'No text was extracted from this document.')+'</div>';
+    }
 
     // ── Stats ──
     html += '<details open><summary><b>Phase Stats</b> ('+esc(r.stats.phases.length)+' phases, '+esc(r.stats.total_us)+' µs total)</summary>';

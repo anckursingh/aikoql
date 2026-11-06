@@ -1500,6 +1500,7 @@ mod tests {
             pages_ocr_succeeded: 1,
             pages_ocr_failed: 0,
             average_confidence: 88.0,
+            ..Default::default()
         });
         let ast = document_model_to_ast(&dm);
         assert_eq!(ast.source_type, "ocr");
@@ -1530,6 +1531,7 @@ mod tests {
             pages_ocr_succeeded: 1,
             pages_ocr_failed: 0,
             average_confidence: 85.0,
+            ..Default::default()
         });
         let ast = document_model_to_ast(&dm);
         assert_eq!(ast.source_type, "mixed");

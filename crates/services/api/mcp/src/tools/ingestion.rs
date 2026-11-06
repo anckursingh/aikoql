@@ -13,10 +13,13 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
         .get("content_base64")
         .and_then(|v| v.as_str())
         .ok_or("missing: content_base64")?;
-    let mime_type = args
-        .get("mime_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("application/octet-stream");
+    // Browsers send "" (or octet-stream) for types they do not know: the
+    // extension decides then, so a .png is still read as an image.
+    let mime_type = match args.get("mime_type").and_then(|v| v.as_str()) {
+        Some(m) if !m.is_empty() && m != "application/octet-stream" => m.to_string(),
+        _ => aikoql_ingestion::mime_from_extension(filename),
+    };
+    let mime_type = mime_type.as_str();
 
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
@@ -135,6 +138,7 @@ pub(crate) fn tool_document_list(k: &Kernel, args: &J) -> Result<J, String> {
             "mime_type": d.properties.get("mime_type").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }).unwrap_or("?"),
             "sha256": d.properties.get("sha256").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }).unwrap_or("?"),
             "size_bytes": d.properties.get("size_bytes").and_then(|v| match v { Value::Int(i) => Some(*i), _ => None }).unwrap_or(0),
+            "char_count": d.properties.get("char_count").and_then(|v| match v { Value::Int(i) => Some(*i), _ => None }).unwrap_or(0),
             "status": d.properties.get("status").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }).unwrap_or("?"),
             "lifecycle": d.lifecycle.state.to_string(),
         })).collect::<Vec<_>>()
@@ -244,7 +248,11 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
         let doc = aikoql_ingestion::extract_document(&artifact_path, &mime_type, Some(&asset_dir))
             .map_err(|e| format!("extract for compile: {}", e))?;
         let cr = aikoql_ingestion::compile_document_mock_with_assets(&doc, &[], Some(&asset_dir));
-        serde_json::to_value(&cr).map_err(|e| format!("serialize: {}", e))?
+        let mut v = serde_json::to_value(&cr).map_err(|e| format!("serialize: {}", e))?;
+        // lets a client say why a compile came back empty (e.g. no OCR tool)
+        v["extraction_status"] = json!(doc.ocr_stats.as_ref().map_or("extracted", |s| s.status()));
+        v["total_chars"] = json!(doc.total_chars);
+        v
     };
 
     // Attach document metadata

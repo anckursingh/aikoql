@@ -351,9 +351,13 @@ pub fn extract_document(
     }
 }
 
-/// Raster formats Tesseract/Leptonica read. SVG is XML, not a bitmap.
+/// Raster formats Tesseract/Leptonica read — the set `mime_from_extension`
+/// maps. SVG is XML, not a bitmap; HEIC/AVIF/ICO are not read by Leptonica.
 fn is_raster_image(mime: &str) -> bool {
-    mime.starts_with("image/") && mime != "image/svg+xml"
+    matches!(
+        mime,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/bmp" | "image/tiff"
+    )
 }
 
 /// A standalone image file: the image is kept as a content-addressed asset and
@@ -368,47 +372,48 @@ pub fn extract_image_with(
 ) -> Result<DocumentModel, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("read image: {}", e))?;
     if bytes.is_empty() {
-        return Err("read image: empty file".into());
+        return Err("bad image: empty file".into());
     }
     let image = pdf_asset_image(&bytes, mime_type, 1, asset_dir, "image file");
 
+    // A per-call dir: the same image may be ingested and compiled at once.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let work_dir = std::env::temp_dir().join(format!(
         "aikoql-ocr-img-{}-{}",
         std::process::id(),
-        image.asset.content_hash.get(..12).unwrap_or("img")
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&work_dir).ok();
     let ocr = provider.recognize(path, "eng", &work_dir.to_string_lossy());
     std::fs::remove_dir_all(&work_dir).ok();
 
-    let (text, source, confidence, ocr_stats) = match ocr {
-        Ok(r) => {
-            let stats = OcrStats {
-                pages_ocr_attempted: 1,
-                pages_ocr_succeeded: 1,
-                pages_ocr_failed: 0,
-                average_confidence: r.confidence.max(0.0),
-            };
+    let mut stats = OcrStats {
+        pages_ocr_attempted: 1,
+        ..Default::default()
+    };
+    let (text, source, confidence) = match ocr {
+        Ok(r) if !r.text.trim().is_empty() => {
+            stats.pages_ocr_succeeded = 1;
+            stats.average_confidence = r.confidence.max(0.0);
             (
-                r.text,
+                r.text.trim().to_string(),
                 "ocr",
                 (r.confidence >= 0.0).then_some(r.confidence),
-                Some(stats),
             )
         }
-        // No tesseract on PATH: same as the PDF path — nothing was attempted.
-        Err(e) if e.starts_with("tesseract not found") => (String::new(), "native", None, None),
+        // OCR ran and read nothing — the PDF path counts this neither way.
+        Ok(_) => (String::new(), "native", None),
+        Err(e) if e.starts_with("tesseract not found") => {
+            stats.ocr_unavailable = true;
+            (String::new(), "native", None)
+        }
         Err(e) => {
             eprintln!("OCR failed for image {}: {}", path, e);
-            let stats = OcrStats {
-                pages_ocr_attempted: 1,
-                pages_ocr_succeeded: 0,
-                pages_ocr_failed: 1,
-                average_confidence: 0.0,
-            };
-            (String::new(), "native", None, Some(stats))
+            stats.pages_ocr_failed = 1;
+            (String::new(), "native", None)
         }
     };
+    let ocr_stats = Some(stats);
     let char_count = text.len();
     Ok(DocumentModel {
         page_count: 1,

@@ -283,6 +283,52 @@ fn im011_real_tesseract_reads_png_and_jpeg_and_the_text_reaches_compile() {
             chunks.contains("Utrecht"),
             "OCR text must reach the compiled chunks"
         );
+
+        // A standalone image is never rasterized: with pdftoppm unrunnable
+        // (so `available()` is false) the image is still OCR'd.
+        let no_pdftoppm = TesseractCli {
+            tesseract_path: None,
+            pdftoppm_path: Some("/nonexistent/pdftoppm".into()),
+        };
+        assert!(!no_pdftoppm.available());
+        let doc = extract_image_with(&no_pdftoppm, path.to_str().unwrap(), mime, None).unwrap();
+        assert!(
+            doc.pages[0].text.contains("Utrecht"),
+            "{file}: {:?}",
+            doc.pages[0].text
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
+}
+
+/// The scanned-PDF path on an image-only PDF fixture (no text layer): pages
+/// are rasterized by pdftoppm and read by Tesseract. Skips without both.
+#[test]
+fn im012_real_tesseract_reads_a_scanned_pdf() {
+    if !TesseractCli::new().available() {
+        eprintln!("Skipping im012: tesseract and pdftoppm not both on PATH");
+        return;
+    }
+    let pdf = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ocr-scan.pdf");
+    let d = scratch("012");
+    let assets = d.join("assets");
+    let doc = extract_document(
+        pdf.to_str().unwrap(),
+        "application/pdf",
+        Some(assets.to_str().unwrap()),
+    )
+    .unwrap();
+    let page = &doc.pages[0];
+    eprintln!(
+        "im012 ocr-scan.pdf: {:?} confidence {:?}",
+        page.text, page.ocr_confidence
+    );
+    // case-insensitive: Tesseract may read a leading capital as lowercase
+    let text = page.text.to_lowercase();
+    for word in ["scanned", "receipt", "rotterdam", "total", "17", "eur"] {
+        assert!(text.contains(word), "{word} not in {:?}", page.text);
+    }
+    assert_eq!(page.source, "ocr");
+    assert_eq!(doc.ocr_stats.as_ref().unwrap().status(), "ocr_complete");
+    let _ = std::fs::remove_dir_all(&d);
 }

@@ -74,11 +74,18 @@ pub struct OcrStats {
     pub pages_ocr_failed: u32,
     /// Average confidence across all OCR'd pages (0.0–100.0).
     pub average_confidence: f32,
+    /// OCR was needed but no OCR tool could run (e.g. tesseract not on PATH).
+    /// Omitted when false, so existing payloads and goldens are unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ocr_unavailable: bool,
 }
 
 impl OcrStats {
     /// Derive the document-level status from OCR statistics.
     pub fn status(&self) -> &'static str {
+        if self.ocr_unavailable {
+            return "ocr_unavailable";
+        }
         if self.pages_ocr_attempted == 0 {
             return "extracted";
         }
@@ -733,6 +740,7 @@ mod tests {
             pages_ocr_succeeded: 3,
             pages_ocr_failed: 0,
             average_confidence: 92.5,
+            ..Default::default()
         };
         assert_eq!(stats.status(), "ocr_complete");
     }
@@ -744,6 +752,7 @@ mod tests {
             pages_ocr_succeeded: 2,
             pages_ocr_failed: 1,
             average_confidence: 88.0,
+            ..Default::default()
         };
         assert_eq!(stats.status(), "ocr_partial");
     }

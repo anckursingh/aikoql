@@ -384,7 +384,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <div class="panel" id="panel-documents">
         <div class="card" style="margin-bottom:12px;">
           <h3>📄 Document Explorer</h3>
-          <p style="font-size:11px;color:var(--muted);">Ingest documents → Knowledge Objects. Upload a PDF, DOCX, HTML, or TXT file to create queryable knowledge.</p>
+          <p style="font-size:11px;color:var(--muted);">Ingest documents → Knowledge Objects. Upload a PDF, DOCX, HTML, or TXT file, or an image (PNG, JPEG, TIFF, BMP, GIF, WebP), to create queryable knowledge. Text in images is read by OCR when Tesseract is installed on the server.</p>
         </div>
         <div class="card" style="margin-bottom:12px;">
           <h4>Upload Document</h4>
