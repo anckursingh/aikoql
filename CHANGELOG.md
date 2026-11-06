@@ -10,8 +10,9 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 ### Image documents
 - PNG, JPEG, TIFF, BMP, GIF and WebP upload as one-page documents: the image is stored as an asset and
   Tesseract (when it is on the server's PATH; `pdftoppm` is not needed for images) supplies the text.
-  Other `image/*` types (HEIC, AVIF, ICO, SVG) stay a 400. An empty or `application/octet-stream` mime
-  falls back to the file extension, a zero-byte image is a 400, and each OCR call uses its own work dir.
+  Other `image/*` types (HEIC, AVIF, ICO, SVG) and zero-byte images are stored at ingest with status
+  `ingested` and compiling them is a 400 (not a 500). An empty or `application/octet-stream` mime
+  falls back to the file extension, and each OCR call uses its own work dir.
 - New document status `ocr_unavailable` when no OCR tool could run (it was reported as `extracted` with
   no text). Studio says so on ingest, on the list badge and on the compile result, and shows how many
   characters OCR read. The compile result carries `extraction_status` and `total_chars`, and
