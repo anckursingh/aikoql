@@ -1625,6 +1625,19 @@ pub(crate) fn handle_http(
                 Err((status, e)) => (status, "application/json", json!({"error": e}).to_string()),
             }
         }
+        // who the cookie/Bearer session is, so Studio can resume after a reload
+        "/api/session" if method == "GET" => match validate_token(token.as_deref(), sessions) {
+            Some(s) => (
+                "200 OK",
+                "application/json",
+                json!({"username": s.name, "roles": s.roles}).to_string(),
+            ),
+            None => (
+                "401 Unauthorized",
+                "application/json",
+                json!({"error": "login required"}).to_string(),
+            ),
+        },
         "/api/logout" if method == "POST" => {
             if let Some(t) = token.as_deref() {
                 sessions.lock().unwrap().remove(t); // justified: Mutex poison is unrecoverable

@@ -42,6 +42,21 @@ function logout() {
   fetch('/api/logout', {method: 'POST', headers: authHeaders()}).catch(() => {}).finally(showLogin);
 }
 document.getElementById('login-pass').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+// Resume after a reload: the HttpOnly cookie is still valid, so ask the server
+// who it is instead of showing the sign-in form again.
+window.addEventListener('load', async () => {
+  if (new URLSearchParams(location.hash ? location.hash.slice(1) : location.search).has('token')) return; // SSO hand-off owns this
+  try {
+    const res = await fetch('/api/session', {headers: authHeaders()});
+    if (!res.ok) return;
+    const me = await res.json();
+    currentUser = me.username;
+    document.getElementById('login-overlay').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    document.getElementById('user-badge').textContent = currentUser + (currentUser === 'admin' ? ' (admin)' : '');
+    initApp();
+  } catch (_) { /* no session: the sign-in form stays */ }
+});
 
 // ═══════════════════════════════════════════
 // API helper

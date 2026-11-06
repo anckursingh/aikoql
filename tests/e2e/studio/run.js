@@ -222,7 +222,11 @@ async function main() {
     const realErrors = consoleErrors.filter(e => !/Failed to load resource/.test(e));
     ok('no page/console errors', realErrors.length === 0, realErrors.slice(0, 4).join(' || '));
 
-    // ---- a reload keeps the old cookie; signing in again must still work ----
+    // ---- a reload resumes the session from the cookie ----------------------
+    await page.reload(); await page.waitForTimeout(1500);
+    ok('reload resumes the signed-in session', await page.isHidden('#login-overlay') && /admin/.test(await page.innerText('#user-badge')), await page.innerText('#login-error').catch(() => ''));
+    // ---- a dead cookie falls back to the form; signing in must still work ---
+    await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });
     await page.fill('#login-user', 'admin'); await page.fill('#login-pass', PW);
     await page.click('[data-click="doLogin"]'); await page.waitForSelector('#login-overlay', { state: 'hidden', timeout: 10000 }).catch(() => {});
