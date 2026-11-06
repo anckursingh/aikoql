@@ -511,6 +511,28 @@ mod tests {
         assert_eq!(findings[0].kind, SecretKind::AwsKey);
     }
 
+    #[test]
+    fn place_names_containing_asia_are_not_aws_keys() {
+        // "asia" matched case-insensitively anywhere: Asia Pacific,
+        // Malaysia and Eurasia were redacted as [REDACTED:AWS_KEY].
+        for text in [
+            "Asia Pacific",
+            "Revenue in Malaysia grew",
+            "Eurasia Group",
+            "ASIA",
+        ] {
+            assert_eq!(detect_secret(text), None, "{text}");
+        }
+        assert_eq!(
+            detect_secret("key ASIAIOSFODNN7EXAMPLE here"),
+            Some(SecretKind::AwsKey)
+        );
+        assert_eq!(
+            detect_secret("AKIAIOSFODNN7EXAMPLE"),
+            Some(SecretKind::AwsKey)
+        );
+    }
+
     // ---- adversarial / edge-case tests (R8 remediation) ----
 
     #[test]
