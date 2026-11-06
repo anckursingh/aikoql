@@ -150,6 +150,26 @@ mod tests {
     }
 
     #[test]
+    fn facts_drop_internal_metadata_and_cap_long_values() {
+        let long = "word ".repeat(200);
+        let f = facts_from_rows(&json!([row(
+            "k1",
+            "Thing",
+            json!({"name": "Ada", "confidence": 0.85, "type_hint": "Person",
+                   "evidence_model": "rules-v1", "evidence_document": "/x/y",
+                   "mentions": long})
+        )]));
+        let st = &f[0].statement;
+        for noise in ["confidence", "type_hint", "evidence_"] {
+            assert!(!st.contains(noise), "{st}");
+        }
+        assert!(st.starts_with("Thing Ada: "), "{st}");
+        assert!(st.contains("mentions=word word"), "{st}");
+        assert!(st.chars().count() < 260, "{} chars", st.chars().count());
+        assert!(st.contains('…'), "a cut value is marked: {st}");
+    }
+
+    #[test]
     fn facts_are_scrubbed() {
         let f = facts_from_rows(&json!([row(
             "k1",
