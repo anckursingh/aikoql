@@ -117,7 +117,8 @@ pub mod transform;
 #[cfg(feature = "remote_emb")]
 pub mod remote_emb;
 pub use ocr::{
-    page_needs_ocr, tool_available, BlockBbox, OcrProvider, OcrStats, OcrWord, TesseractCli,
+    page_needs_ocr, tool_available, BlockBbox, OcrPageResult, OcrProvider, OcrStats, OcrWord,
+    TesseractCli,
 };
 
 mod asset_store;
@@ -345,6 +346,17 @@ pub fn extract_document(
         t if t.starts_with("text/") => extract_text(file_path),
         _ => Err(format!("unsupported mime type: {}", mime_type)),
     }
+}
+
+/// A standalone image file: the image is kept as a content-addressed asset and
+/// OCR supplies the text where an OCR provider can read it.
+pub fn extract_image_with(
+    _provider: &dyn OcrProvider,
+    _path: &str,
+    _mime_type: &str,
+    _asset_dir: Option<&str>,
+) -> Result<DocumentModel, String> {
+    Err("not implemented".into())
 }
 
 fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, String> {
