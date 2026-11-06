@@ -748,6 +748,9 @@ async function saveOntology() {
 // ═══════════════════════════════════════════
 // Panel: Administration
 // ═══════════════════════════════════════════
+// The last backup/verify/restore result, re-shown after the panel reloads itself.
+let adminNote = '';
+function adminMsg(html) { adminNote = html; document.getElementById('admin-backup-result').innerHTML = html; }
 async function loadAdminPanel() {
   try {
     const [health, metrics, backups, compliance] = await Promise.all([
@@ -813,6 +816,7 @@ async function loadAdminPanel() {
     html += '<div id="admin-audit-result" style="margin-top:8px;"></div>';
     html += '</div>';
     document.getElementById('admin-grid').innerHTML = html;
+    document.getElementById('admin-backup-result').innerHTML = adminNote;
   } catch(e) { document.getElementById('admin-grid').innerHTML = '<div class="error-text">Failed to load admin dashboard: '+esc(e.message)+'</div>'; }
 }
 
@@ -901,34 +905,31 @@ async function downloadAuditExport() {
   } catch(e) { alert('Audit export failed: ' + e.message); }
 }
 async function adminCreateBackup() {
-  const div = document.getElementById('admin-backup-result');
-  div.innerHTML = '<span style="color:var(--muted);">Creating backup...</span>';
+  adminMsg('<span style="color:var(--muted);">Creating backup...</span>');
   try {
     const data = await apiPost('/api/v1/backup');
     const d = data.data || data;
-    div.innerHTML = '<span style="color:var(--green);">Backup created: '+esc(d.backup)+' ('+esc(d.object_count)+' objects, verified: '+esc(d.verified)+')</span>';
+    adminMsg('<span style="color:var(--green);">Backup created: '+esc(d.backup)+' ('+esc(d.object_count)+' objects, verified: '+esc(d.verified)+')</span>');
     setTimeout(() => loadAdminPanel(), 1500);
-  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
+  } catch(e) { adminMsg('<span style="color:var(--red);">'+esc(e.message)+'</span>'); }
 }
 async function adminVerifyBackup(name) {
-  const div = document.getElementById('admin-backup-result');
-  div.innerHTML = '<span style="color:var(--muted);">Verifying '+esc(name)+'...</span>';
+  adminMsg('<span style="color:var(--muted);">Verifying '+esc(name)+'...</span>');
   try {
     const data = await apiPost('/api/v1/verify-backup', {backup: name});
     const d = data.data || data;
-    div.innerHTML = '<span style="color:'+esc(d.verified?'var(--green)':'var(--red)')+';">Backup '+esc(name)+': '+esc(d.verified?'✅ Verified':'❌ Invalid')+' (seq '+esc(d.expected_journal_seq)+')</span>';
-  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
+    adminMsg('<span style="color:'+esc(d.verified?'var(--green)':'var(--red)')+';">Backup '+esc(name)+': '+esc(d.verified?'✅ Verified':'❌ Invalid')+' (seq '+esc(d.expected_journal_seq)+')</span>');
+  } catch(e) { adminMsg('<span style="color:var(--red);">'+esc(e.message)+'</span>'); }
 }
 async function adminRestoreBackup(name) {
-  const div = document.getElementById('admin-backup-result');
   if (!confirm('Restore backup "'+name+'"? This will replace the current database.')) return;
-  div.innerHTML = '<span style="color:var(--orange);">Restoring from '+esc(name)+'... server may restart.</span>';
+  adminMsg('<span style="color:var(--orange);">Restoring from '+esc(name)+'... server may restart.</span>');
   try {
     const data = await apiPost('/api/v1/restore', {backup: name});
     const d = data.data || data;
-    div.innerHTML = '<span style="color:var(--green);">Restored from '+esc(name)+'. Recovery point: seq '+esc(d.recovery_point?.journal_seq||'?')+'</span>';
+    adminMsg('<span style="color:var(--green);">Restored from '+esc(name)+'. Recovery point: seq '+esc(d.recovery_point?.journal_seq||'?')+'</span>');
     setTimeout(() => loadAdminPanel(), 2000);
-  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+'</span>'; }
+  } catch(e) { adminMsg('<span style="color:var(--red);">'+esc(e.message)+'</span>'); }
 }
 async function loadAuditReport() {
   const div = document.getElementById('admin-audit-result');
