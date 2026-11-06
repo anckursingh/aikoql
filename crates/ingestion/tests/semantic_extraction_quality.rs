@@ -156,6 +156,38 @@ fn semantic_extraction_quality() {
          (mock rule pipeline has no event rules; a future event extractor makes this cell real)"
     );
 
+    // M2: rule typing on the golden suite — the known names carry their
+    // cue-derived types, and nothing else is guessed to be a Person (the
+    // old "two capitalised words = Person" default).
+    let typed = [
+        ("tables.pdf", "Alice Smith", "Person"),
+        ("tables.pdf", "Bob Johnson", "Person"),
+        ("tables.pdf", "North America", "Location"),
+        ("tables.pdf", "South America", "Location"),
+        ("plain-text.pdf", "Acme Corporation", "Organization"),
+        ("plain-text.pdf", "Globex Industries", "Organization"),
+        ("annual-report.pdf", "Gamma Partners", "Organization"),
+    ];
+    for (fixture, name, kind) in typed {
+        let e = irs[fixture]
+            .entities
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap_or_else(|| panic!("{fixture}: no entity {name}"));
+        assert_eq!(e.type_hint.as_deref(), Some(kind), "{fixture}: {name}");
+    }
+    for (fixture, ir) in &irs {
+        for e in &ir.entities {
+            if e.type_hint.as_deref() == Some("Person") {
+                assert!(
+                    typed.iter().any(|(_, n, _)| *n == e.name),
+                    "{fixture}: {} typed Person without a cue",
+                    e.name
+                );
+            }
+        }
+    }
+
     // Baseline floors: regressions fail, improvements pass trivially.
     assert!(ep >= 0.5, "entity precision regressed: {ep}");
     assert!(er >= 0.5, "entity recall regressed: {er}");

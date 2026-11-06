@@ -1,0 +1,94 @@
+{
+  "mime": "text/plain",
+  "entities": [
+    {
+      "text": "3 February 2026",
+      "type": "Date"
+    },
+    {
+      "text": "Helios Energy Ltd",
+      "type": "Organization"
+    },
+    {
+      "text": "Copenhagen",
+      "type": "Location"
+    },
+    {
+      "text": "Anna Lindqvist",
+      "type": "Person"
+    },
+    {
+      "text": "£48.2 million",
+      "type": "Money"
+    },
+    {
+      "text": "7%",
+      "type": "Percentage"
+    },
+    {
+      "text": "Nordic Wind AS",
+      "type": "Organization"
+    },
+    {
+      "text": "Oslo",
+      "type": "Location"
+    },
+    {
+      "text": "Norway",
+      "type": "Location"
+    },
+    {
+      "text": "ir@helios-energy.example",
+      "type": "Email"
+    },
+    {
+      "text": "+45 33 12 34 56",
+      "type": "Phone"
+    },
+    {
+      "text": "https://helios-energy.example/reports/2025",
+      "type": "Url"
+    },
+    {
+      "text": "Ingrid Haugen",
+      "type": "Person"
+    },
+    {
+      "text": "European Investment Bank",
+      "type": "Organization"
+    },
+    {
+      "text": "EUR 15,000,000",
+      "type": "Money"
+    },
+    {
+      "text": "2026-02-10",
+      "type": "Date"
+    },
+    {
+      "text": "GB82 WEST 1234 5698 7654 32",
+      "type": "Iban"
+    },
+    {
+      "text": "Tomasz Kowalski",
+      "type": "Person"
+    },
+    {
+      "text": "Warsaw",
+      "type": "Location"
+    },
+    {
+      "text": "Kraków",
+      "type": "Location"
+    },
+    {
+      "text": "Q2 2026",
+      "type": "Date"
+    }
+  ],
+  "tables": [],
+  "no_table_pages": [
+    1
+  ],
+  "holdout": true
+}

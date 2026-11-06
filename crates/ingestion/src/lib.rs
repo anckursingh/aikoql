@@ -137,6 +137,9 @@ pub use ast::{
 mod source;
 pub use source::{EvidenceSource, SourceSpan, VisualAssetRef};
 
+// M2: rule-based NER for the default analyzer (no model).
+mod ner;
+
 mod ir;
 pub use ir::{
     document_model_to_ir, EntityCandidate, EventCandidate, Evidence, FactCandidate, KnowledgeIr,

@@ -1,19 +1,23 @@
 {
-  "_about": "Extraction-quality ratchet (tests/extraction_quality_bench.rs). 'baseline' = measured before the rule-based typing / table-detection work (commit range M1, 2026-11-06) and is never edited. 'floor' is the ratchet: each milestone that improves a metric raises it; the test fails when a metric drops below its floor (table_false_positives is a ceiling). Tool versions: tesseract 5.5.4, poppler pdftotext 26.11.0.",
+  "_about": "Extraction-quality ratchet (tests/extraction_quality_bench.rs). 'baseline' = measured before the rule-based typing / table-detection work (commit range M1, 2026-11-06) and is never edited. 'floor' is the ratchet: each milestone that improves a metric raises it; the test fails when a metric drops below its floor (table_false_positives is a ceiling). Tool versions: tesseract 5.5.4, poppler pdftotext 26.11.0. The holdout keys were added with M2: holdout-entities.txt was written after the rules and scored once on the pre-M2 code for its baseline.",
   "baseline": {
     "entity_precision": 0.172,
     "entity_recall": 0.22,
     "table_cell_accuracy_pdf": 0.0,
     "table_cell_accuracy_scan": 0.0,
     "table_false_positives": 0,
-    "ocr_char_accuracy": 0.88
+    "ocr_char_accuracy": 0.88,
+    "entity_precision_holdout": 0.28,
+    "entity_recall_holdout": 0.333
   },
   "floor": {
-    "entity_precision": 0.6,
-    "entity_recall": 0.7,
+    "entity_precision": 1.0,
+    "entity_recall": 0.98,
     "table_cell_accuracy_pdf": 0.0,
     "table_cell_accuracy_scan": 0.0,
     "table_false_positives": 0,
-    "ocr_char_accuracy": 0.88
+    "ocr_char_accuracy": 0.88,
+    "entity_precision_holdout": 0.75,
+    "entity_recall_holdout": 0.857
   }
 }

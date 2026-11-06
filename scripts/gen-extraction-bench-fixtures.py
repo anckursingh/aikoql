@@ -233,6 +233,55 @@ def entities_txt():
         f.write("\n")
 
 
+# A held-out text written AFTER the M2 rules, never used to tune them: its
+# numbers are the honest estimate of how the rules generalise.
+HOLDOUT_TEXT = """On 3 February 2026 the board of Helios Energy Ltd met in Copenhagen. Chair Anna Lindqvist presented results: revenue rose to £48.2 million, up 7%. The company also signed a supply agreement with Nordic Wind AS, based in Oslo, Norway.
+
+Questions from shareholders can be sent to ir@helios-energy.example or by phone on +45 33 12 34 56. The full report is published at https://helios-energy.example/reports/2025.
+
+Ms. Ingrid Haugen of the European Investment Bank confirmed a loan of EUR 15,000,000 on 2026-02-10. Payments go to IBAN GB82 WEST 1234 5698 7654 32.
+
+The project team, led by Tomasz Kowalski, will visit Warsaw and Kraków in Q2 2026.
+"""
+
+
+def holdout_txt():
+    with open(os.path.join(OUT, "holdout-entities.txt"), "w") as f:
+        f.write(HOLDOUT_TEXT)
+    gt = {
+        "mime": "text/plain",
+        "entities": [
+            {"text": "3 February 2026", "type": "Date"},
+            {"text": "Helios Energy Ltd", "type": "Organization"},
+            {"text": "Copenhagen", "type": "Location"},
+            {"text": "Anna Lindqvist", "type": "Person"},
+            {"text": "£48.2 million", "type": "Money"},
+            {"text": "7%", "type": "Percentage"},
+            {"text": "Nordic Wind AS", "type": "Organization"},
+            {"text": "Oslo", "type": "Location"},
+            {"text": "Norway", "type": "Location"},
+            {"text": "ir@helios-energy.example", "type": "Email"},
+            {"text": "+45 33 12 34 56", "type": "Phone"},
+            {"text": "https://helios-energy.example/reports/2025", "type": "Url"},
+            {"text": "Ingrid Haugen", "type": "Person"},
+            {"text": "European Investment Bank", "type": "Organization"},
+            {"text": "EUR 15,000,000", "type": "Money"},
+            {"text": "2026-02-10", "type": "Date"},
+            {"text": "GB82 WEST 1234 5698 7654 32", "type": "Iban"},
+            {"text": "Tomasz Kowalski", "type": "Person"},
+            {"text": "Warsaw", "type": "Location"},
+            {"text": "Kraków", "type": "Location"},
+            {"text": "Q2 2026", "type": "Date"},
+        ],
+        "tables": [],
+        "no_table_pages": [1],
+        "holdout": True,
+    }
+    with open(os.path.join(OUT, "holdout-entities.txt.gt.json"), "w") as f:
+        json.dump(gt, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
 # ------------------------------------------------------------ raster images
 SCAN_TABLE = [
     ["Region", "Q1", "Q2", "Q3"],
@@ -326,6 +375,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     invoice_pdf()
     entities_txt()
+    holdout_txt()
     if "--no-raster" not in sys.argv:
         raster_images()
     print("wrote", os.path.normpath(OUT))

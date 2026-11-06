@@ -5,6 +5,10 @@
 //! `scripts/gen-extraction-bench-fixtures.py` and committed; each fixture has
 //! a `<name>.gt.json` written by hand (never derived from an extractor).
 //!
+//! `holdout-entities.txt` was written after the M2 rules and never used to
+//! tune them: `entity_*_holdout` is the honest generalisation estimate; the
+//! other entity numbers are on text the rules were developed against.
+//!
 //! Metrics (all through the production chain: `extract_document` →
 //! `document_model_to_ast` → `RuleBoundaryDetector` → `MockSemanticAnalyzer`):
 //! - `entity_precision` / `entity_recall` — set match on (normalized text,
@@ -36,6 +40,7 @@ const DIR: &str = "tests/fixtures/extraction-bench";
 const FIXTURES: &[&str] = &[
     "invoice.pdf",
     "entities.txt",
+    "holdout-entities.txt",
     "scanned-table.png",
     "scanned-table-skewed.png",
     "scanned-letter.png",
@@ -127,7 +132,8 @@ fn mean(v: &[f64]) -> Option<f64> {
 fn measure() -> BTreeMap<&'static str, f64> {
     let has_tesseract = tool_available("tesseract");
     let has_pdftotext = tool_available("pdftotext");
-    let (mut tp, mut n_pred, mut n_gold) = (0usize, 0usize, 0usize);
+    // [tuned corpus, held-out corpus] × (correct, predicted, gold).
+    let mut ent = [[0usize; 3]; 2];
     let (mut pdf_cells, mut scan_cells, mut ocr) = (Vec::new(), Vec::new(), Vec::new());
     let mut false_tables = 0usize;
 
@@ -180,9 +186,10 @@ fn measure() -> BTreeMap<&'static str, f64> {
                 pred.len(),
                 gold.len()
             );
-            tp += hit;
-            n_pred += pred.len();
-            n_gold += gold.len();
+            let k = usize::from(gt["holdout"].as_bool() == Some(true));
+            ent[k][0] += hit;
+            ent[k][1] += pred.len();
+            ent[k][2] += gold.len();
         }
 
         // Tables.
@@ -240,16 +247,25 @@ fn measure() -> BTreeMap<&'static str, f64> {
     }
 
     let mut m = BTreeMap::new();
-    if n_gold > 0 {
-        m.insert(
-            "entity_precision",
-            if n_pred == 0 {
-                1.0
-            } else {
-                tp as f64 / n_pred as f64
-            },
-        );
-        m.insert("entity_recall", tp as f64 / n_gold as f64);
+    for (k, (p, r)) in [
+        ("entity_precision", "entity_recall"),
+        ("entity_precision_holdout", "entity_recall_holdout"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let [tp, n_pred, n_gold] = ent[k];
+        if n_gold > 0 {
+            m.insert(
+                p,
+                if n_pred == 0 {
+                    1.0
+                } else {
+                    tp as f64 / n_pred as f64
+                },
+            );
+            m.insert(r, tp as f64 / n_gold as f64);
+        }
     }
     if let Some(v) = mean(&pdf_cells) {
         m.insert("table_cell_accuracy_pdf", v);

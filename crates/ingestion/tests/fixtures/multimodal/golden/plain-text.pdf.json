@@ -107,10 +107,15 @@
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 16,
+                    "start_offset": 0
+                  }
+                }
               }
             ],
             "properties": [
@@ -133,10 +138,15 @@
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 29,
+                    "start_offset": 12
+                  }
+                }
               }
             ],
             "properties": [
@@ -522,18 +532,28 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 16,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 29,
+                  "start_offset": 12
+                }
+              }
             }
           ],
           "step": "Extracted 2 entities from document text"
@@ -740,10 +760,15 @@
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 16,
+                "start_offset": 0
+              }
+            }
           },
           "mentions": [
             "Acme Corporation publishes quarterly reports."
@@ -756,10 +781,15 @@
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 29,
+                "start_offset": 12
+              }
+            }
           },
           "mentions": [
             "Prepared by Globex Industries."
@@ -800,18 +830,28 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 16,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 29,
+                  "start_offset": 12
+                }
+              }
             }
           ],
           "name": "Organization",
@@ -862,10 +902,15 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 16,
+                  "start_offset": 0
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -880,10 +925,15 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 29,
+                  "start_offset": 12
+                }
+              }
             }
           ],
           "matched_koid": null,

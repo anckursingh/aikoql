@@ -277,16 +277,21 @@
       "actions": [
         {
           "CreateKO": {
-            "class_name": "Person",
+            "class_name": "Thing",
             "entity_name": "Billing Pipeline",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 19,
+                    "start_offset": 3
+                  }
+                }
               }
             ],
             "properties": [
@@ -304,7 +309,7 @@
               ],
               [
                 "type",
-                "Person"
+                "Thing"
               ]
             ]
           }
@@ -317,10 +322,15 @@
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 16,
+                    "start_offset": 0
+                  }
+                }
               }
             ],
             "properties": [
@@ -333,46 +343,21 @@
         },
         {
           "CreateKO": {
-            "class_name": "Person",
-            "entity_name": "Owner Validate",
-            "evidence": [
-              {
-                "confidence": 0.8500000238418579,
-                "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
-                "page": 1,
-                "source": null
-              }
-            ],
-            "properties": [
-              [
-                "numeric_value",
-                "Float"
-              ],
-              [
-                "date",
-                "DateTime"
-              ],
-              [
-                "type",
-                "Person"
-              ]
-            ]
-          }
-        },
-        {
-          "CreateKO": {
-            "class_name": "Person",
+            "class_name": "Thing",
             "entity_name": "Billing Team",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 36,
+                    "start_offset": 24
+                  }
+                }
               }
             ],
             "properties": [
@@ -394,58 +379,6 @@
               ],
               [
                 "type",
-                "Person"
-              ]
-            ]
-          }
-        },
-        {
-          "CreateKO": {
-            "class_name": "Person",
-            "entity_name": "Team Commit",
-            "evidence": [
-              {
-                "confidence": 0.8500000238418579,
-                "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
-                "page": 1,
-                "source": null
-              }
-            ],
-            "properties": [
-              [
-                "numeric_value",
-                "Float"
-              ],
-              [
-                "date",
-                "DateTime"
-              ],
-              [
-                "type",
-                "Person"
-              ]
-            ]
-          }
-        },
-        {
-          "CreateKO": {
-            "class_name": "Thing",
-            "entity_name": "Billing Team Commit",
-            "evidence": [
-              {
-                "confidence": 0.8500000238418579,
-                "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
-                "page": 1,
-                "source": null
-              }
-            ],
-            "properties": [
-              [
-                "type",
                 "Thing"
               ]
             ]
@@ -453,16 +386,21 @@
         },
         {
           "CreateKO": {
-            "class_name": "Person",
+            "class_name": "Thing",
             "entity_name": "Ledger Team",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 57,
+                    "start_offset": 46
+                  }
+                }
               }
             ],
             "properties": [
@@ -484,7 +422,7 @@
               ],
               [
                 "type",
-                "Person"
+                "Thing"
               ]
             ]
           }
@@ -546,10 +484,10 @@
       ],
       "document_id": null,
       "stats": {
-        "creates": 9,
+        "creates": 6,
         "needs_review": 0,
         "skips": 0,
-        "total_actions": 9,
+        "total_actions": 6,
         "total_conflicts": 0,
         "updates": 0
       }
@@ -757,10 +695,7 @@
           "entities": [
             "Billing Pipeline",
             "Acme Corporation",
-            "Owner Validate",
             "Billing Team",
-            "Team Commit",
-            "Billing Team Commit",
             "Ledger Team",
             "Payment",
             "Ledger"
@@ -770,58 +705,54 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 19,
+                  "start_offset": 3
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 16,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 36,
+                  "start_offset": 24
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 57,
+                  "start_offset": 46
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
@@ -850,7 +781,7 @@
               }
             }
           ],
-          "step": "Extracted 9 entities from document text"
+          "step": "Extracted 6 entities from document text"
         },
         {
           "entities": [],
@@ -923,39 +854,33 @@
           "entities": [],
           "phase": "D5-ontology",
           "source": [],
-          "step": "Discovered 4 classes, 2 properties, 1 relationship"
+          "step": "Discovered 3 classes, 2 properties, 1 relationship"
         },
         {
           "entities": [
             "Billing Pipeline",
             "Acme Corporation",
-            "Owner Validate",
             "Billing Team",
-            "Team Commit",
-            "Billing Team Commit",
             "Ledger Team",
             "Payment",
             "Ledger"
           ],
           "phase": "D6-resolution",
           "source": [],
-          "step": "Resolved 9 entities: 0 matched, 0 ambiguous, 9 unmatched"
+          "step": "Resolved 6 entities: 0 matched, 0 ambiguous, 6 unmatched"
         },
         {
           "entities": [
             "Billing Pipeline",
             "Acme Corporation",
-            "Owner Validate",
             "Billing Team",
-            "Team Commit",
-            "Billing Team Commit",
             "Ledger Team",
             "Payment",
             "Ledger"
           ],
           "phase": "D7-reconcile",
           "source": [],
-          "step": "Reconciled: 9 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+          "step": "Reconciled: 6 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
         }
       ]
     },
@@ -1212,26 +1137,36 @@
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 19,
+                "start_offset": 3
+              }
+            }
           },
           "mentions": [
             "Billing Pipeline"
           ],
           "name": "Billing Pipeline",
-          "type_hint": "Person"
+          "type_hint": "Thing"
         },
         {
           "confidence": 0.8500000238418579,
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 16,
+                "start_offset": 0
+              }
+            }
           },
           "mentions": [
             "Acme Corporation processes payments nightly."
@@ -1244,63 +1179,20 @@
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
-          },
-          "mentions": [
-            "Owner Validate"
-          ],
-          "name": "Owner Validate",
-          "type_hint": "Person"
-        },
-        {
-          "confidence": 0.8500000238418579,
-          "evidence": {
-            "confidence": 0.8500000238418579,
-            "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
-            "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 36,
+                "start_offset": 24
+              }
+            }
           },
           "mentions": [
             "Step | Owner\nValidate | Billing Team\nCommit | Ledger Team"
           ],
           "name": "Billing Team",
-          "type_hint": "Person"
-        },
-        {
-          "confidence": 0.8500000238418579,
-          "evidence": {
-            "confidence": 0.8500000238418579,
-            "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
-            "page": 1,
-            "source": null
-          },
-          "mentions": [
-            "Team Commit"
-          ],
-          "name": "Team Commit",
-          "type_hint": "Person"
-        },
-        {
-          "confidence": 0.8500000238418579,
-          "evidence": {
-            "confidence": 0.8500000238418579,
-            "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
-            "page": 1,
-            "source": null
-          },
-          "mentions": [
-            "Billing Team Commit"
-          ],
-          "name": "Billing Team Commit",
           "type_hint": "Thing"
         },
         {
@@ -1308,16 +1200,21 @@
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 57,
+                "start_offset": 46
+              }
+            }
           },
           "mentions": [
             "Step | Owner\nValidate | Billing Team\nCommit | Ledger Team"
           ],
           "name": "Ledger Team",
-          "type_hint": "Person"
+          "type_hint": "Thing"
         },
         {
           "confidence": 0.8500000238418579,
@@ -1499,47 +1396,46 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 19,
+                  "start_offset": 3
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 36,
+                  "start_offset": 24
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 57,
+                  "start_offset": 46
+                }
+              }
             }
           ],
-          "name": "Person",
-          "parent": "Person",
-          "signal_count": 5
+          "name": "Thing",
+          "parent": null,
+          "signal_count": 3
         },
         {
           "confidence": 0.8500000238418579,
@@ -1548,31 +1444,19 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 16,
+                  "start_offset": 0
+                }
+              }
             }
           ],
           "name": "Organization",
           "parent": "Organization",
-          "signal_count": 1
-        },
-        {
-          "confidence": 0.8500000238418579,
-          "description": "Discovered from entity 'Billing Team Commit'",
-          "evidence": [
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
-            }
-          ],
-          "name": "Thing",
-          "parent": null,
           "signal_count": 1
         },
         {
@@ -1615,7 +1499,7 @@
       "method": "ir-discovery-mock",
       "properties": [
         {
-          "class_name": "Person",
+          "class_name": "Thing",
           "confidence": 0.8500000238418579,
           "evidence": [
             {
@@ -1632,7 +1516,7 @@
           "value_type": "Float"
         },
         {
-          "class_name": "Person",
+          "class_name": "Thing",
           "confidence": 0.8500000238418579,
           "evidence": [
             {
@@ -1686,23 +1570,28 @@
         "ambiguous_count": 0,
         "average_confidence": 0.0,
         "matched_count": 0,
-        "total_entities": 9,
-        "unmatched_count": 9
+        "total_entities": 6,
+        "unmatched_count": 6
       },
       "unmatched": [
         {
           "candidates": [],
           "confidence": 0.0,
           "entity_name": "Billing Pipeline",
-          "entity_type": "Person",
+          "entity_type": "Thing",
           "evidence": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 19,
+                  "start_offset": 3
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -1717,28 +1606,15 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
-            }
-          ],
-          "matched_koid": null,
-          "needs_creation": true
-        },
-        {
-          "candidates": [],
-          "confidence": 0.0,
-          "entity_name": "Owner Validate",
-          "entity_type": "Person",
-          "evidence": [
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 16,
+                  "start_offset": 0
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -1748,51 +1624,20 @@
           "candidates": [],
           "confidence": 0.0,
           "entity_name": "Billing Team",
-          "entity_type": "Person",
-          "evidence": [
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
-            }
-          ],
-          "matched_koid": null,
-          "needs_creation": true
-        },
-        {
-          "candidates": [],
-          "confidence": 0.0,
-          "entity_name": "Team Commit",
-          "entity_type": "Person",
-          "evidence": [
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 1,
-              "source": null
-            }
-          ],
-          "matched_koid": null,
-          "needs_creation": true
-        },
-        {
-          "candidates": [],
-          "confidence": 0.0,
-          "entity_name": "Billing Team Commit",
           "entity_type": "Thing",
           "evidence": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 36,
+                  "start_offset": 24
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -1802,15 +1647,20 @@
           "candidates": [],
           "confidence": 0.0,
           "entity_name": "Ledger Team",
-          "entity_type": "Person",
+          "entity_type": "Thing",
           "evidence": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 57,
+                  "start_offset": 46
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -1879,22 +1729,22 @@
         },
         {
           "duration_us": 0,
-          "item_count": 15,
+          "item_count": 12,
           "phase": "D4-ir"
         },
         {
           "duration_us": 0,
-          "item_count": 7,
+          "item_count": 6,
           "phase": "D5-ontology"
         },
         {
           "duration_us": 0,
-          "item_count": 9,
+          "item_count": 6,
           "phase": "D6-resolution"
         },
         {
           "duration_us": 0,
-          "item_count": 9,
+          "item_count": 6,
           "phase": "D7-reconcile"
         },
         {
