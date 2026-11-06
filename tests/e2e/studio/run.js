@@ -221,6 +221,12 @@ async function main() {
     ok('no CSP violations (a violation = a handler/script CSP blocked)', violations.length === 0, violations.join(' ; '));
     const realErrors = consoleErrors.filter(e => !/Failed to load resource/.test(e));
     ok('no page/console errors', realErrors.length === 0, realErrors.slice(0, 4).join(' || '));
+
+    // ---- a reload keeps the old cookie; signing in again must still work ----
+    await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });
+    await page.fill('#login-user', 'admin'); await page.fill('#login-pass', PW);
+    await page.click('[data-click="doLogin"]'); await page.waitForSelector('#login-overlay', { state: 'hidden', timeout: 10000 }).catch(() => {});
+    ok('sign in again over a stale session cookie', await page.isHidden('#login-overlay'), await page.innerText('#login-error').catch(() => ''));
   } finally {
     await cleanup();
   }

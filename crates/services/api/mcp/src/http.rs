@@ -663,6 +663,9 @@ fn has_header(req: &str, name: &str) -> bool {
 /// cookie from cross-site requests; this is the second layer.
 fn cookie_write_without_csrf(method: &str, path: &str, req: &str) -> bool {
     !matches!(method, "GET" | "HEAD" | "OPTIONS")
+        // login is credential-based and ignores any cookie: a stale one must
+        // not lock the sign-in form out
+        && path.split('?').next() != Some("/api/login")
         && !path.contains("token=")
         && !has_header(req, "authorization")
         && session_cookie(req).is_some()
