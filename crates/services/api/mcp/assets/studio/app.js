@@ -645,7 +645,11 @@ async function inspectorLoadKOID(koid) {
 // The ontology the compiler uses (GET /api/v1/ontology) — never an arbitrary
 // row. Its version and source are kept for saveOntology's CAS.
 let ontologyVersion = null, ontologySource = null;
-async function loadOntologyPanel() {
+// fill = true also loads the active definition into the editor (empty when the
+// scope has none): after a tenant switch or a save, never leave another
+// scope's text there to be saved over this one.
+async function loadOntologyPanel(fill) {
+  const editor = document.getElementById('ontology-yaml-input');
   try {
     const tenant = document.getElementById('ontology-tenant').value;
     const raw = await api('/api/v1/ontology' + (tenant ? '?tenant=' + encodeURIComponent(tenant) : ''));
@@ -657,12 +661,14 @@ async function loadOntologyPanel() {
 
     if (!data.results || data.results.length === 0) {
       ontologyVersion = null; ontologySource = null;
+      if (fill) editor.value = '';
       statusDiv.innerHTML = '<div class="empty-state">No ontology defined yet. Use the form below to create one.</div>';
       classesDiv.innerHTML = ''; relsDiv.innerHTML = ''; mapsDiv.innerHTML = '';
       return;
     }
     const ko = data.results[0];
     ontologyVersion = ko.version; ontologySource = ko.source;
+    if (fill) editor.value = JSON.stringify(ko.properties || {}, null, 2);
     window.__ontologyClasses = ((ko.properties||{}).classes||[]).map(c => c && c.name).filter(Boolean);
     const props = ko.properties || {};
     statusDiv.innerHTML = '<div style="color:var(--green);margin-bottom:8px;">✓ Ontology loaded — <b>'+ esc(props.namespace||'?') +'</b> v'+ esc(props.version||'?') +' <span style="color:var(--muted);">('+ esc(ko.source||'?') +', revision '+ esc(ko.version) +')</span></div>';
@@ -718,7 +724,7 @@ async function discoverOntology(save) {
     const html = esc(d.classes)+' classes, '+esc(d.relationships)+' relationships, '+esc(d.mappings)+' mappings from '+esc((d.types_discovered||[]).length)+' types';
     if (save) {
       msg.innerHTML = '<span style="color:var(--green);">✓ Saved: '+html+esc(d.changed===false?' (unchanged)':'')+'.</span>';
-      loadOntologyPanel();
+      loadOntologyPanel(true);
     } else {
       msg.innerHTML = '<span style="color:var(--accent);">Proposal: '+html+' — not saved yet.</span> <button class="btn btn-pri btn-sm" data-click="discoverOntologySave">Save discovered ontology</button>';
     }
@@ -744,7 +750,7 @@ async function saveOntology() {
     const r = await apiPost('/api/v1/ontology', payload);
     const d = r.data || r;
     msg.innerHTML = '<span style="color:var(--green);">✓ Ontology saved (revision '+esc(d.version)+').</span>';
-    loadOntologyPanel();
+    loadOntologyPanel(true);
   } catch(e) {
     msg.innerHTML = '<span style="color:var(--red);">'+esc(e.message)+' — reload the panel if the ontology changed since you opened it.</span>';
   }
@@ -1488,7 +1494,7 @@ const ACTIONS = Object.assign(Object.create(null), {
   loadGraphAll: el => loadGraphAll(),
   renderExplorerTree: el => renderExplorerTree(),
   saveOntology: el => saveOntology(),
-  loadOntologyPanel: el => loadOntologyPanel(),
+  loadOntologyPanel: el => loadOntologyPanel(true),
   discoverOntology: el => discoverOntology(),
   discoverOntologySave: el => discoverOntology(true),
   inspectorSearch: el => inspectorSearch(),
