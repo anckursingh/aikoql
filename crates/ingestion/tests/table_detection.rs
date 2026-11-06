@@ -3,8 +3,9 @@
 //! as Table nodes with a `TablePayload`; the words stay in the page text.
 
 use aikoql_ingestion::{
-    document_model_to_ast, extract_document, extract_image_with, tool_available, AstNode,
-    AstPayload, DocumentModel, OcrPageResult, OcrProvider, OcrWord, PageModel, TablePayload,
+    document_model_to_ast, extract_document, extract_image_with, pdf_words_available,
+    tool_available, AstNode, AstPayload, DocumentModel, OcrPageResult, OcrProvider, OcrWord,
+    PageModel, TablePayload,
 };
 
 fn grid(t: &TablePayload) -> Vec<Vec<String>> {
@@ -224,8 +225,8 @@ const BENCH: &str = "tests/fixtures/extraction-bench";
 
 #[test]
 fn invoice_pdf_ruled_table_is_detected_from_the_text_layer() {
-    if !tool_available("pdftotext") {
-        eprintln!("Skipping: pdftotext (poppler) not on PATH");
+    if !pdf_words_available() {
+        eprintln!("Skipping: pdftotext with -tsv (poppler >= 22) not available");
         return;
     }
     let doc = extract_document(&format!("{BENCH}/invoice.pdf"), "application/pdf", None).unwrap();

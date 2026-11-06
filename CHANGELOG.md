@@ -24,6 +24,8 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   stops when the document finishes or you leave the Documents panel, and resumes when you come back.
 
 ### Fixed
+- PDF table cells of the extraction-quality ratchet and `table_detection` now skip unless `pdftotext` supports
+  `-tsv` (`pdf_words_available()`), not merely exists: the Windows CI runner has a `pdftotext` that scored 0.000.
 - Studio Knowledge Explorer showed "No objects of type aikoql:document found" for a type that has objects:
   `/api/graph` did not percent-decode its `type` and `tenant` filters, so any type containing `:` never matched.
 

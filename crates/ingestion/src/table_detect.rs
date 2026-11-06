@@ -381,6 +381,19 @@ pub(crate) fn parse_pdftotext_tsv(tsv: &str) -> Vec<Vec<OcrWord>> {
     pages
 }
 
+/// True when `pdftotext` is installed AND understands `-tsv` (poppler before
+/// ~22 has the tool but not the flag, so `tool_available` is not enough).
+pub fn pdf_words_available() -> bool {
+    std::process::Command::new("pdftotext")
+        .arg("-h")
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout).contains("-tsv")
+                || String::from_utf8_lossy(&o.stderr).contains("-tsv")
+        })
+        .unwrap_or(false)
+}
+
 /// Word boxes of every page of a PDF via `pdftotext -tsv`; `None` when
 /// poppler is missing, fails or exceeds `timeout_secs`.
 /// `range` limits it to pages first..=last (still indexed by real page).

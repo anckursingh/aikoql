@@ -30,8 +30,8 @@
 //! poppler-utils (so the PDF table cell runs there) but not tesseract.
 
 use aikoql_ingestion::{
-    document_model_to_ast, document_model_to_ir, extract_document, tool_available, AstNode,
-    AstPayload, MockSemanticAnalyzer, TablePayload,
+    document_model_to_ast, document_model_to_ir, extract_document, pdf_words_available,
+    tool_available, AstNode, AstPayload, MockSemanticAnalyzer, TablePayload,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -132,7 +132,7 @@ fn mean(v: &[f64]) -> Option<f64> {
 /// Measured metrics; a metric is absent when its tool is missing.
 fn measure() -> BTreeMap<&'static str, f64> {
     let has_tesseract = tool_available("tesseract");
-    let has_pdftotext = tool_available("pdftotext");
+    let has_pdftotext = pdf_words_available();
     // [tuned corpus, held-out corpus] × (correct, predicted, gold).
     let mut ent = [[0usize; 3]; 2];
     let (mut pdf_cells, mut scan_cells, mut ocr) = (Vec::new(), Vec::new(), Vec::new());
@@ -226,7 +226,7 @@ fn measure() -> BTreeMap<&'static str, f64> {
             } else if has_pdftotext {
                 pdf_cells.push(best);
             } else {
-                eprintln!("[XBENCH {name}] pdf table cell skipped: pdftotext not on PATH");
+                eprintln!("[XBENCH {name}] pdf table cell skipped: pdftotext -tsv unavailable");
             }
         }
         for p in gt["no_table_pages"].as_array().unwrap() {

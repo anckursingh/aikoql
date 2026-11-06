@@ -123,7 +123,7 @@ pub use ocr::{
 
 // M3: deterministic table detection from word boxes (PDF text layer, OCR).
 mod table_detect;
-pub use table_detect::{detect_tables, text_with_tables, DetectedTable};
+pub use table_detect::{detect_tables, pdf_words_available, text_with_tables, DetectedTable};
 
 // HLD §27: extractor registry + the XLSX/PPTX/CSV extractors (M4).
 mod extractors;
