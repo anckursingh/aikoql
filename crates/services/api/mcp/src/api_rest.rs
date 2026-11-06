@@ -1896,6 +1896,34 @@ mod tests {
     }
 
     #[test]
+    fn batch_a_document_within_max_pages_over_the_image_limit_is_split_until_it_fits() {
+        let (k, db) = m3_kernel("batch-split");
+        // 4 slides fit max_pages; only slide 4 has an image, so the deck is
+        // over max_image_count = 0 and is split until just slide 4 fails
+        let policy = aikoql_ingestion::ProcessingPolicy {
+            max_pages: 4,
+            max_image_count: 0,
+            ..Default::default()
+        };
+        let resp = b_ingest(&k, &db, &policy);
+        assert_eq!(resp["status"], "processing", "{resp}");
+        let koid = resp["koid"].as_str().unwrap().to_string();
+        let done = b_wait(&k, &db, &koid);
+        assert_eq!(done["status"], "partial", "{done}");
+        assert_eq!(done["batches_done"], done["batches_total"], "{done}");
+        let batches = done["batches"].as_array().unwrap();
+        let mut next = 1;
+        for b in batches {
+            assert_eq!(b["first_page"], next, "contiguous, in page order: {done}");
+            next = b["last_page"].as_u64().unwrap() + 1;
+            let failed = b["status"] == "failed";
+            assert_eq!(failed, b["first_page"] == 4, "only slide 4 fails: {done}");
+        }
+        assert_eq!(next, 5, "{done}");
+        m3_cleanup(k, db);
+    }
+
+    #[test]
     fn batch_compile_while_processing_is_a_409_not_a_500() {
         let (k, db) = m3_kernel("batch-409");
         let admin = crate::Subject::with_roles("admin", &["admin"]);
