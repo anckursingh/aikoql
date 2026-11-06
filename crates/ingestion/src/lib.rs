@@ -125,6 +125,11 @@ pub use ocr::{
 mod table_detect;
 pub use table_detect::{detect_tables, text_with_tables, DetectedTable};
 
+// HLD §27: extractor registry + the XLSX/PPTX/CSV extractors (M4).
+mod extractors;
+mod office;
+pub use extractors::{DocumentExtractor, DocumentSource, ExtractorRegistry};
+
 mod asset_store;
 pub use asset_store::{content_hash, load_asset, mime_from_extension, store_asset};
 
@@ -333,7 +338,9 @@ pub struct DocumentModel {
 }
 
 /// Extract content from a document file on disk.
-/// Returns page-level text for PDFs, single-page for everything else.
+/// Returns page-level text for PDFs, one page per sheet/slide for XLSX/PPTX,
+/// single-page for everything else. Dispatch goes through the default
+/// `ExtractorRegistry` (HLD §27).
 ///
 /// `asset_dir` enables asset persistence: embedded images (PDF DCTDecode,
 /// DOCX media) are content-addressed and stored under `{asset_dir}/{hash}.bin`
@@ -344,18 +351,11 @@ pub fn extract_document(
     mime_type: &str,
     asset_dir: Option<&str>,
 ) -> Result<DocumentModel, String> {
-    match mime_type {
-        "application/pdf" => extract_pdf(file_path, asset_dir),
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
-            extract_docx(file_path, asset_dir)
-        }
-        "text/html" => extract_html(file_path),
-        t if t.starts_with("text/") => extract_text(file_path),
-        t if is_raster_image(t) => {
-            extract_image_with(&TesseractCli::new(), file_path, mime_type, asset_dir)
-        }
-        _ => Err(format!("unsupported mime type: {}", mime_type)),
-    }
+    ExtractorRegistry::with_defaults().extract(&DocumentSource {
+        path: file_path,
+        mime_type,
+        asset_dir,
+    })
 }
 
 /// Raster formats Tesseract/Leptonica read — the set `mime_from_extension`

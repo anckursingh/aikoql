@@ -13,11 +13,14 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
         .get("content_base64")
         .and_then(|v| v.as_str())
         .ok_or("missing: content_base64")?;
-    // Browsers send "" (or octet-stream) for types they do not know: the
-    // extension decides then, so a .png is still read as an image.
+    // A known extension decides: browsers send "", octet-stream or legacy
+    // types (Windows: application/vnd.ms-excel for .csv) for many formats.
+    // An unknown extension falls back to the client's mime type.
+    let by_extension = aikoql_ingestion::mime_from_extension(filename);
     let mime_type = match args.get("mime_type").and_then(|v| v.as_str()) {
-        Some(m) if !m.is_empty() && m != "application/octet-stream" => m.to_string(),
-        _ => aikoql_ingestion::mime_from_extension(filename),
+        _ if by_extension != "application/octet-stream" => by_extension,
+        Some(m) if !m.is_empty() => m.to_string(),
+        _ => by_extension,
     };
     let mime_type = mime_type.as_str();
     // An image no extractor reads would only fail later, at compile: say so now.

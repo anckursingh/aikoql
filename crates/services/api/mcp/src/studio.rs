@@ -384,12 +384,12 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <div class="panel" id="panel-documents">
         <div class="card" style="margin-bottom:12px;">
           <h3>📄 Document Explorer</h3>
-          <p style="font-size:11px;color:var(--muted);">Ingest documents → Knowledge Objects. Upload a PDF, DOCX, HTML, or TXT file, or an image (PNG, JPEG, TIFF, BMP, GIF, WebP), to create queryable knowledge. Text in images is read by OCR when Tesseract is installed on the server.</p>
+          <p style="font-size:11px;color:var(--muted);">Ingest documents → Knowledge Objects. Upload a PDF, DOCX, XLSX, PPTX, CSV, TSV, HTML, Markdown or TXT file, or an image (PNG, JPEG, TIFF, BMP, GIF, WebP), to create queryable knowledge. Spreadsheet sheets, slide tables and tables found in PDFs and scans become structured tables. Text in images is read by OCR when Tesseract is installed on the server; PDF table detection uses poppler's pdftotext when installed.</p>
         </div>
         <div class="card" style="margin-bottom:12px;">
           <h4>Upload Document</h4>
           <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center;">
-            <input type="file" id="doc-file-input" style="padding:6px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;flex:1;min-width:200px;" />
+            <input type="file" id="doc-file-input" accept=".pdf,.docx,.xlsx,.pptx,.csv,.tsv,.html,.htm,.md,.txt,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.webp" style="padding:6px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;flex:1;min-width:200px;" />
             <button class="btn btn-pri btn-sm" data-click="ingestDocument">Ingest</button>
           </div>
           <div id="doc-ingest-result" style="margin-top:8px;"></div>

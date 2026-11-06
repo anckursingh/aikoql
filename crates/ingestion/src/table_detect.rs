@@ -206,19 +206,50 @@ fn grid_from(words: &[OcrWord], rows: &[Vec<Vec<usize>>]) -> Option<DetectedTabl
     if !conf.is_empty() && conf.iter().sum::<f32>() / (conf.len() as f32) < MIN_MEAN_CONFIDENCE {
         return None;
     }
-    // Header detection: a first row holding a number is data, not a header.
-    if grid[0].iter().any(|c| is_numeric_cell(c)) {
-        let header = (1..=bands.len()).map(|i| format!("Column {i}")).collect();
-        grid.insert(0, header);
-    }
     Some(DetectedTable {
-        rows: grid,
+        rows: with_header(grid),
         words: consumed,
     })
 }
 
+/// Header detection: a first row holding a number is data, not a header —
+/// it gets a synthetic "Column N" header row.
+pub(crate) fn with_header(mut grid: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    if grid
+        .first()
+        .is_some_and(|r| r.iter().any(|c| is_numeric_cell(c)))
+    {
+        let n = grid.iter().map(Vec::len).max().unwrap_or(0);
+        grid.insert(0, (1..=n).map(|i| format!("Column {i}")).collect());
+    }
+    grid
+}
+
+/// Rows → the pipe dialect (header detection applied), ragged rows padded.
+pub(crate) fn pipe_table(rows: Vec<Vec<String>>) -> String {
+    let n = rows.iter().map(Vec::len).max().unwrap_or(0);
+    with_header(rows)
+        .into_iter()
+        .map(|mut r| {
+            r.resize(n, String::new());
+            pipe_row(&r)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn pipe_row(cells: &[String]) -> String {
-    let cells: Vec<String> = cells.iter().map(|c| c.replace('|', "/")).collect();
+    // shortcut: a literal '|' in a cell becomes '/', the dialect has no
+    // escape; give TablePayload a direct path if exact cell text matters.
+    let cells: Vec<String> = cells
+        .iter()
+        .map(|c| {
+            c.replace('|', "/")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect();
     format!("| {} |", cells.join(" | "))
 }
 
