@@ -973,6 +973,38 @@ mod tests {
     }
 
     #[test]
+    fn m6_the_ontology_endpoint_scopes_to_the_requested_tenant() {
+        let _serial = crate::http::ontology_serial();
+        let (k, db) = m3_kernel("tenant-scope");
+        for (ns, class, tenant) in [("g", "GlobalClass", None), ("t", "AcmeClass", Some("acme"))] {
+            let mut a = serde_json::json!({
+                "subject": "admin", "roles": ["admin"], "type_name": "Ontology",
+                "properties": m3_def(ns, class),
+            });
+            if let Some(t) = tenant {
+                a["tenant"] = serde_json::json!(t);
+            }
+            crate::tools::tool_remember(&k, &a).expect("remember ontology");
+        }
+        let ns_of = |path: &str| {
+            let (status, body) = m3_call(&k, &db, "GET", path, serde_json::json!({}));
+            assert_eq!(status, "200 OK", "{body}");
+            body["data"]["properties"]["namespace"].clone()
+        };
+        assert_eq!(ns_of("/api/v1/ontology"), "g");
+        assert_eq!(ns_of("/api/v1/ontology?tenant=acme"), "t");
+        let (_, none) = m3_call(
+            &k,
+            &db,
+            "GET",
+            "/api/v1/ontology?tenant=other",
+            serde_json::json!({}),
+        );
+        assert!(none["data"]["active"].is_null(), "{none}");
+        m3_cleanup(k, db);
+    }
+
+    #[test]
     fn m3_saving_updates_the_one_ontology_in_place() {
         let _serial = crate::http::ontology_serial();
         let (k, db) = m3_kernel("save");
