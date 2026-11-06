@@ -4,7 +4,43 @@
 use super::context::Fact;
 use super::protocol::AnswerReply;
 
-pub(crate) fn verify(_answer: &AnswerReply, _facts: &[Fact]) -> Result<(), String> {
+fn norm(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// `Ok` for a refusal, or when every claim quotes a retrieved statement
+/// (trim/case/whitespace-normalised, no fuzzy match) and cites at least one
+/// evidence id, all of which are retrieved koids. The free-text `answer` is
+/// not matched.
+pub(crate) fn verify(answer: &AnswerReply, facts: &[Fact]) -> Result<(), String> {
+    if answer.refusal_reason.is_some() {
+        return Ok(());
+    }
+    if answer.claims.is_empty() {
+        return Err("grounded answer has no claims".into());
+    }
+    let statements: Vec<String> = facts.iter().map(|f| norm(&f.statement)).collect();
+    for c in &answer.claims {
+        if !statements.contains(&norm(&c.statement)) {
+            return Err(format!(
+                "claim not found in retrieved facts: {}",
+                c.statement
+            ));
+        }
+        if c.evidence_ids.is_empty() {
+            return Err("claim cites no evidence".into());
+        }
+        if let Some(bad) = c
+            .evidence_ids
+            .iter()
+            .find(|id| !facts.iter().any(|f| &f.koid == *id))
+        {
+            return Err(format!("evidence id was not retrieved: {bad}"));
+        }
+    }
     Ok(())
 }
 
