@@ -1044,6 +1044,47 @@ mod tests {
     }
 
     #[test]
+    fn m7_saving_with_a_tenant_writes_that_tenants_ontology_only() {
+        let _serial = crate::http::ontology_serial();
+        let (k, db) = m3_kernel("tenant-save");
+        let save = |def: serde_json::Value, extra: serde_json::Value| {
+            let mut body = serde_json::json!({ "definition": def });
+            for (key, v) in extra.as_object().expect("object") {
+                body[key] = v.clone();
+            }
+            m3_call(&k, &db, "POST", "/api/v1/ontology", body)
+        };
+        let (s, g) = save(m3_def("g", "GlobalClass"), serde_json::json!({}));
+        assert_eq!(s, "200 OK", "{g}");
+        let (s, t1) = save(
+            m3_def("t", "AcmeOne"),
+            serde_json::json!({"tenant": "acme"}),
+        );
+        assert_eq!(s, "200 OK", "{t1}");
+        assert_ne!(
+            g["data"]["koid"], t1["data"]["koid"],
+            "tenant save hit the global KO"
+        );
+        // the tenant's own revision is checked, not the global one
+        let v = t1["data"]["version"].clone();
+        let (s, t2) = save(
+            m3_def("t", "AcmeTwo"),
+            serde_json::json!({"tenant": "acme", "expected_version": v}),
+        );
+        assert_eq!(s, "200 OK", "{t2}");
+        assert_eq!(t1["data"]["koid"], t2["data"]["koid"]);
+        assert_eq!(m3_ontology_kos(&k), 2, "one global + one tenant ontology");
+        let ns = |p: &str| {
+            m3_call(&k, &db, "GET", p, serde_json::json!({})).1["data"]["properties"]["classes"][0]
+                ["name"]
+                .clone()
+        };
+        assert_eq!(ns("/api/v1/ontology"), "GlobalClass");
+        assert_eq!(ns("/api/v1/ontology?tenant=acme"), "AcmeTwo");
+        m3_cleanup(k, db);
+    }
+
+    #[test]
     fn m3_a_stale_or_missing_expected_version_cannot_overwrite() {
         let _serial = crate::http::ontology_serial();
         let (k, db) = m3_kernel("cas");
