@@ -185,3 +185,28 @@ fn ck005_logging_in_again_with_a_stale_cookie_still_works() {
     );
     assert_eq!(bad.status, 401, "{}", bad.body);
 }
+
+#[test]
+fn ck006_session_reports_who_is_signed_in() {
+    let srv = serve("006");
+    let (_, pair, _) = login(srv.port);
+    let me = http(srv.port, "GET", "/api/session", &[("Cookie", &pair)], "");
+    assert_eq!(me.status, 200, "{}", me.body);
+    let j: serde_json::Value = serde_json::from_str(&me.body).unwrap();
+    assert_eq!(j["username"], "admin", "{}", me.body);
+    assert!(
+        j["roles"].as_array().is_some_and(|r| !r.is_empty()),
+        "{}",
+        me.body
+    );
+    let none = http(srv.port, "GET", "/api/session", &[], "");
+    assert_eq!(none.status, 401, "{}", none.body);
+    let dead = http(
+        srv.port,
+        "GET",
+        "/api/session",
+        &[("Cookie", "aikoql_session=dead")],
+        "",
+    );
+    assert_eq!(dead.status, 401, "{}", dead.body);
+}
