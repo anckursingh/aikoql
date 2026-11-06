@@ -190,10 +190,10 @@ async function main() {
 
     // ---- admin buttons that need a licence/side effect ---------------------
     await page.click('button[data-panel="admin"]'); await page.waitForTimeout(900);
-    // read before the panel's own 1.5s reload replaces the message
     await page.click('[data-click="adminCreateBackup"]'); await page.waitForTimeout(900);
     ok('Create Backup shows a result', /Backup created|backup/i.test(await page.innerText('#admin-backup-result')), await page.innerText('#admin-backup-result'));
-    await page.waitForTimeout(2200);
+    await page.waitForTimeout(2200); // past the panel's own 1.5s reload
+    ok('Create Backup message survives the panel reload', /Backup created/.test(await page.innerText('#admin-backup-result')), await page.innerText('#admin-backup-result'));
     const verify = await page.$('[data-click="adminVerifyBackup"]');
     if (verify) {
       await verify.click(); await page.waitForTimeout(1500);
