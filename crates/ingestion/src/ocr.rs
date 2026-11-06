@@ -124,6 +124,8 @@ pub trait OcrProvider: Send + Sync {
 pub struct TesseractCli {
     pub tesseract_path: Option<String>,
     pub pdftoppm_path: Option<String>,
+    /// Seconds a single tesseract run may take before it is killed.
+    pub timeout_secs: u64,
 }
 
 impl Default for TesseractCli {
@@ -137,6 +139,7 @@ impl TesseractCli {
         TesseractCli {
             tesseract_path: None,
             pdftoppm_path: None,
+            timeout_secs: 120,
         }
     }
 

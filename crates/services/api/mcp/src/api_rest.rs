@@ -1196,6 +1196,83 @@ mod tests {
         m3_cleanup(k, db);
     }
 
+    fn m9_ingest(
+        k: &crate::Kernel,
+        db: &std::path::Path,
+        filename: &str,
+        mime: &str,
+        bytes: &[u8],
+    ) -> (String, serde_json::Value) {
+        use base64::Engine;
+        m3_call(
+            k,
+            db,
+            "POST",
+            "/api/v1/documents",
+            serde_json::json!({
+                "filename": filename, "mime_type": mime,
+                "content_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+            }),
+        )
+    }
+
+    #[test]
+    fn m9_an_image_type_no_extractor_reads_is_refused_at_upload() {
+        let (k, db) = m3_kernel("heic");
+        let (status, body) = m9_ingest(&k, &db, "IMG_0001.heic", "image/heic", b"ftypheic");
+        assert_eq!(status, "400 Bad Request", "{body}");
+        let msg = body["error"].as_str().unwrap_or("");
+        assert!(
+            msg.contains("unsupported mime type") && msg.contains("PNG or JPEG"),
+            "{body}"
+        );
+        // non-image types keep the old behaviour: stored, just not extractable
+        let (status, body) = m9_ingest(&k, &db, "a.zip", "application/zip", b"PK\x03\x04");
+        assert_eq!(status, "200 OK", "{body}");
+        m3_cleanup(k, db);
+    }
+
+    #[test]
+    fn m9_re_uploading_an_image_after_ocr_is_installed_refreshes_its_status() {
+        if !aikoql_ingestion::tool_available("tesseract") {
+            eprintln!("skip: tesseract not installed");
+            return;
+        }
+        let png = include_bytes!("../../../../ingestion/tests/fixtures/ocr-text.png");
+        let (k, db) = m3_kernel("stale-status");
+        let sha = aikoql_ingestion::content_hash(png);
+        // as left behind by an upload made while OCR was not installed
+        k.deploy_document(
+            "scan.png",
+            "image/png",
+            &sha,
+            png.len() as i64,
+            1,
+            0,
+            "ocr_unavailable",
+            &crate::Subject::with_roles("admin", &["admin"]),
+        )
+        .expect("seed stale document");
+        let (status, body) = m9_ingest(&k, &db, "scan.png", "image/png", png);
+        assert_eq!(status, "200 OK", "{body}");
+        assert_eq!(body["data"]["status"], "ocr_complete", "{body}");
+        let (_, list) = m3_call(
+            &k,
+            &db,
+            "GET",
+            "/api/v1/list-documents",
+            serde_json::json!({}),
+        );
+        let doc = &list["data"]["documents"][0];
+        assert_eq!(doc["status"], "ocr_complete", "{list}");
+        assert!(doc["char_count"].as_i64().unwrap_or(0) > 0, "{list}");
+        assert_eq!(
+            list["data"]["documents"].as_array().map(|d| d.len()),
+            Some(1)
+        );
+        m3_cleanup(k, db);
+    }
+
     #[test]
     fn m3_a_stale_or_missing_expected_version_cannot_overwrite() {
         let _serial = crate::http::ontology_serial();

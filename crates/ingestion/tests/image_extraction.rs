@@ -139,6 +139,7 @@ fn im006_no_ocr_tool_is_reported_as_ocr_unavailable_not_extracted() {
     let missing = TesseractCli {
         tesseract_path: Some("/nonexistent/tesseract".into()),
         pdftoppm_path: None,
+        ..TesseractCli::new()
     };
     let doc = extract_image_with(&missing, img.to_str().unwrap(), "image/png", None).unwrap();
     assert_eq!(doc.pages[0].text, "");
@@ -289,6 +290,7 @@ fn im011_real_tesseract_reads_png_and_jpeg_and_the_text_reaches_compile() {
         let no_pdftoppm = TesseractCli {
             tesseract_path: None,
             pdftoppm_path: Some("/nonexistent/pdftoppm".into()),
+            ..TesseractCli::new()
         };
         assert!(!no_pdftoppm.available());
         let doc = extract_image_with(&no_pdftoppm, path.to_str().unwrap(), mime, None).unwrap();
@@ -330,5 +332,29 @@ fn im012_real_tesseract_reads_a_scanned_pdf() {
     }
     assert_eq!(page.source, "ocr");
     assert_eq!(doc.ocr_stats.as_ref().unwrap().status(), "ocr_complete");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[cfg(unix)]
+#[test]
+fn im013_a_hung_tesseract_is_killed_and_reported() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = scratch("013");
+    let img = d.join("scan.png");
+    std::fs::write(&img, PNG).unwrap();
+    let fake = d.join("tesseract");
+    std::fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let hung = TesseractCli {
+        tesseract_path: Some(fake.to_string_lossy().into()),
+        timeout_secs: 1,
+        ..TesseractCli::new()
+    };
+    let started = std::time::Instant::now();
+    let err = hung
+        .recognize(img.to_str().unwrap(), "eng", d.to_str().unwrap())
+        .unwrap_err();
+    assert!(err.contains("timed out"), "{err}");
+    assert!(started.elapsed().as_secs() < 10, "not killed in time");
     let _ = std::fs::remove_dir_all(&d);
 }
