@@ -159,6 +159,9 @@ function loadTenants() {
     Object.values(d.schema).forEach(info => { if (info.tenants) info.tenants.forEach(t => tenants.add(t)); });
     const opts = '<option value="">Default tenant</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
     document.getElementById('query-tenant').innerHTML = opts;
+    const ot = document.getElementById('ontology-tenant'), cur = ot.value;
+    ot.innerHTML = '<option value="">Global</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
+    ot.value = cur;
     document.getElementById('graph-tenant').innerHTML = '<option value="">All tenants</option>' + [...tenants].map(t => '<option>'+esc(t)+'</option>').join('');
   }).catch(() => {});
 }
@@ -639,7 +642,8 @@ async function inspectorLoadKOID(koid) {
 let ontologyVersion = null, ontologySource = null;
 async function loadOntologyPanel() {
   try {
-    const raw = await api('/api/v1/ontology');
+    const tenant = document.getElementById('ontology-tenant').value;
+    const raw = await api('/api/v1/ontology' + (tenant ? '?tenant=' + encodeURIComponent(tenant) : ''));
     const data = {results: (raw.data || raw).properties ? [raw.data || raw] : []};
     const statusDiv = document.getElementById('ontology-status');
     const classesDiv = document.getElementById('ontology-classes');
@@ -718,6 +722,7 @@ async function discoverOntology(save) {
 
 async function saveOntology() {
   const msg = document.getElementById('ontology-save-msg');
+  if (document.getElementById('ontology-tenant').value) { msg.innerHTML = '<span style="color:var(--red);">Tenant ontologies are read-only here — switch to Global to save.</span>'; return; }
   msg.innerHTML = '<span style="color:var(--muted);">Saving...</span>';
   try {
     const raw = document.getElementById('ontology-yaml-input').value.trim();
@@ -1476,6 +1481,7 @@ const ACTIONS = Object.assign(Object.create(null), {
   loadGraphAll: el => loadGraphAll(),
   renderExplorerTree: el => renderExplorerTree(),
   saveOntology: el => saveOntology(),
+  loadOntologyPanel: el => loadOntologyPanel(),
   discoverOntology: el => discoverOntology(),
   discoverOntologySave: el => discoverOntology(true),
   inspectorSearch: el => inspectorSearch(),

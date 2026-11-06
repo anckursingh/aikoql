@@ -668,8 +668,9 @@ pub(crate) fn tool_discover_ontology(k: &Kernel, args: &J) -> Result<J, String> 
 /// GET /api/v1/ontology — the active ontology, exactly as the compiler sees
 /// it (so Studio never shows one ontology while queries compile against
 /// another).
-pub(crate) fn tool_get_ontology(k: &Kernel, _args: &J) -> Result<J, String> {
-    match crate::http::active_ontology(k) {
+pub(crate) fn tool_get_ontology(k: &Kernel, args: &J) -> Result<J, String> {
+    let tenant = discovery_tenant(args)?;
+    match crate::http::active_ontology_for(k, tenant.as_deref()) {
         None => Ok(json!({"active": null})),
         Some((ko, source)) => {
             let mut j = crate::helpers::ko_json(&ko);

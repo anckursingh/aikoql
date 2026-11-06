@@ -297,6 +297,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
         <div class="card">
           <h3>Ontology Definition</h3>
           <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Each ontology defines classes, relationships, property types, and source mappings for semantic querying across PostgreSQL, Neo4j, MongoDB, and Knowledge Objects.</p>
+          <label style="font-size:11px;color:var(--muted);">Tenant <select id="ontology-tenant" data-change="loadOntologyPanel"><option value="">Global</option></select></label>
           <div id="ontology-status"><div class="loading">Loading ontology...</div></div>
           <div id="ontology-classes"></div>
           <div id="ontology-relationships"></div>
