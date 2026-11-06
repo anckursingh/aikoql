@@ -1694,4 +1694,307 @@ mod tests {
         let a = with_principal(json!({"subject": "hacker"}), Some("bogus"), &sessions);
         assert_eq!(a["subject"], "hacker");
     }
+
+    // ---- Over-limit documents are processed batch by batch ----------------
+
+    fn b_office(name: &str) -> Vec<u8> {
+        std::fs::read(format!(
+            "{}/../../../ingestion/tests/fixtures/office/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("fixture")
+    }
+
+    fn b_open(db: &std::path::Path) -> crate::Kernel {
+        crate::Kernel::open(
+            std::sync::Arc::new(aikoql_storage_v2::AikoqlStorageEngineV2::open(db).expect("open")),
+            std::sync::Arc::new(crate::SystemClock),
+            0,
+        )
+        .expect("open kernel")
+    }
+
+    const B_PPTX: &str =
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
+    fn b_ingest(
+        k: &crate::Kernel,
+        db: &std::path::Path,
+        policy: &aikoql_ingestion::ProcessingPolicy,
+    ) -> serde_json::Value {
+        use base64::Engine;
+        crate::tools::ingestion::document_ingest_with(
+            k,
+            &serde_json::json!({
+                "filename": "deck.pptx", "mime_type": B_PPTX,
+                "content_base64": base64::engine::general_purpose::STANDARD.encode(b_office("deck.pptx")),
+                "subject": "admin", "roles": ["admin"],
+            }),
+            &db.to_string_lossy(),
+            policy,
+        )
+        .expect("ingest")
+    }
+
+    /// Polls REST status to a terminal state (bounded; the worker is fast).
+    fn b_wait(k: &crate::Kernel, db: &std::path::Path, koid: &str) -> serde_json::Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let path = format!("/api/v1/documents/{koid}/status");
+            let (status, body) = m3_call(k, db, "GET", &path, serde_json::json!({}));
+            assert_eq!(status, "200 OK", "{body}");
+            if body["data"]["status"] != "processing" {
+                return body["data"].clone();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never finished: {body}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// Every number under a "page"/"page_number" key in a JSON tree.
+    fn b_pages(v: &serde_json::Value, out: &mut std::collections::BTreeSet<u64>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                for (key, val) in m {
+                    if key == "page" || key == "page_number" {
+                        if let Some(n) = val.as_u64() {
+                            out.insert(n);
+                        }
+                    }
+                    b_pages(val, out);
+                }
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|x| b_pages(x, out)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn batch_an_over_limit_document_is_processed_in_batches_then_compiles_whole() {
+        let (k, db) = m3_kernel("batch-ok");
+        let policy = aikoql_ingestion::ProcessingPolicy {
+            max_pages: 1,
+            ..Default::default()
+        };
+        let resp = b_ingest(&k, &db, &policy);
+        assert_eq!(resp["status"], "processing", "{resp}");
+        assert_eq!(resp["page_count"], 4, "{resp}");
+        assert_eq!(resp["batches_total"], 4, "{resp}");
+        let msg = resp["message"].as_str().unwrap_or("");
+        assert!(msg.contains("4 batches") && msg.contains("wait"), "{resp}");
+        let koid = resp["koid"].as_str().unwrap().to_string();
+
+        let done = b_wait(&k, &db, &koid);
+        assert_eq!(done["status"], "extracted", "{done}");
+        assert_eq!(done["batches_done"], 4, "{done}");
+        assert_eq!(done["pages_done"], 4, "{done}");
+        let batches = done["batches"].as_array().expect("batches").clone();
+        assert_eq!(batches.len(), 4, "{done}");
+        let mut chars = 0;
+        for (i, b) in batches.iter().enumerate() {
+            assert_eq!(b["first_page"], i as u64 + 1, "{b}");
+            assert_eq!(b["last_page"], i as u64 + 1, "{b}");
+            assert_eq!(b["status"], "extracted", "{b}");
+            chars += b["char_count"].as_i64().unwrap_or(0);
+        }
+        assert!(chars > 0 && done["char_count"] == chars, "{done}");
+
+        let (status, list) = m3_call(
+            &k,
+            &db,
+            "GET",
+            "/api/v1/list-documents",
+            serde_json::json!({}),
+        );
+        assert_eq!(status, "200 OK");
+        let row = &list["data"]["documents"][0];
+        assert_eq!(
+            (row["batches_total"].clone(), row["batches_done"].clone()),
+            (4.into(), 4.into()),
+            "{list}"
+        );
+
+        // compile reads the stored batch results (the global policy would
+        // not matter): every slide, real page numbers
+        let (status, compiled) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/documents/compile",
+            serde_json::json!({ "koid": koid }),
+        );
+        assert_eq!(status, "200 OK", "{compiled}");
+        let mut pages = std::collections::BTreeSet::new();
+        b_pages(&compiled["data"], &mut pages);
+        assert!(
+            pages.contains(&4) && pages.iter().all(|p| (1..=4).contains(p)),
+            "{pages:?}"
+        );
+        assert_eq!(
+            compiled["data"]["batches"].as_array().map(|a| a.len()),
+            Some(4)
+        );
+        m3_cleanup(k, db);
+    }
+
+    #[test]
+    fn batch_a_failed_batch_is_recorded_and_the_others_are_kept() {
+        let (k, db) = m3_kernel("batch-partial");
+        // slides with an image fail their batch; the rest succeed
+        let policy = aikoql_ingestion::ProcessingPolicy {
+            max_pages: 1,
+            max_image_count: 0,
+            ..Default::default()
+        };
+        let resp = b_ingest(&k, &db, &policy);
+        assert_eq!(resp["status"], "processing", "{resp}");
+        let koid = resp["koid"].as_str().unwrap().to_string();
+        let done = b_wait(&k, &db, &koid);
+        assert_eq!(done["status"], "partial", "{done}");
+        let batches = done["batches"].as_array().unwrap();
+        let failed: Vec<_> = batches.iter().filter(|b| b["status"] == "failed").collect();
+        assert!(!failed.is_empty() && failed.len() < 4, "{done}");
+        assert!(
+            failed.iter().all(|b| b["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("max_image_count")),
+            "{done}"
+        );
+        assert!(
+            done["message"].as_str().unwrap_or("").contains("failed"),
+            "{done}"
+        );
+        let (status, compiled) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/documents/compile",
+            serde_json::json!({ "koid": koid }),
+        );
+        assert_eq!(
+            status, "200 OK",
+            "a partial document compiles what was read: {compiled}"
+        );
+        assert_eq!(
+            compiled["data"]["failed_batches"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(failed.len()),
+            "{compiled}"
+        );
+        m3_cleanup(k, db);
+    }
+
+    #[test]
+    fn batch_compile_while_processing_is_a_409_not_a_500() {
+        let (k, db) = m3_kernel("batch-409");
+        let admin = crate::Subject::with_roles("admin", &["admin"]);
+        let r = k
+            .deploy_document(
+                "big.pdf",
+                "application/pdf",
+                "abc",
+                10,
+                50,
+                0,
+                "processing",
+                &admin,
+            )
+            .unwrap();
+        let (status, body) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/documents/compile",
+            serde_json::json!({ "koid": r.koid.to_hex() }),
+        );
+        assert_eq!(status, "409 Conflict", "{body}");
+        let msg = body["error"].as_str().unwrap_or("");
+        assert!(
+            msg.contains("still processing") && msg.contains("wait"),
+            "{msg}"
+        );
+        m3_cleanup(k, db);
+    }
+
+    #[test]
+    fn batch_a_restart_marks_unfinished_documents_interrupted() {
+        let (k, db) = m3_kernel("batch-restart");
+        let alice = crate::Subject::with_roles("alice", &[]).in_tenant("t1");
+        let r = k
+            .deploy_document(
+                "big.pdf",
+                "application/pdf",
+                "abc",
+                10,
+                50,
+                0,
+                "processing",
+                &alice,
+            )
+            .unwrap();
+        drop(k);
+        let k = b_open(&db); // the restart
+        assert_eq!(
+            crate::tools::ingestion::interrupt_unfinished_documents(&k),
+            1
+        );
+        let path = format!("/api/v1/documents/{}/status", r.koid.to_hex());
+        let (_, body) = m3_call(&k, &db, "GET", &path, serde_json::json!({}));
+        assert_eq!(body["data"]["status"], "interrupted", "{body}");
+        assert!(
+            body["data"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("upload"),
+            "{body}"
+        );
+        let (status, body) = m3_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/documents/compile",
+            serde_json::json!({ "koid": r.koid.to_hex() }),
+        );
+        assert_eq!(status, "409 Conflict", "{body}");
+        assert_eq!(
+            crate::tools::ingestion::interrupt_unfinished_documents(&k),
+            0,
+            "idempotent"
+        );
+
+        // re-uploading an interrupted document processes it again
+        let policy = aikoql_ingestion::ProcessingPolicy {
+            max_pages: 2,
+            ..Default::default()
+        };
+        let first = b_ingest(&k, &db, &policy);
+        let koid = first["koid"].as_str().unwrap().to_string();
+        b_wait(&k, &db, &koid);
+        let admin = crate::Subject::with_roles("admin", &["admin"]);
+        let deck = k
+            .list_documents(&admin)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.koid.to_hex() == koid)
+            .unwrap();
+        k.set_document_properties(
+            &deck.koid,
+            [(
+                "status".to_string(),
+                crate::Value::Text("interrupted".into()),
+            )]
+            .into(),
+            &admin,
+        )
+        .unwrap();
+        let again = b_ingest(&k, &db, &policy);
+        assert_eq!(again["status"], "processing", "{again}");
+        assert_eq!(b_wait(&k, &db, &koid)["status"], "extracted");
+        m3_cleanup(k, db);
+    }
 }

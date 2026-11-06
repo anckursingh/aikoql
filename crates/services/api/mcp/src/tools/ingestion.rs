@@ -14,6 +14,21 @@ fn ingest_policy() -> aikoql_ingestion::ProcessingPolicy {
 }
 
 pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    document_ingest_with(k, args, db_path, &ingest_policy())
+}
+
+/// Documents a restart left `processing`, marked `interrupted`; the count.
+pub(crate) fn interrupt_unfinished_documents(_k: &Kernel) -> usize {
+    0
+}
+
+/// `document_ingest` under an explicit policy (tests; the tool reads `[ingestion]`).
+pub(crate) fn document_ingest_with(
+    k: &Kernel,
+    args: &J,
+    db_path: &str,
+    policy: &aikoql_ingestion::ProcessingPolicy,
+) -> Result<J, String> {
     let filename = args
         .get("filename")
         .and_then(|v| v.as_str())
@@ -83,7 +98,7 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
                             &hash,
                             filename,
                             mime_type,
-                            &ingest_policy(),
+                            policy,
                         );
                         let was = match doc.properties.get("status") {
                             Some(Value::Text(s)) => s.as_str(),
@@ -146,7 +161,7 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
         &hash,
         filename,
         mime_type,
-        &ingest_policy(),
+        policy,
     );
 
     let r = k

@@ -5099,11 +5099,28 @@ impl Kernel {
         status: &str,
         subject: &Subject,
     ) -> KResult<Remembered> {
+        self.set_document_properties(
+            koid,
+            PropertyMap::from([
+                ("page_count".into(), Value::Int(page_count)),
+                ("char_count".into(), Value::Int(char_count)),
+                ("status".into(), Value::Text(status.into())),
+            ]),
+            subject,
+        )
+    }
+
+    /// Merge `updates` into a document's properties (batch progress, a new
+    /// status): same KO, next version, CAS on the version just read.
+    pub fn set_document_properties(
+        &self,
+        koid: &KOID,
+        updates: PropertyMap,
+        subject: &Subject,
+    ) -> KResult<Remembered> {
         let ko = self.get(KnowledgeContext::from(subject.clone()), koid)?;
         let mut props = ko.properties.clone();
-        props.insert("page_count".into(), Value::Int(page_count));
-        props.insert("char_count".into(), Value::Int(char_count));
-        props.insert("status".into(), Value::Text(status.into()));
+        props.extend(updates);
         let mut extensions = ExtensionMap::new();
         extensions.insert(
             KnowledgeObject::EXT_CONTENT_TRUST.into(),
