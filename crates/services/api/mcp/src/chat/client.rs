@@ -34,3 +34,165 @@ impl ChatConfig {
         Ok(())
     }
 }
+
+/// One prompt in, one completion out.
+pub(crate) trait Generate {
+    fn generate(&self, prompt: &str) -> Result<String, String>;
+}
+
+/// OpenAI-style chat-completions client.
+pub(crate) struct HttpModel {
+    cfg: ChatConfig,
+}
+
+impl HttpModel {
+    pub(crate) fn new(cfg: ChatConfig) -> Self {
+        Self { cfg }
+    }
+}
+
+impl Generate for HttpModel {
+    fn generate(&self, _prompt: &str) -> Result<String, String> {
+        Err("model unreachable".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat::stub::{spawn_stub_server, StubResponse};
+    use std::time::{Duration, Instant};
+
+    fn cfg(url: &str) -> ChatConfig {
+        ChatConfig {
+            url: url.into(),
+            model: "m".into(),
+            api_key_env: None,
+            timeout_secs: 5,
+        }
+    }
+
+    #[test]
+    fn returns_the_message_content() {
+        let (url, seen) = spawn_stub_server(vec![StubResponse::ok("hello")]);
+        let out = HttpModel::new(cfg(&url)).generate("ping").unwrap();
+        assert_eq!(out, "hello");
+        let req = seen.lock().unwrap()[0].clone();
+        assert!(req.contains("\"model\":\"m\""), "{req}");
+        assert!(req.contains("\"content\":\"ping\""), "{req}");
+        assert!(req.contains("\"temperature\":0"), "{req}");
+    }
+
+    #[test]
+    fn sends_bearer_key_from_env_var_only_when_configured() {
+        let (url, seen) = spawn_stub_server(vec![StubResponse::ok("x")]);
+        HttpModel::new(cfg(&url)).generate("p").unwrap();
+        // PATH is always set; the test only reads the environment
+        let mut c = cfg(&url);
+        c.api_key_env = Some("PATH".into());
+        HttpModel::new(c).generate("p").unwrap();
+        let seen = seen.lock().unwrap();
+        assert!(
+            !seen[0].to_lowercase().contains("authorization"),
+            "{}",
+            seen[0]
+        );
+        let want = format!("Bearer {}", std::env::var("PATH").unwrap());
+        assert!(seen[1].contains(&want), "{}", seen[1]);
+    }
+
+    #[test]
+    fn unset_key_env_var_is_an_error_not_an_unauthenticated_call() {
+        let (url, seen) = spawn_stub_server(vec![StubResponse::ok("x")]);
+        let mut c = cfg(&url);
+        c.api_key_env = Some("AIKOQL_CHAT_TEST_KEY_NEVER_SET".into());
+        let e = HttpModel::new(c).generate("p").unwrap_err();
+        assert!(e.contains("not set"), "{e}");
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unreachable_port_is_model_unreachable() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        drop(l);
+        assert_eq!(
+            HttpModel::new(cfg(&url)).generate("p").unwrap_err(),
+            "model unreachable"
+        );
+    }
+
+    #[test]
+    fn slow_server_times_out() {
+        let mut r = StubResponse::ok("late");
+        r.delay = Duration::from_secs(4);
+        let (url, _) = spawn_stub_server(vec![r]);
+        let mut c = cfg(&url);
+        c.timeout_secs = 1;
+        let t = Instant::now();
+        assert_eq!(
+            HttpModel::new(c).generate("p").unwrap_err(),
+            "model timed out"
+        );
+        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn http_500_is_reported() {
+        let (url, _) = spawn_stub_server(vec![StubResponse::raw(500, "boom")]);
+        assert_eq!(
+            HttpModel::new(cfg(&url)).generate("p").unwrap_err(),
+            "model returned HTTP 500"
+        );
+    }
+
+    #[test]
+    fn non_json_body_is_reported() {
+        let (url, _) = spawn_stub_server(vec![StubResponse::raw(200, "<html>")]);
+        assert_eq!(
+            HttpModel::new(cfg(&url)).generate("p").unwrap_err(),
+            "model reply was not JSON"
+        );
+    }
+
+    #[test]
+    fn json_without_choices_is_reported() {
+        let (url, _) = spawn_stub_server(vec![StubResponse::raw(200, "{\"a\":1}")]);
+        assert_eq!(
+            HttpModel::new(cfg(&url)).generate("p").unwrap_err(),
+            "model reply was not JSON"
+        );
+    }
+
+    #[test]
+    fn oversized_body_is_rejected() {
+        let big = "x".repeat(300 * 1024);
+        let (url, _) = spawn_stub_server(vec![StubResponse::ok(&big)]);
+        assert_eq!(
+            HttpModel::new(cfg(&url)).generate("p").unwrap_err(),
+            "model reply too large"
+        );
+    }
+
+    #[test]
+    fn url_without_path_gets_the_default_path() {
+        let (url, seen) = spawn_stub_server(vec![StubResponse::ok("x")]);
+        HttpModel::new(cfg(&format!("{url}/")))
+            .generate("p")
+            .unwrap();
+        HttpModel::new(cfg(&format!("{url}/custom/chat/completions")))
+            .generate("p")
+            .unwrap();
+        let seen = seen.lock().unwrap();
+        assert!(
+            seen[0].starts_with("POST /v1/chat/completions "),
+            "{}",
+            seen[0]
+        );
+        assert!(
+            seen[1].starts_with("POST /custom/chat/completions "),
+            "{}",
+            seen[1]
+        );
+    }
+}
