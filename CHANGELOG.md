@@ -7,6 +7,16 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Image documents
+- PNG, JPEG, TIFF, BMP, GIF and WebP upload as one-page documents: the image is stored as an asset and
+  Tesseract (when it is on the server's PATH; `pdftoppm` is not needed for images) supplies the text.
+  Other `image/*` types (HEIC, AVIF, ICO, SVG) stay a 400. An empty or `application/octet-stream` mime
+  falls back to the file extension, a zero-byte image is a 400, and each OCR call uses its own work dir.
+- New document status `ocr_unavailable` when no OCR tool could run (it was reported as `extracted` with
+  no text). Studio says so on ingest, on the list badge and on the compile result, and shows how many
+  characters OCR read. The compile result carries `extraction_status` and `total_chars`, and
+  `document_list` carries `char_count`.
+
 ### Studio session cookie
 - Password login also sets `aikoql_session` (`HttpOnly; SameSite=Strict; Path=/`, `Secure` behind an
   `X-Forwarded-Proto: https` proxy); Studio no longer keeps the token in script. A cookie-authenticated
