@@ -74,7 +74,8 @@ fn read_batches(artifact_dir: &str, hash: &str) -> Vec<J> {
         .unwrap_or_default()
 }
 
-/// Pages and batch plan when the document is over `max_pages` and splits.
+/// Pages and starting batch plan when a limit refused a multi-page document
+/// (a batch still over a limit is split further by the worker).
 fn batch_plan(
     ex: &Extracted,
     artifact_path: &str,
@@ -85,7 +86,7 @@ fn batch_plan(
         return None;
     }
     let pages = aikoql_ingestion::document_page_count(artifact_path, mime_type).ok()?;
-    (pages > policy.max_pages).then(|| {
+    (pages > 1).then(|| {
         (
             pages,
             aikoql_ingestion::plan_batches(pages, policy.max_pages),
@@ -101,7 +102,7 @@ fn batch_message(p: &std::collections::BTreeMap<String, Value>, batches: &[J]) -
         "processing" => Some(format!(
             "This document is large ({pages} pages). It is being processed in {total} batches \
              of up to {} pages: {done} of {total} done ({} of {pages} pages). Please wait until \
-             it finishes before compiling.",
+             it finishes before compiling (a batch over a limit is split, so the count can grow).",
             pint(p, "batch_pages"),
             pint(p, "pages_done")
         )),
@@ -236,7 +237,9 @@ fn run_batches(
     let asset_dir = format!("{path}.assets");
     let mut results: Vec<J> = Vec::with_capacity(plan.len());
     let mut docs = Vec::new();
-    for (i, &(first, last)) in plan.iter().enumerate() {
+    let mut queue: std::collections::VecDeque<(u32, u32)> = plan.iter().copied().collect();
+    let mut total = plan.len();
+    while let Some((first, last)) = queue.pop_front() {
         let file = batch_path(dir, hash, first.into(), last.into());
         let r = std::panic::catch_unwind(|| {
             aikoql_ingestion::extract_document_pages(
@@ -254,6 +257,19 @@ fn run_batches(
             std::fs::write(&file, bytes).map_err(|e| format!("write batch: {e}"))?;
             Ok(doc)
         });
+        // over a limit with more than one page: split it in two, in order,
+        // so only the pages that cannot fit fail
+        if matches!(&r, Err(e) if aikoql_ingestion::is_limit_error(e)) && last > first {
+            let mid = first + (last - first) / 2;
+            queue.push_front((mid + 1, last));
+            queue.push_front((first, mid));
+            total += 1;
+            let props = [("batches_total".to_string(), Value::Int(total as i64))].into();
+            if let Err(e) = k.set_document_properties(koid, props, subject) {
+                tracing::warn!("batch progress of {hash}: {e}");
+            }
+            continue;
+        }
         results.push(match r {
             Ok(doc) => {
                 let entry = json!({
@@ -280,11 +296,11 @@ fn run_batches(
         }
         let merged_chars: usize = docs.iter().map(|d| d.total_chars).sum();
         let mut props = std::collections::BTreeMap::from([
-            ("batches_done".to_string(), Value::Int(i as i64 + 1)),
+            ("batches_done".to_string(), Value::Int(results.len() as i64)),
             ("pages_done".to_string(), Value::Int(last as i64)),
             ("char_count".to_string(), Value::Int(merged_chars as i64)),
         ]);
-        if i + 1 == plan.len() {
+        if queue.is_empty() {
             let failed = results.iter().any(|b| b["status"] == "failed");
             let merged = aikoql_ingestion::merge_batches(std::mem::take(&mut docs));
             let text: Vec<String> = merged
