@@ -2173,10 +2173,7 @@ impl Kernel {
             Some(statement) => {
                 let mut props = PropertyMap::new();
                 props.insert("statement".into(), Value::Text(statement));
-                props.insert(
-                    "experience".into(),
-                    Value::Text(remembered.koid.to_hex()),
-                );
+                props.insert("experience".into(), Value::Text(remembered.koid.to_hex()));
                 props.insert("actor".into(), Value::Text(actor));
                 props.insert("goal".into(), Value::Text(goal));
                 let lr = RememberRequest {
@@ -2497,12 +2494,10 @@ impl Kernel {
                 until,
             });
         }
-        let claim_until = now
-            .checked_add(
-                req.lease_secs
-                    .checked_mul(1000)
-                    .ok_or_else(|| KError::InvalidObject("lease overflows wall-clock millis".into()))?,
-            )
+        let claim_until =
+            now.checked_add(req.lease_secs.checked_mul(1000).ok_or_else(|| {
+                KError::InvalidObject("lease overflows wall-clock millis".into())
+            })?)
             .ok_or_else(|| KError::InvalidObject("lease overflows wall-clock millis".into()))?;
         let mut extensions = head.extensions.clone();
         extensions.insert(
@@ -2679,11 +2674,25 @@ fn outcome_weight(outcome: Option<&Value>) -> f32 {
         _ => return 0.8,
     };
     const FAILURE: [&str; 10] = [
-        "failed", "failure", "error", "exception", "crashed", "denied", "rejected", "refused",
-        "unsuccessful", "did not",
+        "failed",
+        "failure",
+        "error",
+        "exception",
+        "crashed",
+        "denied",
+        "rejected",
+        "refused",
+        "unsuccessful",
+        "did not",
     ];
     const SUCCESS: [&str; 7] = [
-        "success", "succeeded", "completed", "worked", "passed", "resolved", "fixed",
+        "success",
+        "succeeded",
+        "completed",
+        "worked",
+        "passed",
+        "resolved",
+        "fixed",
     ];
     if FAILURE.iter().any(|m| text.contains(m)) {
         0.5

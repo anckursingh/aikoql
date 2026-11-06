@@ -445,7 +445,10 @@ fn ag14_lesson_is_materialized_as_a_ko() {
         Some(&Value::Text(rec.experience.koid.to_hex()))
     );
     assert_eq!(ko.epistemic_status(), EpistemicStatus::Asserted);
-    assert!(ko.evidence().len() >= 1, "the lesson carries the provenance");
+    assert!(
+        !ko.evidence().is_empty(),
+        "the lesson carries the provenance"
+    );
 }
 
 // ---- persistence ------------------------------------------------------------

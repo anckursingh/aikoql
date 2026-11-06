@@ -102,6 +102,12 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/share/powershell /usr/share/swift 2>/dev/null || true
           df -h /
+      # Poppler only (no tesseract): PDF table detection reads pdftotext word
+      # positions, so without it the PDF table cell of the extraction-quality
+      # ratchet silently skips. Tesseract stays off CI — its version moves
+      # the OCR accuracy floor (measured on 5.5.4).
+      - name: Install poppler-utils
+        run: sudo apt-get install -y --no-install-recommends poppler-utils
       # sfm009_large_wal_snapshot_has_bounded_rss (PR6-R3-003): same RSS-cell
       # gating as the Windows job — local-suite test, skipped on CI runners.
       # Skip list derived from tests/gated.toml (PR6-F2 / P0-2).
@@ -146,6 +152,21 @@ jobs:
         with:
           node-version: 22
       - run: node npm-publish/validate-plugin.js
+
+  # AG-51: lint + render the chart on every PR — a broken template must not
+  # wait for the nightly kind gate to be found (kind + docker build are too
+  # slow for PR CI, so that gate only renders on schedule).
+  helm:
+    name: Helm lint + render (AG-51)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint deploy/helm/aikoql
+      # the chart fails closed without a credential source (statefulset
+      # `required` on auth.adminPasswordKey) — the render is a syntax gate,
+      # so any non-empty value satisfies it
+      - run: helm template aikoql deploy/helm/aikoql --set auth.adminPasswordKey=ci-render-test
 
   docker:
     name: Docker build + health (Linux)

@@ -2,6 +2,8 @@
 
 **Status:** Draft v1 (2026-08-22; certification GO 2026-08-25) · **Companion to:** [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) · **Branch:** feature/mvp-launch
 
+> **Public-tree note (2026-11-03):** the internal QA/market artifacts this historical plan cites (`artifacts/qa-wave3-*`, `artifacts/mvp-test-report.md`, `artifacts/release-gate.md`, `docs/WAVE3-MARKET-EVIDENCE.md`) were scrubbed from the public tree at the community launch; the references below are historical record.
+
 This document turns the two QA certification suites — [AIKOQL-Agent-Knowledge-Certification-Test-Suite.md](AIKOQL-Agent-Knowledge-Certification-Test-Suite.md) (QA-AIKOQL-AGENT-MEMORY-001) and [AIKOQL-Chatbot-Memory-Knowledge-Certification-Test-Suite.md](AIKOQL-Chatbot-Memory-Knowledge-Certification-Test-Suite.md) (QA-AIKOQL-CHATBOT-001) — into an execution plan: what we already cover, what is missing, and how the suites become our end-to-end and acceptance layer.
 
 ---

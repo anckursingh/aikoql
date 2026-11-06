@@ -1427,6 +1427,7 @@ fn t06p_cardinality_1to1_prevents_duplicate_target() {
             name: "Person".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -1435,6 +1436,7 @@ fn t06p_cardinality_1to1_prevents_duplicate_target() {
             name: "Organization".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     let mut relationships = BTreeMap::new();
@@ -1498,6 +1500,7 @@ fn t06q_domain_mismatch_rejected_under_enforced() {
             name: "Person".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -1506,6 +1509,7 @@ fn t06q_domain_mismatch_rejected_under_enforced() {
             name: "Document".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     let mut relationships = BTreeMap::new();
@@ -1554,6 +1558,7 @@ fn t06r_range_mismatch_rejected_under_enforced() {
             name: "Person".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -1562,6 +1567,7 @@ fn t06r_range_mismatch_rejected_under_enforced() {
             name: "Organization".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -1570,6 +1576,7 @@ fn t06r_range_mismatch_rejected_under_enforced() {
             name: "Document".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     let mut relationships = BTreeMap::new();
@@ -1623,6 +1630,7 @@ fn t06s_permissive_policy_skips_ontology_checks() {
             name: "Person".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -1631,6 +1639,7 @@ fn t06s_permissive_policy_skips_ontology_checks() {
             name: "Organization".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     let mut relationships = BTreeMap::new();
@@ -1691,6 +1700,7 @@ fn t06t_one_to_many_inbound_exclusivity() {
             name: "Employee".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -1699,6 +1709,7 @@ fn t06t_one_to_many_inbound_exclusivity() {
             name: "Department".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     let mut relationships = BTreeMap::new();
@@ -1760,6 +1771,7 @@ fn t06u_max_count_enforced() {
             name: "Person".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -1768,6 +1780,7 @@ fn t06u_max_count_enforced() {
             name: "Project".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     let mut relationships = BTreeMap::new();
@@ -1835,6 +1848,7 @@ fn t06v_max_count_within_limit_passes() {
             name: "Person".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -1843,6 +1857,7 @@ fn t06v_max_count_within_limit_passes() {
             name: "Project".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     let mut relationships = BTreeMap::new();
@@ -1901,6 +1916,7 @@ fn t06w_one_to_one_outbound_source_side() {
             name: "Person".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -1909,6 +1925,7 @@ fn t06w_one_to_one_outbound_source_side() {
             name: "Organization".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     let mut relationships = BTreeMap::new();
@@ -1968,6 +1985,7 @@ fn t06x_transact_cardinality_inbound_across_batch() {
             name: "Employee".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -1976,6 +1994,7 @@ fn t06x_transact_cardinality_inbound_across_batch() {
             name: "Department".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     let mut relationships = BTreeMap::new();
@@ -2051,6 +2070,7 @@ fn t06y_transact_range_check_within_batch() {
             name: "Person".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     classes.insert(
@@ -2059,6 +2079,7 @@ fn t06y_transact_range_check_within_batch() {
             name: "Organization".into(),
             parent: None,
             description: None,
+            properties: Vec::new(),
         },
     );
     let mut relationships = BTreeMap::new();
@@ -2810,6 +2831,7 @@ fn t06zw_ontology_evolution_keeps_existing_knowledge_interpretable() {
                 name: "Person".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         c.insert(
@@ -2818,6 +2840,7 @@ fn t06zw_ontology_evolution_keeps_existing_knowledge_interpretable() {
                 name: "Organization".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         c

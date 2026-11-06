@@ -8,7 +8,7 @@
 
 use rustls::pki_types::{pem::PemObject, CertificateDer, ServerName};
 use serde_json::{json, Value as J};
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -66,29 +66,54 @@ impl Drop for Server {
 }
 
 fn serve(tag: &str, extra: &[&str]) -> Server {
-    let (db, port) = (tmp(tag), free_port());
-    let child = Command::new(bin())
-        .arg("serve")
-        .args(["--metrics-addr", &format!("127.0.0.1:{port}")])
-        .args([
-            "--tcp-token",
-            "http-tok::admin",
-            "--tcp-token",
-            "other-tok::admin",
-        ])
-        .args(extra)
-        .arg(&db)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn aikoql-mcp serve");
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while TcpStream::connect(("127.0.0.1", port)).is_err() {
-        assert!(Instant::now() < deadline, "server never listened on {port}");
-        std::thread::sleep(Duration::from_millis(50));
+    // The pre-picked port can be taken between free_port() releasing it and
+    // the child binding it (another test's child, an ephemeral client port):
+    // the server then logs "bind failed" — retry on a fresh port rather than
+    // talk to whatever owns the old one.
+    for _attempt in 0..4 {
+        let (db, port) = (tmp(tag), free_port());
+        let mut child = Command::new(bin())
+            .arg("serve")
+            .args(["--metrics-addr", &format!("127.0.0.1:{port}")])
+            .args([
+                "--tcp-token",
+                "http-tok::admin",
+                "--tcp-token",
+                "other-tok::admin",
+            ])
+            .args(extra)
+            .arg(&db)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn aikoql-mcp serve");
+        // Ready = the server's own "listening" line, logged after bind
+        // succeeded. No connect probe: a connect to a not-yet-bound port can
+        // reach something that is not this server. The reader keeps draining
+        // so stderr never blocks the child.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let err = child.stderr.take().expect("piped stderr");
+        std::thread::spawn(move || {
+            for line in BufReader::new(err).lines().map_while(Result::ok) {
+                if line.contains("metrics HTTP server listening") {
+                    let _ = tx.send(true);
+                } else if line.contains("metrics server bind failed") {
+                    let _ = tx.send(false);
+                }
+            }
+        });
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(true) => return Server { child, db, port },
+            Ok(false) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_dir_all(&db);
+            }
+            Err(_) => panic!("server never reported listening on {port}"),
+        }
     }
-    Server { child, db, port }
+    panic!("no free port after 4 attempts");
 }
 
 /// One HTTP response: status code, lower-cased headers, body.
@@ -898,4 +923,87 @@ fn h019_http_sampling_capability_does_not_leak_to_the_stdio_transport() {
         call.body
     );
     let _ = sid;
+}
+
+#[test]
+fn h020_the_studio_page_is_served_with_framing_and_referrer_hardening() {
+    // Studio puts the session token in some URLs (`?token=`), is a plain
+    // page with no forms/<base>/frames/objects, and is never meant to be
+    // framed: clickjacking, <base> hijack, plugin content and a leaking
+    // Referer are all closed at the header. (A script-src policy is not here:
+    // the page's inline script and handlers need 'unsafe-inline'.)
+    let srv = serve("020", &[]);
+    for path in ["/studio", "/"] {
+        let mut s = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        s.write_all(format!("GET {path} HTTP/1.0\r\nHost: x\r\n\r\n").as_bytes())
+            .unwrap();
+        let mut raw = Vec::new();
+        let _ = s.read_to_end(&mut raw);
+        let r = parse(&raw);
+        assert_eq!(r.status, 200, "{path}");
+        let csp = r
+            .header("content-security-policy")
+            .unwrap_or_else(|| panic!("{path}: no Content-Security-Policy"));
+        for d in [
+            "frame-ancestors 'none'",
+            "base-uri 'none'",
+            "object-src 'none'",
+            "form-action 'self'",
+        ] {
+            assert!(csp.contains(d), "{path}: CSP lacks {d}: {csp}");
+        }
+        for d in [
+            "default-src 'self'",
+            "script-src 'self';",
+            "connect-src 'self'",
+        ] {
+            assert!(csp.contains(d), "{path}: CSP lacks {d}: {csp}");
+        }
+        assert!(
+            !csp.contains("script-src 'self' 'unsafe-inline'"),
+            "{path}: {csp}"
+        );
+        assert_eq!(r.header("x-frame-options"), Some("DENY"), "{path}");
+        assert_eq!(r.header("referrer-policy"), Some("no-referrer"), "{path}");
+        assert_eq!(
+            r.header("x-content-type-options"),
+            Some("nosniff"),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn h021_the_vendored_studio_scripts_are_served_from_the_binary() {
+    let srv = serve("021", &[]);
+    let get = |path: &str| {
+        let mut s = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        s.write_all(format!("GET {path} HTTP/1.0\r\nHost: x\r\n\r\n").as_bytes())
+            .unwrap();
+        let mut raw = Vec::new();
+        let _ = s.read_to_end(&mut raw);
+        parse(&raw)
+    };
+    for (path, marker) in [
+        ("/studio/assets/editor.js", "__initCodeMirror"),
+        ("/studio/assets/vis-network.js", "vis"),
+        ("/studio/assets/app.js", "const ACTIONS"),
+    ] {
+        let r = get(path);
+        assert_eq!(r.status, 200, "{path}");
+        assert!(
+            r.header("content-type")
+                .is_some_and(|c| c.starts_with("application/javascript")),
+            "{path}: {:?}",
+            r.header("content-type")
+        );
+        assert!(
+            r.body.len() > 50_000 && r.body.contains(marker),
+            "{path}: {} bytes",
+            r.body.len()
+        );
+    }
+    assert_eq!(get("/studio/assets/nope.js").status, 404);
 }

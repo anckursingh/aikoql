@@ -15,6 +15,7 @@ mod api_rest;
 mod archive;
 mod audit;
 mod authz;
+mod aws_kms;
 mod cli;
 mod config;
 mod dispatcher;
@@ -27,11 +28,13 @@ mod http;
 mod imports;
 mod ingest;
 mod knowledge_runtime;
+mod license;
 mod mcp_http;
 mod model;
 mod native;
 mod oauth;
 mod observability;
+mod oidc;
 mod prompts;
 mod protocol;
 mod rate_limiter;
@@ -46,6 +49,7 @@ mod tls;
 mod tool_registry;
 mod tools;
 mod transport;
+mod users;
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -90,7 +94,11 @@ pub(crate) use tracing::{error, info, info_span, warn};
 pub(crate) static SERVER_START: OnceLock<Instant> = OnceLock::new();
 pub(crate) static MEMORY_DIR: OnceLock<String> = OnceLock::new();
 /// AG-30: the audit-signing key (AIKOQL_AUDIT_SIGNING_KEY), loaded once.
-pub(crate) static AUDIT_SIGNER: OnceLock<aikoql_kernel::security::SigningKey> = OnceLock::new();
+/// Shared with the kernel, so every committed journal event carries a
+/// chained per-commit signature in addition to the evidence-pack head
+/// signature.
+pub(crate) static AUDIT_SIGNER: OnceLock<std::sync::Arc<aikoql_kernel::security::Signer>> =
+    OnceLock::new();
 
 /// The Ed25519 seed in `path`: 64 hex characters (surrounding whitespace
 /// ignored), e.g. `openssl rand -hex 32 > audit.key`.
@@ -273,6 +281,7 @@ fn main() {
     // PRR-3: local model store override (default ~/.aikoql/models).
     // AG-01: once per process (serve runs once)
     crate::tool_registry::CORE_PROFILE.get_or_init(|| cfg.tool_profile == "core");
+    crate::tools::ingestion::INGEST_POLICY.get_or_init(|| cfg.ingestion_policy.clone());
     let model_dir_flag = cfg.model_dir;
     let model_auto_install = cfg.model_auto_install;
     MEMORY_DIR.set(memory_dir).ok();
@@ -285,13 +294,47 @@ fn main() {
             Ok(key) => {
                 info!(public_key = %key.public_key().iter().map(|b| format!("{b:02x}")).collect::<String>(),
                     "audit evidence will be signed (Ed25519)");
-                AUDIT_SIGNER.get_or_init(|| key);
+                AUDIT_SIGNER.get_or_init(|| {
+                    let signer = std::sync::Arc::new(aikoql_kernel::security::Signer::new());
+                    signer.set_key(key);
+                    signer
+                });
             }
             Err(e) => {
                 eprintln!("AIKOQL_AUDIT_SIGNING_KEY: {e}");
                 std::process::exit(2);
             }
         }
+    }
+
+    // Enterprise licensing (Task 2): verify once at serve start. A valid
+    // license arms the enterprise features (Tasks 5/7/8/9); anything else —
+    // missing file, unreadable, tampered, expired — degrades to community
+    // mode with the reason in the log. Never a crash, never a default
+    // license (fail closed).
+    match std::fs::read(&cfg.license_path) {
+        Ok(bytes) => match license::verify_license(&bytes) {
+            Ok(state) => {
+                info!(org = %state.org, "enterprise license accepted");
+                let _ = license::LICENSE_STATE.set(state);
+            }
+            Err(e) => {
+                warn!(path = %cfg.license_path, "license rejected: {e}; running community mode")
+            }
+        },
+        Err(e) => warn!(
+            path = %cfg.license_path,
+            "license rejected: cannot read file: {e}; running community mode"
+        ),
+    }
+
+    // Enterprise audit retention (Task 7): startup rotation, gated on the
+    // license's audit-export flag — community mode never touches the log.
+    if license::LICENSE_STATE
+        .get()
+        .is_some_and(|s| s.features.audit_export)
+    {
+        audit::rotate(&db_path, cfg.audit_retention_days);
     }
 
     // P3-M1 (§53–54): build the HTTP login resolver once — argon2id hashes
@@ -512,6 +555,39 @@ fn main() {
                 std::process::exit(1);
             }
         };
+    // Enterprise multi-user (Task 3): only a verified multi-user license
+    // opens the user store — community mode never creates users.db. The
+    // store lives in the data dir, which the kernel has just opened. First
+    // start seeds the bootstrap admin from AIKOQL_ADMIN_PASSWORD; with no
+    // admin to seed or claim, serve refuses (exit 2 — an operator fix, not
+    // a runtime failure).
+    if license::LICENSE_STATE
+        .get()
+        .is_some_and(|s| s.features.multi_user)
+    {
+        let store_path = std::path::PathBuf::from(format!("{db_path}/users.db"));
+        let store = match users::UserStore::open(&store_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("multi-user user store {}: {e}", store_path.display());
+                std::process::exit(1);
+            }
+        };
+        if !store.has_admin() {
+            let Some(pw) = cfg.admin_password.as_deref() else {
+                eprintln!("multi-user requires a bootstrap admin (set AIKOQL_ADMIN_PASSWORD)");
+                std::process::exit(2);
+            };
+            if let Err(e) = store.seed_bootstrap_admin(pw) {
+                eprintln!("multi-user user store: seed bootstrap admin: {e}");
+                std::process::exit(1);
+            }
+        }
+        // Final review I-1: publish the handle process-wide so every serve
+        // surface sees the store — MCP over TCP gates viewers even without
+        // a metrics listener (serve_metrics' open_users is then a no-op).
+        crate::session::set_users(Arc::new(Mutex::new(store)));
+    }
     if let (Some(slot), Some(a)) = (&ha_slot, &admin) {
         let _ = slot.set(a.clone()); // the renewer can now fence writes
     }
@@ -662,6 +738,14 @@ fn main() {
     // AG-10: memories still only on disk join the knowledge base, once —
     // on a node that writes (a standby or replica gets them replicated)
     if !serving_standby && role != replication::Role::Fenced {
+        // batches a previous process was running never finish: say so
+        match crate::tools::ingestion::interrupt_unfinished_documents(&kernel) {
+            0 => {}
+            n => warn!(
+                documents = n,
+                "documents left processing by the last run marked interrupted — upload them again"
+            ),
+        }
         if let Some(dir) = MEMORY_DIR.get() {
             match crate::tools::import_memory_dir(&kernel, dir) {
                 Ok(0) => {}
@@ -799,7 +883,7 @@ fn main() {
     // remembers republish through the same path, so the query editor never
     // waits for a restart.
     let ontology = crate::http::load_ontology_registry(&kernel);
-    crate::http::install_ontology(ontology.clone());
+    crate::http::refresh_ontologies(&kernel);
 
     // Optional HTTP metrics endpoint for Prometheus + Kubernetes probes.
     if let Some(ref addr) = metrics_addr {

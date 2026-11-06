@@ -1,0 +1,98 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 1742 >>
+stream
+BT /F1 20 Tf 72 740 Td (INVOICE) Tj ET
+BT /F1 10 Tf 72 712 Td (Northwind Trading B.V., Amsterdam, Netherlands) Tj ET
+BT /F1 10 Tf 72 698 Td (Invoice number: INV-2026-0042) Tj ET
+BT /F1 10 Tf 72 684 Td (Invoice date: 2026-03-14) Tj ET
+BT /F1 10 Tf 72 660 Td (Bill to: Contoso Ltd, London, United Kingdom) Tj ET
+BT /F1 10 Tf 72 646 Td (Contact: Dr. Emma Clarke, emma.clarke@contoso.example, +44 20 7946 0958) Tj ET
+0.5 w
+72 610 m 540 610 l S
+72 590 m 540 590 l S
+72 570 m 540 570 l S
+72 550 m 540 550 l S
+72 530 m 540 530 l S
+72 510 m 540 510 l S
+72 610 m 72 510 l S
+290 610 m 290 510 l S
+340 610 m 340 510 l S
+440 610 m 440 510 l S
+540 610 m 540 510 l S
+BT /F1 10 Tf 76 596 Td (Description) Tj ET
+BT /F1 10 Tf 294 596 Td (Qty) Tj ET
+BT /F1 10 Tf 344 596 Td (Unit price) Tj ET
+BT /F1 10 Tf 444 596 Td (Amount) Tj ET
+BT /F1 10 Tf 76 576 Td (Consulting services) Tj ET
+BT /F1 10 Tf 294 576 Td (10) Tj ET
+BT /F1 10 Tf 344 576 Td (EUR 150.00) Tj ET
+BT /F1 10 Tf 444 576 Td (EUR 1,500.00) Tj ET
+BT /F1 10 Tf 76 556 Td (Software licence) Tj ET
+BT /F1 10 Tf 294 556 Td (2) Tj ET
+BT /F1 10 Tf 344 556 Td (EUR 499.00) Tj ET
+BT /F1 10 Tf 444 556 Td (EUR 998.00) Tj ET
+BT /F1 10 Tf 76 536 Td (Travel expenses) Tj ET
+BT /F1 10 Tf 294 536 Td (1) Tj ET
+BT /F1 10 Tf 344 536 Td (EUR 320.50) Tj ET
+BT /F1 10 Tf 444 536 Td (EUR 320.50) Tj ET
+BT /F1 10 Tf 76 516 Td (Support plan) Tj ET
+BT /F1 10 Tf 294 516 Td (12) Tj ET
+BT /F1 10 Tf 344 516 Td (EUR 45.00) Tj ET
+BT /F1 10 Tf 444 516 Td (EUR 540.00) Tj ET
+BT /F1 10 Tf 72 430 Td (Subtotal: EUR 3,358.50) Tj ET
+BT /F1 10 Tf 72 416 Td (VAT \(21%\): EUR 705.29) Tj ET
+BT /F1 10 Tf 72 402 Td (Total due: EUR 4,063.79) Tj ET
+BT /F1 10 Tf 72 380 Td (Please pay to IBAN NL91 ABNA 0417 1643 00 by April 13, 2026.) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 955 >>
+stream
+BT /F1 14 Tf 72 740 Td (About us) Tj ET
+BT /F1 10 Tf 72 712 Td (Northwind Trading was founded in) Tj ET
+BT /F1 10 Tf 320 712 Td (Our support team answers questions) Tj ET
+BT /F1 10 Tf 72 698 Td (1998 as a small importer of tea and) Tj ET
+BT /F1 10 Tf 320 698 Td (about deliveries, returns and) Tj ET
+BT /F1 10 Tf 72 684 Td (coffee. Today the company supplies) Tj ET
+BT /F1 10 Tf 320 684 Td (invoices on weekdays. Customers who) Tj ET
+BT /F1 10 Tf 72 670 Td (independent shops across the) Tj ET
+BT /F1 10 Tf 320 670 Td (order every month receive a) Tj ET
+BT /F1 10 Tf 72 656 Td (region from its warehouse near the) Tj ET
+BT /F1 10 Tf 320 656 Td (discount on shipping and early) Tj ET
+BT /F1 10 Tf 72 642 Td (port. Every order is packed by hand) Tj ET
+BT /F1 10 Tf 320 642 Td (access to seasonal blends, which are) Tj ET
+BT /F1 10 Tf 72 628 Td (and shipped within two working days.) Tj ET
+BT /F1 10 Tf 320 628 Td (announced in our printed newsletter.) Tj ET
+endstream
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000218 00000 n 
+0000000344 00000 n 
+0000002138 00000 n 
+0000002264 00000 n 
+trailer
+<< /Size 8 /Root 1 0 R >>
+startxref
+3270
+%%EOF

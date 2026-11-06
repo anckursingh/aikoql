@@ -30,7 +30,8 @@ kubectl -n "$NS" delete secret aikoql-auth --ignore-not-found >/dev/null
 kubectl -n "$NS" create secret generic aikoql-auth \
   --from-literal=token="$TOKEN" --from-literal=admin-password="$ADMIN_PW"
 helm upgrade --install "$RELEASE" "$ROOT/deploy/helm/aikoql" \
-  -n "$NS" --set image.tag=local --wait --timeout 300s
+  -n "$NS" --set image.tag=local --set auth.adminPasswordKey=admin-password \
+  --wait --timeout 300s
 kubectl -n "$NS" wait --for=condition=Ready pod \
   -l app.kubernetes.io/name=aikoql --timeout=300s
 
@@ -56,25 +57,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mcp_call() { # $1 = bearer; $2 = method; $3 = params json; echoes the response body
-  local bearer="$1" method="$2" params="$3" id
+mcp_call() { # $1 = bearer; $2 = session; $3 = method; $4 = params json; echoes the response body
+  local bearer="$1" sid="$2" method="$3" params="$4" id
   id=$((RANDOM))
-  curl -fsS -H "Authorization: Bearer $bearer" \
+  curl -kfsS -H "Authorization: Bearer $bearer" -H "Mcp-Session-Id: $sid" \
     -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
     -d "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"$method\",\"params\":$params}" \
-    http://127.0.0.1:4318/mcp
+    https://127.0.0.1:4318/mcp
 }
 
 tool() { # $1 = bearer; $2 = session; $3 = tool; $4 = args json; echoes the tool payload
-  mcp_call "$1" "tools/call" "{\"name\":\"$3\",\"arguments\":$4}" |
+  mcp_call "$1" "$2" "tools/call" "{\"name\":\"$3\",\"arguments\":$4}" |
     python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["result"]["content"][0]["text"])'
 }
 
 session() { # $1 = bearer; initialize and echo the Mcp-Session-Id
-  curl -fsS -D- -o /dev/null -H "Authorization: Bearer $1" \
+  curl -kfsS -D- -o /dev/null -H "Authorization: Bearer $1" \
     -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"kind-e2e","version":"0"}}}' \
-    http://127.0.0.1:4318/mcp |
+    https://127.0.0.1:4318/mcp |
     awk 'tolower($1)=="mcp-session-id:" {print $2}' | tr -d '\r'
 }
 
@@ -93,28 +94,28 @@ KOID="$(tool "$TOKEN" "$SID" "remember" '{"subject":"agent","type_name":"note","
 echo "leader $LEADER remembered $KOID"
 
 # --- an OAuth sign-in (RFC 9728) against the leader ------------------------
-CLIENT="$(curl -fsS -H 'Content-Type: application/json' \
+CLIENT="$(curl -kfsS -H 'Content-Type: application/json' \
   -d '{"redirect_uris":["http://127.0.0.1:9/callback"],"client_name":"kind-e2e","token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}' \
-  http://127.0.0.1:4318/oauth/register | jsonfield '["client_id"]')"
+  https://127.0.0.1:4318/oauth/register | jsonfield '["client_id"]')"
 [ -n "$CLIENT" ] || die "RFC 7591 registration failed"
 VERIFIER="$(openssl rand -hex 32)"
 CHALLENGE="$(printf %s "$VERIFIER" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=')"
-CODE="$(curl -fsS -D- -o /dev/null -H 'Content-Type: application/x-www-form-urlencoded' \
+CODE="$(curl -kfsS -D- -o /dev/null -H 'Content-Type: application/x-www-form-urlencoded' \
   --data-urlencode "response_type=code" --data-urlencode "client_id=$CLIENT" \
   --data-urlencode "redirect_uri=http://127.0.0.1:9/callback" \
   --data-urlencode "code_challenge=$CHALLENGE" --data-urlencode "code_challenge_method=S256" \
   --data-urlencode "state=st-1" --data-urlencode "scope=mcp" \
-  --data-urlencode "resource=http://127.0.0.1:4318/mcp" \
+  --data-urlencode "resource=https://127.0.0.1:4318/mcp" \
   --data-urlencode "username=admin" --data-urlencode "password=$ADMIN_PW" \
-  --data-urlencode "approve=1" http://127.0.0.1:4318/oauth/authorize |
+  --data-urlencode "approve=1" https://127.0.0.1:4318/oauth/authorize |
   awk 'tolower($1)=="location:" {print $2}' | tr -d '\r' |
   python3 -c 'import sys,urllib.parse; print(dict(urllib.parse.parse_qsl(urllib.parse.urlparse(sys.stdin.read()).query))["code"])')"
 [ -n "$CODE" ] || die "authorization code not issued"
-OAUTH_TOKEN="$(curl -fsS -H 'Content-Type: application/x-www-form-urlencoded' \
+OAUTH_TOKEN="$(curl -kfsS -H 'Content-Type: application/x-www-form-urlencoded' \
   --data-urlencode "grant_type=authorization_code" --data-urlencode "code=$CODE" \
   --data-urlencode "redirect_uri=http://127.0.0.1:9/callback" \
   --data-urlencode "client_id=$CLIENT" --data-urlencode "code_verifier=$VERIFIER" \
-  http://127.0.0.1:4318/oauth/token | jsonfield '["access_token"]')"
+  https://127.0.0.1:4318/oauth/token | jsonfield '["access_token"]')"
 [ -n "$OAUTH_TOKEN" ] || die "token exchange failed"
 OSID="$(session "$OAUTH_TOKEN")"
 [ -n "$OSID" ] || die "initialize with the OAuth token failed"
@@ -123,6 +124,11 @@ OKOID="$(tool "$OAUTH_TOKEN" "$OSID" "remember" '{"subject":"agent","type_name":
 echo "OAuth sign-in issued and served a write ($OKOID)"
 
 # --- failover: kill the leader pod -----------------------------------------
+# Orphan the StatefulSet first: a recreated pod would reclaim its own
+# pre-restart lease (same --ha-node) and renew it before the standby's
+# staleness window — the standby promotion this gate proves needs the
+# leader to stay dead.
+kubectl -n "$NS" delete sts "$RELEASE" --cascade=orphan >/dev/null
 kubectl -n "$NS" delete pod "$LEADER" --grace-period=1 >/dev/null
 NEW_LEADER=""
 for _ in $(seq 90); do
@@ -137,11 +143,17 @@ echo "standby $NEW_LEADER won the lease"
 
 # --- the pre-failover writes and sign-in survive ---------------------------
 pf "$NEW_LEADER"
-GOT="$(tool "$TOKEN" "$SID" "get" "{\"subject\":\"agent\",\"koid\":\"$KOID\"}" | jsonfield '["properties"]["n"]')"
+# sessions are process-local and died with the old leader; the tokens
+# (and the writes they made) live in the replicated db — re-initialize
+SID2="$(session "$TOKEN")"
+[ -n "$SID2" ] || die "re-initialize with the static token failed"
+GOT="$(tool "$TOKEN" "$SID2" "get" "{\"subject\":\"agent\",\"koid\":\"$KOID\"}" | jsonfield '["properties"]["n"]')"
 [ "$GOT" = "7" ] || die "leader write lost after failover (got $GOT)"
-GOT8="$(tool "$TOKEN" "$SID" "get" "{\"subject\":\"agent\",\"koid\":\"$OKOID\"}" | jsonfield '["properties"]["n"]')"
+GOT8="$(tool "$TOKEN" "$SID2" "get" "{\"subject\":\"agent\",\"koid\":\"$OKOID\"}" | jsonfield '["properties"]["n"]')"
 [ "$GOT8" = "8" ] || die "OAuth write lost after failover (got $GOT8)"
 # the OAuth sign-in from before the kill still authorizes the new leader
-NEW_KOID="$(tool "$OAUTH_TOKEN" "$OSID" "remember" '{"subject":"agent","type_name":"note","properties":{"n":9}}' | jsonfield '["koid"]')"
+OSID2="$(session "$OAUTH_TOKEN")"
+[ -n "$OSID2" ] || die "re-initialize with the pre-failover OAuth token failed"
+NEW_KOID="$(tool "$OAUTH_TOKEN" "$OSID2" "remember" '{"subject":"agent","type_name":"note","properties":{"n":9}}' | jsonfield '["koid"]')"
 [ -n "$NEW_KOID" ] || die "the pre-failover OAuth token no longer works"
 echo "PASS: failover served both writes; the OAuth sign-in survived ($NEW_KOID)"

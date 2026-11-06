@@ -57,6 +57,10 @@ pub struct ClassDef {
     /// Parent class for single inheritance (e.g. `Employee` → parent = `Person`).
     pub parent: Option<String>,
     pub description: Option<String>,
+    /// Names of the `property_defs` this class declares (own properties; a
+    /// subclass also carries its ancestors'). Empty for every class in a
+    /// legacy ontology — see [`OntologyRegistry::class_properties`].
+    pub properties: Vec<String>,
 }
 
 /// A named relationship between two ontology classes.
@@ -154,6 +158,12 @@ impl OntologyDef {
             if let Some(ref desc) = cd.description {
                 cm.insert("description".into(), Value::Text(desc.clone()));
             }
+            if !cd.properties.is_empty() {
+                cm.insert(
+                    "properties".into(),
+                    Value::List(cd.properties.iter().cloned().map(Value::Text).collect()),
+                );
+            }
             classes_list.push(Value::Map(cm));
         }
         m.insert("classes".into(), Value::List(classes_list));
@@ -186,6 +196,9 @@ impl OntologyDef {
             pm.insert("name".into(), Value::Text(name.clone()));
             pm.insert("type".into(), Value::Text(pd.value_type.clone()));
             pm.insert("required".into(), Value::Bool(pd.required));
+            if pd.nullable {
+                pm.insert("nullable".into(), Value::Bool(true));
+            }
             props_list.push(Value::Map(pm));
         }
         m.insert("property_defs".into(), Value::List(props_list));
@@ -228,12 +241,23 @@ impl OntologyDef {
                         .to_string();
                     let parent = map_get_str(cm, "parent").map(String::from);
                     let description = map_get_str(cm, "description").map(String::from);
+                    let properties = match map_get(cm, "properties") {
+                        Some(Value::List(l)) => l
+                            .iter()
+                            .filter_map(|v| match v {
+                                Value::Text(t) => Some(t.clone()),
+                                _ => None,
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     classes.insert(
                         name.clone(),
                         ClassDef {
                             name,
                             parent,
                             description,
+                            properties,
                         },
                     );
                 }
@@ -282,13 +306,15 @@ impl OntologyDef {
                         .to_string();
                     let value_type = map_get_str(pm, "type").unwrap_or("Text").to_string();
                     let required = map_get_bool(pm, "required").unwrap_or(false);
+                    // absent in ontologies stored before the field was encoded
+                    let nullable = map_get_bool(pm, "nullable").unwrap_or(false);
                     property_defs.insert(
                         name.clone(),
                         PropertyDef {
                             name,
                             value_type,
                             required,
-                            nullable: false,
+                            nullable,
                         },
                     );
                 }
@@ -365,6 +391,33 @@ impl OntologyDef {
                     return Err(KError::InvalidObject(format!(
                         "ontology class '{}' has unknown parent '{}'",
                         name, parent
+                    )));
+                }
+            }
+        }
+
+        // Inheritance must be a forest: walking up from any class must end.
+        for name in self.classes.keys() {
+            let mut seen = std::collections::BTreeSet::new();
+            let mut cur = Some(name.as_str());
+            while let Some(c) = cur {
+                if !seen.insert(c) {
+                    return Err(KError::InvalidObject(format!(
+                        "ontology class '{}' has circular inheritance",
+                        name
+                    )));
+                }
+                cur = self.classes.get(c).and_then(|cd| cd.parent.as_deref());
+            }
+        }
+
+        // A class may only declare properties the ontology defines.
+        for (name, cd) in &self.classes {
+            for p in &cd.properties {
+                if !self.property_defs.contains_key(p) {
+                    return Err(KError::InvalidObject(format!(
+                        "ontology class '{}' declares unknown property '{}'",
+                        name, p
                     )));
                 }
             }
@@ -489,11 +542,36 @@ impl OntologyRegistry {
         false
     }
 
-    /// Get all property definitions.
-    /// ponytail: MVP returns all property_defs globally. Per-class property
-    /// assignment and type-level scoping land when Schema gains property_types.
-    pub fn class_properties(&self, _class_name: &str) -> Vec<&PropertyDef> {
-        self.def.property_defs.values().collect()
+    /// The property definitions that apply to `class_name`: those it declares
+    /// plus its ancestors' (a subclass is-a its parents). A legacy ontology —
+    /// no class declares any — keeps the old behavior: every property applies
+    /// to every class.
+    pub fn class_properties(&self, class_name: &str) -> Vec<&PropertyDef> {
+        if self.def.classes.values().all(|c| c.properties.is_empty()) {
+            return self.def.property_defs.values().collect();
+        }
+        let mut out: Vec<&PropertyDef> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        // validate() rejects cycles; the visited set keeps an unvalidated def finite
+        let mut visited = std::collections::HashSet::new();
+        let mut cur = Some(class_name);
+        while let Some(c) = cur {
+            if !visited.insert(c) {
+                break;
+            }
+            let Some(cd) = self.def.classes.get(c) else {
+                break;
+            };
+            for p in &cd.properties {
+                if let Some(pd) = self.def.property_defs.get(p) {
+                    if seen.insert(p.as_str()) {
+                        out.push(pd);
+                    }
+                }
+            }
+            cur = cd.parent.as_deref();
+        }
+        out
     }
 
     /// Resolve a relationship by domain class and relationship name.
@@ -670,6 +748,7 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
                     "Auto-discovered from {} (source: {})",
                     type_name, source
                 )),
+                properties: Vec::new(),
             },
         );
         for (prop_name, vt) in props {
@@ -772,6 +851,7 @@ mod tests {
                 name: "Person".into(),
                 parent: None,
                 description: Some("A human being".into()),
+                properties: Vec::new(),
             },
         );
         classes.insert(
@@ -780,6 +860,7 @@ mod tests {
                 name: "Employee".into(),
                 parent: Some("Person".into()),
                 description: Some("A person employed by a company".into()),
+                properties: Vec::new(),
             },
         );
         classes.insert(
@@ -788,6 +869,7 @@ mod tests {
                 name: "Manager".into(),
                 parent: Some("Employee".into()),
                 description: Some("An employee who manages others".into()),
+                properties: Vec::new(),
             },
         );
         classes.insert(
@@ -796,6 +878,7 @@ mod tests {
                 name: "Department".into(),
                 parent: None,
                 description: Some("An organizational unit".into()),
+                properties: Vec::new(),
             },
         );
 
@@ -902,6 +985,7 @@ mod tests {
                 name: "A".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let mut relationships = std::collections::BTreeMap::new();
@@ -1208,6 +1292,7 @@ mod tests {
                 name: "A".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let mut props = PropertyMap::new();
@@ -1242,6 +1327,7 @@ mod tests {
                         name: "A".into(),
                         parent: None,
                         description: None,
+                        properties: Vec::new(),
                     },
                 );
                 m
@@ -1283,6 +1369,7 @@ mod tests {
                 name: "Thing".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let mut rels = BTreeMap::new();
@@ -1384,6 +1471,7 @@ mod tests {
                 name: "C".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let mappings: Vec<MappingEntry> = (0..400)
@@ -1435,6 +1523,7 @@ mod tests {
                 name: "C".into(),
                 parent: None,
                 description: None,
+                properties: Vec::new(),
             },
         );
         let r = OntologyRegistry::new(OntologyDef {
@@ -1793,6 +1882,7 @@ mod tests {
                 name: "A".into(),
                 parent: None,
                 description: Some("has desc".into()),
+                properties: Vec::new(),
             },
         );
         classes.insert(
@@ -1801,6 +1891,7 @@ mod tests {
                 name: "B".into(),
                 parent: Some("A".into()),
                 description: None,
+                properties: Vec::new(),
             },
         );
 
@@ -1850,6 +1941,7 @@ mod tests {
                         name: "E".into(),
                         parent: None,
                         description: None,
+                        properties: Vec::new(),
                     },
                 );
                 m
@@ -1964,5 +2056,121 @@ mod tests {
             .expect("discovery must infer a supersedes relationship");
         assert_eq!(supersedes.domain.as_deref(), Some("identity_link"));
         assert_eq!(supersedes.range.as_deref(), Some("identity_link"));
+    }
+
+    // ---- Studio hardening M4: ontology correctness ------------------------
+
+    fn names(defs: Vec<&PropertyDef>) -> Vec<String> {
+        let mut v: Vec<String> = defs.into_iter().map(|d| d.name.clone()).collect();
+        v.sort();
+        v
+    }
+
+    fn scoped() -> OntologyDef {
+        let mut o = sample_ontology();
+        o.property_defs.clear();
+        for n in ["name", "salary", "budget"] {
+            o.property_defs.insert(
+                n.into(),
+                PropertyDef {
+                    name: n.into(),
+                    value_type: "Text".into(),
+                    required: false,
+                    nullable: false,
+                },
+            );
+        }
+        o.classes.get_mut("Person").unwrap().properties = vec!["name".into()];
+        o.classes.get_mut("Employee").unwrap().properties = vec!["salary".into()];
+        o.classes.get_mut("Department").unwrap().properties = vec!["budget".into()];
+        o
+    }
+
+    #[test]
+    fn m4_class_properties_are_scoped_to_the_class_and_its_ancestors() {
+        let reg = OntologyRegistry::new(scoped()).unwrap();
+        assert_eq!(names(reg.class_properties("Person")), ["name"]);
+        // Employee inherits Person's; Manager inherits both
+        assert_eq!(names(reg.class_properties("Employee")), ["name", "salary"]);
+        assert_eq!(names(reg.class_properties("Manager")), ["name", "salary"]);
+        assert_eq!(names(reg.class_properties("Department")), ["budget"]);
+    }
+
+    #[test]
+    fn m4_a_legacy_ontology_without_class_properties_still_returns_every_property() {
+        let mut o = scoped();
+        for c in o.classes.values_mut() {
+            c.properties.clear();
+        }
+        let reg = OntologyRegistry::new(o).unwrap();
+        assert_eq!(
+            names(reg.class_properties("Person")),
+            ["budget", "name", "salary"]
+        );
+    }
+
+    #[test]
+    fn m4_class_properties_round_trip_and_an_empty_list_is_not_emitted() {
+        let o = scoped();
+        let back = OntologyDef::from_property_map(&o.to_property_map()).unwrap();
+        assert_eq!(
+            back.classes["Employee"].properties,
+            vec!["salary".to_string()]
+        );
+        assert_eq!(back, o);
+        // byte-compat: a class with no declared properties encodes exactly as before
+        let legacy = sample_ontology().to_property_map();
+        let Value::List(classes) = &legacy["classes"] else {
+            panic!()
+        };
+        for c in classes {
+            let Value::Map(cm) = c else { panic!() };
+            assert!(!cm.contains_key("properties"), "{cm:?}");
+        }
+    }
+
+    #[test]
+    fn m4_nullable_survives_encode_and_decode() {
+        let mut o = scoped();
+        o.property_defs.get_mut("name").unwrap().nullable = true;
+        let back = OntologyDef::from_property_map(&o.to_property_map()).unwrap();
+        assert!(back.property_defs["name"].nullable, "nullable was dropped");
+        assert!(!back.property_defs["salary"].nullable);
+        // an ontology stored before the field existed decodes as non-nullable
+        let mut pm = o.to_property_map();
+        if let Some(Value::List(pl)) = pm.get_mut("property_defs") {
+            for p in pl {
+                if let Value::Map(m) = p {
+                    m.remove("nullable");
+                }
+            }
+        }
+        let legacy = OntologyDef::from_property_map(&pm).unwrap();
+        assert!(!legacy.property_defs["name"].nullable);
+    }
+
+    #[test]
+    fn m4_validate_rejects_circular_inheritance() {
+        let mut o = sample_ontology();
+        o.classes.get_mut("Person").unwrap().parent = Some("Manager".into());
+        let err = o
+            .validate()
+            .expect_err("Person -> Manager -> Employee -> Person");
+        assert!(err.to_string().contains("circular"), "{err}");
+        let mut own = sample_ontology();
+        own.classes.get_mut("Department").unwrap().parent = Some("Department".into());
+        assert!(own
+            .validate()
+            .expect_err("self parent")
+            .to_string()
+            .contains("circular"));
+    }
+
+    #[test]
+    fn m4_validate_rejects_a_class_declaring_an_unknown_property() {
+        let mut o = scoped();
+        o.classes.get_mut("Person").unwrap().properties = vec!["ghost".into()];
+        let err = o.validate().expect_err("unknown property");
+        assert!(err.to_string().contains("ghost"), "{err}");
     }
 }

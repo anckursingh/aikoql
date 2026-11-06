@@ -63,6 +63,13 @@ pub trait KeyManager: Send + Sync {
     fn install(&self, _key: &[u8; 32], _passphrase: &str) -> Result<(), String> {
         Err("this key manager cannot install a master key".into())
     }
+
+    /// AG-31 — re-wrap the master key under a new passphrase. The key itself
+    /// does not change (nothing downstream is re-encrypted); the old
+    /// passphrase is verified first and stops working afterwards.
+    fn change_passphrase(&self, _old: &str, _new: &str) -> Result<(), String> {
+        Err("this key manager cannot change the passphrase".into())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +144,25 @@ impl KeyManager for LocalKms {
         crate::security::keyring::write_atomic(Path::new(&self.path), &envelope)?;
         // justified: RwLock poison is unrecoverable
         *self.cached_key.write().unwrap() = Some(*key);
+        Ok(())
+    }
+
+    fn change_passphrase(&self, old: &str, new: &str) -> Result<(), String> {
+        let path = Path::new(&self.path);
+        let raw =
+            fs::read(path).map_err(|e| format!("read master key file {}: {}", self.path, e))?;
+        // Verify the old passphrase by opening the file with it (a v1
+        // envelope migrates to v2 under the old passphrase first), then
+        // re-wrap under the new one with a fresh salt and nonce.
+        let key = if raw.len() == V1_ENVELOPE_LEN {
+            self.migrate_from_v1(&raw, old)?
+        } else {
+            decrypt_v2_envelope(&raw, old)?
+        };
+        let envelope = encrypt_v2_envelope(&key, new)?;
+        crate::security::keyring::write_atomic(path, &envelope)?;
+        // justified: RwLock poison is unrecoverable
+        *self.cached_key.write().unwrap() = Some(key);
         Ok(())
     }
 
@@ -342,23 +368,110 @@ fn xor_unwrap(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
 }
 
 // ---------------------------------------------------------------------------
-// Cloud KMS stubs — these implement the KeyManager trait for cloud providers.
-// Full SDK integration (aws-sdk-kms, azure_security_keyvault, google-cloud-kms)
-// deferred. Stubs accept a key_uri and return the key for MVP.
+// AWS KMS — envelope-wrapped master key over the `KmsOps` seam (AG-31)
 // ---------------------------------------------------------------------------
 
-/// AWS KMS stub. Set AIKOQL_AWS_KMS_KEY=<hex-key> for MVP.
+/// The AWS KMS API surface the [`AwsKms`] manager needs. The kernel stays
+/// SDK-free: the serve binary supplies an aws-sdk-kms implementation, unit
+/// tests drive a mock.
+pub trait KmsOps: Send + Sync {
+    /// Create a customer-managed key for `alias` and return its ARN.
+    fn create_key(&self, alias: &str) -> Result<String, String>;
+    /// Encrypt plaintext under the CMK.
+    fn encrypt(&self, key_id: &str, plaintext: &[u8]) -> Result<Vec<u8>, String>;
+    /// Decrypt ciphertext under the CMK.
+    fn decrypt(&self, key_id: &str, ciphertext: &[u8]) -> Result<Vec<u8>, String>;
+}
+
+/// KMS pointer file: `AIKOQL-KMS1 || arn_len(2 LE) || arn || key_hash(32) || ct`.
+/// The 32-byte SHA-256 of the master key authenticates the unwrap — real KMS
+/// Decrypt authenticates its own ciphertext, but the seam may not, so the
+/// hash fails a torn pointer closed before it becomes a wrong key.
+const KMS_POINTER_MAGIC: &[u8] = b"AIKOQL-KMS1";
+
+/// AWS KMS-backed master key (envelope encryption): the 32-byte master key
+/// is Encrypted under a customer-managed key into the pointer file, and
+/// `master_key` unlocks through Decrypt — AWS IAM gates the key, not the
+/// passphrase. `install` creates the CMK and wraps; `rotate` mints a fresh
+/// key and re-wraps it under the same CMK.
+/// shortcut: ImportKeyMaterial (the CMK holds OUR key, not a wrap of it) is
+/// the stronger upgrade path; Envelope-Encrypt/Decrypt was chosen because it
+/// needs no BYOK permissions on the new AWS experience.
 pub struct AwsKms {
-    pub key_id: String,
+    key_id: String,
+    path: std::path::PathBuf,
+    ops: std::sync::Arc<dyn KmsOps>,
     cached_key: std::sync::RwLock<Option<[u8; 32]>>,
 }
 
 impl AwsKms {
-    pub fn new(key_id: impl Into<String>) -> Self {
+    /// An empty `key_id` makes `install` create the CMK itself (registered
+    /// under `alias/aikoql/<stem>`); a non-empty ARN reuses an existing CMK.
+    pub fn with_ops(
+        key_id: impl Into<String>,
+        path: impl Into<std::path::PathBuf>,
+        ops: std::sync::Arc<dyn KmsOps>,
+    ) -> Self {
         AwsKms {
             key_id: key_id.into(),
+            path: path.into(),
+            ops,
             cached_key: std::sync::RwLock::new(None),
         }
+    }
+
+    /// True when `path` holds a KMS pointer (the magic header) — openers
+    /// route to `AwsKms` from the file itself, no config flag needed.
+    pub fn is_pointer(path: &Path) -> bool {
+        fs::read(path)
+            .map(|raw| raw.starts_with(KMS_POINTER_MAGIC))
+            .unwrap_or(false)
+    }
+
+    /// The alias a fresh CMK is registered under: the DB's file stem.
+    fn alias(&self) -> String {
+        let stem = self
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("master");
+        format!("aikoql/{stem}")
+    }
+
+    /// Parse the pointer file into (arn, key_hash, ciphertext).
+    fn read_pointer(&self) -> Result<(String, [u8; 32], Vec<u8>), String> {
+        let raw = fs::read(&self.path)
+            .map_err(|e| format!("read KMS pointer {}: {}", self.path.display(), e))?;
+        let rest = raw
+            .strip_prefix(KMS_POINTER_MAGIC)
+            .ok_or("not an AIKOQL KMS pointer file")?;
+        if rest.len() < 34 {
+            return Err("KMS pointer file truncated".into());
+        }
+        // justified: length checked above
+        let arn_len = u16::from_le_bytes([rest[0], rest[1]]) as usize;
+        if rest.len() < 2 + arn_len + 32 {
+            return Err("KMS pointer file truncated".into());
+        }
+        let arn = String::from_utf8(rest[2..2 + arn_len].to_vec())
+            .map_err(|_| "KMS pointer ARN is not utf-8".to_string())?;
+        // justified: length checked above
+        let key_hash: [u8; 32] = rest[2 + arn_len..2 + arn_len + 32].try_into().unwrap();
+        Ok((arn, key_hash, rest[2 + arn_len + 32..].to_vec()))
+    }
+
+    fn write_pointer(&self, arn: &str, key: &[u8; 32], ciphertext: &[u8]) -> Result<(), String> {
+        use sha2::Digest;
+        let key_hash = sha2::Sha256::digest(key);
+        let mut raw =
+            Vec::with_capacity(KMS_POINTER_MAGIC.len() + 2 + arn.len() + 32 + ciphertext.len());
+        raw.extend_from_slice(KMS_POINTER_MAGIC);
+        // justified: ARNs are far below u16::MAX
+        raw.extend_from_slice(&(arn.len() as u16).to_le_bytes());
+        raw.extend_from_slice(arn.as_bytes());
+        raw.extend_from_slice(&key_hash);
+        raw.extend_from_slice(ciphertext);
+        crate::security::keyring::write_atomic(&self.path, &raw)
     }
 }
 
@@ -368,26 +481,60 @@ impl KeyManager for AwsKms {
         if let Some(k) = *self.cached_key.read().unwrap() {
             return Ok(k);
         }
-        if let Ok(hex) = std::env::var("AIKOQL_AWS_KMS_KEY") {
-            let bytes = hex_decode(hex.trim()).map_err(|e| format!("invalid hex key: {}", e))?;
-            if bytes.len() != 32 {
-                return Err("AWS KMS key must be 32 bytes (64 hex chars)".into());
-            }
-            let mut key = [0u8; 32];
-            key.copy_from_slice(&bytes);
-            // justified: RwLock poison is unrecoverable
-            *self.cached_key.write().unwrap() = Some(key);
-            Ok(key)
-        } else {
-            Err("AWS KMS not configured. Set AIKOQL_AWS_KMS_KEY env var or use LocalKms.".into())
+        // shortcut: the passphrase no longer gates a KMS-held key — AWS IAM
+        // does; the parameter stays for the trait
+        let (arn, key_hash, ciphertext) = self.read_pointer()?;
+        let plain = self
+            .ops
+            .decrypt(&arn, &ciphertext)
+            .map_err(|e| format!("AWS KMS decrypt: {}", e))?;
+        let key: [u8; 32] = plain
+            .try_into()
+            .map_err(|_| "AWS KMS returned a wrong-length key".to_string())?;
+        use sha2::Digest;
+        // justified: 32-byte digest
+        let got: [u8; 32] = sha2::Sha256::digest(key).into();
+        if got != key_hash {
+            return Err(
+                "KMS pointer checksum mismatch — the unwrapped key is not the installed one".into(),
+            );
         }
+        // justified: RwLock poison is unrecoverable
+        *self.cached_key.write().unwrap() = Some(key);
+        Ok(key)
+    }
+
+    fn install(&self, key: &[u8; 32], _passphrase: &str) -> Result<(), String> {
+        let arn = if self.key_id.is_empty() {
+            self.ops.create_key(&self.alias())?
+        } else {
+            self.key_id.clone()
+        };
+        let ciphertext = self.ops.encrypt(&arn, key)?;
+        // Verify the unwrap BEFORE replacing the local file — a wrong region
+        // or permission set must not strand the DB on a pointer it cannot
+        // decrypt.
+        let back = self.ops.decrypt(&arn, &ciphertext)?;
+        if back != *key {
+            return Err(
+                "AWS KMS round trip failed — the CMK did not unwrap the key it wrapped".into(),
+            );
+        }
+        // no cache — the first open must prove the file on disk unwraps
+        self.write_pointer(&arn, key, &ciphertext)
     }
 
     fn rotate(&self, _passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String> {
+        let (arn, _, _) = self.read_pointer()?;
         let new_key = provider.generate_key();
-        // justified: RwLock poison is unrecoverable
-        *self.cached_key.write().unwrap() = Some(new_key);
+        let ciphertext = self.ops.encrypt(&arn, &new_key)?;
+        // no cache — the first open must prove the file on disk unwraps
+        self.write_pointer(&arn, &new_key, &ciphertext)?;
         Ok(new_key)
+    }
+
+    fn change_passphrase(&self, _old: &str, _new: &str) -> Result<(), String> {
+        Err("the master key is held by AWS KMS — the passphrase no longer gates it".into())
     }
 }
 
@@ -768,6 +915,35 @@ mod tests {
         let on_disk = fs::read(&tmp).unwrap();
         assert_eq!(on_disk.len(), V2_ENVELOPE_LEN);
         assert_eq!(on_disk[0], ENVELOPE_VERSION);
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn local_kms_change_passphrase_keeps_the_key_and_retires_the_old_passphrase() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("aikoql-test-kms-chpw-{}", std::process::id()));
+        let kms = LocalKms::new(tmp.to_str().unwrap());
+        let key = kms.master_key("old-pw").unwrap();
+
+        // A wrong old passphrase fails the change and leaves the file as it was.
+        let before = fs::read(&tmp).unwrap();
+        assert!(kms.change_passphrase("wrong-pw", "x").is_err());
+        assert_eq!(fs::read(&tmp).unwrap(), before);
+
+        kms.change_passphrase("old-pw", "new-pw").unwrap();
+
+        // The key itself never changes — nothing downstream needs re-encrypting.
+        let kms2 = LocalKms::new(tmp.to_str().unwrap());
+        assert_eq!(kms2.master_key("new-pw").unwrap(), key);
+
+        let kms3 = LocalKms::new(tmp.to_str().unwrap());
+        let err = kms3.master_key("old-pw").unwrap_err();
+        assert!(
+            err.contains("InvalidPassphrase"),
+            "expected InvalidPassphrase, got: {}",
+            err
+        );
+
         let _ = fs::remove_file(&tmp);
     }
 

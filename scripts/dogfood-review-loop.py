@@ -150,9 +150,16 @@ async def run(opts, checks):
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
+    # AIKOQL_BIN (absolute path) serves a locally built binary instead of
+    # npx — needed before a release is published, and for offline runs.
+    bin_env = os.environ.get("AIKOQL_BIN")
+    if bin_env:
+        command, args = bin_env, ["serve", opts.kb]
+    else:
+        command, args = "npx", ["-y", "aikoql-mcp", "serve", opts.kb]
     params = StdioServerParameters(
-        command="npx",
-        args=["-y", "aikoql-mcp", "serve", opts.kb],
+        command=command,
+        args=args,
         cwd=str(REPO),
     )
     code, err = 0, None

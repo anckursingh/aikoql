@@ -20,6 +20,16 @@ pub const DEKS_STORAGE_KEY: &[u8] = b"__encryption__/deks";
 /// switches to a new KEK: after a crash the set that unwraps under the
 /// installed KEK wins (`Kernel::with_field_encryption`).
 pub const DEKS_NEXT_KEY: &[u8] = b"__encryption__/deks.next";
+/// AG-31 — the previous generation's wrapped DEKs (decrypt-only fallback
+/// for the historical versions a DEK roll left behind). Written together
+/// with [`DEKS_NEXT_KEY`] during a KEK rotation so both generations
+/// rewrapped under the new KEK commit at the KMS install point.
+pub const DEKS_PREV_NEXT_KEY: &[u8] = b"__encryption__/deks.prev.next";
+/// AG-31 — the previous generation's wrapped DEKs at rest. A DEK roll
+/// keeps one previous generation (shortcut: a second roll retires the
+/// first fallback — historical versions from before the last roll lose
+/// their field plaintext; upgrade when history needs more generations).
+pub const DEKS_PREV_KEY: &[u8] = b"__encryption__/deks.prev";
 
 /// Storage key under which the crypto-version metadata record lives. Written
 /// on first open and verified on every later open — an unknown record fails
@@ -53,6 +63,9 @@ pub struct Envelope {
     kek_id: RwLock<u64>,
     /// Per-tenant DEKs, cached unwrapped.
     deks: RwLock<HashMap<String, [u8; 32]>>,
+    /// AG-31 — the previous generation's DEKs (decrypt-only fallback after
+    /// a DEK roll; historical versions keep their ciphertext).
+    prev_deks: RwLock<HashMap<String, [u8; 32]>>,
     /// Wrapped DEKs for persistence.
     wrapped_deks: RwLock<HashMap<String, WrappedDek>>,
     /// Optional audit log for key lifecycle events (MRFC-0020 Phase 4).
@@ -78,6 +91,7 @@ impl Envelope {
             kek: RwLock::new(kek),
             kek_id: RwLock::new(0),
             deks: RwLock::new(HashMap::new()),
+            prev_deks: RwLock::new(HashMap::new()),
             wrapped_deks: RwLock::new(HashMap::new()),
             audit: RwLock::new(None),
             creation: std::sync::Mutex::new(()),
@@ -177,6 +191,102 @@ impl Envelope {
         let next_id = *self.kek_id.read().unwrap() + 1;
         // justified: RwLock poison is unrecoverable
         let deks = self.deks.read().unwrap();
+        let mut out = Vec::with_capacity(deks.len());
+        for (tenant, dek) in deks.iter() {
+            out.push(WrappedDek {
+                tenant: tenant.clone(),
+                kek_id: next_id,
+                wrapped_key: self.crypto.encrypt(&wrap_key, dek, tenant.as_bytes())?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// AG-31 — the previous generation's DEK for `tenant`, if any.
+    pub fn prev_key(&self, tenant: &str) -> Option<[u8; 32]> {
+        // justified: RwLock poison is unrecoverable
+        self.prev_deks.read().unwrap().get(tenant).copied()
+    }
+
+    /// AG-31 — load a wrapped previous-generation DEK (decrypt-only
+    /// fallback for the historical versions a roll left behind).
+    pub fn load_prev_dek(&self, wrapped: &WrappedDek) -> Result<[u8; 32], String> {
+        let dek = self.unwrap_dek(wrapped)?;
+        // justified: RwLock poison is unrecoverable
+        self.prev_deks
+            .write()
+            .unwrap()
+            .insert(wrapped.tenant.clone(), dek);
+        Ok(dek)
+    }
+
+    /// AG-31 — roll every tenant DEK to a fresh key: new encrypts use the
+    /// new generation and the previous one stays for decrypt fallback.
+    /// Returns the new generation's wraps (the caller persists them, with
+    /// the previous set, before re-encrypting anything).
+    /// The caller holds `creation_guard()`, like `rewrapped`: the swap and
+    /// the persist must be one critical section or a tenant minted between
+    /// them would miss the batch.
+    pub fn roll_deks(&self) -> Result<Vec<WrappedDek>, String> {
+        // justified: RwLock poison is unrecoverable
+        let kek = *self.kek.read().unwrap();
+        // justified: RwLock poison is unrecoverable
+        let kek_id = *self.kek_id.read().unwrap();
+        let wrap_key = hkdf::domain_sep(&kek, DOMAIN_DEK_WRAP);
+        let tenants: Vec<String> = self
+            .deks
+            .read()
+            // justified: RwLock poison is unrecoverable
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        let mut out = Vec::with_capacity(tenants.len());
+        for tenant in tenants {
+            let new_dek = self.crypto.generate_key();
+            out.push(WrappedDek {
+                tenant: tenant.clone(),
+                kek_id,
+                wrapped_key: self
+                    .crypto
+                    .encrypt(&wrap_key, &new_dek, tenant.as_bytes())?,
+            });
+            let old = self
+                .deks
+                .write()
+                // justified: RwLock poison is unrecoverable
+                .unwrap()
+                .insert(tenant.clone(), new_dek);
+            if let Some(old) = old {
+                self.prev_deks
+                    .write()
+                    // justified: RwLock poison is unrecoverable
+                    .unwrap()
+                    .insert(tenant, old);
+            }
+        }
+        *self.wrapped_deks.write().unwrap() =
+            out.iter().map(|w| (w.tenant.clone(), w.clone())).collect();
+        // justified: RwLock poison is unrecoverable
+        if let Some(ref audit) = *self.audit.read().unwrap() {
+            let _ = audit.record(&KeyEvent::now(
+                KeyEventKind::Rotated,
+                "tenant-dek",
+                &format!("{} tenant DEKs rolled to a new generation", out.len()),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// AG-31 — the previous generation's wraps under `new_kek` (a KEK
+    /// rotation must rewrap them too, or the historical versions a roll
+    /// left behind lose their fields under the new KEK).
+    pub fn rewrapped_prev(&self, new_kek: &[u8; 32]) -> Result<Vec<WrappedDek>, String> {
+        let wrap_key = hkdf::domain_sep(new_kek, DOMAIN_DEK_WRAP);
+        // justified: RwLock poison is unrecoverable
+        let next_id = *self.kek_id.read().unwrap() + 1;
+        // justified: RwLock poison is unrecoverable
+        let deks = self.prev_deks.read().unwrap();
         let mut out = Vec::with_capacity(deks.len());
         for (tenant, dek) in deks.iter() {
             out.push(WrappedDek {
@@ -387,6 +497,48 @@ mod tests {
             "the old KEK's wraps no longer do"
         );
         assert_eq!(env.wrapped_deks()[0].kek_id, 1);
+    }
+
+    /// AG-31 — a DEK roll swaps generations in place: new encrypts use the
+    /// fresh key, the previous generation stays decryptable, and the
+    /// previous set rewraps under a new KEK for a later KEK rotation.
+    #[test]
+    fn envelope_dek_roll_swaps_generations() {
+        let kms = MemKms::new();
+        let provider = Aes256Gcm::new();
+        let crypto = std::sync::Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+
+        let env = Envelope::init(&kms, "pw", crypto.clone()).unwrap();
+        let old = env.tenant_key("a").unwrap();
+        let old_wraps = env.wrapped_deks();
+
+        let new_wraps = env.roll_deks().unwrap();
+        assert_eq!(env.wrapped_deks().len(), 1);
+        assert_eq!(
+            env.prev_key("a"),
+            Some(old),
+            "the old generation stays decryptable"
+        );
+        let new = env.tenant_key("a").unwrap();
+        assert_ne!(new, old, "new encrypts use a fresh DEK");
+        assert_eq!(
+            new_wraps[0].kek_id, old_wraps[0].kek_id,
+            "the KEK is unchanged"
+        );
+
+        // The previous set rewraps under a new KEK (a later KEK rotation):
+        // a fresh envelope under the rotated KMS loads it, and the old
+        // KEK's wraps no longer do.
+        let prev_rewrapped = env
+            .rewrapped_prev(&kms.rotate("pw", &provider).unwrap())
+            .unwrap();
+        let env2 = Envelope::init(&kms, "pw", crypto).unwrap();
+        let loaded_prev = env2.load_prev_dek(&prev_rewrapped[0]).unwrap();
+        assert_eq!(loaded_prev, old);
+        assert!(
+            env2.load_prev_dek(&old_wraps[0]).is_err(),
+            "old KEK retired"
+        );
     }
 
     /// AG-31 — the create race: concurrent first calls for one tenant must

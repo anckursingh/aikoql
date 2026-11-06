@@ -1,0 +1,24 @@
+{
+  "benchmark": "agent memory token savings (community launch)",
+  "binary": "aikoql-mcp 0.4.0, release build from commit 1e51db4 (built locally; the npm registry still carries 0.2.4 at time of writing)",
+  "machine": "Darwin arm64",
+  "tokenizer": "cl100k_base (tiktoken)",
+  "corpus": {
+    "path": "the aikoql repository itself (dogfood), staged copy with .git, target, .venv, node_modules, .superpowers, kb.ckpt, kb.artifacts excluded",
+    "files": 1760,
+    "corpus_tokens": 4675496
+  },
+  "method": {
+    "retrieval": "MCP tool recall (AG-02 hybrid retrieval, k=10, max_tokens=2000, subject ingest-dir) over the corpus ingested with `aikoql-mcp ingest-dir`",
+    "queries": "benchmarks/scripts/fixtures/queries.json (3 task questions about aikoql internals)",
+    "baseline": "corpus_tokens x 3 — without memory the agent re-reads the corpus on every turn; with it, one recall slice per turn",
+    "memory": "sum of cl100k tokens of the recall content.text returned per query (what enters the agent's context)",
+    "harness": "python benchmarks/scripts/token_savings.py --corpus <corpus> --queries benchmarks/scripts/fixtures/queries.json (AIKOQL_BIN and AIKOQL_DB point at the built binary and the ingested db)",
+    "variance": "recall is freshness-dependent; two consecutive runs measured 6583 and 6538 memory tokens (0.7%)"
+  },
+  "results": {
+    "baseline_tokens": 14026488,
+    "memory_tokens": 6538,
+    "reduction_pct": 99.95
+  }
+}

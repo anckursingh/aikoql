@@ -75,11 +75,35 @@ fn put_value(out: &mut Vec<u8>, v: &Value) {
     }
 }
 
-fn encode(values: &[&Value]) -> Vec<u8> {
+/// The order-preserving encoding of one value (the same bytes the index
+/// keys carry) — pub(crate) so `statistics` builds range histograms over
+/// the SAME order the range scans serve.
+pub(crate) fn encode(values: &[&Value]) -> Vec<u8> {
     let mut out = Vec::new();
     for v in values {
         put_value(&mut out, v);
     }
+    out
+}
+
+/// AG-21d: the smallest key greater than every key that carries `bytes`
+/// as a prefix — increment the last byte, carrying away trailing 0xFFs.
+/// This is the exclusive upper bound of a prefix range: any `bytes ++
+/// suffix` key sorts below it (the first differing byte is the incremented
+/// one, still inside the prefix's span), and any key with a larger prefix
+/// sorts at or past it. A value key never ends in all-0xFF (the tag byte
+/// is ≤ 5), so the increment always lands.
+fn successor(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    while let Some(last) = out.last_mut() {
+        if *last == 0xFF {
+            out.pop();
+        } else {
+            *last += 1;
+            return out;
+        }
+    }
+    out.push(0);
     out
 }
 
@@ -237,9 +261,9 @@ impl Index for PropertyIndex {
     }
 
     fn scan_range(&self, lo: Option<&Value>, hi: Option<&Value>) -> KResult<Option<Vec<KOID>>> {
-        if self.properties.len() != 1 {
-            return Ok(None);
-        }
+        // AG-21d: any tuple arity — the bounds are prefixes over the FIRST
+        // property (a range on a later property is not prefix-servable;
+        // the caller's covers_range gate keeps those out).
         let domain = |v: &Value| -> Option<u8> {
             match v {
                 Value::Int(_) | Value::Float(_) => Some(TAG_NUM),
@@ -261,12 +285,17 @@ impl Index for PropertyIndex {
         let start = lo.map_or(Bound::Included(vec![tag]), |v| {
             Bound::Included(encode(&[v]))
         });
+        // AG-21d: the upper bound is the exclusive SUCCESSOR of hi's key —
+        // tuple keys carry suffixes, so hi's own key covers only the bare
+        // [hi] tuple; every [hi, suffix] key sorts past it. For a
+        // single-property index the successor form answers the same set
+        // (no valid key sits between a value key and its successor).
         let end = hi.map_or(Bound::Excluded(vec![tag + 1]), |v| {
-            Bound::Included(encode(&[v]))
+            Bound::Excluded(successor(&encode(&[v])))
         });
-        if let (Bound::Included(a), Bound::Included(b)) = (&start, &end) {
-            if a > b {
-                return Ok(Some(Vec::new()));
+        if let (Bound::Included(a), Bound::Excluded(b)) = (&start, &end) {
+            if a >= b {
+                return Ok(Some(Vec::new())); // lo > hi: nothing compares
             }
         }
         // justified: RwLock poison is unrecoverable
@@ -282,6 +311,13 @@ impl Index for PropertyIndex {
 
     fn covers(&self, type_name: &str, property: &str) -> bool {
         self.type_name == type_name && self.properties.len() == 1 && self.properties[0] == property
+    }
+
+    /// AG-21d: a range may ride the FIRST property of any tuple — a prefix
+    /// range over the ordered keys. Eq still needs the full tuple
+    /// (`covers`).
+    fn covers_range(&self, type_name: &str, property: &str) -> bool {
+        self.type_name == type_name && self.properties.first().is_some_and(|p| p == property)
     }
 
     fn len(&self) -> usize {
@@ -655,7 +691,72 @@ mod tests {
             vec![k2],
             "binary-unsafe keys must round-trip"
         );
-        assert_eq!(idx2.applied_seq(), 7, "restore stamps the water");
-        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- AG-21d — idx6-003: a range on the FIRST property of a composite
+    // index serves as a byte-prefix range over the tuple keys. The hi
+    // boundary is the exclusive successor of its key, so rows whose tuple
+    // carries a suffix past hi are still included (the Filter re-checks).
+    // RED pre-fix: scan_range refuses multi-property indexes and the trait
+    // has no covers_range — the query full-scans.
+    #[test]
+    fn idx6_003_composite_prefix_range_serves_the_first_property() {
+        let idx = PropertyIndex::new("by_team_points", "Player", &["team", "points"]);
+        let row = |n: u8, team: i64, points: i64| {
+            let koid = KOID::from_bytes([n; KOID_LEN]);
+            let mut o = ko(koid, "Player");
+            o.properties.insert("team".into(), Value::Int(team));
+            o.properties.insert("points".into(), Value::Int(points));
+            (koid, o)
+        };
+        for (koid, o) in [
+            row(1, 3, 7),
+            row(2, 5, 10),
+            row(3, 8, 1),
+            row(4, 8, 99),
+            row(5, 9, 0),
+        ] {
+            idx.upsert(koid, &o).unwrap();
+        }
+        // team in [5, 8]: 5, 8+1, 8+99 — the 8 rows' suffixes must not
+        // drop them at the hi boundary
+        let got = idx
+            .scan_range(Some(&Value::Int(5)), Some(&Value::Int(8)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            got,
+            vec![
+                KOID::from_bytes([2; KOID_LEN]),
+                KOID::from_bytes([3; KOID_LEN]),
+                KOID::from_bytes([4; KOID_LEN])
+            ]
+        );
+        // open upper end: team >= 8
+        let got = idx.scan_range(Some(&Value::Int(8)), None).unwrap().unwrap();
+        assert_eq!(
+            got,
+            vec![
+                KOID::from_bytes([3; KOID_LEN]),
+                KOID::from_bytes([4; KOID_LEN]),
+                KOID::from_bytes([5; KOID_LEN])
+            ]
+        );
+        // the range covers only the FIRST property; Eq still needs the
+        // full tuple
+        assert!(idx.covers_range("Player", "team"));
+        assert!(!idx.covers_range("Player", "points"));
+        assert!(!idx.covers("Player", "team"), "Eq needs the full tuple");
+    }
+
+    #[test]
+    fn idx6_003_composite_index_eq_scan_checks_arity() {
+        let idx = PropertyIndex::new("by_team_points", "Player", &["team", "points"]);
+        // an Eq probe with fewer key parts than the tuple is refused
+        assert!(idx.scan_eq(&[Value::Int(1)]).is_err());
+        assert_eq!(
+            idx.scan_eq(&[Value::Int(1), Value::Int(2)]).unwrap(),
+            Vec::<KOID>::new()
+        );
     }
 }

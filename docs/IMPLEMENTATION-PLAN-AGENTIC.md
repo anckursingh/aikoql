@@ -295,8 +295,23 @@ and a `lesson` KO type distilled by AG-12 sampling.
   0.1% 0.143 ms, range 0.1% 0.151 ms (was 133.6), eq under 100 live
   writes 0.254 ms (was a full scan — one write after analyze switched
   indexes off), build 32.85 → 0.26 s. Fixed on the way: Int/Float Eq
-  through an index missed rows; scan_from never seeked. Open: composite
-  range (prefix ranges on a tuple), a CBO histogram for ranges.
+  through an index missed rows; scan_from never seeked.
+- *Status (2026-11-02): the two open items landed (AG-21d).* **Composite
+  range**: a range over the FIRST property of a composite index serves
+  as a byte-prefix scan — the hi bound is the exclusive successor of its
+  key, so hi's own suffix rows stay included (RED `idx6_003` +
+  `cbo_default_010`; `covers_range` keeps Eq on the full tuple). **CBO
+  range histogram**: `analyze` builds a per-property quantile histogram
+  (64 buckets over the index's ordered keys, per-bucket row counts) for
+  orderable values (Num/Text/Bool) with ≥ 64 distinct; `range_fraction`
+  estimates a range's match fraction, the range index decision prices
+  from it instead of materializing candidates (the exact-count probe is
+  the fallback — never worse), and a range Filter without an Eq conjunct
+  prices its rows from it (RED `cbo_a07` +
+  `cbo_range_filter_prices_from_the_histogram`). Shortcut: histograms
+  rebuild at analyze (an explicit DBA op) — no incremental
+  maintenance, so the estimate ages with the watermark like every
+  other statistic.
 - *Problem:* 1M structured_filter 22.9 s (brute force + sort).
 - *Design:* property secondary indexes (`index_create` exists) used by the
   planner (the CBO in `runtime/src/cbo.rs` estimates only the first Eq —
@@ -348,7 +363,7 @@ models never serves mixed-dimension results; migration survives a kill.
 
 ### Phase T — trust debt (the moat's own credibility)
 
-**AG-30 (P0) Real Ed25519 audit signatures** — **DONE 2026-10-30** (`ring` Ed25519, RFC 8032 TEST 1-3; `evidence_pack` signs the audit chain under `AIKOQL_AUDIT_SIGNING_KEY`; verified by Python `cryptography` from the public key). The placeholder turned out never to have been called, so no chain migration was needed. Not yet: signing the journal per commit, CI wiring of the e2e script. (ed25519-dalek, RFC 8032),
+**AG-30 (P0) Real Ed25519 audit signatures** — **DONE 2026-10-30** (`ring` Ed25519, RFC 8032 TEST 1-3; `evidence_pack` signs the audit chain under `AIKOQL_AUDIT_SIGNING_KEY`; verified by Python `cryptography` from the public key). The placeholder turned out never to have been called, so no chain migration was needed. Status (2026-11-02): the two "not yet" items landed — every journal event committed under the signer carries an Ed25519 signature chaining to the previous one (`KnowledgeEvent.audit_signature` over prev signature ‖ audit hash, all four commit paths, lenient decode of pre-AG-30 rows); `evidence_pack` emits the `journal_signatures` stream; `scripts/e2e-audit-verify.py` verifies the whole chain with Python `cryptography` and its CI leg runs in the e2e-dogfood job (wired at 5bc002e). Shortcut closed 2026-11-02 (AG-30b): `open_signed` attaches the signer at open, so the catalog bootstrap commits are inside the signed stream — the chain starts at seq 1, anchored at zeros (RED `au30_003_open_signed_signs_the_catalog_bootstrap`); the serve path opens signed, `with_audit_signer` stays for post-open attach. shortcut: a restart re-anchors the chain at zeros (`prev_sig` is not recovered from the journal head) — tighten when the verifier runs against restarted databases. (ed25519-dalek, RFC 8032),
 verifiable outside aikoql; migrate existing chains (re-sign with a marked
 algorithm switch, never rewrite history). *Gate:* RFC 8032 test vectors;
 an external verifier (Python `cryptography`) accepts an exported chain.
@@ -361,10 +376,38 @@ unusable.
   generation-safe rotation), `aikoql-mcp key rotate`, the job rotates;
   kr001–kr004 + the job test. Found on the way: the derived store key
   (any rotation = an unreadable store), the DEK first-use race, the job's
-  hanging shutdown. Open: cloud KMS `install` (AWS/Azure/GCP return
-  unsupported), passphrase change, data-key (DEK) re-encryption.
+  hanging shutdown. Passphrase change landed 2026-11-02:
+  `aikoql-mcp key change-passphrase NEW [DB]` re-wraps the master key
+  file under a new passphrase — the master key itself never changes (no
+  data key moves), the old passphrase stops opening the database, and
+  the ring keeps its passphrase copy in sync so a later rotation still
+  wraps under the new one (kr005). DEK re-encryption landed 2026-11-02:
+  `aikoql-mcp key roll-deks [DB]` mints fresh tenant data keys and
+  re-encrypts every encrypted field through the journal (one committed
+  version per object — the journal hashes the ciphertext, so this is a
+  commit, not a rewrite); both generations persist before the walk
+  (crash-safe), readers fall back to the previous generation, a re-run
+  resumes without swapping generations again, and a later `key rotate`
+  rewraps the previous generation too so history stays readable (kr006).
+  shortcut: a roll can be re-run but not repeated — a second roll is a
+  no-op walk (returns 0); forcing a fresh roll needs a manual reset of
+  the DEK rows, which nothing offers yet. Closed 2026-11-02: cloud KMS
+  `install` — `aikoql-mcp key install [DB] [--kms-region R]` wraps the
+  master key under a new AWS KMS CMK (`alias/aikoql/<db>`, envelope
+  Encrypt/Decrypt through the kernel's SDK-free `KmsOps` seam; the serve
+  binary supplies the aws-sdk-kms implementation) and replaces the key
+  file with a pointer (`AIKOQL-KMS1` magic + ARN + SHA-256 of the key +
+  ciphertext) — the KEK itself never changes (no data key moves), AWS
+  IAM gates every later open instead of the passphrase, and the pointer's
+  key hash fails a torn file closed. `key rotate` re-wraps a fresh KEK
+  under the same CMK (aws03); a pointer file is detected at open so no
+  config flag is needed (kr007 guards: no encryption config, no key
+  file, or an already-KMS-held file all refuse before any AWS call).
+  shortcut: ImportKeyMaterial (the CMK holds OUR key, not a wrap of it)
+  is the upgrade path for full BYOK control; Azure/GCP still return
+  unsupported.
 
-**AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). — **DONE 2026-11-01** (rebuild buckets each head under its own `metadata.tenant`, tenant-less → "default"; remember/transact creates and both forget modes keep the live counters in sync; gate: 5 tests — tenant unit tests + `tenant_accounting.rs`). Shortcut: no startup head scan wires `rebuild` yet, so counters restart empty and re-learn as writes land. *Gate:* usage per tenant matches the oracle count.
+**AG-32 (P1) Tenant accounting from KO metadata** (`tenant.rs:75`). — **DONE 2026-11-01** (rebuild buckets each head under its own `metadata.tenant`, tenant-less → "default"; remember/transact creates and both forget modes keep the live counters in sync; gate: 5 tests — tenant unit tests + `tenant_accounting.rs`). Shortcut closed 2026-11-02: `open_with` scans the heads on every non-standby open and rebuilds the counters from each head's `metadata.tenant` (RED `ag32_reopen_rebuilds_usage_from_store`). Remaining shortcut closed 2026-11-02 (AG-32b): each tenant's live count persists as an 8-byte LE row under `__tenants/usage/<tenant>` and a `(seq, ts)` head watermark rides every commit batch atomically with the rows — a clean open loads the rows when the watermark matches the journal head, anything else (older database, crash) rebuilds from the heads and re-persists both (RED `ag32_usage_persists_under_a_watermark_and_rebuilds_when_missing`). *Gate:* usage per tenant matches the oracle count.
 
 **AG-33 (P1) Prompt-injection provenance.** Every KO carries a trust class
 of its source (`user`, `tool_output`, `web`, `document`, `system`);
@@ -458,8 +501,16 @@ chart install, remember through the leader, kill the leader pod, the
 standby promotes and serves the writes, and an OAuth sign-in issued
 before the kill keeps authorizing the new leader — this closes the
 "real k8s pod" open item (the MRFC-0080 certs covered a real
-apiserver via envtest, not a pod). Laws pinned by tests/helm_chart.rs;
-not yet: helm lint/render in PR CI (rendered only by the kind gate).
+apiserver via envtest, not a pod). Laws pinned by tests/helm_chart.rs.
+
+Status (2026-11-02): the last "not yet" landed — a PR-CI job
+(`ci.yml` `helm`, ubuntu-latest, azure/setup-helm@v4) runs
+`helm lint deploy/helm/aikoql` + `helm template aikoql
+deploy/helm/aikoql` on every PR, so a broken template fails at push
+instead of waiting for the nightly kind gate (which now only
+re-renders on schedule). Pinned by RED
+`ag51_helm_lint_render_is_wired_into_pr_ci`; the real lint/render
+verified against alpine/helm (0 failures, 239 rendered lines).
 
 **AG-52 (P2) Login backoff survives restarts** (in-memory today) and a
 per-IP layer behind proxies (`X-Forwarded-For` trusted only from a
@@ -503,11 +554,15 @@ MCP kwargs, the `{"results": ...}` unwrap, the `text_only` vs `text`
 fusion spellings); their re-exports are lazy (PEP 562) so
 `import aikoql` never drags the frameworks in. CI pins:
 llama-index-core 0.14.25 + openai-agents 0.24.0 (python-sdk job), ai
-7.0.159 (ts-sdk devDependency, peer >=7). Not yet: embedded-client
-gates for the two python adapters (the gates ride the MCP client; the
-embedded path shares the crewai/langgraph precedent), and
-asyncio.to_thread wrappers for the sync client I/O in the async
-session methods.
+7.0.159 (ts-sdk devDependency, peer >=7).
+
+Status (2026-11-02): the two "not yet" items landed. Embedded-client
+gates (tmp_aikoql) drive both python adapters over the positional
+client, and the async session methods offload their sync client I/O via
+`asyncio.to_thread` (the langgraph.py shape) — RED
+`test_async_session_io_runs_off_the_event_loop` pins every
+remember/enumerate_rows/forget call to a worker thread, so the Runner
+never blocks the loop on local I/O.
 
 **AG-61 (P0) Public agent-memory benchmark — measured, not claimed.**
 - *Status (2026-10-31): harnesses committed; the run stays open.*

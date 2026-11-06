@@ -63,23 +63,17 @@ pub(crate) fn first_eq_after(
     }
 }
 
-/// AG-21c: the range bounds on one property in the Filter IMMEDIATELY after
-/// op `i` (same positional rule as `first_eq_after`): the first property
-/// with a `>`/`>=`/`<`/`<=` comparison, and its first lower and upper
-/// bound. Bounds are served inclusive — strictness is the Filter's.
-pub(crate) fn range_after(
-    ops: &[PhysicalOp],
-    i: usize,
+/// AG-21c: the range bounds on one property in a comparison list: the
+/// first property with a `>`/`>=`/`<`/`<=` comparison, and its first lower
+/// and upper bound. Bounds are served inclusive — strictness is the
+/// Filter's.
+fn range_bounds<'a>(
+    cmps: &[(&'a str, PredOp, &'a aikoql_kernel::Value)],
 ) -> Option<(
-    &str,
-    Option<&aikoql_kernel::Value>,
-    Option<&aikoql_kernel::Value>,
+    &'a str,
+    Option<&'a aikoql_kernel::Value>,
+    Option<&'a aikoql_kernel::Value>,
 )> {
-    let Some(IrOp::Filter { predicates }) = ops.get(i + 1).map(|po| &po.op) else {
-        return None;
-    };
-    let cmps: Vec<(&str, PredOp, &aikoql_kernel::Value)> =
-        predicates.iter().filter_map(|p| p.as_cmp()).collect();
     let (property, _, _) = cmps
         .iter()
         .find(|(_, op, _)| matches!(op, PredOp::Gt | PredOp::Gte | PredOp::Lt | PredOp::Lte))?;
@@ -96,6 +90,24 @@ pub(crate) fn range_after(
             .map(|(_, _, v)| *v)
     };
     Some((property, bound(true), bound(false)))
+}
+
+/// AG-21c: the range bounds on one property in the Filter IMMEDIATELY after
+/// op `i` (same positional rule as `first_eq_after`).
+pub(crate) fn range_after(
+    ops: &[PhysicalOp],
+    i: usize,
+) -> Option<(
+    &str,
+    Option<&aikoql_kernel::Value>,
+    Option<&aikoql_kernel::Value>,
+)> {
+    let Some(IrOp::Filter { predicates }) = ops.get(i + 1).map(|po| &po.op) else {
+        return None;
+    };
+    let cmps: Vec<(&str, PredOp, &aikoql_kernel::Value)> =
+        predicates.iter().filter_map(|p| p.as_cmp()).collect();
+    range_bounds(&cmps)
 }
 
 /// The uniform match fraction of that predicate: 1/distinct from the stats,
@@ -202,7 +214,7 @@ pub(crate) fn scan_assist(
             return Ok(None);
         };
         for idx in kernel.property_indexes()? {
-            if may_serve_exact(&*idx) && idx.covers(type_name, property) {
+            if may_serve_exact(&*idx) && idx.covers_range(type_name, property) {
                 return patched_range(kernel, &*idx, lo, hi);
             }
         }
@@ -272,6 +284,14 @@ pub fn cost_plan(
                     .iter()
                     .find(|p| matches!(p, Predicate::Cmp { op: PredOp::Eq, .. }))
                     .map(|p| eq_selectivity(p, stats))
+                    // AG-21d: no Eq — a range conjunct estimates from the
+                    // property histogram (1.0 without one)
+                    .or_else(|| {
+                        let cmps: Vec<(&str, PredOp, &aikoql_kernel::Value)> =
+                            predicates.iter().filter_map(|p| p.as_cmp()).collect();
+                        let (property, lo, hi) = range_bounds(&cmps)?;
+                        stats.and_then(|s| s.range_fraction(property, lo, hi))
+                    })
                     .unwrap_or(1.0)
                     .min(1.0);
                 Cost {
@@ -382,19 +402,29 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
                     break;
                 }
             } else if let Some((property, lo, hi)) = range_after(&ops, 0) {
-                // AG-21c: a range is priced by the index itself — its exact
-                // candidate count against the type's rows (no histogram)
+                // AG-21d: price the range from the histogram when the
+                // property carries one — no candidate materialization at
+                // optimize. The exact-count probe is the fallback (never
+                // worse than today).
+                let fraction = stats.range_fraction(property, lo, hi);
                 for idx in kernel.property_indexes()? {
                     if idx.state() != aikoql_kernel::IndexState::Ready
-                        || !idx.covers(&stats.type_name, property)
+                        || !idx.covers_range(&stats.type_name, property)
                     {
                         continue;
                     }
-                    if let Some(cands) = patched_range(kernel, &*idx, lo, hi)? {
-                        if (cands.len() as u64).saturating_mul(2) < stats.row_count {
-                            ops[0].strategy = Strategy::PropertyIndex;
-                            index_used = Some(idx.name().to_string());
-                        }
+                    if unapplied(kernel, &*idx)?.is_none() {
+                        continue;
+                    }
+                    let serve = match fraction {
+                        Some(f) => f < 0.5,
+                        None => patched_range(kernel, &*idx, lo, hi)?.is_some_and(|cands| {
+                            (cands.len() as u64).saturating_mul(2) < stats.row_count
+                        }),
+                    };
+                    if serve {
+                        ops[0].strategy = Strategy::PropertyIndex;
+                        index_used = Some(idx.name().to_string());
                     }
                     break;
                 }

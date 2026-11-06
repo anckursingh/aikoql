@@ -169,6 +169,12 @@ impl FieldCrypto {
         }
         let dek = self.envelope.tenant_key(tenant)?;
         let key = hkdf::domain_sep(&dek, DOMAIN_FIELD);
+        // AG-31 DEK roll: not-yet-migrated ciphertext decrypts under the
+        // previous generation — an AEAD miss on the current one falls back.
+        let prev_key = self
+            .envelope
+            .prev_key(tenant)
+            .map(|d| hkdf::domain_sep(&d, DOMAIN_FIELD));
         let mut count = 0usize;
 
         for field_name in &policy.fields {
@@ -177,7 +183,16 @@ impl FieldCrypto {
                     continue; // not encrypted
                 }
                 let aad = field_name.as_bytes();
-                let plain_bytes = self.crypto.decrypt(&key, b, aad)?;
+                let plain_bytes = match self.crypto.decrypt(&key, b, aad) {
+                    Ok(p) => p,
+                    Err(current) => match prev_key.as_ref() {
+                        Some(pk) => self
+                            .crypto
+                            .decrypt(pk, b, aad)
+                            .map_err(|prev| format!("{current}; previous generation: {prev}"))?,
+                        None => return Err(current),
+                    },
+                };
                 // Restore the original Value type from the encrypted payload.
                 // ponytail: simple tag-prefix type encoding (0x00=Text, 0x01=Int BE, ...).
                 if let Some(restored) = bytes_to_value(&plain_bytes) {
@@ -195,6 +210,51 @@ impl FieldCrypto {
                     &format!("tenant-dek:{}", tenant),
                     &format!("decrypted {} fields for type {}", count, _type_name),
                 ));
+            }
+        }
+        Ok(count)
+    }
+
+    /// AG-31 DEK roll — move fields from the previous generation to the
+    /// current one. Idempotent: fields already under the current generation
+    /// are left alone (verified by decrypting them), so a re-run after a
+    /// crash migrates nothing that was already done.
+    pub fn reencrypt_fields(
+        &self,
+        tenant: &str,
+        _type_name: &str,
+        props: &mut BTreeMap<String, Value>,
+        policy: &EncryptionPolicy,
+    ) -> Result<usize, String> {
+        if policy.is_empty() {
+            return Ok(0);
+        }
+        let Some(prev_dek) = self.envelope.prev_key(tenant) else {
+            return Ok(0); // nothing was ever rolled
+        };
+        let key_prev = hkdf::domain_sep(&prev_dek, DOMAIN_FIELD);
+        let dek = self.envelope.tenant_key(tenant)?;
+        let key_cur = hkdf::domain_sep(&dek, DOMAIN_FIELD);
+        let mut count = 0usize;
+
+        for field_name in &policy.fields {
+            if let Some(Value::Bytes(b)) = props.get(field_name) {
+                if b.first() != Some(&0x01) {
+                    continue; // not encrypted
+                }
+                let aad = field_name.as_bytes();
+                match self.crypto.decrypt(&key_prev, b, aad) {
+                    Ok(plain) => {
+                        let cipher = self.crypto.encrypt(&key_cur, &plain, aad)?;
+                        props.insert(field_name.clone(), Value::Bytes(cipher));
+                        count += 1;
+                    }
+                    Err(_) => {
+                        // Already migrated? Only if the current generation
+                        // decrypts it — anything else is corruption.
+                        self.crypto.decrypt(&key_cur, b, aad)?;
+                    }
+                }
             }
         }
         Ok(count)
@@ -523,5 +583,51 @@ mod tests {
             let restored = bytes_to_value(&bytes).unwrap();
             assert_eq!(&restored, v, "round-trip failed for {:?}", v);
         }
+    }
+
+    /// AG-31 — the DEK roll walk: `reencrypt_fields` moves ciphertext from
+    /// the previous generation to the current one (idempotent — a re-run
+    /// migrates nothing), and `decrypt_fields` falls back to the previous
+    /// generation for not-yet-migrated fields.
+    #[test]
+    fn dek_roll_reencrypts_and_decrypt_falls_back() {
+        let (fc, policy) = setup();
+        let mut props = BTreeMap::new();
+        props.insert("salary".into(), Value::Text("s3cret".into()));
+        fc.encrypt_fields("acme", "t", &mut props, &policy).unwrap();
+        let gen0 = props.clone();
+
+        fc.envelope().roll_deks().unwrap();
+
+        // Not-yet-migrated fields still decrypt (previous-generation fallback).
+        let mut read = gen0.clone();
+        assert_eq!(
+            fc.decrypt_fields("acme", "t", &mut read, &policy).unwrap(),
+            1
+        );
+        assert_eq!(read.get("salary"), Some(&Value::Text("s3cret".into())));
+
+        // The walk migrates them: one field moved, under new ciphertext,
+        // and a second run is a no-op.
+        let mut walk = gen0.clone();
+        assert_eq!(
+            fc.reencrypt_fields("acme", "t", &mut walk, &policy)
+                .unwrap(),
+            1
+        );
+        assert_ne!(walk.get("salary"), gen0.get("salary"), "new ciphertext");
+        assert_eq!(
+            fc.reencrypt_fields("acme", "t", &mut walk, &policy)
+                .unwrap(),
+            0
+        );
+
+        // A migrated field decrypts under the current generation.
+        let mut read2 = walk.clone();
+        assert_eq!(
+            fc.decrypt_fields("acme", "t", &mut read2, &policy).unwrap(),
+            1
+        );
+        assert_eq!(read2.get("salary"), Some(&Value::Text("s3cret".into())));
     }
 }

@@ -25,7 +25,6 @@ the architect review.
 | `docs/IMPLEMENTATION-PLAN-AGENTIC.md`, `docs/TESTING-PLAN-AGENTIC.md` | **the next plan** (2026-10-30, post-launch) — AG-01..62: agent surface (tool profiles, one `recall`), one memory store + scopes + sampling extraction, ANN/indexed filters at 1M, trust debt (Ed25519, KEK rotation), multi-agent, platform, ecosystem; each milestone with its evidence, RED and gate |
 | `docs/PR6-TDD-DISPOSITIONS.md` | the review-disposition state machine (R3-001..005, R2-008, follow-up milestones); CI gates pin its freshness |
 | `docs/ARCHITECT-REVIEW-2026-09.md` | project-level assessment vs the agentic-DB field (2026-09-20) |
-| `docs/VISION-AND-STRATEGY.md` | goals and strategy |
 | `docs/first-class-db-roadmap.md` | the honest primary-DB roadmap, phases 0–5, evidence-gated triggers |
 | `docs/MRFC-0005-System-Architecture.md` | system architecture |
 | `docs/MRFC-0001-Knowledge-Object-Model.md` | the knowledge object model |
@@ -75,6 +74,7 @@ the architect review.
 | `crates/engines/` | graph, vector, scheduler, semantic, reasoning |
 | `crates/compiler/`, `crates/runtime/` | aikoql language → KIR → planner → runtime |
 | `crates/services/api/mcp/` | the MCP server (stdio/TCP, auth, tenancy) |
+| `crates/services/api/mcp/assets/studio/` + `src/studio.rs` | **Studio** (the web console). `studio.rs` = HTML shell + headers; `app.js` = the app script; `editor.js` / `vis-network.js` = vendored libs built from pinned versions (`scripts/build-studio-assets.sh`, committed, embedded in the binary — no CDN at runtime; this is the repo's only npm build step, needed only to bump a lib). Rules the tests enforce: every value concatenated into markup goes through `esc()` (exhaustive lint over `app.js`); **no inline `on*=` handlers or inline scripts** — markup names an action (`data-click`/`data-change`/`data-input`) resolved by one delegated listener against the closed `ACTIONS` table (CSP is `script-src 'self'`; a missed handler silently does nothing); the token travels in an `Authorization` header, never a URL; assertions read `page_for_tests()` (shell + scripts), not `STUDIO_HTML` alone. `tests/e2e/studio/` is a real-Chrome click-through run by `scripts/prepush.sh` (not CI) |
 | `crates/protocol/native/` | the D-15 framed binary protocol codec — zero-dep, §6 wire format, spec in `docs/NATIVE-PROTOCOL.md` |
 | `crates/sdk/fault-proxy/` | the D-16 §18 fault proxy — one instance = one fault mode, two blocking pump threads + a shared Mutex; the matrix test is `crates/sdk/rust/tests/fault.rs` |
 | `crates/sdk/{python,go,rust,typescript,java}/` | the first-party SDKs — Python, Go, the Rust reference (D-12), TypeScript `@aikoql/client` (D-13), and Java `com.aikoql:aikoql-client` (D-14); all five run the shared conformance runner (`scripts/sdk-conformance.sh`) |

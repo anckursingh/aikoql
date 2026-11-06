@@ -396,8 +396,10 @@ fn auth002_session_token_256bit_unpredictable() {
     let auth = crate::http::AuthResolver::new(vec![], Some("admin"), 86_400);
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let body = serde_json::json!({"username": "admin", "password": "admin"}).to_string();
-    let t1 = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
-    let t2 = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
+    let t1 = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap())
+        .expect("login");
+    let t2 = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap())
+        .expect("login");
     assert_eq!(t1.len(), 64, "token must be 256-bit hex (32 bytes)");
     assert!(
         t1.chars().all(|c| c.is_ascii_hexdigit()),
@@ -508,7 +510,8 @@ fn logins_back_off_after_five_failures() {
     );
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let ok = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
-    let err = crate::http::handle_login(&ok, &sessions, &auth, "127.0.0.1".parse().unwrap()).unwrap_err();
+    let err =
+        crate::http::handle_login(&ok, &sessions, &auth, "127.0.0.1".parse().unwrap()).unwrap_err();
     assert!(err.0.starts_with("429"), "{err:?}");
     // a name that is not a login is never tracked (the map stays bounded)
     for _ in 0..10 {
@@ -554,7 +557,10 @@ fn ag52_login_backoff_survives_restart() {
     // the lock expires (wall clock, not process lifetime), then the right
     // password clears the persisted state
     std::thread::sleep(std::time::Duration::from_millis(1100));
-    assert!(auth2.verify("admin", "pw").is_some(), "right password clears it");
+    assert!(
+        auth2.verify("admin", "pw").is_some(),
+        "right password clears it"
+    );
     assert_eq!(auth2.locked_for("admin"), None);
 }
 
@@ -585,7 +591,10 @@ fn ag52_per_ip_backoff_behind_trusted_proxy() {
 
     let ip: std::net::IpAddr = "6.6.6.6".parse().unwrap();
     for _ in 0..crate::http::FREE_IP_FAILS {
-        assert!(auth.verify("ghost", "x").is_none(), "unknown login, counted per IP");
+        assert!(
+            auth.verify("ghost", "x").is_none(),
+            "unknown login, counted per IP"
+        );
         auth.ip_failure(ip);
     }
     assert!(auth.ip_wait(ip).is_some(), "the address is locked");
@@ -616,7 +625,9 @@ fn auth001_login_configured_creds_ok_wrong_401() {
         "the old hardcoded admin/admin pair must be dead"
     );
     let nobody = serde_json::json!({"username": "user", "password": "user"}).to_string();
-    assert!(crate::http::handle_login(&nobody, &sessions, &auth, "127.0.0.1".parse().unwrap()).is_err());
+    assert!(
+        crate::http::handle_login(&nobody, &sessions, &auth, "127.0.0.1".parse().unwrap()).is_err()
+    );
 
     // [auth].users path: a configured hash verifies and maps to its roles.
     use argon2::password_hash::PasswordHasher;
@@ -636,7 +647,8 @@ fn auth001_login_configured_creds_ok_wrong_401() {
         86400,
     );
     let ok = serde_json::json!({"username": "ops", "password": "cfg-pw"}).to_string();
-    let tok = crate::http::handle_login(&ok, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("configured login");
+    let tok = crate::http::handle_login(&ok, &sessions, &auth, "127.0.0.1".parse().unwrap())
+        .expect("configured login");
     let subj = crate::http::validate_token(Some(&tok), &sessions).expect("valid session");
     assert_eq!(subj.name, "ops");
     assert_eq!(subj.roles, vec!["operator".to_string()]);
@@ -649,14 +661,16 @@ fn auth003_session_expiry_rejects_after_ttl() {
     let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 0);
     let sessions = crate::Mutex::new(crate::HashMap::new());
     let body = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
-    let tok = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
+    let tok = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap())
+        .expect("login");
     assert!(
         crate::http::validate_token(Some(&tok), &sessions).is_none(),
         "TTL 0 must expire immediately"
     );
 
     let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86_400);
-    let tok = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap()).expect("login");
+    let tok = crate::http::handle_login(&body, &sessions, &auth, "127.0.0.1".parse().unwrap())
+        .expect("login");
     assert!(crate::http::validate_token(Some(&tok), &sessions).is_some());
 }
 
@@ -1174,10 +1188,13 @@ fn ag41_claim_tool_claims_once_and_releases() {
     let call = |args: &crate::J, session: &mut crate::session::McpSession| {
         crate::tool_registry::call_tool(&k, "claim_task", args, &db, session, None, &txns)
     };
-    let ok = call(&crate::json!({"task": hex, "lease_seconds": 60}), &mut session).unwrap();
+    let ok = call(
+        &crate::json!({"task": hex, "lease_seconds": 60}),
+        &mut session,
+    )
+    .unwrap();
     assert_eq!(ok["isError"], false);
-    let data: crate::J =
-        serde_json::from_str(ok["content"][0]["text"].as_str().unwrap()).unwrap();
+    let data: crate::J = serde_json::from_str(ok["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(data["task"], hex);
     assert_eq!(data["holder"], "mcp-agent");
     assert!(data["claim_until"].is_u64());
@@ -1272,6 +1289,7 @@ fn s03_trace_events_carry_audit_hash_and_versions_carry_valid_from() {
 // until a server restart — a fresh KB was a dead end in the query editor.
 #[test]
 fn s08_discover_ontology_hot_reloads_the_compile_registry() {
+    let _serial = crate::http::ontology_serial();
     let db = tmp_db("s08");
     let _ = std::fs::remove_dir_all(&db);
     let k = crate::Kernel::open(
@@ -1311,7 +1329,7 @@ fn s08_discover_ontology_hot_reloads_the_compile_registry() {
     );
 
     // Auto-Discover (the studio button's route) must republish the registry.
-    crate::tools::tool_discover_ontology(&k).expect("discover");
+    crate::tools::tool_discover_ontology(&k, &serde_json::json!({})).expect("discover");
 
     // No restart: the hot-reloaded registry in the slot resolves the type.
     let hot = crate::http::current_ontology().expect("slot populated");
@@ -1328,6 +1346,223 @@ fn s08_discover_ontology_hot_reloads_the_compile_registry() {
     drop(k);
     let _ = std::fs::remove_dir_all(&db);
     let _ = std::fs::remove_file(format!("{db}.audit.log"));
+}
+
+// ---------------------------------------------------------------------------
+// Studio hardening M2: discovery is tenant-confined, previewable, and
+// refreshes on re-run. Before: the tools scanned every tenant as an unscoped
+// admin whatever the caller's tenant, always persisted, and the fixed
+// idempotency key made a second run replay the first result.
+// ---------------------------------------------------------------------------
+
+fn m2_kernel(tag: &str) -> crate::Kernel {
+    let db = tmp_db(tag);
+    let _ = std::fs::remove_dir_all(&db);
+    crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel")
+}
+
+fn m2_put(k: &crate::Kernel, ty: &str, tenant: Option<&str>) {
+    let mut a = serde_json::json!({
+        "subject": "admin", "roles": ["admin"], "type_name": ty,
+        "properties": {"case_id": ty},
+    });
+    if let Some(t) = tenant {
+        a["tenant"] = serde_json::json!(t);
+    }
+    crate::tools::tool_remember(k, &a).expect("remember");
+}
+
+fn m2_types(r: &serde_json::Value) -> Vec<String> {
+    r["types_discovered"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn m2_discover(k: &crate::Kernel, extra: serde_json::Value) -> serde_json::Value {
+    let mut a = serde_json::json!({"subject": "admin", "roles": ["admin"]});
+    for (key, v) in extra.as_object().expect("object") {
+        a[key] = v.clone();
+    }
+    crate::tools::tool_discover_ontology(k, &a).expect("discover")
+}
+
+#[test]
+fn m2_discovery_is_confined_to_the_callers_tenant() {
+    let k = m2_kernel("m2a");
+    m2_put(&k, "alpha_doc", Some("tenant-a"));
+    m2_put(&k, "beta_doc", Some("tenant-b"));
+    m2_put(&k, "shared_doc", None);
+    let a = m2_discover(
+        &k,
+        serde_json::json!({"tenant": "tenant-a", "preview": true}),
+    );
+    let got = m2_types(&a);
+    assert!(
+        got.contains(&"alpha_doc".to_string()),
+        "own tenant: {got:?}"
+    );
+    assert!(
+        !got.contains(&"beta_doc".to_string()),
+        "another tenant's type leaked into tenant-a's discovery: {got:?}"
+    );
+    assert!(
+        !got.contains(&"shared_doc".to_string()),
+        "a tenant-scoped read of untenanted rows must fail closed: {got:?}"
+    );
+}
+
+#[test]
+fn m2_unscoped_admin_discovery_still_sees_every_tenant() {
+    // The Studio console is a platform-level view; confinement is opt-in by
+    // tenant scope, not a behavior change for the unscoped admin.
+    let k = m2_kernel("m2b");
+    m2_put(&k, "alpha_doc", Some("tenant-a"));
+    m2_put(&k, "shared_doc", None);
+    let got = m2_types(&m2_discover(&k, serde_json::json!({"preview": true})));
+    assert!(got.contains(&"alpha_doc".to_string()) && got.contains(&"shared_doc".to_string()));
+}
+
+#[test]
+fn m2_preview_returns_a_proposal_and_persists_nothing() {
+    let k = m2_kernel("m2c");
+    m2_put(&k, "shared_doc", None);
+    let r = m2_discover(&k, serde_json::json!({"preview": true}));
+    assert_eq!(r["saved"], serde_json::json!(false), "{r}");
+    assert!(m2_types(&r).contains(&"shared_doc".to_string()), "{r}");
+    let subj = crate::Subject::with_roles("admin", &["admin"]);
+    let stored = k.scan_by_type(&subj, crate::ONTOLOGY_TYPE).expect("scan");
+    assert!(
+        stored.is_empty(),
+        "preview wrote an Ontology KO: {}",
+        stored.len()
+    );
+}
+
+#[test]
+fn m2_rediscovery_picks_up_new_data_and_is_idempotent_when_unchanged() {
+    let _serial = crate::http::ontology_serial();
+    let k = m2_kernel("m2d");
+    m2_put(&k, "first_doc", None);
+    let one = m2_discover(&k, serde_json::json!({}));
+    m2_put(&k, "second_doc", None);
+    let two = m2_discover(&k, serde_json::json!({}));
+    assert!(
+        m2_types(&two).contains(&"second_doc".to_string()),
+        "re-discovery replayed the first result: {two}"
+    );
+    assert_eq!(
+        one["koid"], two["koid"],
+        "re-discovery must update the same KO"
+    );
+    assert!(
+        two["version"].as_u64() > one["version"].as_u64(),
+        "{one} -> {two}"
+    );
+    let three = m2_discover(&k, serde_json::json!({}));
+    assert_eq!(
+        three["version"], two["version"],
+        "unchanged data must not write a new version"
+    );
+}
+
+#[test]
+fn m2_a_tenant_ontology_never_becomes_the_global_compile_registry() {
+    let _serial = crate::http::ontology_serial();
+    let k = m2_kernel("m2e");
+    m2_put(&k, "alpha_doc", Some("tenant-a"));
+    let saved = m2_discover(&k, serde_json::json!({"tenant": "tenant-a"}));
+    assert_eq!(saved["saved"], serde_json::json!(true), "{saved}");
+    let reg = crate::http::load_ontology_registry(&k);
+    assert!(
+        reg.resolve_class("alpha_doc").is_none(),
+        "tenant-a's discovered ontology was installed as the process-wide registry"
+    );
+}
+
+#[test]
+fn m2_discover_schema_is_confined_to_the_callers_tenant() {
+    let k = m2_kernel("m2f");
+    m2_put(&k, "alpha_doc", Some("tenant-a"));
+    m2_put(&k, "beta_doc", Some("tenant-b"));
+    let r = crate::tools::tool_discover_schema(
+        &k,
+        &serde_json::json!({"subject": "admin", "roles": ["admin"], "tenant": "tenant-a"}),
+    )
+    .expect("schema");
+    let types = r["types"].as_array().expect("types");
+    let names: Vec<&str> = types.iter().filter_map(|t| t.as_str()).collect();
+    assert!(names.contains(&"alpha_doc"), "{names:?}");
+    assert!(
+        !names.contains(&"beta_doc"),
+        "tenant-a saw tenant-b's type name: {names:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Studio hardening M5: a tenant's queries compile against that tenant's own
+// ontology (when it has one), else the global one. Before: one process-wide
+// registry, so tenant A's classes — and tenant B's, via an admin discovery —
+// were what every tenant's queries resolved against.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m5_each_tenant_compiles_against_its_own_ontology() {
+    let _serial = crate::http::ontology_serial();
+    let k = m2_kernel("m5a");
+    m2_put(&k, "m5_shared", None);
+    m2_discover(&k, serde_json::json!({}));
+    m2_put(&k, "m5_alpha", Some("tenant-a"));
+    m2_discover(&k, serde_json::json!({"tenant": "tenant-a"}));
+    m2_put(&k, "m5_beta", Some("tenant-b"));
+    m2_discover(&k, serde_json::json!({"tenant": "tenant-b"}));
+
+    let a = crate::http::registry_for(Some("tenant-a")).expect("tenant-a registry");
+    assert!(a.resolve_class("m5_alpha").is_some(), "own class");
+    assert!(
+        a.resolve_class("m5_beta").is_none(),
+        "tenant-a resolved tenant-b's class"
+    );
+    let b = crate::http::registry_for(Some("tenant-b")).expect("tenant-b registry");
+    assert!(b.resolve_class("m5_beta").is_some() && b.resolve_class("m5_alpha").is_none());
+    for scope in [None, Some("tenant-without-an-ontology")] {
+        let g = crate::http::registry_for(scope).expect("global registry");
+        assert!(g.resolve_class("m5_shared").is_some(), "{scope:?}: global");
+        assert!(
+            g.resolve_class("m5_alpha").is_none(),
+            "{scope:?}: the global registry holds a tenant's class"
+        );
+    }
+}
+
+#[test]
+fn m5_tenant_registries_are_bounded_by_tenants_with_an_ontology() {
+    let _serial = crate::http::ontology_serial();
+    let k = m2_kernel("m5b");
+    m2_put(&k, "m5_one", Some("tenant-one"));
+    m2_discover(&k, serde_json::json!({"tenant": "tenant-one"}));
+    assert_eq!(crate::http::tenant_registry_count(), 1);
+    // a caller-supplied tenant string must never grow server state
+    for i in 0..500 {
+        let _ = crate::http::registry_for(Some(&format!("probe-{i}")));
+    }
+    assert_eq!(
+        crate::http::tenant_registry_count(),
+        1,
+        "lookups for tenants without an ontology cached an entry"
+    );
 }
 
 // POC-4 S-7: REST /api/aikoql validated every type against an empty
@@ -1408,4 +1643,47 @@ fn url_decode_handles_utf8_a_trailing_escape_and_never_panics() {
         Some("%é1"),
         "no panic on '%' before a multi-byte character"
     );
+}
+
+/// Studio asks for `/api/graph?type=aikoql%3Adocument`; the filter must be
+/// percent-decoded or a namespaced type lists "No objects" despite its count.
+#[test]
+fn graph_api_type_and_tenant_filters_are_percent_decoded() {
+    let db = tmp_db("graph-pct");
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let seed = crate::Subject::with_roles("seed", &["admin"]);
+    let mut req = crate::RememberRequest::create(
+        seed,
+        crate::Metadata {
+            type_name: "aikoql:document".into(),
+            tenant: Some("acme corp".into()),
+            schema_version: 1,
+            tags: vec![],
+        },
+    );
+    req.properties
+        .insert("name".into(), crate::Value::Text("d".into()));
+    k.remember(req).expect("seed");
+    let admin = crate::Subject::with_roles("alice", &["admin"]);
+    for q in [
+        "/api/graph?type=aikoql%3Adocument",
+        "/api/graph?type=aikoql:document",
+        "/api/graph?type=aikoql%3Adocument&tenant=acme%20corp",
+        "/api/graph?type=aikoql%3Adocument&tenant=acme+corp",
+    ] {
+        let s = crate::http::graph_api(&k, q, &admin).expect("graph");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["nodes"].as_array().unwrap().len(), 1, "{q}: {s}");
+    }
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
 }

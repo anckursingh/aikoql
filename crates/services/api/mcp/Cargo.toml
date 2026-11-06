@@ -33,6 +33,9 @@ ureq = { version = "2", features = ["json"] }
 # the tree; no default features, so aws-lc-rs stays out)
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 base64 = "0.22"
+# Ed25519 license verification (Task 2) — ring is already linked via
+# rustls/kernel; this makes it a direct dependency for license.rs.
+ring = "0.17"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # AG-50: OTLP trace export when AIKOQL_OTEL_ENDPOINT is set (blocking HTTP
@@ -45,6 +48,21 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = ["
 # KMS uses) + 256-bit CSPRNG session tokens. Both already in Cargo.lock.
 argon2 = "0.5"
 getrandom = "0.2"
+# Enterprise multi-user store (Task 3): rusqlite at the locked version the
+# aikoql-sqlite provider already builds (bundled SQLite) — zero new
+# Cargo.lock entries.
+rusqlite = { version = "0.31", features = ["bundled"] }
+# AG-31 cloud KMS install: the AWS SDK implementation of the kernel's
+# KmsOps seam (the serve binary supplies it; the kernel stays SDK-free).
+aws-config = "1"
+# the SDK's default "rustls" feature is the legacy stack (hyper 0.14,
+# h2 0.3, rustls 0.21, webpki 0.101) — RustSec 2026-0258/0346/0349/
+# 0104/0382/0099/0098 have no patch in those lines. Take the modern
+# default-https-client (hyper 1, rustls 0.23) and leave the legacy off.
+aws-sdk-kms = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+# The SDK bridge's current-thread runtime (the binary carries no other
+# async runtime — see the OTLP comment below).
+tokio = { version = "1", features = ["rt", "time"] }
 
 [features]
 default = ["embedding-candle"]

@@ -43,7 +43,9 @@ function client() {
       const r = await req('tools/call', { name, arguments: arguments_ });
       return JSON.parse(r.content[0].text);
     },
-    end: () => child.stdin.end(),
+    // resolve once the server has exited and released the db lock (the next
+    // process opens the same db)
+    end: () => new Promise((res) => { child.once('exit', res); child.stdin.end(); }),
   };
 }
 
@@ -66,7 +68,7 @@ function assert(cond, msg) {
   const structs = await ql('MATCH Struct RETURN *');
   assert(structs.length > 0, 'ingested Struct entities must survive restart');
 
-  c.end();
+  await c.end();
   console.log('e2e-restart: PASS — dogfood writes + ingested corpus survive a fresh server process');
   process.exit(0);
 })().catch((e) => { console.error('e2e-restart: FAIL', e.message); process.exit(1); });

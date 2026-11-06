@@ -44,7 +44,9 @@ function client() {
       const r = await req('tools/call', { name, arguments: arguments_ });
       return JSON.parse(r.content[0].text);
     },
-    end: () => child.stdin.end(),
+    // resolve once the server has exited and released the db lock (the next
+    // process opens the same db)
+    end: () => new Promise((res) => { child.once('exit', res); child.stdin.end(); }),
   };
 }
 
@@ -190,7 +192,7 @@ function assert(cond, msg) {
     'compile_context must expose the matched experiences');
   console.log('dogfood Q10: experience injected into the next agent context package');
 
-  c.end();
+  await c.end();
   console.log('e2e-dogfood: PASS — 10 continuity questions answered with knowledge lineage over the ingested repo');
   process.exit(0);
 })().catch((e) => { console.error('e2e-dogfood: FAIL', e.message); process.exit(1); });

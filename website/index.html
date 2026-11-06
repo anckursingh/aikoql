@@ -126,15 +126,15 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
 </header>
 
 <section class="hero">
-  <h1>The <em>Agent-First</em><br>Knowledge Database</h1>
-  <p class="sub">A SQL-style query language and embedded database for knowledge objects — code, docs, policies, programs — every fact versioned, evidence-backed, and traceable. Native MCP interface. Graph, vector, and text search in one statement.</p>
+  <h1>Persistent Memory for <em>AI Agents</em></h1>
+  <p class="sub">Your agents write facts, recall them across sessions, and stop re-reading the whole context every turn. Measured on our own repository: <strong>99.95% fewer tokens</strong> with aikoql recall slices. Versioned, evidence-backed, traceable — with graph, vector, and text search in one statement.</p>
   <div class="cta">
-    <a href="#install" class="cta-primary">Install aikoql</a>
+    <a href="#install" class="cta-primary">Try it in 2 minutes</a>
     <a href="/docs/" class="cta-secondary">Read the Docs</a>
   </div>
   <div class="hero-demo">
     <pre><code><span class="demo-prompt">aikoql&gt;</span> CREATE Note body == "refund policy: 30 days"<br><span class="demo-prompt">aikoql&gt;</span> MATCH Note SIMILAR TO "refund window"<br>          SCORE BM25 USING EMBEDDING RETURN *</code></pre>
-    <p><span class="demo-strong">npm i -g aikoql-mcp</span> · single binary · zero runtime deps</p>
+    <p>AGPL-3.0-only · <span class="demo-strong">npm i -g aikoql-mcp</span> · single binary · zero runtime deps</p>
   </div>
 </section>
 
@@ -357,7 +357,7 @@ aikoql&gt; MATCH Employee EPISTEMIC verified RETURN *    # only verified knowled
 
 <section id="install">
   <h2>Get Started in 5 Seconds</h2>
-  <p class="lead">Single binary. Zero dependencies. No installers. Latest release: v0.3.0 — agent tool profiles, recall, memory as knowledge objects, signed audit evidence and dependency security fixes.</p>
+  <p class="lead">Single binary. Zero dependencies. No installers. No install? Run the docker-compose trial with a Cloudflare quick-tunnel — <code>deploy/docker-compose.yml</code> in the repo. Latest release: v0.4.0 — agent tool profiles, recall, memory as knowledge objects, signed audit evidence and dependency security fixes.</p>
   <div class="install-section">
     <h3>Install</h3>
     <div class="tabs">
@@ -370,22 +370,22 @@ aikoql&gt; MATCH Employee EPISTEMIC verified RETURN *    # only verified knowled
     </div>
     <div id="inst-npm"><pre><code>npm install -g aikoql-mcp
 aikoql-mcp --version</code></pre></div>
-    <div id="inst-windows" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.3.0/aikoql-mcp.exe
+    <div id="inst-windows" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp.exe
 .\aikoql-mcp.exe --help</code></pre></div>
-    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.3.0/aikoql-mcp-linux-musl
+    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp-linux-musl
 chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql-mcp
 aikoql-mcp --help</code></pre></div>
     <div id="inst-macos" style="display:none"><pre><code># Apple Silicon
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.3.0/aikoql-mcp-macos-arm64
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp-macos-arm64
 chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql-mcp
 # Intel
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.3.0/aikoql-mcp-macos
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp-macos
 chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql</code></pre></div>
-    <div id="inst-docker" style="display:none"><pre><code>docker pull ghcr.io/anckursingh/aikoql:0.3.0
+    <div id="inst-docker" style="display:none"><pre><code>docker pull ghcr.io/anckursingh/aikoql:0.4.0
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.3.0
+  ghcr.io/anckursingh/aikoql:0.4.0
 docker exec aikoql aikoql --version</code></pre></div>
     <div id="inst-source" style="display:none"><pre><code>git clone https://github.com/anckursingh/aikoql.git
 cd aikoql
@@ -476,7 +476,7 @@ const result = await client.callTool({ name: 'remember', arguments: { type_name:
     <a href="/docs/guides/import">Import Data</a>
     <a href="/docs/query-language">Query Language</a>
   </div>
-  <p>aikoql — Apache 2.0 License. Built in Rust. Single binary, zero runtime deps.</p>
+  <p>aikoql — AGPL-3.0-only License. Built in Rust. Single binary, zero runtime deps.</p>
 </footer>
 
 <script>

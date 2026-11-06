@@ -71,7 +71,9 @@ impl ErrorCode {
     pub fn hint(&self) -> &str {
         match self {
             ErrorCode::AccessDenied => "The caller's identity lacks permission for this action",
-            ErrorCode::VersionConflict => "The object changed since it was last read (stale expected_version)",
+            ErrorCode::VersionConflict => {
+                "The object changed since it was last read (stale expected_version)"
+            }
             ErrorCode::NotFound => "No live knowledge object matches this KOID",
             ErrorCode::ValidationError => "Arguments failed validation",
             ErrorCode::RateLimited => "Request rate exceeded the configured limit",

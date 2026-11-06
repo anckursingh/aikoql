@@ -1,0 +1,113 @@
+{
+  "mime": "text/plain",
+  "entities": [
+    {
+      "text": "Maria Jansen",
+      "type": "Person"
+    },
+    {
+      "text": "Utrecht International Center",
+      "type": "Organization"
+    },
+    {
+      "text": "March 2024",
+      "type": "Date"
+    },
+    {
+      "text": "Siemens AG",
+      "type": "Organization"
+    },
+    {
+      "text": "Munich",
+      "type": "Location"
+    },
+    {
+      "text": "Germany",
+      "type": "Location"
+    },
+    {
+      "text": "Acme Holdings Inc.",
+      "type": "Organization"
+    },
+    {
+      "text": "Boston",
+      "type": "Location"
+    },
+    {
+      "text": "Globex GmbH",
+      "type": "Organization"
+    },
+    {
+      "text": "12 May 2025",
+      "type": "Date"
+    },
+    {
+      "text": "Berlin",
+      "type": "Location"
+    },
+    {
+      "text": "$2.5 million",
+      "type": "Money"
+    },
+    {
+      "text": "€120,000",
+      "type": "Money"
+    },
+    {
+      "text": "2025-06-01",
+      "type": "Date"
+    },
+    {
+      "text": "12.5%",
+      "type": "Percentage"
+    },
+    {
+      "text": "John Okafor",
+      "type": "Person"
+    },
+    {
+      "text": "john.okafor@uic.example",
+      "type": "Email"
+    },
+    {
+      "text": "+31 30 253 7000",
+      "type": "Phone"
+    },
+    {
+      "text": "https://www.uic.example/partners",
+      "type": "Url"
+    },
+    {
+      "text": "Peter van Dijk",
+      "type": "Person"
+    },
+    {
+      "text": "Rabobank",
+      "type": "Organization"
+    },
+    {
+      "text": "DE89 3704 0044 0532 0130 00",
+      "type": "Iban"
+    },
+    {
+      "text": "Rotterdam",
+      "type": "Location"
+    },
+    {
+      "text": "15/09/2025",
+      "type": "Date"
+    },
+    {
+      "text": "Sarah Connor",
+      "type": "Person"
+    },
+    {
+      "text": "Cyberdyne Systems Ltd",
+      "type": "Organization"
+    }
+  ],
+  "tables": [],
+  "no_table_pages": [
+    1
+  ]
+}

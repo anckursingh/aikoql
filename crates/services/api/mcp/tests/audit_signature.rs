@@ -43,18 +43,31 @@ fn serve(root: &Path, key: Option<&Path>) -> std::process::Child {
     cmd.spawn().expect("spawn aikoql-mcp serve")
 }
 
-/// initialize, one remember (so the chain is non-trivial), evidence_pack.
-fn evidence_pack(child: &mut std::process::Child) -> J {
+/// initialize, `remembers` remembers (so the journal is non-trivial),
+/// evidence_pack (the pack is the response to call id 3).
+fn evidence_pack(child: &mut std::process::Child, remembers: usize) -> J {
     let mut stdin = child.stdin.take().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
-    let calls = [
-        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "remember", "arguments": {"type_name": "note", "properties": {"n": 1}}}}),
-        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "evidence_pack", "arguments": {}}}),
-    ];
-    for c in &calls {
-        writeln!(stdin, "{c}").unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}})
+    )
+    .unwrap();
+    for i in 0..remembers {
+        writeln!(
+            stdin,
+            "{}",
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "remember", "arguments": {"type_name": "note", "properties": {"n": i}}}})
+        )
+        .unwrap();
     }
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "evidence_pack", "arguments": {}}})
+    )
+    .unwrap();
     stdin.flush().unwrap();
     loop {
         let mut line = String::new();
@@ -80,7 +93,7 @@ fn as01_a_signing_server_signs_the_audit_chain() {
     let key = root.join("audit.key");
     std::fs::write(&key, format!("{SEED}\n")).unwrap();
     let mut child = serve(&root, Some(&key));
-    let pack = evidence_pack(&mut child);
+    let pack = evidence_pack(&mut child, 1);
     let _ = child.kill();
     let sig = &pack["audit_signature"];
     assert_eq!(sig["algorithm"], json!("ed25519"), "{pack}");
@@ -104,7 +117,7 @@ fn as01_a_signing_server_signs_the_audit_chain() {
 fn as02_no_key_no_signature() {
     let root = tmp("unsigned");
     let mut child = serve(&root, None);
-    let pack = evidence_pack(&mut child);
+    let pack = evidence_pack(&mut child, 1);
     let _ = child.kill();
     assert!(pack["audit_chain"].is_string(), "{pack}");
     assert!(pack.get("audit_signature").is_none(), "{pack}");
@@ -132,4 +145,67 @@ fn as03_an_unusable_key_refuses_to_start() {
     std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut err).unwrap();
     assert_eq!(status.code(), Some(2), "{err}");
     assert!(err.contains("AIKOQL_AUDIT_SIGNING_KEY"), "{err}");
+}
+
+/// AG-30 (per-commit): every journal event committed by a signing server
+/// carries an Ed25519 signature over (previous signature || its audit
+/// hash); the chain verifies from the public key alone and its tail is
+/// the signed audit head.
+#[test]
+fn as04_a_signing_server_chains_a_signature_per_committed_event() {
+    let root = tmp("per-commit");
+    let key = root.join("audit.key");
+    std::fs::write(&key, format!("{SEED}\n")).unwrap();
+    let mut child = serve(&root, Some(&key));
+    let pack = evidence_pack(&mut child, 3);
+    let _ = child.kill();
+
+    let sigs = pack["journal_signatures"]
+        .as_array()
+        .unwrap_or_else(|| panic!("journal_signatures missing: {pack}"));
+    assert!(sigs.len() >= 3, "one signature per committed event: {pack}");
+    let public: [u8; 32] = hex(PUBLIC).try_into().unwrap();
+    let mut prev = [0u8; 64];
+    let mut last: Option<(u64, Vec<u8>)> = None;
+    for row in sigs {
+        let seq = row["seq"].as_u64().unwrap();
+        if let Some((s, _)) = last {
+            assert_eq!(seq, s + 1, "the signed stream must be gapless");
+        }
+        let hash = hex(row["audit_hash"].as_str().unwrap());
+        let sig: [u8; 64] = hex(row["signature"].as_str().unwrap()).try_into().unwrap();
+        let mut msg = Vec::with_capacity(96);
+        msg.extend_from_slice(&prev);
+        msg.extend_from_slice(&hash);
+        assert!(
+            SigningKey::verify(&public, &msg, &sig),
+            "seq {seq} verifies"
+        );
+        prev = sig;
+        last = Some((seq, hash));
+    }
+    let (seq, hash) = last.unwrap();
+    assert_eq!(
+        hash,
+        hex(pack["audit_chain"].as_str().unwrap()),
+        "the chain tail is the signed head"
+    );
+    assert_eq!(
+        seq,
+        pack["journal_seq"].as_u64().unwrap(),
+        "the signed tail seq is the head seq"
+    );
+
+    // A tampered event hash breaks that event's signature.
+    let row = &sigs[0];
+    let mut hash = hex(row["audit_hash"].as_str().unwrap());
+    hash[0] ^= 1;
+    let sig: [u8; 64] = hex(row["signature"].as_str().unwrap()).try_into().unwrap();
+    let mut msg = Vec::with_capacity(96);
+    msg.extend_from_slice(&[0u8; 64]);
+    msg.extend_from_slice(&hash);
+    assert!(
+        !SigningKey::verify(&public, &msg, &sig),
+        "a flipped event hash fails its signature"
+    );
 }

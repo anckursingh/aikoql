@@ -22,6 +22,15 @@ use std::sync::RwLock;
 /// `aikoql_endpoint` prefers it over the startup snapshot it is handed.
 static ONTOLOGY_SLOT: OnceLock<RwLock<Arc<OntologyRegistry>>> = OnceLock::new();
 
+/// Tests that install into (or read back from) the process-wide registry slot
+/// take this lock: parallel tests would otherwise overwrite each other's slot
+/// between a publish and its assertion.
+#[cfg(test)]
+pub(crate) fn ontology_serial() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub(crate) fn install_ontology(reg: Arc<OntologyRegistry>) {
     match ONTOLOGY_SLOT.get() {
         Some(slot) => {
@@ -38,61 +47,122 @@ pub(crate) fn current_ontology() -> Option<Arc<OntologyRegistry>> {
     ONTOLOGY_SLOT.get().map(|slot| slot.read().unwrap().clone()) // justified: poison is unrecoverable
 }
 
-/// Load the active ontology from stored Ontology KOs (MRFC-0041).
-/// Prefer manually-curated ontologies over auto-discovered ones.
-/// If multiple exist, pick the latest non-discovered, fall back to discovered.
-pub(crate) fn load_ontology_registry(k: &Kernel) -> Arc<OntologyRegistry> {
+/// Per-tenant compile registries: only tenants that have an Ontology KO of
+/// their own appear here (so the map is bounded by those tenants, never by
+/// the tenant strings callers send). Replaced wholesale by
+/// [`refresh_ontologies`].
+static TENANT_ONTOLOGIES: OnceLock<RwLock<HashMap<String, Arc<OntologyRegistry>>>> =
+    OnceLock::new();
+
+fn decode_registry(ko: &KnowledgeObject) -> Option<Arc<OntologyRegistry>> {
+    let def = OntologyDef::from_ko(ko).ok()?;
+    OntologyRegistry::new(def).ok().map(Arc::new)
+}
+
+/// Republish every compile registry from the stored Ontology KOs: the global
+/// one and each tenant's own. Called at startup and after any ontology write.
+pub(crate) fn refresh_ontologies(k: &Kernel) {
+    install_ontology(load_ontology_registry(k));
     let subj = Subject::with_roles("system", &["admin"]);
-    match k.scan_by_type(&subj, ONTOLOGY_TYPE) {
-        Ok(kos) if !kos.is_empty() => {
-            let manual: Vec<_> = kos
-                .iter()
-                .filter(|ko| !ko.metadata.tags.contains(&"auto-discovered".to_string()))
-                .collect();
-            let candidate = if !manual.is_empty() {
-                // Prefer the latest manually-created ontology.
-                manual
-                    .into_iter()
-                    .max_by_key(|ko| ko.commit_ts)
-                    .expect("manual is non-empty") // justified: guarded by !manual.is_empty() above
-            } else {
-                // Fall back to latest auto-discovered.
-                kos.iter()
-                    .max_by_key(|ko| ko.commit_ts)
-                    .expect("kos is non-empty") // justified: guarded by the outer Ok(kos) if !kos.is_empty() arm
-            };
-            match OntologyDef::from_ko(candidate) {
-                Ok(def) => {
-                    let source = if candidate
-                        .metadata
-                        .tags
-                        .contains(&"auto-discovered".to_string())
-                    {
-                        "auto-discovered"
-                    } else {
-                        "manual"
-                    };
-                    info!(namespace = %def.namespace, version = %def.version,
-                          classes = def.classes.len(),
-                          mappings = def.mappings.len(),
-                          source = source,
-                          "ontology loaded");
-                    match OntologyRegistry::new(def) {
-                        Ok(r) => Arc::new(r),
-                        Err(e) => {
-                            info!(error = %e, "ontology registry failed to initialize — using empty registry");
-                            Arc::new(OntologyRegistry::empty())
-                        }
-                    }
-                }
+    let tenants: std::collections::BTreeSet<String> = k
+        .scan_by_type(&subj, ONTOLOGY_TYPE)
+        .map(|kos| {
+            kos.into_iter()
+                .filter_map(|ko| ko.metadata.tenant)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut map = HashMap::new();
+    for t in tenants {
+        if let Some(reg) = active_ontology_for(k, Some(&t)).and_then(|(ko, _)| decode_registry(&ko))
+        {
+            map.insert(t, reg);
+        }
+    }
+    let slot = TENANT_ONTOLOGIES.get_or_init(|| RwLock::new(HashMap::new()));
+    *slot.write().unwrap() = map; // justified: RwLock poison is unrecoverable
+}
+
+/// The registry a query for `tenant` compiles against: that tenant's own
+/// ontology when it has saved one, else the process-wide (untenanted) one.
+/// A lookup for any other tenant string reads, and caches, nothing.
+pub(crate) fn registry_for(tenant: Option<&str>) -> Option<Arc<OntologyRegistry>> {
+    if let Some(t) = tenant {
+        let own = TENANT_ONTOLOGIES
+            .get()
+            .and_then(|slot| slot.read().unwrap().get(t).cloned()); // justified: poison is unrecoverable
+        if own.is_some() {
+            return own;
+        }
+    }
+    current_ontology()
+}
+
+/// How many per-tenant registries are held (bounded by tenants that have an
+/// ontology — never by the tenant strings callers supply).
+#[cfg(test)]
+pub(crate) fn tenant_registry_count() -> usize {
+    TENANT_ONTOLOGIES
+        .get()
+        .map_or(0, |slot| slot.read().unwrap().len()) // justified: poison is unrecoverable
+}
+
+/// The ontology the compiler uses, and the one Studio shows: the newest
+/// *manual* untenanted Ontology KO, else the newest auto-discovered one. A
+/// tenant's own ontology is never the process-wide one. Returns the KO and
+/// its source ("manual" | "auto-discovered").
+pub(crate) fn active_ontology(k: &Kernel) -> Option<(KnowledgeObject, &'static str)> {
+    active_ontology_for(k, None)
+}
+
+/// The same selection within one scope: `None` = the untenanted (global)
+/// ontologies, `Some(t)` = tenant `t`'s own.
+pub(crate) fn active_ontology_for(
+    k: &Kernel,
+    tenant: Option<&str>,
+) -> Option<(KnowledgeObject, &'static str)> {
+    let subj = Subject::with_roles("system", &["admin"]);
+    let scoped: Vec<KnowledgeObject> = k
+        .scan_by_type(&subj, ONTOLOGY_TYPE)
+        .ok()?
+        .into_iter()
+        .filter(|ko| ko.metadata.tenant.as_deref() == tenant)
+        .collect();
+    let auto = |ko: &KnowledgeObject| ko.metadata.tags.iter().any(|t| t == "auto-discovered");
+    let newest = |manual: bool| {
+        scoped
+            .iter()
+            .filter(|ko| auto(ko) != manual)
+            .max_by_key(|ko| ko.commit_ts)
+            .cloned()
+    };
+    newest(true)
+        .map(|ko| (ko, "manual"))
+        .or_else(|| newest(false).map(|ko| (ko, "auto-discovered")))
+}
+
+pub(crate) fn load_ontology_registry(k: &Kernel) -> Arc<OntologyRegistry> {
+    let Some((candidate, source)) = active_ontology(k) else {
+        info!("no ontology KO found — using empty registry");
+        return Arc::new(OntologyRegistry::empty());
+    };
+    match OntologyDef::from_ko(&candidate) {
+        Ok(def) => {
+            info!(namespace = %def.namespace, version = %def.version,
+                  classes = def.classes.len(),
+                  mappings = def.mappings.len(),
+                  source = source,
+                  "ontology loaded");
+            match OntologyRegistry::new(def) {
+                Ok(r) => Arc::new(r),
                 Err(e) => {
-                    info!(error = %e, "ontology KO found but failed to decode — using empty registry");
+                    info!(error = %e, "ontology registry failed to initialize — using empty registry");
                     Arc::new(OntologyRegistry::empty())
                 }
             }
         }
-        _ => {
-            info!("no ontology KO found — using empty registry");
+        Err(e) => {
+            info!(error = %e, "ontology KO found but failed to decode — using empty registry");
             Arc::new(OntologyRegistry::empty())
         }
     }
@@ -116,7 +186,13 @@ pub(crate) fn serve_metrics(
             return;
         }
     };
+    // Logged only once the socket is bound and listening — the "started" line
+    // in spawn_metrics precedes the bind, so it cannot gate a client.
+    info!(addr = %addr, "metrics HTTP server listening");
     let sessions: Arc<Mutex<HashMap<String, HttpSession>>> = Arc::new(Mutex::new(HashMap::new()));
+    // Enterprise (Task 5): the serving handle on the user store main.rs
+    // opened (users.db); None in community mode.
+    crate::session::open_users(db_path.as_str());
     for stream in listener.incoming() {
         match stream {
             Ok(mut s) => {
@@ -131,7 +207,10 @@ pub(crate) fn serve_metrics(
                 let mcp = mcp.clone();
                 // AG-52: the peer for the login per-IP layer (before the
                 // TLS wrap consumes the stream).
-                let peer_ip = s.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
+                let peer_ip = s
+                    .peer_addr()
+                    .map(|a| a.ip())
+                    .unwrap_or(IpAddr::from([0, 0, 0, 0]));
                 std::thread::spawn(move || match tls {
                     None => handle_http(
                         &mut s,
@@ -218,7 +297,7 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
                         detail = v == "1" || v == "true";
                     }
                     "type" => {
-                        type_filter = Some(v.to_string());
+                        type_filter = Some(url_decode(v));
                     }
                     _ => {}
                 }
@@ -235,7 +314,7 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
         qs.split('&')
             .filter_map(|p| p.split_once('='))
             .find(|(k, _)| *k == "tenant")
-            .map(|(_, v)| v.to_string())
+            .map(|(_, v)| url_decode(v))
     });
 
     let heads = k.scan_heads().map_err(|e| format!("scan: {}", e))?;
@@ -540,13 +619,72 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
             }
         }
     }
-    // From Authorization header: Bearer abc123
+    // From Authorization header: Bearer abc123 (name and scheme are
+    // case-insensitive, RFC 9110 — browsers and proxies vary the casing)
     for line in req.lines() {
-        if let Some(v) = line.strip_prefix("Authorization: Bearer ") {
-            return Some(v.trim().to_string());
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.eq_ignore_ascii_case("authorization") {
+            continue;
+        }
+        let value = value.trim();
+        if value.len() > 7 && value[..7].eq_ignore_ascii_case("bearer ") {
+            return Some(value[7..].trim().to_string());
         }
     }
-    None
+    session_cookie(req)
+}
+
+/// Largest `POST /api/v1/documents` body (base64 JSON, so ~48 MiB of file).
+const MAX_DOCUMENT_BODY: usize = 64 * 1024 * 1024;
+
+const SESSION_COOKIE: &str = "aikoql_session";
+
+/// The Studio session cookie value, if the request carries one.
+fn session_cookie(req: &str) -> Option<String> {
+    req.lines()
+        .filter_map(|l| l.split_once(':'))
+        .filter(|(n, _)| n.eq_ignore_ascii_case("cookie"))
+        .flat_map(|(_, v)| v.split(';'))
+        .find_map(|pair| {
+            let (k, v) = pair.trim().split_once('=')?;
+            (k == SESSION_COOKIE && !v.is_empty()).then(|| v.to_string())
+        })
+}
+
+fn has_header(req: &str, name: &str) -> bool {
+    req.lines()
+        .filter_map(|l| l.split_once(':'))
+        .any(|(n, _)| n.eq_ignore_ascii_case(name))
+}
+
+/// CSRF guard: a write whose only credential is the ambient session cookie
+/// must carry the custom `X-Aikoql-Csrf` header. A cross-site page cannot
+/// add a custom header without a CORS preflight (which this server answers
+/// without credentials support), and SameSite=Strict already withholds the
+/// cookie from cross-site requests; this is the second layer.
+fn cookie_write_without_csrf(method: &str, path: &str, req: &str) -> bool {
+    !matches!(method, "GET" | "HEAD" | "OPTIONS")
+        // login is credential-based and ignores any cookie: a stale one must
+        // not lock the sign-in form out
+        && path.split('?').next() != Some("/api/login")
+        && !path.contains("token=")
+        && !has_header(req, "authorization")
+        && session_cookie(req).is_some()
+        && !has_header(req, "x-aikoql-csrf")
+}
+
+/// `Set-Cookie` for a session (`ttl` seconds) or, with `ttl` 0, its removal.
+/// `Secure` only behind a TLS-terminating proxy that says so.
+fn session_cookie_header(token: &str, ttl: u64, req: &str) -> String {
+    let secure = req.lines().filter_map(|l| l.split_once(':')).any(|(n, v)| {
+        n.eq_ignore_ascii_case("x-forwarded-proto") && v.trim().eq_ignore_ascii_case("https")
+    });
+    format!(
+        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={ttl}{}",
+        if secure { "; Secure" } else { "" }
+    )
 }
 
 /// P3-M1 (§53): HTTP login credentials. Users come from [auth].users with
@@ -556,6 +694,10 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
 /// no hardcoded credentials anywhere).
 pub(crate) struct AuthResolver {
     users: Vec<crate::config::AuthUser>,
+    /// The AIKOQL_ADMIN_PASSWORD bootstrap, kept apart from `users`: it arms
+    /// is_configured() (and so the OAuth surface), but enterprise break-glass
+    /// consults config users only — the env password just seeds the store.
+    admin: Option<crate::config::AuthUser>,
     ttl_secs: u64,
     /// per configured login: (consecutive failures, locked until unix ms)
     fails: Mutex<HashMap<String, (u32, i64)>>,
@@ -581,8 +723,7 @@ const MAX_BACKOFF_SECS: u64 = 900;
 /// The doubling backoff the login and per-IP layers share: failure n
 /// (1-based, past the free allowance) waits 2^(n-free) s, capped.
 fn backoff_secs(n: u32, free: u32) -> u64 {
-    1u64
-        .checked_shl(n.saturating_sub(free))
+    1u64.checked_shl(n.saturating_sub(free))
         .unwrap_or(u64::MAX)
         .min(MAX_BACKOFF_SECS)
 }
@@ -594,6 +735,9 @@ fn unix_ms() -> i64 {
 }
 
 impl AuthResolver {
+    /// Test-only convenience (AG-52's `with_state` is the serve path);
+    /// cfg(test) so the bin build does not flag it dead
+    #[cfg(test)]
     pub(crate) fn new(
         users: Vec<crate::config::AuthUser>,
         admin_password: Option<&str>,
@@ -611,23 +755,25 @@ impl AuthResolver {
         ttl_secs: u64,
         state_path: Option<PathBuf>,
     ) -> Self {
-        let mut users = users;
-        if let Some(pw) = admin_password {
-            if !users.iter().any(|u| u.username == "admin") {
+        let admin = admin_password
+            .filter(|_| !users.iter().any(|u| u.username == "admin"))
+            .and_then(|pw| {
                 use argon2::password_hash::PasswordHasher;
                 let salt = argon2::password_hash::SaltString::generate(
                     &mut argon2::password_hash::rand_core::OsRng,
                 );
                 match argon2::Argon2::default().hash_password(pw.as_bytes(), &salt) {
-                    Ok(h) => users.push(crate::config::AuthUser {
+                    Ok(h) => Some(crate::config::AuthUser {
                         username: "admin".into(),
                         hash: h.to_string(),
                         roles: vec!["admin".into()],
                     }),
-                    Err(e) => eprintln!("admin password hash failed: {e}"),
+                    Err(e) => {
+                        eprintln!("admin password hash failed: {e}");
+                        None
+                    }
                 }
-            }
-        }
+            });
         // AG-52: reload the persisted fail state; a torn or unreadable file
         // reads as no state (the backoff restarts — fail open, login never
         // blocked by a corrupted sidecar).
@@ -638,6 +784,7 @@ impl AuthResolver {
             .unwrap_or_default();
         AuthResolver {
             users,
+            admin,
             ttl_secs,
             fails: Mutex::new(fails),
             ips: Mutex::new(HashMap::new()),
@@ -653,7 +800,7 @@ impl AuthResolver {
     }
 
     pub(crate) fn is_configured(&self) -> bool {
-        !self.users.is_empty()
+        !self.users.is_empty() || self.admin.is_some()
     }
 
     pub(crate) fn ttl_secs(&self) -> u64 {
@@ -668,6 +815,7 @@ impl AuthResolver {
         self.users
             .iter()
             .find(|u| u.username == username)
+            .or(self.admin.as_ref().filter(|a| a.username == username))
             .map(|u| u.roles.clone())
     }
 
@@ -678,9 +826,13 @@ impl AuthResolver {
         // justified: Mutex poison is unrecoverable
         let fails = self.fails.lock().unwrap();
         let now = unix_ms();
-        let live: HashMap<&String, &(u32, i64)> =
-            fails.iter().filter(|(_, (_, until))| *until > now).collect();
-        let Ok(json) = serde_json::to_string(&live) else { return };
+        let live: HashMap<&String, &(u32, i64)> = fails
+            .iter()
+            .filter(|(_, (_, until))| *until > now)
+            .collect();
+        let Ok(json) = serde_json::to_string(&live) else {
+            return;
+        };
         let tmp = path.with_extension("login-backoff.tmp");
         if std::fs::write(&tmp, json).is_err() {
             return;
@@ -700,7 +852,11 @@ impl AuthResolver {
     /// password extends the backoff, a right one clears it.
     pub(crate) fn verify(&self, username: &str, password: &str) -> Option<Vec<String>> {
         use argon2::password_hash::PasswordVerifier;
-        let u = self.users.iter().find(|u| u.username == username)?;
+        let u = self
+            .users
+            .iter()
+            .find(|u| u.username == username)
+            .or(self.admin.as_ref().filter(|a| a.username == username))?;
         if self.locked_for(username).is_some() {
             return None;
         }
@@ -717,9 +873,7 @@ impl AuthResolver {
             self.save();
             return Some(u.roles.clone());
         }
-        let (n, until) = fails
-            .entry(username.to_string())
-            .or_insert((0, unix_ms()));
+        let (n, until) = fails.entry(username.to_string()).or_insert((0, unix_ms()));
         *n += 1;
         if *n >= FREE_FAILS {
             *until = unix_ms() + (backoff_secs(*n, FREE_FAILS) * 1000) as i64;
@@ -727,6 +881,25 @@ impl AuthResolver {
         drop(fails);
         self.save();
         None
+    }
+
+    /// argon2id-verify against the CONFIG-FILE users only. Enterprise
+    /// break-glass falls back here after the store hash: a config-file admin
+    /// keeps its v0.4.0 password, while the env bootstrap entry is never
+    /// consulted (in enterprise the env only seeds the user store). Honors
+    /// the per-login backoff; the caller counts refusals at the IP layer.
+    pub(crate) fn verify_config(&self, username: &str, password: &str) -> Option<Vec<String>> {
+        use argon2::password_hash::PasswordVerifier;
+        let u = self.users.iter().find(|u| u.username == username)?;
+        if self.locked_for(username).is_some() {
+            return None;
+        }
+        let ok = argon2::PasswordHash::new(&u.hash).is_ok_and(|parsed| {
+            argon2::Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok()
+        });
+        ok.then(|| u.roles.clone())
     }
 
     /// AG-52: seconds `ip` must wait before its next login attempt.
@@ -754,12 +927,16 @@ impl AuthResolver {
     /// the last X-Forwarded-For hop (the one the proxy appended) is the
     /// client. An unparseable entry falls back to the peer.
     pub(crate) fn client_ip(&self, peer: IpAddr, headers: &str) -> IpAddr {
-        let Some(proxy) = self.trusted_proxy else { return peer };
+        let Some(proxy) = self.trusted_proxy else {
+            return peer;
+        };
         if peer != proxy {
             return peer;
         }
         for line in headers.lines() {
-            let Some((name, value)) = line.split_once(':') else { continue };
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
             if name.trim().eq_ignore_ascii_case("x-forwarded-for") {
                 if let Some(last) = value.split(',').next_back().map(str::trim) {
                     if let Ok(ip) = last.parse() {
@@ -799,14 +976,39 @@ pub(crate) fn handle_login(
             format!("too many failed sign-ins from your address; retry in {wait} s"),
         ));
     }
-    let roles = auth.verify(username, password).ok_or_else(|| {
+    // Enterprise break-glass (Task 5): with multi-user on, the bootstrap
+    // admin verifies against the users.db hash — AIKOQL_ADMIN_PASSWORD only
+    // seeded it. Config-file users keep the AuthResolver path untouched.
+    let roles = match crate::session::users() {
+        Some(store) if username == crate::users::ADMIN_SUB => store
+            .lock()
+            .unwrap() // justified: Mutex poison is unrecoverable
+            .verify_admin_password(password)
+            .unwrap_or(false)
+            .then(|| vec!["admin".to_string()])
+            // a config-file admin ([auth].users) keeps its v0.4.0 password;
+            // the env bootstrap entry is not consulted (it only seeds)
+            .or_else(|| auth.verify_config(username, password)),
+        _ => auth.verify(username, password),
+    }
+    .ok_or_else(|| {
         auth.ip_failure(client_ip);
         unauthorized("invalid credentials".into())
     })?;
-    // P3-M1 (auth002): 256-bit CSPRNG session token (64 hex chars). The old
-    // time+pid token was predictable; sessions are bearer credentials now.
+    let token = mint_session(sessions, username, roles, auth.ttl_secs()).map_err(unauthorized)?;
+    Ok(token)
+}
+
+/// Mint a 256-bit CSPRNG session token (64 hex chars — P3-M1 auth002) and
+/// store the session.
+fn mint_session(
+    sessions: &Mutex<HashMap<String, HttpSession>>,
+    username: &str,
+    roles: Vec<String>,
+    ttl_secs: u64,
+) -> Result<String, String> {
     let mut raw = [0u8; 32];
-    getrandom::getrandom(&mut raw).map_err(|e| unauthorized(format!("session token: {e}")))?;
+    getrandom::getrandom(&mut raw).map_err(|e| format!("session token: {e}"))?;
     let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     // justified: Mutex poison is unrecoverable
     sessions.lock().unwrap().insert(
@@ -815,7 +1017,7 @@ pub(crate) fn handle_login(
             username: username.to_string(),
             roles,
             created: Instant::now(),
-            ttl_secs: auth.ttl_secs(),
+            ttl_secs,
         },
     );
     Ok(token)
@@ -834,11 +1036,43 @@ pub(crate) fn validate_token(
     if sess.created.elapsed().as_secs() >= sess.ttl_secs {
         return None;
     }
-    Some(Subject {
+    let mut subject = Subject {
         name: sess.username.clone(),
         roles: sess.roles.clone(),
         tenant: None, // REST sessions carry no tenant claim; callers scope via query param
-    })
+    };
+    // Enterprise (Task 5): the store's roles are authoritative, per request
+    // — a revocation takes effect on the next call. Users not in the store
+    // (config-file logins) keep their session snapshot.
+    if let Some(store) = crate::session::users() {
+        // justified: Mutex poison is unrecoverable
+        if let Ok(Some(roles)) = store.lock().unwrap().roles_of(&sess.username) {
+            subject.roles = roles;
+        }
+    }
+    Some(subject)
+}
+
+/// Task 6: the session's live roles for the REST gate — the user store is
+/// authoritative when open (a revocation takes effect on the next call),
+/// exactly as validate_token resolves them, but WITHOUT the TTL check: the
+/// gate must never change a session's community-mode TTL behavior.
+pub(crate) fn live_roles(
+    token: Option<&str>,
+    sessions: &Mutex<HashMap<String, HttpSession>>,
+) -> Option<Vec<String>> {
+    let token = token?;
+    // justified: Mutex poison is unrecoverable
+    let guard = sessions.lock().unwrap();
+    let sess = guard.get(token)?;
+    let mut roles = sess.roles.clone();
+    if let Some(store) = crate::session::users() {
+        // justified: Mutex poison is unrecoverable
+        if let Ok(Some(store_roles)) = store.lock().unwrap().roles_of(&sess.username) {
+            roles = store_roles;
+        }
+    }
+    Some(roles)
 }
 
 pub(crate) fn aikoql_endpoint(
@@ -896,7 +1130,9 @@ pub(crate) fn aikoql_endpoint(
     let schema = SchemaRegistry::new(); // ponytail: empty registry; ontology handles resolution
                                         // S-8 (POC-4): prefer the hot-reloaded registry (published by
                                         // Auto-Discover / REST Ontology remembers) over the startup snapshot.
-    let hot = current_ontology();
+                                        // Per-tenant: the caller's tenant (its session scope, else the requested
+                                        // one) compiles against its own ontology, falling back to the global.
+    let hot = registry_for(subject.tenant.as_deref().or(tenant));
     let ont = hot.as_deref().unwrap_or(ontology);
     let plans = match aikoql_compiler::parser::compile_with_ontology_scoped(
         query,
@@ -1150,6 +1386,20 @@ pub(crate) fn handle_http(
             content_len = line.split(':').nth(1).and_then(|s| s.trim().parse().ok());
         }
     }
+    // A document upload is read whole into memory (base64 in JSON): refuse an
+    // oversized declared body before reading any of it.
+    if route == "/api/v1/documents" && content_len.is_some_and(|cl| cl > MAX_DOCUMENT_BODY) {
+        crate::mcp_http::write_reply(
+            stream,
+            (
+                "413 Payload Too Large",
+                vec![],
+                "text/plain; charset=utf-8",
+                format!("a document upload is at most {MAX_DOCUMENT_BODY} bytes"),
+            ),
+        );
+        return;
+    }
     // MCP over Streamable HTTP and its OAuth endpoints: bodies are capped
     // before they are read
     if (route == "/mcp" || route.starts_with("/oauth/"))
@@ -1215,6 +1465,21 @@ pub(crate) fn handle_http(
     // Extract token from query string or Authorization header.
     let token = extract_token(path, &req);
 
+    if cookie_write_without_csrf(method, path, &req) {
+        let body = json!({"error": "missing X-Aikoql-Csrf header"}).to_string();
+        let mut resp = format!(
+            "HTTP/1.0 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        for (k, v) in api_rest::cors_headers() {
+            resp.push_str(&format!("{}: {}\r\n", k, v));
+        }
+        resp.push_str("\r\n");
+        resp.push_str(&body);
+        let _ = stream.write_all(resp.as_bytes());
+        return;
+    }
+
     // CORS preflight.
     if method == "OPTIONS" {
         let (status, ct, body) = api_rest::cors_preflight();
@@ -1261,6 +1526,61 @@ pub(crate) fn handle_http(
         return;
     }
 
+    // Enterprise (Task 8): the admin API — /api/license for any
+    // authenticated session; the user routes dispatch only when the
+    // multi-user store is open (they are gated admin-only inside
+    // route_admin with the T6 live-role check). Community mode has no
+    // store: those paths fall through to the v0.4.0 404, byte-for-byte —
+    // no 401, no JSON, no "user store unavailable". Task 9 adds
+    // /api/audit-export under the audit-export flag, same fall-through.
+    let admin_reply = if route == "/api/license"
+        || ((route == "/api/users" || route.starts_with("/api/users/"))
+            && crate::session::users().is_some())
+    {
+        let (status, ct, body) =
+            api_rest::route_admin(method, route, &body_str, sessions, token.as_deref());
+        Some((status, ct, Vec::new(), body))
+    } else if route == "/api/audit-export"
+        && crate::license::LICENSE_STATE
+            .get()
+            .is_some_and(|s| s.features.audit_export)
+    {
+        Some(api_rest::route_audit_export(
+            sessions,
+            token.as_deref(),
+            db_path.as_str(),
+        ))
+    } else {
+        None
+    };
+    if let Some((status, ct, extra_headers, body)) = admin_reply {
+        let mut resp = format!(
+            "HTTP/1.0 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
+            status,
+            ct,
+            body.len()
+        );
+        for (h, v) in extra_headers {
+            resp.push_str(&format!("{h}: {v}\r\n"));
+        }
+        for (h, v) in api_rest::cors_headers() {
+            resp.push_str(&format!("{}: {}\r\n", h, v));
+        }
+        resp.push_str("\r\n");
+        resp.push_str(&body);
+        let _ = stream.write_all(resp.as_bytes());
+        return;
+    }
+
+    // Enterprise SSO (Task 5): /api/login/sso starts an IdP sign-in and
+    // /oidc/callback finishes it. Without an oidc_sso license + OIDC config
+    // (gate() None) these 404 — the v0.4.0 surface is byte-for-byte unchanged.
+    if let Some(reply) = sso_routes(method, route, path, sessions, auth, mcp) {
+        crate::mcp_http::write_reply(stream, reply);
+        return;
+    }
+
+    let mut set_cookie: Option<String> = None;
     let (status, content_type, body) = match route {
         "/ui" => (
             "200 OK",
@@ -1270,7 +1590,25 @@ pub(crate) fn handle_http(
         "/" | "/studio" => (
             "200 OK",
             "text/html; charset=utf-8",
-            studio::STUDIO_HTML.to_string(),
+            studio::studio_html(
+                crate::oidc::gate().is_some(),
+                crate::license::LICENSE_STATE.get(),
+            ),
+        ),
+        "/studio/assets/app.js" => (
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            studio::APP_JS.to_string(),
+        ),
+        "/studio/assets/editor.js" => (
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            studio::EDITOR_JS.to_string(),
+        ),
+        "/studio/assets/vis-network.js" => (
+            "200 OK",
+            "application/javascript; charset=utf-8",
+            studio::VIS_JS.to_string(),
         ),
         "/health" => {
             let uptime = SERVER_START
@@ -1293,13 +1631,40 @@ pub(crate) fn handle_http(
         }
         "/api/login" if method == "POST" => {
             match handle_login(&body_str, sessions, auth, client_ip) {
-                Ok(token) => (
-                    "200 OK",
-                    "application/json",
-                    json!({"token": token}).to_string(),
-                ),
+                Ok(token) => {
+                    set_cookie = Some(session_cookie_header(&token, auth.ttl_secs(), &req));
+                    (
+                        "200 OK",
+                        "application/json",
+                        json!({"token": token}).to_string(),
+                    )
+                }
                 Err((status, e)) => (status, "application/json", json!({"error": e}).to_string()),
             }
+        }
+        // who the cookie/Bearer session is, so Studio can resume after a reload
+        "/api/session" if method == "GET" => match validate_token(token.as_deref(), sessions) {
+            Some(s) => (
+                "200 OK",
+                "application/json",
+                json!({"username": s.name, "roles": s.roles}).to_string(),
+            ),
+            None => (
+                "401 Unauthorized",
+                "application/json",
+                json!({"error": "login required"}).to_string(),
+            ),
+        },
+        "/api/logout" if method == "POST" => {
+            if let Some(t) = token.as_deref() {
+                sessions.lock().unwrap().remove(t); // justified: Mutex poison is unrecoverable
+            }
+            set_cookie = Some(session_cookie_header("", 0, &req));
+            (
+                "200 OK",
+                "application/json",
+                json!({"ok": true}).to_string(),
+            )
         }
         // P3-M1 (auth005/auth006): the pre-v1 route aliases are part of the
         // same surface — session required, and graph runs as the session's
@@ -1399,9 +1764,143 @@ pub(crate) fn handle_http(
     for (k, v) in api_rest::cors_headers() {
         resp.push_str(&format!("{}: {}\r\n", k, v));
     }
+    if let Some(c) = &set_cookie {
+        resp.push_str(&format!("Set-Cookie: {c}\r\n"));
+    }
+    if matches!(route, "/" | "/studio") {
+        for (k, v) in studio::STUDIO_HEADERS {
+            resp.push_str(&format!("{}: {}\r\n", k, v));
+        }
+    }
     resp.push_str("\r\n");
     resp.push_str(&body);
     let _ = stream.write_all(resp.as_bytes());
+}
+
+/// Task 5: the Studio SSO entry and the IdP callback. None for any other
+/// route (and for everything when OIDC is not active).
+fn sso_routes(
+    method: &str,
+    route: &str,
+    path: &str,
+    sessions: &Mutex<HashMap<String, HttpSession>>,
+    auth: &AuthResolver,
+    mcp: Option<&crate::mcp_http::McpHttp>,
+) -> Option<crate::mcp_http::Reply> {
+    match (method, route) {
+        ("GET", "/api/login/sso") => {
+            let provider = crate::oidc::gate()?;
+            let verifier = crate::oidc::pkce_verifier();
+            // no resume: the callback mints a Studio session
+            let state = crate::session::oidc_flows().begin(verifier.clone(), None);
+            let url = match provider.authorize_url(&state, &verifier) {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!(error = %e, "OIDC authorize URL failed");
+                    return Some((
+                        "500 Internal Server Error",
+                        vec![],
+                        "text/plain; charset=utf-8",
+                        format!("OIDC sign-in is not available: {e}\n"),
+                    ));
+                }
+            };
+            let mut h = vec![("Cache-Control", "no-store".to_string())];
+            h.push(("Location", url));
+            Some(("302 Found", h, "text/plain", String::new()))
+        }
+        ("GET", "/oidc/callback") => Some(callback(path, sessions, auth, mcp)),
+        _ => None,
+    }
+}
+
+/// /oidc/callback — the IdP sends the browser back here with code+state.
+/// Exchange → upsert the user → either resume the interrupted MCP authorize
+/// (issue its code) or mint a Studio session.
+fn callback(
+    path: &str,
+    sessions: &Mutex<HashMap<String, HttpSession>>,
+    auth: &AuthResolver,
+    mcp: Option<&crate::mcp_http::McpHttp>,
+) -> crate::mcp_http::Reply {
+    let page = |status: &'static str, msg: String| {
+        (
+            status,
+            vec![],
+            "text/plain; charset=utf-8",
+            format!("{msg}\n"),
+        )
+    };
+    let Some(provider) = crate::oidc::gate() else {
+        return page("404 Not Found", "OIDC is not configured".into());
+    };
+    let code = parse_query_param(path, "code");
+    let state = parse_query_param(path, "state");
+    let flow = match crate::session::oidc_flows().take(&state) {
+        Some(f) => f,
+        None => return page("400 Bad Request", "unknown or used OIDC state".into()),
+    };
+    let claims = match provider.exchange(&code, &flow.verifier) {
+        Ok(c) => c,
+        Err(e) => return page("401 Unauthorized", format!("OIDC sign-in failed: {e}")),
+    };
+    // Final review I-4: the bootstrap admin's sub is reserved — an IdP
+    // identity colliding with it must never overwrite the break-glass row
+    // (the store refuses too; this gives the clean status).
+    if claims.sub == crate::users::ADMIN_SUB {
+        return page(
+            "403 Forbidden",
+            format!(
+                "the break-glass admin '{}' cannot sign in via SSO",
+                crate::users::ADMIN_SUB
+            ),
+        );
+    }
+    let roles = crate::oidc::map_roles(&claims.roles);
+    // the store is authoritative: first login inserts, later logins refresh
+    if let Some(store) = crate::session::users() {
+        let store = store.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        if let Err(e) = store.upsert_oidc_user(&claims.sub, claims.name.as_deref(), &roles) {
+            drop(store);
+            return page("500 Internal Server Error", format!("user store: {e}"));
+        }
+    }
+    match flow.resume {
+        Some(pending) => {
+            // the interrupted MCP sign-in continues: issue its code
+            let Some(oauth) = mcp.and_then(|m| m.oauth()) else {
+                return page("404 Not Found", "OAuth is not configured".into());
+            };
+            oauth.finish_sso(&pending, &claims.sub)
+        }
+        None => {
+            // Studio login: a session token, handed to the overlay via the
+            // home redirect's URL fragment (fragments never reach servers,
+            // proxies or Referer; the page's api() sends authToken as a
+            // query param itself).
+            let token = match mint_session(sessions, &claims.sub, roles, auth.ttl_secs()) {
+                Ok(t) => t,
+                Err(e) => return page("500 Internal Server Error", format!("session: {e}")),
+            };
+            let user = enc_query(&claims.sub);
+            let mut h = vec![("Cache-Control", "no-store".to_string())];
+            h.push(("Location", format!("/#token={token}&user={user}")));
+            ("302 Found", h, "text/plain", String::new())
+        }
+    }
+}
+
+/// Percent-encoding for the callback's home redirect (a sub may carry
+/// characters that would break the fragment).
+fn enc_query(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 pub(crate) fn prometheus_metrics(
@@ -1509,4 +2008,43 @@ pub(crate) fn spawn_metrics(
             kernel, ontology, &addr, &db_path, rate_limit, auth, admin, tls, mcp,
         )
     });
+}
+
+#[cfg(test)]
+mod token_tests {
+    use super::extract_token;
+
+    #[test]
+    fn bearer_header_name_is_case_insensitive() {
+        // Header names are case-insensitive (RFC 9110); a client that sends
+        // `authorization:` must authenticate like one that sends `Authorization:`.
+        for name in ["Authorization", "authorization", "AUTHORIZATION"] {
+            let req = format!("GET /api/x HTTP/1.1\r\nHost: h\r\n{name}: Bearer tok-1\r\n\r\n");
+            assert_eq!(
+                extract_token("/api/x", &req).as_deref(),
+                Some("tok-1"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_session_cookie_is_the_last_resort_after_header_and_query() {
+        let cookie = "GET /x HTTP/1.1\r\nCookie: a=1; aikoql_session=ck-1; b=2\r\n\r\n";
+        assert_eq!(extract_token("/x", cookie).as_deref(), Some("ck-1"));
+        let both =
+            "GET /x HTTP/1.1\r\ncookie: aikoql_session=ck-1\r\nAuthorization: Bearer hd-1\r\n\r\n";
+        assert_eq!(extract_token("/x", both).as_deref(), Some("hd-1"));
+        assert_eq!(extract_token("/x?token=q-1", both).as_deref(), Some("q-1"));
+        let other = "GET /x HTTP/1.1\r\nCookie: aikoql_sessionx=no\r\n\r\n";
+        assert_eq!(extract_token("/x", other), None);
+    }
+
+    #[test]
+    fn query_token_still_works_for_existing_clients() {
+        assert_eq!(
+            extract_token("/api/x?token=abc", "GET /api/x?token=abc HTTP/1.0\r\n\r\n").as_deref(),
+            Some("abc")
+        );
+    }
 }

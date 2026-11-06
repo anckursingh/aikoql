@@ -67,6 +67,7 @@ above (e.g. `NOT_FOUND: <koid>` → NOT_FOUND via the "not_found" keyword).
 | INVALID_SCHEMA | schema constraint violation |
 | INVALID_QUERY | aikoql parse or semantic error |
 | VERSION_CONFLICT | OCC expected/found version mismatch |
+| CLAIM_CONFLICT | task claim/handoff refused — held by another agent or already released (AG-41) |
 | ACCESS_DENIED | owner-default ACL refusal |
 | INVALID_STATE | illegal state transition |
 | INVALID_EPISTEMIC | illegal epistemic transition |
@@ -79,6 +80,7 @@ above (e.g. `NOT_FOUND: <koid>` → NOT_FOUND via the "not_found" keyword).
 | STORE | storage engine error |
 | CODEC | serialization error |
 | RETRYABLE | similarity arm: query embedded but no in-scope KO carries an embedding yet |
+| CLAIM_CONFLICT | AG-41: a task claim lost — the KO is held by another agent until `until` |
 
 ## SDK-side codes
 

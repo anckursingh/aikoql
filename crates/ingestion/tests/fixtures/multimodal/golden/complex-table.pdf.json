@@ -528,16 +528,21 @@
       "actions": [
         {
           "CreateKO": {
-            "class_name": "Person",
+            "class_name": "Thing",
             "entity_name": "Units Sold",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 1,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 20,
+                    "start_offset": 10
+                  }
+                }
               }
             ],
             "properties": [
@@ -555,23 +560,28 @@
               ],
               [
                 "type",
-                "Person"
+                "Thing"
               ]
             ]
           }
         },
         {
           "CreateKO": {
-            "class_name": "Person",
+            "class_name": "Thing",
             "entity_name": "Product Line",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 2,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 12,
+                    "start_offset": 0
+                  }
+                }
               }
             ],
             "properties": [
@@ -585,23 +595,28 @@
               ],
               [
                 "type",
-                "Person"
+                "Thing"
               ]
             ]
           }
         },
         {
           "CreateKO": {
-            "class_name": "Person",
+            "class_name": "Thing",
             "entity_name": "Industrial Sensors",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 2,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 51,
+                    "start_offset": 33
+                  }
+                }
               }
             ],
             "properties": [
@@ -623,23 +638,28 @@
               ],
               [
                 "type",
-                "Person"
+                "Thing"
               ]
             ]
           }
         },
         {
           "CreateKO": {
-            "class_name": "Person",
+            "class_name": "Thing",
             "entity_name": "Home Automation",
             "evidence": [
               {
                 "confidence": 0.8500000238418579,
                 "document_id": null,
-                "extractor": "mock",
-                "model": "mock-v1",
+                "extractor": "rules",
+                "model": "rules-v1",
                 "page": 2,
-                "source": null
+                "source": {
+                  "TextSpan": {
+                    "end_offset": 72,
+                    "start_offset": 57
+                  }
+                }
               }
             ],
             "properties": [
@@ -661,7 +681,7 @@
               ],
               [
                 "type",
-                "Person"
+                "Thing"
               ]
             ]
           }
@@ -1024,34 +1044,54 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 20,
+                  "start_offset": 10
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 12,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 51,
+                  "start_offset": 33
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 72,
+                  "start_offset": 57
+                }
+              }
             }
           ],
           "step": "Extracted 4 entities from document text"
@@ -1493,64 +1533,84 @@
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 1,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 20,
+                "start_offset": 10
+              }
+            }
           },
           "mentions": [
             "Quarter | Units Sold | Margin (%)\nQ1 2025 | 4000 | 12.5\nQ2 2025 | 5100 | 13.0"
           ],
           "name": "Units Sold",
-          "type_hint": "Person"
+          "type_hint": "Thing"
         },
         {
           "confidence": 0.8500000238418579,
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 2,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 12,
+                "start_offset": 0
+              }
+            }
           },
           "mentions": [
             "Product Line | Warranty (months)\nIndustrial Sensors | 36\nHome Automation | 24"
           ],
           "name": "Product Line",
-          "type_hint": "Person"
+          "type_hint": "Thing"
         },
         {
           "confidence": 0.8500000238418579,
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 2,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 51,
+                "start_offset": 33
+              }
+            }
           },
           "mentions": [
             "Product Line | Warranty (months)\nIndustrial Sensors | 36\nHome Automation | 24"
           ],
           "name": "Industrial Sensors",
-          "type_hint": "Person"
+          "type_hint": "Thing"
         },
         {
           "confidence": 0.8500000238418579,
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
-            "extractor": "mock",
-            "model": "mock-v1",
+            "extractor": "rules",
+            "model": "rules-v1",
             "page": 2,
-            "source": null
+            "source": {
+              "TextSpan": {
+                "end_offset": 72,
+                "start_offset": 57
+              }
+            }
           },
           "mentions": [
             "Product Line | Warranty (months)\nIndustrial Sensors | 36\nHome Automation | 24"
           ],
           "name": "Home Automation",
-          "type_hint": "Person"
+          "type_hint": "Thing"
         }
       ],
       "events": [],
@@ -1798,38 +1858,58 @@
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 20,
+                  "start_offset": 10
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 12,
+                  "start_offset": 0
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 51,
+                  "start_offset": 33
+                }
+              }
             },
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 72,
+                  "start_offset": 57
+                }
+              }
             }
           ],
-          "name": "Person",
-          "parent": "Person",
+          "name": "Thing",
+          "parent": null,
           "signal_count": 4
         }
       ],
@@ -1994,7 +2074,7 @@
           "value_type": "DateTime"
         },
         {
-          "class_name": "Person",
+          "class_name": "Thing",
           "confidence": 0.8500000238418579,
           "evidence": [
             {
@@ -2029,7 +2109,7 @@
           "value_type": "Float"
         },
         {
-          "class_name": "Person",
+          "class_name": "Thing",
           "confidence": 0.8500000238418579,
           "evidence": [
             {
@@ -2071,15 +2151,20 @@
           "candidates": [],
           "confidence": 0.0,
           "entity_name": "Units Sold",
-          "entity_type": "Person",
+          "entity_type": "Thing",
           "evidence": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 1,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 20,
+                  "start_offset": 10
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -2089,15 +2174,20 @@
           "candidates": [],
           "confidence": 0.0,
           "entity_name": "Product Line",
-          "entity_type": "Person",
+          "entity_type": "Thing",
           "evidence": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 12,
+                  "start_offset": 0
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -2107,15 +2197,20 @@
           "candidates": [],
           "confidence": 0.0,
           "entity_name": "Industrial Sensors",
-          "entity_type": "Person",
+          "entity_type": "Thing",
           "evidence": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 51,
+                  "start_offset": 33
+                }
+              }
             }
           ],
           "matched_koid": null,
@@ -2125,15 +2220,20 @@
           "candidates": [],
           "confidence": 0.0,
           "entity_name": "Home Automation",
-          "entity_type": "Person",
+          "entity_type": "Thing",
           "evidence": [
             {
               "confidence": 0.8500000238418579,
               "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
+              "extractor": "rules",
+              "model": "rules-v1",
               "page": 2,
-              "source": null
+              "source": {
+                "TextSpan": {
+                  "end_offset": 72,
+                  "start_offset": 57
+                }
+              }
             }
           ],
           "matched_koid": null,

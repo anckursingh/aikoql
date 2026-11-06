@@ -26,7 +26,8 @@ fn mk_task(k: &Kernel, name: &str, agents: &[&str]) -> KOID {
             tags: vec![],
         },
     );
-    rr.properties.insert("task".into(), Value::Text(name.into()));
+    rr.properties
+        .insert("task".into(), Value::Text(name.into()));
     rr.security = Some(SecurityDescriptor {
         owner: "dispatcher".into(),
         acl: agents
@@ -96,7 +97,11 @@ fn ag41_n_agents_claim_m_tasks_exactly_once() {
         );
         seen.push((t, who));
     }
-    assert_eq!(seen.len(), tasks.len(), "every task must be claimed exactly once");
+    assert_eq!(
+        seen.len(),
+        tasks.len(),
+        "every task must be claimed exactly once"
+    );
 }
 
 #[test]
@@ -150,15 +155,14 @@ fn ag41_renew_and_release() {
         .unwrap();
     assert_eq!(rel.koid, task);
     let ko = k.get(Subject::new("alice"), &task).unwrap();
-    assert!(ko.extensions.get("claim_holder").is_none());
+    assert!(!ko.extensions.contains_key("claim_holder"));
     // Released → claimable by anyone in the pool; unclaimed → release errors.
     assert!(k
         .claim_task(ClaimRequest::new(Subject::new("bob"), task, 5))
         .is_ok());
-    assert!(matches!(
-        k.release_task(ReleaseRequest::new(Subject::new("bob"), task)),
-        Ok(_)
-    ));
+    assert!(k
+        .release_task(ReleaseRequest::new(Subject::new("bob"), task))
+        .is_ok());
     assert!(matches!(
         k.release_task(ReleaseRequest::new(Subject::new("bob"), task)),
         Err(KError::InvalidObject(_))
@@ -214,15 +218,30 @@ fn ag41_handoff_transfers_the_claim_and_records_provenance() {
         Some(&Value::Text(task.to_hex()))
     );
     assert_eq!(hko.epistemic_status(), EpistemicStatus::Asserted);
-    assert!(hko.evidence().len() >= 1, "the handoff carries its evidence");
+    assert!(
+        !hko.evidence().is_empty(),
+        "the handoff carries its evidence"
+    );
     // A non-holder cannot hand the task off (evidence present so the
     // failure is the claim, not the evidence gate).
     let mut rogue = HandoffRequest::new(Subject::new("alice"), task, "alice".into());
-    rogue.evidence = vec![Evidence::new("rogue handoff", EvidenceMethod::AgentAnalysis)];
-    assert!(matches!(k.handoff_task(rogue), Err(KError::ClaimConflict { .. })));
+    rogue.evidence = vec![Evidence::new(
+        "rogue handoff",
+        EvidenceMethod::AgentAnalysis,
+    )];
+    assert!(matches!(
+        k.handoff_task(rogue),
+        Err(KError::ClaimConflict { .. })
+    ));
     // An unclaimed task cannot be handed off either.
     let free = mk_task(&k, "free", &["alice", "bob"]);
     let mut orphan = HandoffRequest::new(Subject::new("alice"), free, "bob".into());
-    orphan.evidence = vec![Evidence::new("orphan handoff", EvidenceMethod::AgentAnalysis)];
-    assert!(matches!(k.handoff_task(orphan), Err(KError::InvalidObject(_))));
+    orphan.evidence = vec![Evidence::new(
+        "orphan handoff",
+        EvidenceMethod::AgentAnalysis,
+    )];
+    assert!(matches!(
+        k.handoff_task(orphan),
+        Err(KError::InvalidObject(_))
+    ));
 }

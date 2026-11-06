@@ -1,0 +1,24 @@
+{{- if .Values.tls.auto }}
+# R3c: one shared serving cert whose SANs cover both pods' DNS names
+# (per-pod certs are a cert-manager upgrade — see the README), generated
+# by helm at install. `lookup` reuses the Secret on upgrade so the
+# replication CA stays stable across releases. A pre-install Job hook was
+# tried first and needs kubectl inside the pod — removed, and with it the
+# secrets RBAC (the Role is lease-only again).
+{{- $fullname := include "aikoql.fullname" . }}
+{{- $secret := (lookup "v1" "Secret" .Release.Namespace (printf "%s-repl-tls" $fullname)) }}
+{{- $ca := genCA "aikoql-repl-ca" 3650 }}
+{{- $cert := genSignedCert "aikoql-repl" nil (list (printf "*.%s-headless.%s.svc" $fullname .Release.Namespace) (printf "*.%s-headless.%s.svc.cluster.local" $fullname .Release.Namespace)) 3650 $ca }}
+{{- $reused := and $secret (index $secret.data "ca.crt") (index $secret.data "tls.crt") (index $secret.data "tls.key") }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-repl-tls
+  labels:
+    {{- include "aikoql.labels" . | nindent 4 }}
+type: Opaque
+data:
+  ca.crt: {{ if $reused }}{{ index $secret.data "ca.crt" }}{{ else }}{{ $ca.Cert | b64enc }}{{ end }}
+  tls.crt: {{ if $reused }}{{ index $secret.data "tls.crt" }}{{ else }}{{ printf "%s%s" $cert.Cert $ca.Cert | b64enc }}{{ end }}
+  tls.key: {{ if $reused }}{{ index $secret.data "tls.key" }}{{ else }}{{ $cert.Key | b64enc }}{{ end }}
+{{- end }}

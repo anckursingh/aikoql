@@ -19,7 +19,7 @@ pub(crate) fn print_usage() {
         "  serve [OPTIONS] [DB]   Start MCP server (default: stdio mode)\n",
         "  backup [DB]            Create a verified backup\n",
         "  restore BACKUP [DB]    Restore from a backup\n",
-        "  audit [DB]             Print encryption compliance report\n",
+        "  audit [--export-jsonl PATH] [DB]  Compliance report; --export-jsonl streams the audit log (licensed)\n",
         "  keygen [PATH]          Generate an encryption master key\n",
         "  status [DB]            Health, metrics, and ABI version of a knowledge base\n",
         "  query <AIKOQL> [DB]    Run one aikoql statement (CREATE/MATCH/...)\n",
@@ -31,6 +31,9 @@ pub(crate) fn print_usage() {
         "  report [PATH]          Print knowledge report for directory\n",
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
         "  key rotate [DB]        Rotate the master key of an encrypted database (offline; rewraps, no re-encryption)\n",
+        "  key change-passphrase NEW [DB]  Re-wrap the master key under a new passphrase (offline; the key itself does not change)\n",
+        "  key roll-deks [DB]    Mint fresh tenant data keys and re-encrypt every encrypted field (offline)\n",
+        "  key install [DB]      Wrap the master key under a new AWS KMS CMK (offline; IAM gates later opens)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
         "  pitr --archive URL --to DIR [--until-seq N | --until-ms MS]  Restore from the archive\n",
         "  archive-prune --archive URL --keep N  Keep the newest N archived snapshots\n",
@@ -101,6 +104,7 @@ pub(crate) fn print_usage() {
 pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option<usize>) -> bool {
     let arg_after = subcmd_idx.and_then(|i| args.get(i + 2)).map(String::as_str);
     let arg_after2 = subcmd_idx.and_then(|i| args.get(i + 3)).map(String::as_str);
+    let arg_after3 = subcmd_idx.and_then(|i| args.get(i + 4)).map(String::as_str);
 
     match subcmd {
         Some("shell") => {
@@ -265,26 +269,99 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             run_backup(arg_after.unwrap_or(DEFAULT_DB_PATH));
             true
         }
-        Some("key") => {
-            if arg_after != Some("rotate") {
+        Some("key") => match arg_after {
+            Some("rotate") => {
+                let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
+                let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                if let Err(e) = crate::engine::rotate_keys(db, &cfg.encryption) {
+                    eprintln!("key rotate: {e}");
+                    std::process::exit(1);
+                }
+                println!("{}", serde_json::json!({"rotated": true, "db": db}));
+                true
+            }
+            Some("change-passphrase") => {
+                let Some(new) = arg_after2 else {
+                    eprintln!("Usage: aikoql-mcp key change-passphrase NEW_PASSPHRASE [DB_PATH]");
+                    std::process::exit(2);
+                };
+                let db = arg_after3.unwrap_or(DEFAULT_DB_PATH);
+                let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                if let Err(e) = crate::engine::change_passphrase(db, &cfg.encryption, new) {
+                    eprintln!("key change-passphrase: {e}");
+                    std::process::exit(1);
+                }
+                println!("{}", serde_json::json!({"changed": true, "db": db}));
+                true
+            }
+            Some("roll-deks") => {
+                let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
+                let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                match crate::engine::roll_deks(db, &cfg.encryption) {
+                    Ok(n) => println!(
+                        "{}",
+                        serde_json::json!({"rolled": true, "objects": n, "db": db})
+                    ),
+                    Err(e) => {
+                        eprintln!("key roll-deks: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                true
+            }
+            Some("install") => {
+                // AG-31 cloud KMS: aikoql-mcp key install [DB] [--kms-region R]
+                // (i+3: past "key install" — arg_after2's slot, like rotate)
+                let tail: Vec<&str> = subcmd_idx
+                    .map(|i| args.iter().skip(i + 3).map(String::as_str).collect())
+                    .unwrap_or_default();
+                let (mut db, mut region) = (None, None);
+                let mut it = tail.iter();
+                while let Some(a) = it.next() {
+                    match *a {
+                        "--kms-region" => region = it.next().map(|s| s.to_string()),
+                        other => db = Some(other.to_string()),
+                    }
+                }
+                let db = db.unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
+                let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                if let Err(e) = crate::engine::install_to_kms(&cfg.encryption, region.as_deref()) {
+                    eprintln!("key install: {e}");
+                    std::process::exit(1);
+                }
+                println!("{}", serde_json::json!({"installed": true, "db": db}));
+                true
+            }
+            _ => {
                 eprintln!("Usage: aikoql-mcp key rotate [DB_PATH]");
-                eprintln!("Rotates the master key (KEK) of an encrypted database: every data key");
-                eprintln!("is rewrapped under the new KEK, no data is re-encrypted, and the old");
-                eprintln!("key file no longer opens the database. Stop the server first.");
+                eprintln!("       aikoql-mcp key change-passphrase NEW_PASSPHRASE [DB_PATH]");
+                eprintln!("       aikoql-mcp key roll-deks [DB_PATH]");
+                eprintln!("       aikoql-mcp key install [DB_PATH] [--kms-region REGION]");
+                eprintln!("rotate rewraps every data key under a new master key — no data is");
+                eprintln!("re-encrypted — and the old key file no longer opens the database.");
+                eprintln!("change-passphrase re-wraps the master key file under a new passphrase");
+                eprintln!("(the master key itself does not change).");
+                eprintln!("roll-deks mints fresh tenant data keys and re-encrypts every encrypted");
+                eprintln!(
+                    "field under them (one committed version per object). Stop the server first."
+                );
+                eprintln!("install wraps the master key under a new AWS KMS CMK (aikoql/<db>) —");
+                eprintln!("AWS IAM gates every later open, the passphrase stops gating.");
                 std::process::exit(2);
             }
-            let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
-            let cfg = crate::config::load(&[], None, None).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
-            if let Err(e) = crate::engine::rotate_keys(db, &cfg.encryption) {
-                eprintln!("key rotate: {e}");
-                std::process::exit(1);
-            }
-            println!("{}", serde_json::json!({"rotated": true, "db": db}));
-            true
-        }
+        },
         Some("restore") => {
             let backup = arg_after.unwrap_or_else(|| {
                 eprintln!("Usage: aikoql-mcp restore <BACKUP_DIR> [DB_PATH]");
@@ -295,7 +372,26 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             true
         }
         Some("audit") => {
-            run_audit(arg_after.unwrap_or(DEFAULT_DB_PATH));
+            // Task 7: audit [--export-jsonl PATH] [DB] — the export is
+            // license-gated inside run_audit (enterprise audit-export flag).
+            let tail: Vec<&str> = subcmd_idx
+                .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
+                .unwrap_or_default();
+            let (mut db, mut export) = (None, None);
+            let mut it = tail.iter();
+            while let Some(a) = it.next() {
+                match *a {
+                    "--export-jsonl" => match it.next() {
+                        Some(p) => export = Some(p.to_string()),
+                        None => {
+                            eprintln!("--export-jsonl requires a path");
+                            std::process::exit(2);
+                        }
+                    },
+                    _ => db = Some(a.to_string()),
+                }
+            }
+            run_audit(db.as_deref().unwrap_or(DEFAULT_DB_PATH), export.as_deref());
             true
         }
         Some("ingest-dir") => {
@@ -749,7 +845,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         Some("schema") => {
             let db = arg_after.unwrap_or(DEFAULT_DB_PATH);
             run_verb(db, |k, _admin| {
-                crate::tools::agent_knowledge::tool_discover_schema(k)
+                crate::tools::agent_knowledge::tool_discover_schema(k, &serde_json::json!({}))
             });
             true
         }

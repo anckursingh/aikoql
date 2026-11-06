@@ -16,10 +16,10 @@ ResultSet rows = conn.query("MATCH person RETURN *");
 <dependency>
   <groupId>com.aikoql</groupId>
   <artifactId>aikoql-client</artifactId>
-  <version>0.3.0</version>
+  <version>0.4.0</version>
 </dependency>
 ```
 
 - Tests: `mvn test` (real-server conformance honors `AIKOQL_MCP_BIN`)
 - Fuzz smokes (7 Jazzer targets): `bash jazzer-smoke.sh` (`AIKOQL_JAZZER_SECONDS` for a bigger budget)
-- License: Apache-2.0
+- License: AGPL-3.0-only

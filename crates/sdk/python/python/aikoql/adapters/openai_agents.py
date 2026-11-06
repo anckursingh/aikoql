@@ -6,12 +6,14 @@ Drop-in for the upstream example (the docs' Runner)::
 
 One KO per conversation item (JSON). get_items returns the latest N in
 chronological order, like the SDK's own in-memory session. The async
-methods carry sync aikoql I/O (both clients are sync) — the round trips
-are local and short.
+methods offload the sync aikoql I/O (both clients are sync) to a worker
+thread via asyncio.to_thread, like langgraph.py — the Runner awaits them
+on the event loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Optional
 
@@ -56,12 +58,18 @@ class AikoqlSession:
         return self._next_seq
 
     async def get_items(self, limit: Optional[int] = None) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self._get_items_sync, limit)
+
+    def _get_items_sync(self, limit: Optional[int] = None) -> list[dict[str, Any]]:
         items = [item for _, item in self._items()]
         if limit is not None:
             items = items[-limit:]
         return items
 
     async def add_items(self, items: list[dict[str, Any]]) -> None:
+        await asyncio.to_thread(self._add_items_sync, items)
+
+    def _add_items_sync(self, items: list[dict[str, Any]]) -> None:
         seq = self._seed_seq()
         for item in items:
             remember(self.client, self.subject, self._TYPE, {
@@ -72,6 +80,9 @@ class AikoqlSession:
         self._next_seq = seq
 
     async def pop_item(self) -> Optional[dict[str, Any]]:
+        return await asyncio.to_thread(self._pop_item_sync)
+
+    def _pop_item_sync(self) -> Optional[dict[str, Any]]:
         rows = enumerate_rows(self.client, self.subject, self._TYPE)
         if not rows:
             return None
@@ -82,6 +93,9 @@ class AikoqlSession:
         return json.loads(raw) if raw else None
 
     async def clear_session(self) -> None:
+        await asyncio.to_thread(self._clear_session_sync)
+
+    def _clear_session_sync(self) -> None:
         for row in enumerate_rows(self.client, self.subject, self._TYPE):
             forget(self.client, self.subject, row["koid"])
         self._next_seq = None

@@ -11,18 +11,18 @@ Streamable HTTP on the metrics port (`/mcp`, bearer = the auth token;
 
 ```sh
 kubectl create secret generic aikoql-auth --from-literal=token='<token>' \
-  --from-literal=admin-password='<admin password>'   # optional: arms OAuth
+  --from-literal=admin-password='<admin password>'   # required: arms OAuth (the server fails closed without it)
 helm install aikoql deploy/helm/aikoql
 ```
 
 - `auth.existingSecret` is required — the token is never a values
   default. The same token authorizes `/mcp` and the replication stream
   (`TOKEN::admin`).
-- Replication between pods is TLS. With `tls.auto` (default) a
-  pre-install hook generates a CA and one shared serving cert whose
-  SANs cover both pods' DNS names, stored in `<release>-repl-tls`.
-  Set `tls.auto: false` and provide that Secret yourself for a real
-  CA (per-pod certs would be a cert-manager step).
+- Replication between pods is TLS. With `tls.auto` (default) the chart
+  renders a CA and one shared serving cert whose SANs cover both pods'
+  DNS names into `<release>-repl-tls`, and reuses it across upgrades so
+  the CA is stable. Set `tls.auto: false` and provide that Secret
+  yourself for a real CA (per-pod certs would be a cert-manager step).
 - `appVersion` tracks the workspace version — `scripts/bump-version.py`
   bumps this Chart.yaml too (pinned by `tests/helm_chart.rs`).
 

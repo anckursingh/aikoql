@@ -9,6 +9,14 @@ use serde::Deserialize;
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeConfig {
     pub db_path: String,
+    /// Enterprise licensing: `AIKOQL_LICENSE` names the license file, else
+    /// `<data-dir>/.aikoql-license` (the database directory). Resolved at
+    /// the end of load() — a positional DB path moves the default too.
+    pub license_path: String,
+    /// Enterprise audit retention (Task 7): startup rotation drops audit
+    /// entries older than this many days (`AIKOQL_AUDIT_RETENTION_DAYS`,
+    /// default 90). Read only when the license arms audit-export.
+    pub audit_retention_days: u64,
     pub listen_addr: Option<String>,
     /// D-15: the framed native protocol listener (§5/§6, ECO-2). Same
     /// loopback-only + token rules as the MCP TCP listener; CLI-only for
@@ -60,6 +68,9 @@ pub(crate) struct RuntimeConfig {
     /// AG-01: the listed tool surface — "full" (every tool) or "core" (a
     /// small set + tools_more). Listing only; calls are governed by roles.
     pub tool_profile: String,
+    /// HLD §54/§55: `[ingestion]` limits and enable flags for document
+    /// extraction and compile (defaults: `ProcessingPolicy::default()`).
+    pub ingestion_policy: aikoql_ingestion::ProcessingPolicy,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -150,6 +161,8 @@ struct TomlConfig {
     rate_limit: Option<TomlRateLimit>,
     embedding: Option<TomlEmbedding>,
     logging: Option<TomlLogging>,
+    /// Missing keys keep their defaults; unknown keys are rejected.
+    ingestion: Option<aikoql_ingestion::ProcessingPolicy>,
 }
 
 #[derive(Deserialize, Default)]
@@ -319,6 +332,8 @@ pub(crate) fn load(
 ) -> Result<RuntimeConfig, String> {
     let mut cfg = RuntimeConfig {
         db_path: DEFAULT_DB_PATH.into(),
+        license_path: String::new(), // resolved below, after every layer
+        audit_retention_days: 90,
         listen_addr: None,
         native_port: None,
         replicate_listen: None,
@@ -338,6 +353,7 @@ pub(crate) fn load(
         ha_node: None,
         ha_ttl_ms: 10_000,
         tool_profile: "full".into(),
+        ingestion_policy: aikoql_ingestion::ProcessingPolicy::default(),
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -411,6 +427,12 @@ pub(crate) fn load(
                 cfg.tool_profile =
                     tool_profile(&v).map_err(|e| format!("config {path}: server.{e}"))?;
             }
+        }
+        if let Some(policy) = t.ingestion {
+            policy
+                .validate()
+                .map_err(|e| format!("config {path}: ingestion.{e}"))?;
+            cfg.ingestion_policy = policy;
         }
         if let Some(a) = t.auth {
             if let Some(users) = a.users {
@@ -546,6 +568,14 @@ pub(crate) fn load(
     }
     if let Some(v) = env_opt("AIKOQL_ADMIN_PASSWORD") {
         cfg.admin_password = Some(v);
+    }
+    // Enterprise audit retention (Task 7): invalid values are rejected, not
+    // silently defaulted — an operator's typo must not silently widen the
+    // window evidence is kept for.
+    if let Some(v) = env_opt("AIKOQL_AUDIT_RETENTION_DAYS") {
+        cfg.audit_retention_days = v.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+            format!("AIKOQL_AUDIT_RETENTION_DAYS: requires a positive number of days, got {v:?}")
+        })?;
     }
 
     // Layer 4: CLI (highest precedence). Same semantics as the pre-PRR-4 loop.
@@ -820,6 +850,11 @@ pub(crate) fn load(
     if !cli_tcp_tokens.is_empty() {
         cfg.tcp_tokens = cli_tcp_tokens;
     }
+
+    // The enterprise license: AIKOQL_LICENSE wins, else the license lives
+    // next to the database (the v2 data directory).
+    cfg.license_path =
+        env_opt("AIKOQL_LICENSE").unwrap_or_else(|| format!("{}/.aikoql-license", cfg.db_path));
 
     Ok(cfg)
 }
@@ -1249,6 +1284,28 @@ employee = ["salary", "ssn"]
     }
 
     #[test]
+    fn ingestion_policy_from_toml() {
+        let d = load_bare(&argv(&["aikoql-mcp"])).unwrap().ingestion_policy;
+        assert_eq!(d, aikoql_ingestion::ProcessingPolicy::default());
+        let p = tmp_toml(
+            "[ingestion]\nmax_pages = 10\nmax_image_dimension = 4000\nenable_ocr = false\nmax_ocr_seconds = 30\n",
+        );
+        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap();
+        assert_eq!(cfg.ingestion_policy.max_pages, 10);
+        assert_eq!(cfg.ingestion_policy.max_image_dimension, 4000);
+        assert!(!cfg.ingestion_policy.enable_ocr);
+        assert_eq!(cfg.ingestion_policy.max_ocr_seconds, 30);
+        assert_eq!(cfg.ingestion_policy.max_image_count, d.max_image_count);
+        let bad = tmp_toml("[ingestion]\nmax_pagez = 10\n");
+        assert!(load_t(&argv(&["aikoql-mcp", "--config", &bad]), None, None).is_err());
+        let zero = tmp_toml("[ingestion]\nmax_pages = 0\n");
+        assert!(
+            load_t(&argv(&["aikoql-mcp", "--config", &zero]), None, None).is_err(),
+            "a zero page limit would refuse every document"
+        );
+    }
+
+    #[test]
     fn tool_profile_from_toml_env_and_cli() {
         assert_eq!(
             load_bare(&argv(&["aikoql-mcp"])).unwrap().tool_profile,
@@ -1317,5 +1374,54 @@ employee = ["salary", "ssn"]
     fn positional_db_path_still_works() {
         let cfg = load_bare(&argv(&["aikoql-mcp", "./my-kb"])).unwrap();
         assert_eq!(cfg.db_path, "./my-kb");
+    }
+
+    #[test]
+    fn license_path_env_else_data_dir_default() {
+        let cfg = load_bare(&argv(&["aikoql-mcp"])).unwrap();
+        assert_eq!(
+            cfg.license_path,
+            format!("{DEFAULT_DB_PATH}/.aikoql-license")
+        );
+        // a positional DB path moves the default next to the database
+        let cfg = load_bare(&argv(&["aikoql-mcp", "/kb/x"])).unwrap();
+        assert_eq!(cfg.license_path, "/kb/x/.aikoql-license");
+        // AIKOQL_LICENSE wins over the default
+        let cfg = load_with_env(|| {
+            std::env::set_var("AIKOQL_LICENSE", "/lic/a.bin");
+            let r = load(&argv(&["aikoql-mcp", "/kb/x"]), None, None);
+            std::env::remove_var("AIKOQL_LICENSE");
+            r
+        })
+        .unwrap();
+        assert_eq!(cfg.license_path, "/lic/a.bin");
+    }
+
+    #[test]
+    fn audit_retention_env_default_parsed_and_invalid_rejected() {
+        assert_eq!(
+            load_bare(&argv(&["aikoql-mcp"]))
+                .unwrap()
+                .audit_retention_days,
+            90
+        );
+        let cfg = load_with_env(|| {
+            std::env::set_var("AIKOQL_AUDIT_RETENTION_DAYS", "7");
+            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            std::env::remove_var("AIKOQL_AUDIT_RETENTION_DAYS");
+            r
+        })
+        .unwrap();
+        assert_eq!(cfg.audit_retention_days, 7);
+        for bad in ["0", "abc", "-3"] {
+            let err = load_with_env(|| {
+                std::env::set_var("AIKOQL_AUDIT_RETENTION_DAYS", bad);
+                let r = load(&argv(&["aikoql-mcp"]), None, None);
+                std::env::remove_var("AIKOQL_AUDIT_RETENTION_DAYS");
+                r
+            })
+            .unwrap_err();
+            assert!(err.contains("AIKOQL_AUDIT_RETENTION_DAYS"), "got: {err}");
+        }
     }
 }
