@@ -1252,6 +1252,39 @@ mod tests {
     }
 
     #[test]
+    fn m11_a_document_over_a_policy_limit_is_classified_not_silently_ingested() {
+        let office = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../ingestion/tests/fixtures/office"
+        );
+        let dir = std::env::temp_dir().join(format!("aikoql-limit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let art = dir.join("deck");
+        std::fs::copy(format!("{office}/deck.pptx"), &art).unwrap();
+        let policy = aikoql_ingestion::ProcessingPolicy {
+            max_pages: 2,
+            ..Default::default()
+        };
+        let pptx = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+        let out = crate::tools::ingestion::extract_for_ingest_with(
+            &dir.to_string_lossy(),
+            &art.to_string_lossy(),
+            "deck",
+            "deck.pptx",
+            pptx,
+            &policy,
+        );
+        assert_eq!(out.status, "limit_exceeded");
+        assert_eq!(out.pages, 0);
+        let err = out.error.unwrap_or_default();
+        assert!(
+            err.contains("max_pages") && err.contains("4 pages > 2"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn m9_an_image_type_no_extractor_reads_is_refused_at_upload() {
         let (k, db) = m3_kernel("heic");
         let (status, body) = m9_ingest(&k, &db, "IMG_0001.heic", "image/heic", b"ftypheic");

@@ -1272,6 +1272,28 @@ employee = ["salary", "ssn"]
     }
 
     #[test]
+    fn ingestion_policy_from_toml() {
+        let d = load_bare(&argv(&["aikoql-mcp"])).unwrap().ingestion_policy;
+        assert_eq!(d, aikoql_ingestion::ProcessingPolicy::default());
+        let p = tmp_toml(
+            "[ingestion]\nmax_pages = 10\nmax_image_dimension = 4000\nenable_ocr = false\nmax_ocr_seconds = 30\n",
+        );
+        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap();
+        assert_eq!(cfg.ingestion_policy.max_pages, 10);
+        assert_eq!(cfg.ingestion_policy.max_image_dimension, 4000);
+        assert!(!cfg.ingestion_policy.enable_ocr);
+        assert_eq!(cfg.ingestion_policy.max_ocr_seconds, 30);
+        assert_eq!(cfg.ingestion_policy.max_image_count, d.max_image_count);
+        let bad = tmp_toml("[ingestion]\nmax_pagez = 10\n");
+        assert!(load_t(&argv(&["aikoql-mcp", "--config", &bad]), None, None).is_err());
+        let zero = tmp_toml("[ingestion]\nmax_pages = 0\n");
+        assert!(
+            load_t(&argv(&["aikoql-mcp", "--config", &zero]), None, None).is_err(),
+            "a zero page limit would refuse every document"
+        );
+    }
+
+    #[test]
     fn tool_profile_from_toml_env_and_cli() {
         assert_eq!(
             load_bare(&argv(&["aikoql-mcp"])).unwrap().tool_profile,
