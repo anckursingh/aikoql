@@ -738,6 +738,14 @@ fn main() {
     // AG-10: memories still only on disk join the knowledge base, once —
     // on a node that writes (a standby or replica gets them replicated)
     if !serving_standby && role != replication::Role::Fenced {
+        // batches a previous process was running never finish: say so
+        match crate::tools::ingestion::interrupt_unfinished_documents(&kernel) {
+            0 => {}
+            n => warn!(
+                documents = n,
+                "documents left processing by the last run marked interrupted — upload them again"
+            ),
+        }
         if let Some(dir) = MEMORY_DIR.get() {
             match crate::tools::import_memory_dir(&kernel, dir) {
                 Ok(0) => {}
