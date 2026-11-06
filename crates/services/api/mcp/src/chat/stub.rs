@@ -85,3 +85,89 @@ pub(crate) fn spawn_stub_server(responses: Vec<StubResponse>) -> (String, Arc<Mu
     });
     (url, seen)
 }
+
+use super::client::Generate;
+use crate::{
+    json, ExtensionMap, Kernel, Metadata, Origin, PropertyMap, ReferentialPolicy, RememberRequest,
+    Value,
+};
+use std::collections::VecDeque;
+
+/// Scripted model: pops one reply per call and records every prompt.
+pub(crate) struct StubModel {
+    replies: Mutex<VecDeque<Result<String, String>>>,
+    pub prompts: Mutex<Vec<String>>,
+}
+
+impl StubModel {
+    pub(crate) fn new(replies: Vec<Result<String, String>>) -> Self {
+        Self {
+            replies: Mutex::new(replies.into()),
+            prompts: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Generate for StubModel {
+    fn generate(&self, prompt: &str) -> Result<String, String> {
+        // justified: Mutex poison is unrecoverable
+        self.prompts.lock().unwrap().push(prompt.to_string());
+        self.replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| Err("stub exhausted".into()))
+    }
+}
+
+/// An in-memory kernel with a live text index.
+pub(crate) fn kernel() -> Arc<Kernel> {
+    let k = Arc::new(
+        Kernel::open(
+            Arc::new(aikoql_kernel::MemoryEngine::new()),
+            Arc::new(aikoql_kernel::ManualClock::new(10_000)),
+            0xBEEF,
+        )
+        .unwrap(),
+    );
+    let m = aikoql_scheduler::IndexMaintainer::start(
+        &k,
+        Arc::new(aikoql_kernel::BruteForceVectorIndex::new()),
+        Arc::new(aikoql_kernel::TokenTextIndex::new()),
+    )
+    .unwrap();
+    k.attach_indexes(m);
+    k
+}
+
+/// Create an object and wait for the index; returns its koid.
+pub(crate) fn seed(k: &Kernel, tenant: Option<&str>, ty: &str, props: &[(&str, &str)]) -> String {
+    let mut p = PropertyMap::new();
+    for (key, v) in props {
+        p.insert((*key).into(), Value::Text((*v).into()));
+    }
+    let r = k
+        .remember(RememberRequest {
+            context: crate::session::subject_of(&json!({"subject": "alice"})).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: ty.into(),
+                tenant: tenant.map(String::from),
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: p,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap();
+    crate::tools::query::wait_fresh(k, 5000);
+    r.koid.to_hex()
+}
