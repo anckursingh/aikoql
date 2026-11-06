@@ -1918,6 +1918,18 @@ mod token_tests {
     }
 
     #[test]
+    fn the_session_cookie_is_the_last_resort_after_header_and_query() {
+        let cookie = "GET /x HTTP/1.1\r\nCookie: a=1; aikoql_session=ck-1; b=2\r\n\r\n";
+        assert_eq!(extract_token("/x", cookie).as_deref(), Some("ck-1"));
+        let both =
+            "GET /x HTTP/1.1\r\ncookie: aikoql_session=ck-1\r\nAuthorization: Bearer hd-1\r\n\r\n";
+        assert_eq!(extract_token("/x", both).as_deref(), Some("hd-1"));
+        assert_eq!(extract_token("/x?token=q-1", both).as_deref(), Some("q-1"));
+        let other = "GET /x HTTP/1.1\r\nCookie: aikoql_sessionx=no\r\n\r\n";
+        assert_eq!(extract_token("/x", other), None);
+    }
+
+    #[test]
     fn query_token_still_works_for_existing_clients() {
         assert_eq!(
             extract_token("/api/x?token=abc", "GET /api/x?token=abc HTTP/1.0\r\n\r\n").as_deref(),
