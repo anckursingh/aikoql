@@ -2,7 +2,7 @@
 //! claim quotes a retrieved fact and cites a retrieved koid.
 
 use super::context::Fact;
-use super::protocol::AnswerReply;
+use super::protocol::{AnswerReply, Claim};
 
 fn norm(s: &str) -> String {
     s.split_whitespace()
@@ -15,9 +15,9 @@ fn norm(s: &str) -> String {
 /// (trim/case/whitespace-normalised, no fuzzy match) and cites at least one
 /// evidence id, all of which are retrieved koids. The free-text `answer` is
 /// not matched.
-pub(crate) fn verify(answer: &AnswerReply, facts: &[Fact]) -> Result<(), String> {
+pub(crate) fn verify(answer: &AnswerReply, facts: &[Fact]) -> Result<Vec<Claim>, String> {
     if answer.refusal_reason.is_some() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     if answer.claims.is_empty() {
         return Err("grounded answer has no claims".into());
@@ -41,13 +41,19 @@ pub(crate) fn verify(answer: &AnswerReply, facts: &[Fact]) -> Result<(), String>
             return Err(format!("evidence id was not retrieved: {bad}"));
         }
     }
-    Ok(())
+    Ok(answer
+        .claims
+        .iter()
+        .map(|c| Claim {
+            statement: c.statement.clone(),
+            evidence_ids: c.evidence_ids.clone(),
+        })
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat::protocol::Claim;
 
     fn fact(koid: &str, statement: &str) -> Fact {
         Fact {
@@ -75,7 +81,7 @@ mod tests {
     fn quote_with_case_and_space_noise_is_accepted() {
         let f = [fact("k1", "Person Ada: city=London")];
         let a = reply(vec![("  person   ADA:\tcity=london ", vec!["k1"])]);
-        assert_eq!(verify(&a, &f), Ok(()));
+        assert!(verify(&a, &f).is_ok());
     }
 
     #[test]
@@ -85,15 +91,25 @@ mod tests {
     }
 
     #[test]
-    fn unknown_evidence_id_is_rejected() {
-        let f = [fact("k1", "Person Ada: city=London")];
-        assert!(verify(&reply(vec![("Person Ada: city=London", vec!["zz"])]), &f).is_err());
+    fn evidence_comes_from_the_matched_fact_not_the_model() {
+        let f = [fact("k1", "Person Ada: city=London"), fact("k2", "other")];
+        for given in [vec!["zz"], vec![], vec!["k2", "zz"]] {
+            let a = reply(vec![("PERSON ada: city=london", given)]);
+            let claims = verify(&a, &f).unwrap();
+            assert_eq!(claims.len(), 1);
+            assert_eq!(claims[0].statement, "PERSON ada: city=london");
+            assert_eq!(claims[0].evidence_ids, vec!["k1".to_string()]);
+        }
     }
 
     #[test]
-    fn claim_without_evidence_is_rejected() {
-        let f = [fact("k1", "Person Ada: city=London")];
-        assert!(verify(&reply(vec![("Person Ada: city=London", vec![])]), &f).is_err());
+    fn identical_statements_cite_every_matching_koid() {
+        let f = [fact("k1", "same"), fact("k2", "Same")];
+        let claims = verify(&reply(vec![("same", vec![])]), &f).unwrap();
+        assert_eq!(
+            claims[0].evidence_ids,
+            vec!["k1".to_string(), "k2".to_string()]
+        );
     }
 
     #[test]
@@ -107,7 +123,7 @@ mod tests {
         let mut a = reply(vec![]);
         a.grounded = false;
         a.refusal_reason = Some("no facts".into());
-        assert_eq!(verify(&a, &[]), Ok(()));
+        assert_eq!(verify(&a, &[]).unwrap(), vec![]);
     }
 
     #[test]

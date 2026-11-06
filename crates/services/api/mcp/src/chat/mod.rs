@@ -50,7 +50,7 @@ fn answer_from_model(
     let reply = model.generate(&protocol::build_answer_prompt(question, &statements))?;
     let answer = protocol::parse_answer_reply(&reply)
         .map_err(|e| format!("model answer was malformed: {e}"))?;
-    grounding::verify(&answer, facts).map_err(|_| NOT_SUPPORTED.to_string())?;
+    let _ = grounding::verify(&answer, facts).map_err(|_| NOT_SUPPORTED.to_string())?;
     Ok(answer)
 }
 
@@ -261,6 +261,15 @@ mod tests {
         assert_eq!(r["statements"][0], STMT);
         assert_eq!(r["claims"][0]["evidence_ids"][0], acme.as_str());
         assert_eq!(r["model"], "stub");
+    }
+
+    #[test]
+    fn the_models_evidence_ids_are_ignored_and_replaced_by_the_matched_koid() {
+        let (k, acme) = setup();
+        let m = StubModel::new(vec![q("MATCH Note RETURN *"), answer(STMT, "made-up-id")]);
+        let r = ask(&k, &m);
+        assert_eq!(r["refused"], false, "{r}");
+        assert_eq!(r["claims"][0]["evidence_ids"], json!([acme]));
     }
 
     #[test]
