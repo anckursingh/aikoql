@@ -2617,12 +2617,14 @@ maximum VLM calls
 
 **Implementation note (batched processing).** Every limit is enforced by
 `ProcessingPolicy`; a hit is an error naming the limit, never a silent
-truncation. A document whose page count (PDF pages, sheets, slides, DOCX
-page breaks) is over `max_pages` is not refused: it is stored at once with
+truncation. A multi-page document (PDF pages, sheets, slides, DOCX page
+breaks) refused by any limit is not refused whole: it is stored at once with
 status `processing` and read by a background worker in batches of at most
 `max_pages` pages (`plan_batches`, `extract_document_pages`). Per-batch
 limits apply per batch — `max_image_count`, `max_visual_assets`,
-`max_image_dimension` and one `max_ocr_seconds` deadline per batch. PDF
+`max_image_dimension` and one `max_ocr_seconds` deadline per batch; a batch
+still over a limit is split in half (in page order, `batches_total` grows)
+until it fits, so only a single page that cannot fit fails. PDF
 reads only the batch's pages (text, `pdftotext -f/-l` word boxes, images,
 OCR) with their real page numbers; the other formats are extracted whole
 and cut to the range (cheap: no OCR). The document KO carries
@@ -2637,10 +2639,10 @@ re-extraction) and lists `failed_batches`. Compile while `processing` is a
 (409 at compile; a re-upload processes them again). A merged batch run
 equals the single-pass extraction (`tests/batch_processing.rs`).
 
-Not split, still refused as `limit_exceeded`: a document within `max_pages`
-that exceeds an image/asset/OCR-time limit (one batch would fail the same
-way), and formats with no pages to split — a single image, CSV/TSV, HTML,
-text.
+Not split, still refused as `limit_exceeded`: single-page documents — a
+single image, CSV/TSV, HTML, text, a one-page PDF — over a limit (there is
+nothing to split). Splitting re-runs extraction (and OCR) for the halves of
+a batch that hit a limit, so an OCR-time hit costs up to ~2x per split.
 
 ------------------------------------------------------------------------
 
@@ -2690,6 +2692,12 @@ pub struct ProcessingPolicy {
 ```
 
 This is essential for a self-hosted database.
+
+**Implementation note.** `ProcessingPolicy` (`policy.rs`) carries the §54
+limits as well (`max_pages`, `max_image_count`, `max_image_dimension`,
+`max_ocr_seconds`) and is set from `[ingestion]`. For a document read in
+batches (§54 note) every limit applies per batch, so a large document costs
+at most one batch's worth of OCR time and memory per extraction call.
 
 ------------------------------------------------------------------------
 

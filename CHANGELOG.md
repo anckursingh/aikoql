@@ -8,15 +8,16 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 ## [Unreleased]
 
 ### Large documents
-- A document over `[ingestion] max_pages` is no longer refused: it is stored at once (status `processing`)
-  and read in background batches of `max_pages` pages, with the image, asset and OCR-time limits applied per
-  batch. `document_status`, `document_list` and REST report `batches_total`, `batches_done`, `pages_done`,
+- A multi-page document over an `[ingestion]` limit (`max_pages`, image/asset counts, image size, OCR time)
+  is no longer refused: it is stored at once (status `processing`) and read in background batches of
+  `max_pages` pages, with the limits applied per batch; a batch still over a limit is split in half until it
+  fits, so only a page that cannot fit fails. `document_status`, `document_list` and REST report `batches_total`, `batches_done`, `pages_done`,
   every finished batch's result and a plain-language message; a failed batch is recorded and the rest kept
   (status `partial`). `document_compile` while processing returns 409 ("batch 2 of 5 is running — wait"),
   and afterwards compiles every batch in page order with the real page numbers. A server restart marks
   unfinished documents `interrupted`; uploading the file again finishes them. Documents within the limit are
-  unchanged. Not split (still `limit_exceeded`): a document within `max_pages` over an image/OCR limit, and
-  single images, CSV/TSV, HTML and text.
+  unchanged. Not split (still `limit_exceeded`): single-page documents — an image, CSV/TSV, HTML, text, a
+  one-page PDF.
 - Studio: an over-limit upload shows a notice ("This document is large … please keep this page open"), a
   progress bar and each batch's result as it lands, polling every 2 s; Compile stays disabled with an
   explanation until it is done, then a success message (or a readable partial/failure message). Polling
