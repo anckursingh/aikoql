@@ -53,7 +53,9 @@ async function main() {
   const port = await freePort();
   const BASE = `http://127.0.0.1:${port}`;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aikoql-studio-e2e-'));
-  const server = spawn(BIN, ['serve', '--metrics-addr', `127.0.0.1:${port}`, path.join(dir, 'db')], {
+  // max_pages = 2: the 4-slide deck below is read in two batches
+  fs.writeFileSync(path.join(dir, 'aikoql.toml'), '[ingestion]\nmax_pages = 2\n');
+  const server = spawn(BIN, ['serve', '--config', path.join(dir, 'aikoql.toml'), '--metrics-addr', `127.0.0.1:${port}`, path.join(dir, 'db')], {
     env: { ...process.env, AIKOQL_ADMIN_PASSWORD: PW }, stdio: ['ignore', 'ignore', 'pipe'],
   });
   let serverLog = ''; server.stderr.on('data', d => { serverLog += d; });
@@ -219,6 +221,37 @@ async function main() {
     await page.setInputFiles('#doc-file-input', { name: 'IMG_0001.heic', mimeType: 'image/heic', buffer: Buffer.from('ftypheic') });
     await page.click('[data-click="ingestDocument"]'); await page.waitForTimeout(1200);
     ok('an unsupported image type is refused at upload with a way forward', /convert the image to PNG or JPEG/.test(await page.innerText('#doc-ingest-result')), await page.innerText('#doc-ingest-result'));
+
+    // ---- an over-limit document is read in batches, with visible progress --
+    const statusCalls = () => requests.filter(u => /\/api\/v1\/documents\/[0-9a-f]+\/status$/.test(u)).length;
+    await page.setInputFiles('#doc-file-input', { name: 'deck.pptx', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', buffer: fs.readFileSync(path.join(ROOT, 'crates/ingestion/tests/fixtures/office/deck.pptx')) });
+    await page.click('[data-click="ingestDocument"]');
+    await page.waitForSelector('#doc-ingest-result [data-batch-status]', { timeout: 10000 }).catch(() => {});
+    ok('an over-limit upload shows the batch notice with a progress bar', await page.evaluate(() => !!document.querySelector('#doc-ingest-result [data-batch-status] [role="progressbar"]') && /batches/.test(document.getElementById('doc-ingest-result').innerText)), await page.innerText('#doc-ingest-result'));
+    // a bounded poll (waitForFunction evaluates a string, which the page CSP reports)
+    for (let i = 0; i < 60 && !(await page.evaluate(() => { const n = document.querySelector('#doc-ingest-result [data-batch-status]'); return !!n && n.dataset.batchStatus !== 'processing'; })); i++) await sleep(500);
+    const batchDone = await page.innerText('#doc-ingest-result');
+    ok('the batch notice ends with a clear success message and every batch result', /Done — all 2 batches processed/.test(batchDone) && /You can compile it now/.test(batchDone) && (await page.$$('#doc-ingest-result tbody tr')).length === 2, batchDone);
+    await page.waitForTimeout(1200);
+    ok('Compile is enabled once every batch has finished', await page.evaluate(() => [...document.querySelectorAll('#documents-list tr')].some(r => /deck\.pptx/.test(r.innerText) && !r.querySelector('[data-click="compileDocument"]').disabled)), await page.innerText('#documents-list'));
+    const polledDone = statusCalls(); await page.waitForTimeout(4500);
+    ok('status polling stops when the document is done', statusCalls() === polledDone, `${polledDone} -> ${statusCalls()}`);
+
+    // mid-flight, made deterministic: the server answers "batch 1 of 3"
+    const FAKE = 'ff00000000000000000000000000beef';
+    const fakeDoc = { koid: FAKE, filename: 'huge.pdf', mime_type: 'application/pdf', sha256: 'f'.repeat(64), size_bytes: 9e6, char_count: 10, status: 'processing', page_count: 6, batches_total: 3, batches_done: 1, pages_done: 2, message: 'This document is large (6 pages). It is being processed in 3 batches of up to 2 pages: 1 of 3 done (2 of 6 pages). Please wait until it finishes before compiling.' };
+    await page.route('**/api/v1/list-documents', r => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: { documents: [fakeDoc] } }) }));
+    await page.route(`**/api/v1/documents/${FAKE}/status`, r => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: { ...fakeDoc, batches: [{ first_page: 1, last_page: 2, status: 'extracted', char_count: 10, images: 0, tables: 0 }] } }) }));
+    await page.click('button[data-panel="graph"]'); await page.waitForTimeout(300);
+    await page.click('button[data-panel="documents"]'); await page.waitForTimeout(1500);
+    const fakeBtn = await page.$('#documents-list [data-click="compileDocument"]');
+    ok('Compile is disabled with an explanation while a document is processing', !!fakeBtn && await fakeBtn.isDisabled() && /Still processing/.test(await fakeBtn.getAttribute('title')), await page.innerText('#documents-list'));
+    ok('a processing document shows "keep this page open" and its progress', /keep this page open/.test(await page.innerText('#doc-ingest-result')) && await page.evaluate(() => document.querySelector('#doc-ingest-result [role="progressbar"]')?.getAttribute('aria-valuenow') === '1'), await page.innerText('#doc-ingest-result'));
+    await page.waitForTimeout(2300);
+    const polling = statusCalls();
+    await page.click('button[data-panel="graph"]'); await page.waitForTimeout(4500);
+    ok('status polling continues every ~2s and stops when the user leaves the panel', polling > polledDone + 1 && statusCalls() <= polling + 1, `${polledDone} -> ${polling} -> ${statusCalls()}`);
+    await page.unroute('**/api/v1/list-documents'); await page.unroute(`**/api/v1/documents/${FAKE}/status`);
 
     // ---- admin buttons that need a licence/side effect ---------------------
     await page.click('button[data-panel="admin"]'); await page.waitForTimeout(900);
