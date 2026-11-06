@@ -245,6 +245,7 @@ async function main() {
     await askSubmit('Which companies exist?');
     ok('a grounded answer shows the green badge and its facts',
       await page.evaluate(() => { const r = document.getElementById('ask-result'); return !!r && !!r.querySelector('.badge-green') && /Acme is a company/.test(r.innerText) && /Company Acme: name=Acme/.test(r.textContent); }), await page.innerText('#ask-result').catch(() => 'no panel'));
+    await page.locator('#ask-result summary').click({ timeout: 2000 }).catch(() => {});
     await page.locator('#ask-result a[data-click="openInInspector"]').first().click({ timeout: 2000 }).catch(() => {});
     await page.waitForTimeout(700);
     ok('a koid link opens the Inspector',
@@ -259,7 +260,7 @@ async function main() {
     await page.fill('#ask-question', 'slow companies', { timeout: 1500 }).catch(() => {});
     await page.click('#ask-submit', { timeout: 1500 }).catch(() => {});
     const inFlight = await page.evaluate(() => { const b = document.getElementById('ask-submit'); return !!b && b.disabled; });
-    await page.waitForTimeout(1800);
+    await page.waitForTimeout(3500); // two model calls of ~0.9s each
     ok('the Ask button is disabled while a request is in flight and enabled after',
       inFlight && await page.evaluate(() => !document.getElementById('ask-submit').disabled));
     ok('no CSP violation and no console error on the Ask panel',

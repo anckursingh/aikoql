@@ -233,6 +233,9 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <button data-panel="documents" title="Document Explorer">
         <span class="ico">📄</span><span class="lbl">Documents</span>
       </button>
+      <button data-panel="ask" title="Ask — grounded answers from your knowledge">
+        <span class="ico">💬</span><span class="lbl">Ask</span>
+      </button>
     </nav>
     <div class="user-area">
       <div class="user-badge" data-click="logout" id="user-badge">―</div>
@@ -401,6 +404,22 @@ tr:hover td { background: rgba(108,199,240,0.03); }
         </div>
         <div id="documents-list"><div class="loading">Loading documents...</div></div>
         <div id="doc-compile-result" style="margin-top:12px;"></div>
+      </div>
+
+      <!-- ── Ask ── -->
+      <div class="panel" id="panel-ask">
+        <div class="card" style="margin-bottom:12px;">
+          <h3>💬 Ask</h3>
+          <p style="font-size:11px;color:var(--muted);">Ask a question about your knowledge. The answer is written by the configured model from facts the server retrieves for the selected tenant, and is refused when those facts do not support it.</p>
+          <div id="ask-disabled" style="display:none;font-size:12px;color:var(--orange);">No model configured — see docs/CHAT.md</div>
+          <div id="ask-model" style="font-size:11px;color:var(--muted);"></div>
+        </div>
+        <div class="card" id="ask-form" style="margin-bottom:12px;">
+          <label style="font-size:11px;color:var(--muted);">Tenant <select id="ask-tenant"><option value="">All tenants</option></select></label>
+          <textarea id="ask-question" rows="3" maxlength="2000" placeholder="Ask a question… (Ctrl/Cmd+Enter to send)" style="width:100%;margin-top:8px;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;box-sizing:border-box;"></textarea>
+          <div style="margin-top:8px;"><button class="btn btn-pri btn-sm" id="ask-submit" data-click="askQuestion">Ask</button></div>
+        </div>
+        <div id="ask-result"></div>
       </div>
 
       <!-- ── Administration ── -->
