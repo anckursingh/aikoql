@@ -79,7 +79,17 @@ impl SecretKind {
 /// Redact secrets from free text: each whitespace-separated token that
 /// looks like a secret becomes `[REDACTED:<KIND>]`; the rest is verbatim.
 pub fn redact_text(text: &str) -> String {
-    text.to_string()
+    text.split_inclusive(char::is_whitespace)
+        .map(|piece| {
+            let token = piece.trim_end();
+            match detect_secret(token) {
+                Some(kind) if !token.is_empty() => {
+                    format!("[REDACTED:{}]{}", kind.as_str(), &piece[token.len()..])
+                }
+                _ => piece.to_string(),
+            }
+        })
+        .collect()
 }
 
 /// Scan and redact secrets from a KnowledgeIr.

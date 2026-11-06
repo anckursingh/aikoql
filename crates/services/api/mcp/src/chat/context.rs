@@ -1,7 +1,7 @@
 //! Retrieved facts: rendering, secret scrubbing, bounded context, and the
 //! tenant-scoped retrieval fallback.
 
-use crate::Kernel;
+use crate::{json, Kernel};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Fact {
@@ -12,18 +12,104 @@ pub(crate) struct Fact {
 pub(crate) const MAX_FACTS: usize = 8;
 pub(crate) const MAX_CONTEXT_CHARS: usize = 2000;
 
-pub(crate) fn facts_from_rows(_rows: &serde_json::Value) -> Vec<Fact> {
-    Vec::new()
+/// Render result rows as facts. Rows without a koid or any content are
+/// skipped; every statement is secret-scrubbed; the total is bounded.
+pub(crate) fn facts_from_rows(rows: &serde_json::Value) -> Vec<Fact> {
+    let mut out = Vec::new();
+    let mut budget = MAX_CONTEXT_CHARS;
+    for row in rows.as_array().into_iter().flatten() {
+        if out.len() == MAX_FACTS || budget == 0 {
+            break;
+        }
+        let Some(koid) = row.get("koid").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(statement) = render(row) else {
+            continue;
+        };
+        let statement: String = aikoql_ingestion::redact_text(&statement)
+            .chars()
+            .take(budget)
+            .collect();
+        budget -= statement.chars().count();
+        out.push(Fact {
+            koid: koid.to_string(),
+            statement,
+        });
+    }
+    out
 }
 
+fn render(row: &serde_json::Value) -> Option<String> {
+    let ty = row.get("type_name").and_then(|v| v.as_str()).unwrap_or("");
+    let props = row
+        .get("properties")?
+        .as_object()
+        .filter(|p| !p.is_empty())?;
+    let text = |v: &serde_json::Value| match v {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let label = ["name", "title", "label"]
+        .iter()
+        .find_map(|k| props.get(*k).and_then(|v| v.as_str()));
+    if label.is_none() {
+        if let Some(t) = props.get("text").and_then(|v| v.as_str()) {
+            return Some(format!("{ty}: {t}"));
+        }
+    }
+    let mut body: Vec<String> = props
+        .iter()
+        .map(|(k, v)| format!("{k}={}", text(v)))
+        .collect();
+    body.sort();
+    Some(match label {
+        Some(l) => format!("{ty} {l}: {}", body.join("; ")),
+        None => format!("{ty}: {}", body.join("; ")),
+    })
+}
+
+/// Text/vector search over what the caller may see, confined to `tenant`
+/// (None = unscoped, as `execute_readonly`). The kernel search is not
+/// tenant-aware, so hits are over-fetched and filtered here.
 pub(crate) fn retrieve_fallback(
-    _k: &Kernel,
-    _subject: &str,
-    _roles: &[String],
-    _tenant: Option<&str>,
-    _question: &str,
+    k: &Kernel,
+    subject: &str,
+    roles: &[String],
+    tenant: Option<&str>,
+    question: &str,
 ) -> Vec<Fact> {
-    Vec::new()
+    let ctx =
+        crate::session::subject_of(&json!({"subject": subject, "roles": roles, "tenant": tenant}));
+    let hits = k.find_similar(crate::SimilarityQuery {
+        context: ctx.into(),
+        filter: None,
+        text: Some(question.to_string()),
+        vector: None,
+        embedding_model: None,
+        k: MAX_FACTS * 4,
+        fusion: crate::helpers::parse_fusion(&json!({})),
+    });
+    let Ok(hits) = hits else {
+        return Vec::new();
+    };
+    let rows: Vec<serde_json::Value> = hits
+        .iter()
+        .filter(|h| h.score > 0.0)
+        .map(|h| &h.ko)
+        .filter(|ko| !ko.metadata.type_name.starts_with("aikoql:"))
+        .filter(|ko| tenant.is_none_or(|t| ko.metadata.tenant.as_deref() == Some(t)))
+        .map(|ko| {
+            json!({
+                "koid": ko.koid.to_hex(),
+                "type_name": ko.metadata.type_name,
+                "properties": ko.properties.iter()
+                    .map(|(k, v)| (k.clone(), crate::helpers::value_to_json(v)))
+                    .collect::<serde_json::Map<_, _>>(),
+            })
+        })
+        .collect();
+    facts_from_rows(&json!(rows))
 }
 
 #[cfg(test)]
@@ -150,14 +236,14 @@ mod tests {
         let a = retrieve_fallback(&k, "alice", &[], Some("acme"), "zebra policy");
         assert_eq!(
             a.iter().map(|f| f.koid.clone()).collect::<Vec<_>>(),
-            [acme.clone()]
+            std::slice::from_ref(&acme)
         );
         let g = retrieve_fallback(&k, "alice", &[], Some("globex"), "zebra policy");
         assert_eq!(
             g.iter().map(|f| f.koid.clone()).collect::<Vec<_>>(),
-            [globex.clone()]
+            std::slice::from_ref(&globex)
         );
-        let all = retrieve_fallback(&k, "alice", &[], None, "zebra policy");
+        let all = retrieve_fallback(&k, "alice", &["admin".to_string()], None, "zebra policy");
         let ids: Vec<_> = all.iter().map(|f| f.koid.clone()).collect();
         assert!(ids.contains(&acme) && ids.contains(&globex), "{ids:?}");
     }
