@@ -8,20 +8,107 @@ pub(crate) mod stub;
 use crate::{json, Kernel};
 use client::Generate;
 use context::Fact;
+use protocol::{AnswerReply, QueryReply};
+
+const NOT_SUPPORTED: &str = "answer not supported by the retrieved facts";
+
+/// Model query (read-only, caller-scoped) -> facts, or None to fall back.
+fn facts_from_model_query(
+    k: &Kernel,
+    model: &dyn Generate,
+    subject: &str,
+    roles: &[String],
+    tenant: Option<&str>,
+    question: &str,
+) -> Result<(Option<String>, Vec<Fact>), String> {
+    let reply = model.generate(&protocol::build_query_prompt(question))?;
+    let Ok(QueryReply::Query(query)) = protocol::parse_query_reply(&reply) else {
+        return Ok((None, Vec::new()));
+    };
+    // The compile path also accepts CREATE/UPDATE/DELETE/INGEST: a model
+    // must only ever read.
+    let is_read = matches!(
+        aikoql_compiler::parser::parse(&query),
+        Ok(aikoql_compiler::parser::ast::Statement::Match(_))
+    );
+    if !is_read {
+        return Ok((Some(query), Vec::new()));
+    }
+    let rows = crate::tools::query::execute_readonly(k, &query, subject, roles, tenant);
+    let facts = rows
+        .map(|r| context::facts_from_rows(&r))
+        .unwrap_or_default();
+    Ok((Some(query), facts))
+}
+
+fn answer_from_model(
+    model: &dyn Generate,
+    question: &str,
+    facts: &[Fact],
+) -> Result<AnswerReply, String> {
+    let statements: Vec<String> = facts.iter().map(|f| f.statement.clone()).collect();
+    let reply = model.generate(&protocol::build_answer_prompt(question, &statements))?;
+    let answer = protocol::parse_answer_reply(&reply)
+        .map_err(|e| format!("model answer was malformed: {e}"))?;
+    grounding::verify(&answer, facts).map_err(|_| NOT_SUPPORTED.to_string())?;
+    Ok(answer)
+}
 
 /// The whole flow: model query -> scoped read -> retrieval fallback ->
 /// model answer -> server-side grounding check. Returns the response record.
 pub(crate) fn run_chat(
-    _k: &Kernel,
-    _model: &dyn Generate,
+    k: &Kernel,
+    model: &dyn Generate,
     model_id: &str,
-    _subject: &str,
-    _roles: &[String],
-    _tenant: Option<&str>,
+    subject: &str,
+    roles: &[String],
+    tenant: Option<&str>,
     question: &str,
 ) -> serde_json::Value {
-    let _: Option<Fact> = None;
-    json!({"question": question, "model": model_id})
+    let t0 = std::time::Instant::now();
+    let mut query: Option<String> = None;
+    let mut source = "none";
+    let mut facts: Vec<Fact> = Vec::new();
+
+    let outcome = (|| -> Result<AnswerReply, String> {
+        let (q, from_query) = facts_from_model_query(k, model, subject, roles, tenant, question)?;
+        query = q;
+        facts = from_query;
+        if !facts.is_empty() {
+            source = "model_query";
+        } else {
+            facts = context::retrieve_fallback(k, subject, roles, tenant, question);
+            if !facts.is_empty() {
+                source = "retrieval";
+            }
+        }
+        if facts.is_empty() {
+            return Err("no relevant facts were found".into());
+        }
+        answer_from_model(model, question, &facts)
+    })();
+
+    let (answer, claims, refusal) = match outcome {
+        Ok(a) if a.refusal_reason.is_none() => (a.answer, a.claims, None),
+        Ok(a) => (a.answer, Vec::new(), a.refusal_reason),
+        Err(reason) => (format!("UNKNOWN: {reason}"), Vec::new(), Some(reason)),
+    };
+    json!({
+        "question": question,
+        "answer": answer,
+        "grounded": refusal.is_none(),
+        "refused": refusal.is_some(),
+        "refusal_reason": refusal,
+        "claims": claims.iter().map(|c| json!({
+            "statement": c.statement, "evidence_ids": c.evidence_ids,
+        })).collect::<Vec<_>>(),
+        "query": query,
+        "context_source": source,
+        "retrieved": facts.iter().map(|f| f.koid.clone()).collect::<Vec<_>>(),
+        "statements": facts.iter().map(|f| f.statement.clone()).collect::<Vec<_>>(),
+        "model": model_id,
+        "ms": t0.elapsed().as_millis() as u64,
+    })
 }
 
 #[cfg(test)]
@@ -32,7 +119,7 @@ mod tests {
     const STMT: &str = "Note Zebra policy: body=Zebras are allowed; title=Zebra policy";
 
     fn q(query: &str) -> Result<String, String> {
-        Ok(json!({"query": query}).to_string())
+        Ok(json!({"query": query, "refusal_reason": null}).to_string())
     }
     fn q_refuse() -> Result<String, String> {
         Ok(json!({"query": null, "refusal_reason": "no"}).to_string())
@@ -83,7 +170,7 @@ mod tests {
         assert_eq!(r["grounded"], true);
         assert_eq!(r["context_source"], "model_query");
         assert_eq!(r["query"], "MATCH Note RETURN *");
-        assert_eq!(koids(&r), [acme.clone()]);
+        assert_eq!(koids(&r), std::slice::from_ref(&acme));
         assert_eq!(r["statements"][0], STMT);
         assert_eq!(r["claims"][0]["evidence_ids"][0], acme.as_str());
         assert_eq!(r["model"], "stub");
