@@ -344,19 +344,85 @@ pub fn extract_document(
         }
         "text/html" => extract_html(file_path),
         t if t.starts_with("text/") => extract_text(file_path),
+        t if is_raster_image(t) => {
+            extract_image_with(&TesseractCli::new(), file_path, mime_type, asset_dir)
+        }
         _ => Err(format!("unsupported mime type: {}", mime_type)),
     }
 }
 
+/// Raster formats Tesseract/Leptonica read. SVG is XML, not a bitmap.
+fn is_raster_image(mime: &str) -> bool {
+    mime.starts_with("image/") && mime != "image/svg+xml"
+}
+
 /// A standalone image file: the image is kept as a content-addressed asset and
-/// OCR supplies the text where an OCR provider can read it.
+/// OCR supplies the text where an OCR provider can read it. A missing or
+/// failing OCR tool never fails the document — the page keeps the image and
+/// no text (the PDF path degrades the same way).
 pub fn extract_image_with(
-    _provider: &dyn OcrProvider,
-    _path: &str,
-    _mime_type: &str,
-    _asset_dir: Option<&str>,
+    provider: &dyn OcrProvider,
+    path: &str,
+    mime_type: &str,
+    asset_dir: Option<&str>,
 ) -> Result<DocumentModel, String> {
-    Err("not implemented".into())
+    let bytes = std::fs::read(path).map_err(|e| format!("read image: {}", e))?;
+    if bytes.is_empty() {
+        return Err("read image: empty file".into());
+    }
+    let image = pdf_asset_image(&bytes, mime_type, 1, asset_dir, "image file");
+
+    let work_dir = std::env::temp_dir().join(format!(
+        "aikoql-ocr-img-{}-{}",
+        std::process::id(),
+        image.asset.content_hash.get(..12).unwrap_or("img")
+    ));
+    std::fs::create_dir_all(&work_dir).ok();
+    let ocr = provider.recognize(path, "eng", &work_dir.to_string_lossy());
+    std::fs::remove_dir_all(&work_dir).ok();
+
+    let (text, source, confidence, ocr_stats) = match ocr {
+        Ok(r) => {
+            let stats = OcrStats {
+                pages_ocr_attempted: 1,
+                pages_ocr_succeeded: 1,
+                pages_ocr_failed: 0,
+                average_confidence: r.confidence.max(0.0),
+            };
+            (
+                r.text,
+                "ocr",
+                (r.confidence >= 0.0).then_some(r.confidence),
+                Some(stats),
+            )
+        }
+        // No tesseract on PATH: same as the PDF path — nothing was attempted.
+        Err(e) if e.starts_with("tesseract not found") => (String::new(), "native", None, None),
+        Err(e) => {
+            eprintln!("OCR failed for image {}: {}", path, e);
+            let stats = OcrStats {
+                pages_ocr_attempted: 1,
+                pages_ocr_succeeded: 0,
+                pages_ocr_failed: 1,
+                average_confidence: 0.0,
+            };
+            (String::new(), "native", None, Some(stats))
+        }
+    };
+    let char_count = text.len();
+    Ok(DocumentModel {
+        page_count: 1,
+        pages: vec![PageModel {
+            page_number: 1,
+            text,
+            char_count,
+            source: source.into(),
+            ocr_confidence: confidence,
+            images: vec![image],
+        }],
+        total_chars: char_count,
+        ocr_stats,
+    })
 }
 
 fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, String> {

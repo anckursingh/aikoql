@@ -1089,28 +1089,31 @@ mod tests {
     }
 
     #[test]
-    fn m8_compiling_an_unsupported_document_type_is_a_client_error() {
-        let (k, db) = m3_kernel("compile-png");
-        let (s, ingested) = m3_call(
-            &k,
-            &db,
-            "POST",
-            "/api/v1/documents",
-            serde_json::json!({
-                "filename": "shot.png", "mime_type": "image/png",
-                // PNG signature: enough bytes to be stored, nothing to extract
-                "content_base64": "iVBORw0KGgo=",
-            }),
-        );
-        assert_eq!(s, "200 OK", "{ingested}");
-        let koid = ingested["data"]["koid"].clone();
-        let (status, body) = m3_call(
-            &k,
-            &db,
-            "POST",
-            "/api/v1/documents/compile",
-            serde_json::json!({ "koid": koid }),
-        );
+    fn m8_an_image_document_compiles_and_an_unsupported_type_is_a_client_error() {
+        let (k, db) = m3_kernel("compile-types");
+        let compile = |filename: &str, mime: &str, b64: &str| {
+            let (s, ingested) = m3_call(
+                &k,
+                &db,
+                "POST",
+                "/api/v1/documents",
+                serde_json::json!({"filename": filename, "mime_type": mime, "content_base64": b64}),
+            );
+            assert_eq!(s, "200 OK", "{ingested}");
+            m3_call(
+                &k,
+                &db,
+                "POST",
+                "/api/v1/documents/compile",
+                serde_json::json!({ "koid": ingested["data"]["koid"] }),
+            )
+        };
+        // a real 1x1 PNG: supported — compiles even with no OCR tool installed
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        let (status, body) = compile("shot.png", "image/png", png);
+        assert_eq!(status, "200 OK", "{body}");
+        // a type no extractor reads is bad input, not a server fault
+        let (status, body) = compile("a.zip", "application/zip", "UEsDBA==");
         assert_eq!(status, "400 Bad Request", "{body}");
         assert!(
             body["error"]
