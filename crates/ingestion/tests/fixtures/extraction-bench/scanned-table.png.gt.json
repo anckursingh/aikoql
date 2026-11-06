@@ -1,0 +1,43 @@
+{
+  "mime": "image/png",
+  "entities": [],
+  "tables": [
+    {
+      "page": 1,
+      "rows": [
+        [
+          "Region",
+          "Q1",
+          "Q2",
+          "Q3"
+        ],
+        [
+          "North America",
+          "1,200",
+          "1,350",
+          "1,410"
+        ],
+        [
+          "Europe",
+          "980",
+          "1,020",
+          "1,105"
+        ],
+        [
+          "Asia Pacific",
+          "760",
+          "840",
+          "905"
+        ],
+        [
+          "Latin America",
+          "310",
+          "335",
+          "360"
+        ]
+      ]
+    }
+  ],
+  "no_table_pages": [],
+  "ocr_text": "Quarterly sales by region\nRegion Q1 Q2 Q3\nNorth America 1,200 1,350 1,410\nEurope 980 1,020 1,105\nAsia Pacific 760 840 905\nLatin America 310 335 360"
+}

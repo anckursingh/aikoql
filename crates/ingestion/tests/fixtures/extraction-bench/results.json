@@ -1,0 +1,19 @@
+{
+  "_about": "Extraction-quality ratchet (tests/extraction_quality_bench.rs). 'baseline' = measured before the rule-based typing / table-detection work (commit range M1, 2026-11-06) and is never edited. 'floor' is the ratchet: each milestone that improves a metric raises it; the test fails when a metric drops below its floor (table_false_positives is a ceiling). Tool versions: tesseract 5.5.4, poppler pdftotext 26.11.0.",
+  "baseline": {
+    "entity_precision": 0.172,
+    "entity_recall": 0.220,
+    "table_cell_accuracy_pdf": 0.000,
+    "table_cell_accuracy_scan": 0.000,
+    "table_false_positives": 0,
+    "ocr_char_accuracy": 0.880
+  },
+  "floor": {
+    "entity_precision": 0.172,
+    "entity_recall": 0.220,
+    "table_cell_accuracy_pdf": 0.000,
+    "table_cell_accuracy_scan": 0.000,
+    "table_false_positives": 0,
+    "ocr_char_accuracy": 0.880
+  }
+}
