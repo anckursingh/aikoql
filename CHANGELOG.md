@@ -8,6 +8,11 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 ## [Unreleased]
 
 ### Document extraction quality
+- Seeded fuzz and generated-accuracy tests (`tests/fuzz_accuracy.rs`): random text, word boxes and mutated
+  XLSX/PPTX/CSV/PDF/PNG bytes must never panic; generated grids are recovered cell for cell (300/300,
+  accuracy 1.0), generated prose never yields a table, generated people/organisations/places are typed at
+  precision and recall 1.0, and every single-digit IBAN corruption is rejected. It found a real bug: word
+  boxes with extreme coordinates overflowed table detection; such boxes are now ignored.
 - Typed entities without a model: the default analyzer types organisations (legal forms and
   organisation nouns), people (honorifics, name particles, common given names) and places (a built-in
   gazetteer), and recognises money, email, URL, phone, IBAN (checksum-validated) and percentages, plus

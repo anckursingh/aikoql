@@ -99,11 +99,21 @@ fn is_numeric_cell(s: &str) -> bool {
     !t.is_empty() && t.chars().all(|c| c.is_ascii_digit())
 }
 
+/// Boxes from a hostile or corrupt text layer can overflow i32 arithmetic
+/// below; real pages stay far inside 2^24 pixels/points.
+fn sane_box(w: &OcrWord) -> bool {
+    const LIM: u32 = 1 << 24;
+    w.width >= 0
+        && [w.left, w.top, w.width, w.height]
+            .iter()
+            .all(|v| v.unsigned_abs() < LIM)
+}
+
 /// Tables in a page's words. Words without any alphanumeric character
 /// (ruling-line debris in OCR output) are ignored.
 pub fn detect_tables(words: &[OcrWord]) -> Vec<DetectedTable> {
     let keep: Vec<usize> = (0..words.len())
-        .filter(|&i| has_alnum(&words[i].text) && words[i].height > 0)
+        .filter(|&i| has_alnum(&words[i].text) && words[i].height > 0 && sane_box(&words[i]))
         .collect();
     let lines = geometric_lines(words, &keep);
     let segs: Vec<Vec<Vec<usize>>> = lines.iter().map(|l| segments(words, l)).collect();
