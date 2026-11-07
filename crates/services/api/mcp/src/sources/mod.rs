@@ -2,6 +2,7 @@
 //! knowledge, and the ontology drafted from it.
 
 pub(crate) mod introspect;
+pub(crate) mod store;
 
 use serde::Deserialize;
 use std::sync::OnceLock;
