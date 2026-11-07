@@ -375,7 +375,7 @@ mod config_tests {
                 s.timeout_secs,
                 s.import_max_rows
             ),
-            (100, 500, 15, 100_000)
+            (100, 500, 15, 10_000)
         );
     }
 

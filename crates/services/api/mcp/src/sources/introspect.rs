@@ -66,6 +66,37 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Bounds blocking source calls. A driver that blocks forever on a silent
+/// server cannot be interrupted, so the call runs on its own thread and the
+/// request gives up at the deadline; abandoned threads are counted, and when
+/// too many are still stuck new calls are refused instead of piling up.
+pub(crate) struct Gate {
+    stuck: std::sync::atomic::AtomicUsize,
+    max: usize,
+}
+
+impl Gate {
+    pub(crate) const fn new(max: usize) -> Gate {
+        Gate {
+            stuck: std::sync::atomic::AtomicUsize::new(0),
+            max,
+        }
+    }
+
+    pub(crate) fn stuck(&self) -> usize {
+        self.stuck.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn run<T: Send + 'static>(
+        &self,
+        limit: std::time::Duration,
+        f: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let _ = (limit, self.max, f);
+        Err("todo".into())
+    }
+}
+
 /// Remove the connection string and any password from an error message.
 pub(crate) fn scrub(msg: &str, conn: &str) -> String {
     let mut out = msg.to_string();
@@ -1035,5 +1066,96 @@ mod tests {
         assert!(m.references.iter().any(|r| r.from_container == "T7Person"
             && r.to_container == "T7Person"
             && r.name.as_deref() == Some("T7_KNOWS")));
+    }
+
+    // ---- Gate: a call that never returns must not hang the request ----
+
+    #[test]
+    fn gate_returns_a_fast_result_and_a_fast_error_untouched() {
+        let g = Gate::new(4);
+        assert_eq!(g.run(Duration::from_secs(2), || Ok(41 + 1)), Ok(42));
+        assert_eq!(
+            g.run(Duration::from_secs(2), || -> Result<u8, String> {
+                Err("boom".into())
+            }),
+            Err("boom".to_string())
+        );
+        assert_eq!(g.stuck(), 0);
+    }
+
+    #[test]
+    fn gate_gives_up_on_a_stuck_call_counts_it_and_uncounts_it_when_it_finally_returns() {
+        let g = std::sync::Arc::new(Gate::new(4));
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let started = Instant::now();
+        let r = g.run(Duration::from_millis(200), move || {
+            let _ = release_rx.recv(); // blocks until released: a silent server
+            Ok(())
+        });
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(r.unwrap_err().contains("timed out"));
+        assert_eq!(g.stuck(), 1);
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while g.stuck() != 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(g.stuck(), 0, "a finished straggler is no longer counted");
+    }
+
+    #[test]
+    fn gate_refuses_new_calls_while_too_many_are_stuck() {
+        let g = Gate::new(2);
+        let mut releases = Vec::new();
+        for _ in 0..2 {
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            releases.push(tx);
+            assert!(g
+                .run(Duration::from_millis(100), move || {
+                    let _ = rx.recv();
+                    Ok(())
+                })
+                .is_err());
+        }
+        assert_eq!(g.stuck(), 2);
+        let started = Instant::now();
+        let e = g.run(Duration::from_secs(5), || Ok(())).unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "refusal must be immediate"
+        );
+        assert!(e.contains("unresponsive"), "{e}");
+        for tx in releases {
+            tx.send(()).unwrap();
+        }
+    }
+
+    #[test]
+    fn gate_survives_a_panicking_call() {
+        let g = Gate::new(4);
+        let e = g
+            .run(Duration::from_secs(2), || -> Result<u8, String> {
+                panic!("driver bug")
+            })
+            .unwrap_err();
+        assert!(e.contains("failed"), "{e}");
+        assert_eq!(g.stuck(), 0);
+    }
+
+    #[test]
+    fn gate_finishing_just_at_the_deadline_never_leaks_a_count() {
+        let g = std::sync::Arc::new(Gate::new(64));
+        for i in 0..40u64 {
+            let _ = g.run(Duration::from_millis(5), move || {
+                std::thread::sleep(Duration::from_millis(3 + i % 6));
+                Ok(())
+            });
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(g.stuck(), 0, "racing finishes must not strand the counter");
     }
 }
