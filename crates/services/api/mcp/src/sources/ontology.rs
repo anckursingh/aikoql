@@ -851,4 +851,68 @@ mod tests {
         })
         .unwrap();
     }
+
+    fn merge_fixture(description: &str, with_mapping: bool) -> (J, J) {
+        let class =
+            |d: &str, props: J| json!({"name": "Customer", "description": d, "properties": props});
+        let mut existing = json!({
+            "namespace": "n", "version": "1",
+            "classes": [class(description, json!(["note"]))],
+            "relationships": [], "property_defs": [], "mappings": [],
+        });
+        if with_mapping {
+            existing["mappings"] = json!([{"source": "sqlite", "physical_type": "customers", "class": "Customer", "property_map": {}}]);
+        }
+        let draft = json!({
+            "namespace": "n", "version": "1",
+            "classes": [class("Discovered from crm.customers", json!(["email"]))],
+            "relationships": [], "property_defs": [],
+            "mappings": [{"source": "sqlite", "physical_type": "customers", "class": "Customer", "property_map": {}}],
+        });
+        (existing, draft)
+    }
+
+    #[test]
+    fn a_human_class_that_borrows_the_discovery_phrase_is_never_refreshed() {
+        // the phrase alone must not hand a human's class to discovery
+        for text in [
+            "Discovered from the CRM team's spreadsheet",
+            "Discovered from crm.customers",
+            "Discovered from",
+        ] {
+            let (existing, draft) = merge_fixture(text, false);
+            let m = merge(Some(&existing), &draft);
+            assert!(
+                m.refreshed.is_empty(),
+                "{text:?}: refreshed {:?}",
+                m.refreshed
+            );
+            let c = &m.definition["classes"][0];
+            assert_eq!(c["description"], text, "description rewritten for {text:?}");
+            assert_eq!(
+                c["properties"],
+                json!(["note"]),
+                "properties changed for {text:?}"
+            );
+            assert!(
+                m.warnings
+                    .iter()
+                    .any(|w| w.contains("not written by discovery")),
+                "{text:?}: {:?}",
+                m.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn a_class_discovery_wrote_still_refreshes() {
+        // the description names the container and a mapping ties it to the class
+        let (existing, draft) = merge_fixture("Discovered from crm.customers", true);
+        let m = merge(Some(&existing), &draft);
+        assert_eq!(m.refreshed, vec!["Customer".to_string()]);
+        assert_eq!(
+            m.definition["classes"][0]["properties"],
+            json!(["note", "email"])
+        );
+    }
 }
