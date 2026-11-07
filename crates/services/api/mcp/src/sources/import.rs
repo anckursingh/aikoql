@@ -23,10 +23,12 @@ fn fetch(
     cap: u64,
     deadline: std::time::Duration,
 ) -> Result<Fetched, String> {
+    // the budget covers the open/connect too, so the driver stops when the gate would
+    let started = std::time::Instant::now();
+    let left = || deadline.saturating_sub(started.elapsed());
     match kind {
         SourceKind::Sqlite => {
-            let c =
-                aikoql_sqlite::SqliteConnector::open_read_only(conn, ms)?.with_deadline(deadline);
+            let c = aikoql_sqlite::SqliteConnector::open_read_only(conn, ms)?.with_deadline(left());
             let schema = c.introspect_table_with(container, false)?;
             c.import_table_limited(&schema, tenant, cap)
         }
@@ -38,7 +40,7 @@ fn fetch(
         }
         SourceKind::Mongodb => {
             let c = aikoql_mongodb::MongoConnector::connect_with_timeout(conn, database, Some(ms))?
-                .with_deadline(deadline);
+                .with_deadline(left());
             let schema = aikoql_mongodb::CollectionSchema {
                 name: container.to_string(),
                 document_count: 0,

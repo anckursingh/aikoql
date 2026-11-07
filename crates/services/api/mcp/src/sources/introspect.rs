@@ -347,7 +347,9 @@ fn cap(mut names: Vec<String>, max: usize) -> (Vec<String>, bool) {
 }
 
 fn sqlite_meta(path: &str, ms: u64, max: usize, own: std::time::Duration) -> Result<Parts, String> {
-    let c = aikoql_sqlite::SqliteConnector::open_read_only(path, ms)?.with_deadline(own);
+    let started = std::time::Instant::now();
+    let c = aikoql_sqlite::SqliteConnector::open_read_only(path, ms)?
+        .with_deadline(own.saturating_sub(started.elapsed()));
     let (names, truncated) = cap(c.list_tables()?, max);
     let included: HashSet<String> = names.iter().cloned().collect();
     let mut containers = Vec::with_capacity(names.len());
@@ -415,8 +417,9 @@ fn mongo_meta(
     mode: Mode,
     own: std::time::Duration,
 ) -> Result<Parts, String> {
+    let started = std::time::Instant::now();
     let c = aikoql_mongodb::MongoConnector::connect_with_timeout(uri, database, Some(ms))?
-        .with_deadline(own);
+        .with_deadline(own.saturating_sub(started.elapsed()));
     let names: Vec<String> = c
         .list_collections()?
         .into_iter()
