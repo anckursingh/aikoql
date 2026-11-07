@@ -7,6 +7,30 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Data sources: schema discovery → canonical ontology
+- `[[sources]]` in `aikoql.toml` names external databases (PostgreSQL, MongoDB, Neo4j, SQLite, ClickHouse) by
+  an environment variable holding the connection string — never the string itself. Studio's **Data Sources**
+  panel discovers a source's schema (read-only, bounded), records it as versioned knowledge
+  (`aikoql:source`, `aikoql:source-table`, `aikoql:schema-run`), previews an ontology with **one class per
+  table**, lets a person merge classes and publish, and imports chosen tables (postgres/sqlite/mongodb,
+  row-capped, idempotent). Publishing merges into the manual ontology and never changes what a person wrote;
+  schema drift is reported, not applied. `MATCH <Class>` reads every mapped source and translates `WHERE`
+  property names through each mapping's `property_map`. New REST routes: `GET /api/v1/sources`,
+  `POST /api/v1/sources/{discover,ontology,import}` (admin). See `docs/SOURCES.md`.
+- ClickHouse provider (`aikoql-clickhouse`): read-only, parameterised schema introspection over HTTP.
+- Provider introspection: composite foreign keys, unique groups and schema namespaces (Postgres), foreign
+  keys (SQLite), sampled field profiles (Mongo), schema procedures (Neo4j); capped imports.
+- Ontology discovery from connector metadata proposes one class per container instead of one per source kind.
+- Robustness: seeded fuzz and adversarial suites (`scripts/fuzz-sources.sh`).
+
+### Fixed
+- Neo4j connector: node labels and relationship types are escaped in Cypher (a label containing a backtick could
+  inject a second clause — proven by a live test that deleted another label's nodes).
+- REST: an unknown `/api/v1/*` path answered 500 instead of 404 (the default arm's "Not Found" did not match the
+  status mapping).
+- A source that accepts a connection and never answers can no longer hang a request: blocking driver calls run
+  behind a deadline.
+
 ### Large documents
 - A multi-page document over an `[ingestion]` limit (`max_pages`, image/asset counts, image size, OCR time)
   is no longer refused: it is stored at once (status `processing`) and read in background batches of
