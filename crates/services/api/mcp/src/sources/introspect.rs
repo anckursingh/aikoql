@@ -17,36 +17,202 @@ pub(crate) enum Mode {
     Sample,
 }
 
+/// Passwords hiding in a connection string: `password=…` pairs and the
+/// `user:password@` part of a URL, raw and percent-decoded.
+fn secrets_in(conn: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let lower = conn.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(i) = lower[from..].find("password=") {
+        let start = from + i + "password=".len();
+        let rest = &conn[start..];
+        let value: String = match rest.strip_prefix('\'') {
+            Some(q) => q.split('\'').next().unwrap_or("").to_string(),
+            None => rest.split_whitespace().next().unwrap_or("").to_string(),
+        };
+        if !value.is_empty() {
+            out.push(value);
+        }
+        from = start;
+    }
+    if let Some((_, after)) = conn.split_once("://") {
+        let authority = after.split(['/', '?']).next().unwrap_or("");
+        if let Some((userinfo, _)) = authority.rsplit_once('@') {
+            if let Some((_, pw)) = userinfo.split_once(':') {
+                out.push(pw.to_string());
+                out.push(percent_decode(pw));
+            }
+        }
+    }
+    out.retain(|s| !s.is_empty());
+    out
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Remove the connection string and any password from an error message.
 pub(crate) fn scrub(msg: &str, conn: &str) -> String {
-    let _ = conn;
-    msg.to_string()
+    let mut out = msg.to_string();
+    if !conn.is_empty() {
+        out = out.replace(conn, "***");
+    }
+    for secret in secrets_in(conn) {
+        out = out.replace(&secret, "***");
+    }
+    out
 }
 
-use aikoql_ingestion::{ContainerInfo, ReferenceInfo};
+use aikoql_ingestion::{ContainerInfo, FieldInfo, FieldProfile, Provenance, ReferenceInfo};
 use std::collections::HashSet;
 
-fn map_mongo(_name: &str, _stats: &[aikoql_mongodb::FieldStats], _mode: Mode) -> ContainerInfo {
-    ContainerInfo::default()
+fn non_null(types: &[String]) -> Vec<&String> {
+    types.iter().filter(|t| t.as_str() != "Null").collect()
 }
 
-fn map_neo4j(_label: &str, _props: &[aikoql_neo4j::LabelProp], _mode: Mode) -> ContainerInfo {
-    ContainerInfo::default()
+fn map_mongo(name: &str, stats: &[aikoql_mongodb::FieldStats], mode: Mode) -> ContainerInfo {
+    ContainerInfo {
+        name: name.to_string(),
+        fields: stats
+            .iter()
+            .map(|f| {
+                let types = non_null(&f.types);
+                FieldInfo {
+                    name: f.name.clone(),
+                    data_type: if types.is_empty() {
+                        "Null".to_string()
+                    } else {
+                        types
+                            .iter()
+                            .map(|t| t.as_str())
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    },
+                    is_primary_key: f.name == "_id",
+                    nullable: f.name != "_id" && (f.nulls > 0 || f.present < f.samples),
+                    is_unique: false,
+                    provenance: Provenance::Observed,
+                    profile: (mode == Mode::Sample).then(|| FieldProfile {
+                        types: f.types.clone(),
+                        presence_ratio: f.presence_ratio(),
+                        null_ratio: f.null_ratio(),
+                        samples: f.samples,
+                    }),
+                }
+            })
+            .collect(),
+        ..Default::default()
+    }
 }
 
-fn map_clickhouse(_t: &aikoql_clickhouse::TableSchema) -> ContainerInfo {
-    ContainerInfo::default()
+fn map_neo4j(label: &str, props: &[aikoql_neo4j::LabelProp], mode: Mode) -> ContainerInfo {
+    ContainerInfo {
+        name: label.to_string(),
+        fields: props
+            .iter()
+            .map(|p| FieldInfo {
+                name: p.name.clone(),
+                data_type: if p.types.is_empty() {
+                    "Any".to_string()
+                } else {
+                    p.types.join("|")
+                },
+                nullable: !p.mandatory,
+                provenance: Provenance::Observed,
+                // the schema procedure reports types and "mandatory", not ratios: samples = 0
+                profile: (mode == Mode::Sample).then(|| FieldProfile {
+                    types: p.types.clone(),
+                    presence_ratio: if p.mandatory { 1.0 } else { 0.0 },
+                    null_ratio: 0.0,
+                    samples: 0,
+                }),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
 }
 
-fn map_postgres(_t: &aikoql_postgres::TableSchema) -> ContainerInfo {
-    ContainerInfo::default()
+fn map_clickhouse(t: &aikoql_clickhouse::TableSchema) -> ContainerInfo {
+    ContainerInfo {
+        name: t.name.clone(),
+        fields: t
+            .columns
+            .iter()
+            .map(|c| FieldInfo {
+                name: c.name.clone(),
+                data_type: c.ch_type.clone(),
+                is_primary_key: c.in_primary_key,
+                nullable: c.is_nullable,
+                ..Default::default()
+            })
+            .collect(),
+        row_count: Some(t.row_count_estimate),
+        ..Default::default()
+    }
+}
+
+fn map_postgres(t: &aikoql_postgres::TableSchema) -> ContainerInfo {
+    ContainerInfo {
+        name: t.name.clone(),
+        fields: t
+            .columns
+            .iter()
+            .map(|c| FieldInfo {
+                name: c.name.clone(),
+                data_type: c.pg_type.clone(),
+                is_primary_key: c.is_primary_key,
+                nullable: c.is_nullable,
+                is_unique: t
+                    .unique_groups
+                    .iter()
+                    .any(|g| g.len() == 1 && g[0] == c.name),
+                ..Default::default()
+            })
+            .collect(),
+        row_count: u64::try_from(t.row_count_estimate).ok(),
+        schema: (!t.schema.is_empty()).then(|| t.schema.clone()),
+        unique_groups: t.unique_groups.clone(),
+    }
 }
 
 fn map_pg_fks(
-    _fks: &[aikoql_postgres::ForeignKeyInfo],
-    _included: &HashSet<String>,
+    fks: &[aikoql_postgres::ForeignKeyInfo],
+    included: &HashSet<String>,
 ) -> Vec<ReferenceInfo> {
-    Vec::new()
+    fks.iter()
+        .filter(|f| included.contains(&f.child_table) && included.contains(&f.parent_table))
+        .map(|f| ReferenceInfo {
+            from_container: f.child_table.clone(),
+            from_fields: if f.child_columns.is_empty() {
+                vec![f.child_column.clone()]
+            } else {
+                f.child_columns.clone()
+            },
+            to_container: f.parent_table.clone(),
+            to_fields: if f.parent_columns.is_empty() {
+                vec![f.parent_column.clone()]
+            } else {
+                f.parent_columns.clone()
+            },
+            name: Some(f.constraint_name.clone()),
+        })
+        .collect()
 }
 
 pub(crate) fn introspect_source(
@@ -62,8 +228,182 @@ pub(crate) fn introspect_with(
     conn: &str,
     mode: Mode,
 ) -> Result<ConnectorMetadata, String> {
-    let _ = (src, conn, mode, SourceKind::Sqlite);
-    Err("todo".into())
+    let ms = src.timeout_secs.saturating_mul(1000);
+    let max = src.max_containers as usize;
+    let sample = match mode {
+        Mode::Schema => src.sample_limit.min(20),
+        Mode::Sample => src.sample_limit,
+    };
+    let result = match src.kind {
+        SourceKind::Sqlite => sqlite_meta(conn, ms, max),
+        SourceKind::Postgres => postgres_meta(conn, ms, max),
+        SourceKind::Mongodb => mongo_meta(
+            conn,
+            src.database.as_deref().unwrap_or(""),
+            ms,
+            max,
+            sample,
+            mode,
+        ),
+        SourceKind::Neo4j => neo4j_meta(conn, ms, max, sample, mode),
+        SourceKind::Clickhouse => {
+            clickhouse_meta(conn, src.database.as_deref().unwrap_or(""), ms, max)
+        }
+    };
+    let (containers, references, truncated, version) =
+        result.map_err(|e| format!("source {}: {}", src.name, scrub(&e, conn)))?;
+    Ok(ConnectorMetadata {
+        connector_type: src.kind.as_str().to_string(),
+        label: src.name.clone(),
+        containers,
+        references,
+        version,
+        truncated,
+    })
+}
+
+type Parts = (Vec<ContainerInfo>, Vec<ReferenceInfo>, bool, Option<String>);
+
+fn cap(mut names: Vec<String>, max: usize) -> (Vec<String>, bool) {
+    names.sort();
+    names.dedup();
+    let truncated = names.len() > max;
+    names.truncate(max);
+    (names, truncated)
+}
+
+fn sqlite_meta(path: &str, ms: u64, max: usize) -> Result<Parts, String> {
+    let c = aikoql_sqlite::SqliteConnector::open_read_only(path, ms)?;
+    let (names, truncated) = cap(c.list_tables()?, max);
+    let included: HashSet<String> = names.iter().cloned().collect();
+    let mut containers = Vec::with_capacity(names.len());
+    for n in &names {
+        let t = c.introspect_table_with(n, false)?;
+        containers.push(ContainerInfo {
+            name: t.name.clone(),
+            fields: t
+                .columns
+                .iter()
+                .map(|col| FieldInfo {
+                    name: col.name.clone(),
+                    data_type: col.sqlite_type.clone(),
+                    is_primary_key: col.is_primary_key,
+                    nullable: col.is_nullable && !col.is_primary_key,
+                    is_unique: t
+                        .unique_groups
+                        .iter()
+                        .any(|g| g.len() == 1 && g[0] == col.name),
+                    ..Default::default()
+                })
+                .collect(),
+            row_count: None,
+            schema: None,
+            unique_groups: t.unique_groups,
+        });
+    }
+    let references = c
+        .introspect_foreign_keys()?
+        .into_iter()
+        .filter(|f| included.contains(&f.child_table) && included.contains(&f.parent_table))
+        .map(|f| ReferenceInfo {
+            from_container: f.child_table,
+            from_fields: f.child_columns,
+            to_container: f.parent_table,
+            to_fields: f.parent_columns,
+            name: Some(f.constraint_name),
+        })
+        .collect();
+    Ok((containers, references, truncated, None))
+}
+
+fn postgres_meta(conn: &str, ms: u64, max: usize) -> Result<Parts, String> {
+    let mut c = aikoql_postgres::PostgresConnector::connect_with_timeout(conn, Some(ms))?;
+    c.read_only_session()?;
+    if !c.is_read_only()? {
+        return Err("could not make the session read-only".into());
+    }
+    let (names, truncated) = cap(c.list_tables()?, max);
+    let included: HashSet<String> = names.iter().cloned().collect();
+    let mut containers = Vec::with_capacity(names.len());
+    for n in &names {
+        containers.push(map_postgres(&c.introspect_table_with(n, false)?));
+    }
+    let references = map_pg_fks(&c.introspect_foreign_keys()?, &included);
+    Ok((containers, references, truncated, None))
+}
+
+fn mongo_meta(
+    uri: &str,
+    database: &str,
+    ms: u64,
+    max: usize,
+    sample: u32,
+    mode: Mode,
+) -> Result<Parts, String> {
+    let c = aikoql_mongodb::MongoConnector::connect_with_timeout(uri, database, Some(ms))?;
+    let names: Vec<String> = c
+        .list_collections()?
+        .into_iter()
+        .filter(|n| !n.starts_with("system."))
+        .collect();
+    let (names, truncated) = cap(names, max);
+    let mut containers = Vec::with_capacity(names.len());
+    for n in &names {
+        containers.push(map_mongo(
+            n,
+            &c.introspect_collection_sampled(n, sample)?,
+            mode,
+        ));
+    }
+    Ok((containers, Vec::new(), truncated, None))
+}
+
+fn neo4j_meta(conn: &str, ms: u64, max: usize, sample: u32, mode: Mode) -> Result<Parts, String> {
+    let (_, rest) = conn.split_once("://").ok_or("invalid Neo4j URL")?;
+    let scheme = &conn[..conn.len() - rest.len()];
+    let (userinfo, host) = rest
+        .rsplit_once('@')
+        .ok_or("Neo4j URL needs user:password@host")?;
+    let (user, pass) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+    let c = aikoql_neo4j::Neo4jConnector::connect_with_timeout(
+        &format!("{scheme}{host}"),
+        &percent_decode(user),
+        &percent_decode(pass),
+        Some(ms),
+    )?;
+    let (labels, truncated) = cap(c.list_labels()?, max);
+    let included: HashSet<String> = labels.iter().cloned().collect();
+    let mut containers = Vec::with_capacity(labels.len());
+    for l in &labels {
+        containers.push(map_neo4j(l, &c.introspect_label_schema(l, sample)?, mode));
+    }
+    let references = c
+        .introspect_rel_patterns(1_000)?
+        .into_iter()
+        .filter(|(_, from, to)| included.contains(from) && included.contains(to))
+        .map(|(rel, from, to)| ReferenceInfo {
+            from_container: from,
+            from_fields: Vec::new(),
+            to_container: to,
+            to_fields: Vec::new(),
+            name: Some(rel),
+        })
+        .collect();
+    Ok((containers, references, truncated, None))
+}
+
+fn clickhouse_meta(url: &str, database: &str, ms: u64, max: usize) -> Result<Parts, String> {
+    let c = aikoql_clickhouse::ClickHouseConnector::connect_with_timeout(url, database, Some(ms))?;
+    let mut tables = c.introspect_all(max)?;
+    let truncated = tables.len() > max;
+    tables.truncate(max);
+    let version = Some(c.version().to_string()).filter(|v| !v.is_empty());
+    Ok((
+        tables.iter().map(map_clickhouse).collect(),
+        Vec::new(),
+        truncated,
+        version,
+    ))
 }
 
 #[cfg(test)]
@@ -470,8 +810,8 @@ mod tests {
         let c = map_clickhouse(&t);
         assert_eq!(
             (c.name.as_str(), c.row_count),
-            ("events", None),
-            "estimates are not stored as counts"
+            ("events", Some(42)),
+            "a catalog estimate is an approximate count"
         );
         let ts = c.fields.iter().find(|f| f.name == "ts").unwrap();
         assert!(ts.is_primary_key && !ts.nullable && ts.data_type == "DateTime");

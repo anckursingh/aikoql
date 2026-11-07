@@ -113,12 +113,18 @@ impl PostgresConnector {
     /// Make this session read-only (`transaction_read_only = on`): the server
     /// then refuses every write, whatever a later bug tries.
     pub fn read_only_session(&mut self) -> Result<(), String> {
-        Ok(())
+        self.client
+            .batch_execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+            .map_err(|e| format!("read-only session: {e}"))
     }
 
     /// Whether the session is read-only (`SHOW transaction_read_only`).
     pub fn is_read_only(&mut self) -> Result<bool, String> {
-        Ok(false)
+        let row = self
+            .client
+            .query_one("SHOW transaction_read_only", &[])
+            .map_err(|e| format!("transaction_read_only: {e}"))?;
+        Ok(row.get::<_, String>(0) == "on")
     }
 
     /// Introspect a table: columns, types, primary keys, exact row count.
@@ -133,7 +139,6 @@ impl PostgresConnector {
         table_name: &str,
         exact_count: bool,
     ) -> Result<TableSchema, String> {
-        let _ = exact_count;
         // Discover columns. format_type adds the typmod so pgvector columns
         // report as "vector(3)" (dims) instead of the bare USER-DEFINED
         // data_type — and numeric/varchar keep their precision.
@@ -180,15 +185,24 @@ impl PostgresConnector {
             })
             .collect();
 
-        // Row count estimate.
-        let count: i64 = self
-            .client
-            .query_one(
-                &format!("SELECT COUNT(*) FROM {}", quote_ident(table_name)),
-                &[],
-            )
-            .map(|r| r.get(0))
-            .unwrap_or(-1);
+        // Row count: exact (a scan) or the planner's estimate (no scan).
+        let count: i64 = if exact_count {
+            self.client
+                .query_one(
+                    &format!("SELECT COUNT(*) FROM {}", quote_ident(table_name)),
+                    &[],
+                )
+                .map(|r| r.get(0))
+                .unwrap_or(-1)
+        } else {
+            self.client
+                .query_one(
+                    "SELECT reltuples::bigint FROM pg_class WHERE oid = to_regclass($1)",
+                    &[&quote_ident(table_name)],
+                )
+                .map(|r| r.get(0))
+                .unwrap_or(-1)
+        };
 
         Ok(TableSchema {
             name: table_name.to_string(),

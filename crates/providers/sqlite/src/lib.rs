@@ -60,8 +60,31 @@ pub struct SqliteConnector {
 impl SqliteConnector {
     /// Open an existing database file strictly read-only: never creates the file,
     /// never writes, and gives up on a lock after `busy_ms`.
-    pub fn open_read_only(_path: &str, _busy_ms: u64) -> Result<Self, String> {
-        Err("todo".into())
+    pub fn open_read_only(path: &str, busy_ms: u64) -> Result<Self, String> {
+        use rusqlite::{ffi::ErrorCode, Error, OpenFlags};
+        let short = |e: Error| match e {
+            Error::SqliteFailure(f, _) => match f.code {
+                ErrorCode::NotADatabase => "not a SQLite database".to_string(),
+                ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => {
+                    "database is locked".to_string()
+                }
+                _ => "cannot open database (missing, unreadable or not a file)".to_string(),
+            },
+            _ => "cannot open database".to_string(),
+        };
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(short)?;
+        conn.busy_timeout(std::time::Duration::from_millis(busy_ms))
+            .map_err(short)?;
+        // force a read now, so a non-database file or a held lock fails here
+        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .map_err(short)?;
+        Ok(SqliteConnector { conn })
     }
 
     /// Open a SQLite database file. `:memory:` for an in-memory database.
@@ -110,7 +133,6 @@ impl SqliteConnector {
         table_name: &str,
         count: bool,
     ) -> Result<TableSchema, String> {
-        let _ = count;
         // PRAGMA table_info gives: cid, name, type, notnull, dflt_value, pk
         let mut stmt = self
             .conn
@@ -142,18 +164,21 @@ impl SqliteConnector {
             });
         }
 
-        // Row count.
-        let count: i64 = self
-            .conn
-            .query_row(
-                &format!(
-                    "SELECT COUNT(*) FROM \"{}\"",
-                    table_name.replace('"', "\"\"")
-                ),
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        // Row count (a full scan — skipped for schema-only discovery).
+        let count: i64 = if count {
+            self.conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM \"{}\"",
+                        table_name.replace('"', "\"\"")
+                    ),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0)
+        } else {
+            -1
+        };
 
         Ok(TableSchema {
             name: table_name.to_string(),
@@ -671,9 +696,8 @@ mod tests {
     #[test]
     fn a_read_only_connection_cannot_write() {
         let p = tmp_path("ro");
-        let rw = SqliteConnector::open(p.to_str().unwrap()).unwrap();
-        rw.conn
-            .execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t VALUES (1);")
+        let rw = Connection::open(&p).unwrap();
+        rw.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t VALUES (1);")
             .unwrap();
         drop(rw);
         let ro = SqliteConnector::open_read_only(p.to_str().unwrap(), 200).unwrap();
@@ -701,12 +725,10 @@ mod tests {
     #[test]
     fn a_locked_database_fails_within_the_busy_timeout() {
         let p = tmp_path("locked");
-        let rw = SqliteConnector::open(p.to_str().unwrap()).unwrap();
-        rw.conn
-            .execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY);")
+        let rw = Connection::open(&p).unwrap();
+        rw.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY);")
             .unwrap();
-        rw.conn
-            .execute_batch("BEGIN EXCLUSIVE; INSERT INTO t VALUES (1);")
+        rw.execute_batch("BEGIN EXCLUSIVE; INSERT INTO t VALUES (1);")
             .unwrap(); // writer holds the lock
         let started = std::time::Instant::now();
         let r =
@@ -720,7 +742,7 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
-        rw.conn.execute_batch("ROLLBACK").unwrap();
+        rw.execute_batch("ROLLBACK").unwrap();
     }
 
     #[test]
