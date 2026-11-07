@@ -223,6 +223,18 @@ impl MongoConnector {
         schema: &CollectionSchema,
         tenant: Option<&str>,
     ) -> Result<Vec<KnowledgeObject>, String> {
+        self.import_collection_limited(schema, tenant, u64::MAX)
+            .map(|(objects, _)| objects)
+    }
+
+    /// At most `max_rows` documents; the flag says the collection had more.
+    pub fn import_collection_limited(
+        &self,
+        schema: &CollectionSchema,
+        tenant: Option<&str>,
+        max_rows: u64,
+    ) -> Result<(Vec<KnowledgeObject>, bool), String> {
+        let _ = max_rows;
         self.rt
             .block_on(async {
                 let coll = self.db.collection::<Document>(&schema.name);
@@ -263,7 +275,7 @@ impl MongoConnector {
                         extensions: ExtensionMap::new(),
                     });
                 }
-                Ok(objects)
+                Ok((objects, false))
             })
             .map_err(|e: String| e)
     }

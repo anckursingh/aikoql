@@ -49,7 +49,7 @@ fn redact_secrets(msg: &str, secrets: &[String]) -> String {
 /// so unchanged re-imports churn no versions. `secrets` (conn strings,
 /// passwords) are scrubbed from every failure message before it is printed
 /// or stored.
-struct ImportSink<'k> {
+pub(crate) struct ImportSink<'k> {
     kernel: &'k Kernel,
     run_id: String,
     subject: Subject,
@@ -57,7 +57,12 @@ struct ImportSink<'k> {
 }
 
 impl<'k> ImportSink<'k> {
-    fn new(kernel: &'k Kernel, run_id: String, subject: Subject, secrets: Vec<String>) -> Self {
+    pub(crate) fn new(
+        kernel: &'k Kernel,
+        run_id: String,
+        subject: Subject,
+        secrets: Vec<String>,
+    ) -> Self {
         ImportSink {
             kernel,
             run_id,
@@ -68,7 +73,7 @@ impl<'k> ImportSink<'k> {
 
     /// Commit one imported KO. `Ok(false)` = head already identical (skipped).
     /// Errors are loud on purpose — a failed put means a failed run.
-    fn put(&self, ko: KnowledgeObject, source: &str, note: &str) -> KResult<bool> {
+    pub(crate) fn put(&self, ko: KnowledgeObject, source: &str, note: &str) -> KResult<bool> {
         let ctx = KnowledgeContext::from(self.subject.clone());
         let head = self.kernel.get(ctx, &ko.koid).ok();
         if let Some(h) = &head {

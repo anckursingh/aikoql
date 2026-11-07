@@ -1,6 +1,7 @@
 //! Source schema discovery: configured external databases, their schema as
 //! knowledge, and the ontology drafted from it.
 
+pub(crate) mod import;
 pub(crate) mod introspect;
 pub(crate) mod ontology;
 pub(crate) mod service;

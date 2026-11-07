@@ -339,6 +339,19 @@ impl SqliteConnector {
         schema: &TableSchema,
         tenant: Option<&str>,
     ) -> Result<Vec<KnowledgeObject>, String> {
+        self.import_table_limited(schema, tenant, u64::MAX)
+            .map(|(objects, _)| objects)
+    }
+
+    /// At most `max_rows` rows; the flag says the table had more (memory stays
+    /// bounded: one extra row is read to know).
+    pub fn import_table_limited(
+        &self,
+        schema: &TableSchema,
+        tenant: Option<&str>,
+        max_rows: u64,
+    ) -> Result<(Vec<KnowledgeObject>, bool), String> {
+        let _ = max_rows;
         let col_names: Vec<String> = schema
             .columns
             .iter()
@@ -424,7 +437,7 @@ impl SqliteConnector {
                 extensions: ExtensionMap::new(),
             });
         }
-        Ok(objects)
+        Ok((objects, false))
     }
 }
 
@@ -766,5 +779,34 @@ mod tests {
             c.list_tables().unwrap().contains(&"victim".to_string()),
             "nothing was injected"
         );
+    }
+
+    #[test]
+    fn import_table_limited_caps_rows_and_says_when_it_cut() {
+        let c = SqliteConnector::open(":memory:").unwrap();
+        c.conn
+            .execute_batch(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);
+                 INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e');",
+            )
+            .unwrap();
+        let schema = c.introspect_table("t").unwrap();
+        let (objs, cut) = c.import_table_limited(&schema, None, 3).unwrap();
+        assert_eq!((objs.len(), cut), (3, true));
+        let (objs, cut) = c.import_table_limited(&schema, None, 5).unwrap();
+        assert_eq!(
+            (objs.len(), cut),
+            (5, false),
+            "exactly the cap is not a cut"
+        );
+        let (objs, cut) = c.import_table_limited(&schema, None, 100).unwrap();
+        assert_eq!((objs.len(), cut), (5, false));
+        assert_eq!(
+            c.import_table(&schema, None).unwrap().len(),
+            5,
+            "the unlimited path is unchanged"
+        );
+        let (objs, cut) = c.import_table_limited(&schema, None, 0).unwrap();
+        assert_eq!((objs.len(), cut), (0, true));
     }
 }

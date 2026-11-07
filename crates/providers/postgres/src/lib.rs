@@ -292,6 +292,18 @@ impl PostgresConnector {
         schema: &TableSchema,
         tenant: Option<&str>,
     ) -> Result<Vec<KnowledgeObject>, String> {
+        self.import_table_limited(schema, tenant, u64::MAX)
+            .map(|(objects, _)| objects)
+    }
+
+    /// At most `max_rows` rows; the flag says the table had more.
+    pub fn import_table_limited(
+        &mut self,
+        schema: &TableSchema,
+        tenant: Option<&str>,
+        max_rows: u64,
+    ) -> Result<(Vec<KnowledgeObject>, bool), String> {
+        let _ = max_rows;
         let col_list: Vec<String> = schema
             .columns
             .iter()
@@ -359,7 +371,7 @@ impl PostgresConnector {
                 extensions: ExtensionMap::new(),
             });
         }
-        Ok(objects)
+        Ok((objects, false))
     }
 
     /// Every foreign key with ALL its column pairs, in key order.

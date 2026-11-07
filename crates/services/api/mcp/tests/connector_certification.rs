@@ -1980,3 +1980,49 @@ fn src_pg_read_only_session_and_estimate_without_scanning() {
         1000
     );
 }
+
+#[test]
+fn src_pg_and_mongo_capped_imports_cut_at_the_cap_and_say_so() {
+    if let Some(live) = connectors::Live::pg() {
+        let dsn = connectors::pg_private_db(&live.dsn, "cert_src_cap");
+        connectors::pg_exec(
+            &dsn,
+            &[
+                "CREATE TABLE cap_t (id INT PRIMARY KEY, v TEXT)",
+                "INSERT INTO cap_t SELECT g, 'x' FROM generate_series(1, 5) g",
+            ],
+        );
+        let mut c = aikoql_postgres::PostgresConnector::connect(&dsn).expect("pg");
+        let schema = c.introspect_table("cap_t").expect("schema");
+        let (objs, cut) = c.import_table_limited(&schema, None, 3).expect("limited");
+        assert_eq!((objs.len(), cut), (3, true));
+        let (objs, cut) = c.import_table_limited(&schema, None, 5).expect("exact");
+        assert_eq!((objs.len(), cut), (5, false));
+    }
+    if let Some(live) = connectors::Live::mongo() {
+        let coll = "cert_src_cap";
+        connectors::mongo_seed(
+            &live.mongo_uri,
+            &live.mongo_db,
+            coll,
+            (1..=5)
+                .map(|i| mongodb::bson::doc! { "_id": i, "v": "x" })
+                .collect(),
+        );
+        let c = aikoql_mongodb::MongoConnector::connect(&live.mongo_uri, &live.mongo_db)
+            .expect("mongo");
+        let schema = aikoql_mongodb::CollectionSchema {
+            name: coll.into(),
+            document_count: 5,
+            properties: vec![],
+        };
+        let (objs, cut) = c
+            .import_collection_limited(&schema, None, 3)
+            .expect("limited");
+        assert_eq!((objs.len(), cut), (3, true));
+        let (objs, cut) = c
+            .import_collection_limited(&schema, None, 5)
+            .expect("exact");
+        assert_eq!((objs.len(), cut), (5, false));
+    }
+}
