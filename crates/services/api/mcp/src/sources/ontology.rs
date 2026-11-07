@@ -249,8 +249,10 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
         .map(|(s, m)| (s.name.clone(), m.fingerprint()))
         .collect();
 
-    let existing =
-        crate::http::active_ontology_for(k, tenant.as_deref()).filter(|(_, src)| *src == "manual");
+    // whatever is active is the base, whatever its provenance: an auto-discovered
+    // ontology is shadowed by the manual one this publish creates, so it must be carried over
+    let existing = crate::http::active_ontology_for(k, tenant.as_deref());
+    let base = existing.as_ref().map_or("none", |(_, src)| *src);
     let existing_json = existing.as_ref().map(|(ko, _)| {
         J::Object(
             ko.properties
@@ -277,7 +279,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     let summary = json!({
         "classes": classes, "adds": merged.adds, "refreshed": merged.refreshed,
         "untouched": merged.untouched, "mappings": merged.mappings, "warnings": warnings,
-        "fingerprints": fingerprints, "active_version": active_version,
+        "fingerprints": fingerprints, "active_version": active_version, "base": base,
     });
     if preview {
         let mut out = summary;
@@ -320,7 +322,9 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     if let Some(t) = &tenant {
         save["tenant"] = json!(t);
     }
-    if let Some(v) = expected_version {
+    // the pin guards a manual ontology; an auto one has no manual KO to update, so a
+    // racing publisher must be refused by the save itself rather than matched by number
+    if let (Some(v), "manual") = (expected_version, base) {
         save["expected_version"] = json!(v);
     }
     for key in ["subject", "roles"] {
@@ -725,5 +729,126 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn concurrent_first_publishes_cannot_both_succeed() {
+        // Codex review finding: with no ontology at preview time there is no version to
+        // pin, so two admins publishing at once could each create one and the later
+        // would silently replace the earlier's classes.
+        for round in 0..15 {
+            let (k, crm, shop) = (
+                kernel(),
+                crm_db(&format!("race{round}")),
+                shop_db(&format!("race{round}")),
+            );
+            two_sources(&crm, &shop, || {
+                discover(&k, "crm");
+                discover(&k, "shop");
+                let p =
+                    tool_sources_ontology(&k, &json!({"sources": ["crm"], "preview": true}), "x")
+                        .unwrap();
+                let apply = apply_args(&p, json!({}));
+                let barrier = std::sync::Arc::new(std::sync::Barrier::new(6));
+                let handles: Vec<_> = (0..6)
+                    .map(|_| {
+                        let (k, apply, barrier) = (k.clone(), apply.clone(), barrier.clone());
+                        std::thread::spawn(move || {
+                            barrier.wait();
+                            tool_sources_ontology(&k, &apply, "x")
+                        })
+                    })
+                    .collect();
+                let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+                let ok = results.iter().filter(|r| r.is_ok()).count();
+                assert_eq!(
+                    ok, 1,
+                    "round {round}: exactly one first publish may win: {results:?}"
+                );
+                for r in results.iter().filter_map(|r| r.as_ref().err()) {
+                    assert!(
+                        r.starts_with("expected_version required"),
+                        "round {round}: losers must be told to re-preview: {r}"
+                    );
+                }
+                let kos = k
+                    .scan_by_type(
+                        &crate::Subject::with_roles("t", &["admin"]),
+                        crate::ONTOLOGY_TYPE,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    kos.len(),
+                    1,
+                    "round {round}: one ontology object, not several"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn publishing_over_an_auto_discovered_ontology_keeps_its_classes() {
+        // Codex review finding: only a manual ontology was a merge base, so a published
+        // source ontology shadowed an active auto-discovered one and dropped its classes.
+        let (k, crm, shop) = (kernel(), crm_db("auto"), shop_db("auto"));
+        two_sources(&crm, &shop, || {
+            seed_object(&k, "Legacy", "legacy-1");
+            crate::tools::tool_discover_ontology(&k, &json!({})).expect("auto-discover");
+            let (_, source) =
+                crate::http::active_ontology_for(&k, None).expect("an active ontology");
+            assert_eq!(
+                source, "auto-discovered",
+                "setup: the active ontology is the auto one"
+            );
+            discover(&k, "crm");
+            let p = tool_sources_ontology(&k, &json!({"sources": ["crm"], "preview": true}), "x")
+                .unwrap();
+            assert!(
+                p["untouched"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("Legacy")),
+                "the auto class is part of the base: {p}"
+            );
+            assert_eq!(p["base"], "auto-discovered");
+            let pin = json!({"expected_version": p["active_version"]});
+            tool_sources_ontology(&k, &apply_args(&p, pin), "x").unwrap();
+            let (_, def) = manual(&k).expect("published as the manual ontology");
+            assert!(
+                def.classes.contains_key("Legacy"),
+                "Legacy survived the publish: {:?}",
+                def.classes.keys().collect::<Vec<_>>()
+            );
+            assert!(def.classes.contains_key("Customer") && def.classes.contains_key("Order"));
+        });
+    }
+
+    fn seed_object(k: &Kernel, type_name: &str, name: &str) {
+        use crate::{
+            ExtensionMap, Metadata, Origin, PropertyMap, ReferentialPolicy, RememberRequest, Value,
+        };
+        let mut props = PropertyMap::new();
+        props.insert("name".into(), Value::Text(name.into()));
+        k.remember(RememberRequest {
+            context: crate::Subject::with_roles("seed", &["admin"]).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: type_name.into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap();
     }
 }
