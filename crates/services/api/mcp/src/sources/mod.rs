@@ -476,7 +476,7 @@ mod config_tests {
             let mut r = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
             let mut obj = serde_json::Map::new();
             let mut maybe = |k: &str, v: serde_json::Value, r: &mut Rng| {
-                if r.next() % 5 != 0 {
+                if !r.next().is_multiple_of(5) {
                     obj.insert(k.into(), v);
                 }
             };
@@ -503,7 +503,7 @@ mod config_tests {
                 let v = ints[(r.next() % ints.len() as u64) as usize].clone();
                 maybe(k, v, &mut r);
             }
-            if r.next() % 7 == 0 {
+            if r.next().is_multiple_of(7) {
                 obj.insert("surprise".into(), serde_json::json!(1));
             }
             let Ok(cfg) = serde_json::from_value::<SourceConfig>(serde_json::Value::Object(obj))
