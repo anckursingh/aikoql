@@ -71,6 +71,8 @@ pub(crate) struct RuntimeConfig {
     /// HLD §54/§55: `[ingestion]` limits and enable flags for document
     /// extraction and compile (defaults: `ProcessingPolicy::default()`).
     pub ingestion_policy: aikoql_ingestion::ProcessingPolicy,
+    /// `[chat]` model endpoint for the Studio Ask panel; `None` = chat disabled.
+    pub chat: Option<crate::chat::client::ChatConfig>,
     /// `[[sources]]`: external databases Studio may introspect (names only —
     /// connection strings stay in the environment).
     pub sources: Vec<crate::sources::SourceConfig>,
@@ -166,6 +168,7 @@ struct TomlConfig {
     logging: Option<TomlLogging>,
     /// Missing keys keep their defaults; unknown keys are rejected.
     ingestion: Option<aikoql_ingestion::ProcessingPolicy>,
+    chat: Option<crate::chat::client::ChatConfig>,
     sources: Option<Vec<crate::sources::SourceConfig>>,
 }
 
@@ -358,6 +361,7 @@ pub(crate) fn load(
         ha_ttl_ms: 10_000,
         tool_profile: "full".into(),
         ingestion_policy: aikoql_ingestion::ProcessingPolicy::default(),
+        chat: None,
         sources: Vec::new(),
         metrics_addr: None,
         tcp_tokens: Vec::new(),
@@ -438,6 +442,11 @@ pub(crate) fn load(
                 .validate()
                 .map_err(|e| format!("config {path}: ingestion.{e}"))?;
             cfg.ingestion_policy = policy;
+        }
+        if let Some(chat) = t.chat {
+            chat.validate()
+                .map_err(|e| format!("config {path}: chat.{e}"))?;
+            cfg.chat = Some(chat);
         }
         if let Some(sources) = t.sources {
             crate::sources::validate_sources(&sources)
@@ -1313,6 +1322,54 @@ employee = ["salary", "ssn"]
             load_t(&argv(&["aikoql-mcp", "--config", &zero]), None, None).is_err(),
             "a zero page limit would refuse every document"
         );
+    }
+
+    #[test]
+    fn chat_config_absent_means_disabled() {
+        assert!(load_bare(&argv(&["aikoql-mcp"])).unwrap().chat.is_none());
+    }
+
+    #[test]
+    fn chat_config_from_toml() {
+        let p = tmp_toml(
+            "[chat]\nurl = \"http://127.0.0.1:8080\"\nmodel = \"qwen\"\napi_key_env = \"CHAT_KEY\"\ntimeout_secs = 5\n",
+        );
+        let c = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None)
+            .unwrap()
+            .chat
+            .unwrap();
+        assert_eq!(c.url, "http://127.0.0.1:8080");
+        assert_eq!(c.model, "qwen");
+        assert_eq!(c.api_key_env.as_deref(), Some("CHAT_KEY"));
+        assert_eq!(c.timeout_secs, 5);
+        let d = tmp_toml("[chat]\nurl = \"https://x\"\nmodel = \"m\"\n");
+        let c = load_t(&argv(&["aikoql-mcp", "--config", &d]), None, None)
+            .unwrap()
+            .chat
+            .unwrap();
+        assert_eq!((c.api_key_env, c.timeout_secs), (None, 60));
+    }
+
+    #[test]
+    fn chat_config_rejects_typo_key() {
+        let p = tmp_toml("[chat]\nurl = \"http://x\"\nmodle = \"x\"\n");
+        let e = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap_err();
+        assert!(e.contains("modle"), "error should name the key: {e}");
+    }
+
+    #[test]
+    fn chat_config_rejects_bad_url_empty_model_zero_timeout() {
+        for body in [
+            "url = \"ftp://x\"\nmodel = \"m\"\n",
+            "url = \"http://x\"\nmodel = \"\"\n",
+            "url = \"http://x\"\nmodel = \"m\"\ntimeout_secs = 0\n",
+        ] {
+            let p = tmp_toml(&format!("[chat]\n{body}"));
+            assert!(
+                load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).is_err(),
+                "should reject: {body}"
+            );
+        }
     }
 
     #[test]

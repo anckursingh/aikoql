@@ -125,7 +125,7 @@ function switchPanel(name) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panel = document.getElementById('panel-' + name);
   if (panel) panel.classList.add('active');
-  const titles = { query:'Query Editor', graph:'Knowledge Graph', explorer:'Knowledge Explorer', schema:'Schema Explorer', ontology:'Ontology', inspector:'KO Inspector', admin:'Administration', timeline:'Timeline', provenance:'Provenance', debugger:'Program Debugger', benchmarks:'Benchmark Center', profiler:'Query Profiler', providers:'Provider Manager', documents:'Document Explorer', sources:'Data Sources' };
+  const titles = { query:'Query Editor', graph:'Knowledge Graph', explorer:'Knowledge Explorer', schema:'Schema Explorer', ontology:'Ontology', inspector:'KO Inspector', admin:'Administration', timeline:'Timeline', provenance:'Provenance', debugger:'Program Debugger', benchmarks:'Benchmark Center', profiler:'Query Profiler', providers:'Provider Manager', documents:'Document Explorer', ask:'Ask', sources:'Data Sources' };
   document.getElementById('panel-title').textContent = titles[name] || name;
   document.getElementById('panel-breadcrumb').textContent = '';
   if (name === 'graph') initGraph();
@@ -138,6 +138,7 @@ function switchPanel(name) {
   if (name === 'benchmarks') loadBenchmarks();
   if (name === 'documents') loadDocuments();
   if (name === 'sources') loadSourcesPanel();
+  if (name === 'ask') loadAskPanel();
 }
 document.querySelectorAll('#sidebar nav button').forEach(b => {
   b.addEventListener('click', () => switchPanel(b.dataset.panel));
@@ -186,6 +187,9 @@ function loadTenants() {
     const st = document.getElementById('sources-tenant'), srcCur = st.value;
     st.innerHTML = '<option value="">Global</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
     st.value = srcCur;
+    const at = document.getElementById('ask-tenant'), askCur = at.value;
+    at.innerHTML = '<option value="">All tenants</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
+    at.value = askCur;
     document.getElementById('graph-tenant').innerHTML = '<option value="">All tenants</option>' + [...tenants].map(t => '<option>'+esc(t)+'</option>').join('');
   }).catch(() => {});
 }
@@ -1678,6 +1682,51 @@ async function importSource(name) {
     out.innerHTML = '<div class="card" style="border-color:var(--red);">'+esc(e.message)+'</div>';
   }
 }
+// Panel: Ask (grounded answers; POST /api/v1/chat)
+// ═══════════════════════════════════════════
+async function loadAskPanel() {
+  const off = document.getElementById('ask-disabled'), form = document.getElementById('ask-form'), model = document.getElementById('ask-model');
+  try {
+    const st = (await api('/api/v1/chat/status')).data;
+    off.style.display = st.enabled ? 'none' : '';
+    form.style.display = st.enabled ? '' : 'none';
+    model.textContent = st.enabled ? 'Model: ' + st.model + (st.reachable === false ? ' — endpoint not reachable' : '') : '';
+  } catch (e) {
+    off.textContent = 'Could not read the chat status: ' + e.message;
+    off.style.display = ''; form.style.display = 'none'; model.textContent = '';
+  }
+}
+function renderAskResult(r) {
+  const ok = r.grounded && !r.refused;
+  return '<div class="card" id="ask-answer">'
+    + '<span class="badge '+esc(ok ? 'badge-green' : 'badge-orange')+'">'+esc(ok ? 'grounded' : 'refused')+'</span>'
+    + '<div style="margin-top:8px;white-space:pre-wrap;">'+esc(r.answer)+'</div>'
+    + '<details style="margin-top:10px;font-size:11px;"><summary style="cursor:pointer;color:var(--muted);">How I answered</summary>'
+    + '<div style="margin-top:6px;">Query: <code>'+esc(r.query || 'none (the model gave no usable query)')+'</code></div>'
+    + '<div>Facts from: '+esc(r.context_source)+' · model '+esc(r.model)+' · '+esc(r.ms)+' ms · '+esc((r.retrieved || []).length)+' fact(s)</div>'
+    + '<table style="margin-top:6px;font-size:11px;border-collapse:collapse;">'
+    + (r.retrieved || []).map((koid, i) => '<tr><td class="mono" style="padding:2px 8px 2px 0;"><a href="#" data-koid="'+esc(koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(koid.substring(0, 16))+'...</a></td><td>'+esc((r.statements || [])[i])+'</td></tr>').join('')
+    + '</table></details></div>';
+}
+async function askQuestion() {
+  const box = document.getElementById('ask-question'), btn = document.getElementById('ask-submit'), out = document.getElementById('ask-result');
+  if (btn.disabled) return;
+  const question = box.value.trim();
+  if (!question) { out.innerHTML = '<div class="empty-state">Type a question first.</div>'; return; }
+  const tenant = document.getElementById('ask-tenant').value;
+  btn.disabled = true;
+  out.innerHTML = '<div class="loading">Thinking...</div>';
+  try {
+    const r = (await apiPost('/api/v1/chat', tenant ? {question, tenant} : {question})).data;
+    out.innerHTML = renderAskResult(r);
+  } catch (e) {
+    const msg = e.message === 'Failed to fetch' ? 'Could not reach the server.' : e.message;
+    out.innerHTML = '<div class="card" style="border-color:var(--red);">'+esc(msg)+'</div>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+document.getElementById('ask-question').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') askQuestion(); });
 
 // ═══════════════════════════════════════════
 // Event delegation — the page has NO inline handlers or inline scripts, so the
@@ -1734,6 +1783,7 @@ const ACTIONS = Object.assign(Object.create(null), {
   mergeSelectedClasses: el => mergeSelectedClasses(),
   applySourceOntology: el => applySourceOntology(),
   importSource: el => importSource(el.dataset.name),
+  askQuestion: el => askQuestion(),
   signInSso: el => location.href = '/api/login/sso',
 });
 function dispatchAction(attr, ev) {

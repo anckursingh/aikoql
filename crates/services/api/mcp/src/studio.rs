@@ -235,6 +235,8 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       </button>
       <button data-panel="sources" title="Data Sources — discover external schemas">
         <span class="ico">🗄️</span><span class="lbl">Data Sources</span>
+      <button data-panel="ask" title="Ask — grounded answers from your knowledge">
+        <span class="ico">💬</span><span class="lbl">Ask</span>
       </button>
     </nav>
     <div class="user-area">
@@ -420,6 +422,22 @@ tr:hover td { background: rgba(108,199,240,0.03); }
         </div>
         <div id="sources-result"></div>
         <div id="sources-preview"></div>
+      </div>
+
+      <!-- ── Ask ── -->
+      <div class="panel" id="panel-ask">
+        <div class="card" style="margin-bottom:12px;">
+          <h3>💬 Ask</h3>
+          <p style="font-size:11px;color:var(--muted);">Ask a question about your knowledge. The answer is written by the configured model from facts the server retrieves for the selected tenant, and is refused when those facts do not support it.</p>
+          <div id="ask-disabled" style="display:none;font-size:12px;color:var(--orange);">No model configured — see docs/CHAT.md</div>
+          <div id="ask-model" style="font-size:11px;color:var(--muted);"></div>
+        </div>
+        <div class="card" id="ask-form" style="margin-bottom:12px;">
+          <label style="font-size:11px;color:var(--muted);">Tenant <select id="ask-tenant"><option value="">All tenants</option></select></label>
+          <textarea id="ask-question" rows="3" maxlength="2000" placeholder="Ask a question… (Ctrl/Cmd+Enter to send)" style="width:100%;margin-top:8px;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;box-sizing:border-box;"></textarea>
+          <div style="margin-top:8px;"><button class="btn btn-pri btn-sm" id="ask-submit" data-click="askQuestion">Ask</button></div>
+        </div>
+        <div id="ask-result"></div>
       </div>
 
       <!-- ── Administration ── -->
@@ -1278,6 +1296,40 @@ mod tests {
         assert!(
             !studio_html(false, Some(&other)).contains("data-audit-export"),
             "a license without the flag must not carry the export button"
+        );
+    }
+
+    /// A merge once left a panel unclosed, nesting the Admin panel inside a hidden
+    /// one: every control in it silently stopped working. Only a browser run saw it;
+    /// this catches the class cheaply.
+    #[test]
+    fn studio_page_div_tags_balance_and_every_panel_is_a_top_level_sibling() {
+        let page = page_for_tests();
+        let (open, close) = (page.matches("<div").count(), page.matches("</div>").count());
+        assert_eq!(
+            open, close,
+            "unbalanced <div> tags in the Studio page: {open} open, {close} closed"
+        );
+        // each `class="panel"` div must open at the same nesting depth
+        let mut depth = 0i32;
+        let mut depths = std::collections::BTreeSet::new();
+        let mut rest: &str = page;
+        while let Some(i) = rest.find('<') {
+            rest = &rest[i..];
+            if rest.starts_with("</div>") {
+                depth -= 1;
+            } else if rest.starts_with("<div") {
+                if rest.starts_with("<div class=\"panel\"") {
+                    depths.insert(depth);
+                }
+                depth += 1;
+            }
+            rest = &rest[1..];
+        }
+        assert_eq!(
+            depths.len(),
+            1,
+            "panels open at different nesting depths: {depths:?}"
         );
     }
 }

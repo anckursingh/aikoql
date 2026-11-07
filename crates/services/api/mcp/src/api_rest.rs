@@ -80,7 +80,11 @@ pub fn route_v1(
         Err(msg) => {
             // 409: a CAS on expected_version lost the race, or a document's
             // batches are still running / were cut short by a restart
-            let code = if let Some(c) = crate::sources::status_for(&msg) {
+            let code = if msg == crate::chat::NOT_CONFIGURED {
+                503
+            } else if msg.starts_with("question must be") {
+                400
+            } else if let Some(c) = crate::sources::status_for(&msg) {
                 c
             } else if msg.contains("VERSION_CONFLICT")
                 || msg.starts_with(crate::tools::ingestion::STILL_PROCESSING)
@@ -158,6 +162,14 @@ fn route_inner(
         ("POST", "/api/v1/sources/ontology") => {
             need_auth()?;
             crate::sources::ontology::tool_sources_ontology(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/chat") => {
+            need_auth()?;
+            crate::chat::tool_chat(k, &args(), db_path)
+        }
+        ("GET", "/api/v1/chat/status") => {
+            need_auth()?;
+            Ok(crate::chat::chat_status())
         }
         ("GET", "/api/v1/ontology") => {
             need_auth()?;
@@ -829,6 +841,7 @@ fn json_response(code: u16, body: &J) -> (String, String, String) {
         409 => "409 Conflict",
         429 => "429 Too Many Requests",
         502 => "502 Bad Gateway",
+        503 => "503 Service Unavailable",
         _ => "500 Internal Server Error",
     };
     (
@@ -2152,6 +2165,124 @@ mod tests {
                 .starts_with("400"));
             },
         );
+        m3_cleanup(k, db);
+    }
+    // ---- tenant chat (M10): the REST surface; the model path is covered in chat/ ----
+
+    fn m10_call(
+        k: &crate::Kernel,
+        db: &std::path::Path,
+        method: &str,
+        path: &str,
+        body: serde_json::Value,
+        roles: Option<&[&str]>,
+    ) -> (String, serde_json::Value) {
+        let sessions = Mutex::new(HashMap::new());
+        if let Some(roles) = roles {
+            sessions.lock().unwrap().insert(
+                "tok".into(),
+                crate::HttpSession {
+                    username: "user".into(),
+                    roles: roles.iter().map(|r| r.to_string()).collect(),
+                    created: std::time::Instant::now(),
+                    ttl_secs: 86_400,
+                },
+            );
+        }
+        let rate = Mutex::new(crate::rate_limiter::RateLimiter::new(false, 1));
+        let (status, _ct, out) = route_v1(
+            method,
+            path,
+            &body.to_string(),
+            k,
+            &db.to_string_lossy(),
+            &sessions,
+            roles.map(|_| "tok".to_string()),
+            &rate,
+            None,
+        );
+        (
+            status,
+            serde_json::from_str(&out).unwrap_or(serde_json::json!({"raw": out})),
+        )
+    }
+
+    #[test]
+    fn m10_chat_disabled_is_503_with_guidance() {
+        let (k, db) = m3_kernel("m10-off");
+        let (st, out) = m10_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/chat",
+            serde_json::json!({"question": "hi"}),
+            Some(&["admin"]),
+        );
+        assert!(st.starts_with("503"), "{st} {out}");
+        assert!(out["error"].as_str().unwrap().contains("[chat]"), "{out}");
+        m3_cleanup(k, db);
+    }
+
+    #[test]
+    fn m10_status_disabled() {
+        let (k, db) = m3_kernel("m10-status");
+        let (st, out) = m10_call(
+            &k,
+            &db,
+            "GET",
+            "/api/v1/chat/status",
+            serde_json::json!({}),
+            Some(&["viewer"]),
+        );
+        assert!(st.starts_with("200"), "{st} {out}");
+        assert_eq!(
+            out["data"],
+            serde_json::json!({"enabled": false, "model": null, "reachable": null})
+        );
+        m3_cleanup(k, db);
+    }
+
+    #[test]
+    fn m10_empty_and_oversize_question_are_400() {
+        let (k, db) = m3_kernel("m10-len");
+        let ask = |q: String| {
+            m10_call(
+                &k,
+                &db,
+                "POST",
+                "/api/v1/chat",
+                serde_json::json!({"question": q}),
+                Some(&["admin"]),
+            )
+            .0
+        };
+        for bad in ["".to_string(), "   ".to_string(), "x".repeat(2001)] {
+            assert!(ask(bad).starts_with("400"));
+        }
+        // valid questions get past validation (chat itself is disabled here)
+        assert!(ask("x".repeat(2000)).starts_with("503"));
+        assert!(ask("hi\0 \u{1F600}".to_string()).starts_with("503"));
+        m3_cleanup(k, db);
+    }
+
+    #[test]
+    fn m10_viewer_can_chat_but_unauthenticated_gets_401() {
+        let (k, db) = m3_kernel("m10-roles");
+        let body = serde_json::json!({"question": "hi"});
+        let (viewer, _) = m10_call(
+            &k,
+            &db,
+            "POST",
+            "/api/v1/chat",
+            body.clone(),
+            Some(&["viewer"]),
+        );
+        assert!(
+            viewer.starts_with("503"),
+            "a viewer reaches the handler: {viewer}"
+        );
+        let (anon, _) = m10_call(&k, &db, "POST", "/api/v1/chat", body, None);
+        assert!(anon.starts_with("401"), "{anon}");
         m3_cleanup(k, db);
     }
 }
