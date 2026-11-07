@@ -649,9 +649,10 @@ mod tests {
         let ir = crate::connector_bridge::connector_metadata_to_ir(&meta);
         let proposal = discover_ontology_from_ir(&ir);
         assert!(
-            proposal.properties.iter().any(|p| {
-                p.name == "name" && p.value_type == "Text" && p.class_name == "postgresTable"
-            }),
+            proposal
+                .properties
+                .iter()
+                .any(|p| { p.name == "name" && p.value_type == "Text" && p.class_name == "User" }),
             "text column must propose a Text property: {:?}",
             proposal.properties
         );

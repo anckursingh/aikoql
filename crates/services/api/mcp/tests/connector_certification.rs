@@ -1362,19 +1362,22 @@ fn ont001_live_discovery_merges_three_sources() {
             .collect::<Vec<_>>(),
     );
 
-    // Classes: one per source container type — no per-table type explosion.
+    // Classes: one per container (never one per source kind).
     let class_names: Vec<&str> = merged.classes.iter().map(|c| c.name.as_str()).collect();
+    for want in ["OntParent", "OntChild", "CertOnt001People", "POnt001"] {
+        if metas.iter().any(|m| match m.connector_type.as_str() {
+            "postgres" => want.starts_with("Ont"),
+            "mongodb" => want == "CertOnt001People",
+            _ => want == "POnt001",
+        }) {
+            assert!(class_names.contains(&want), "classes: {class_names:?}");
+        }
+    }
     assert!(
-        class_names.contains(&"postgresTable"),
-        "classes: {class_names:?}"
-    );
-    assert!(
-        class_names.contains(&"mongodbCollection"),
-        "classes: {class_names:?}"
-    );
-    assert!(
-        class_names.contains(&"neo4jNodeLabel"),
-        "classes: {class_names:?}"
+        !class_names
+            .iter()
+            .any(|c| c.ends_with("Table") || c.ends_with("Collection") || c.ends_with("NodeLabel")),
+        "no per-kind collapse: {class_names:?}"
     );
     assert!(
         merged.classes.len() < 15,
@@ -1393,8 +1396,7 @@ fn ont001_live_discovery_merges_three_sources() {
     );
     assert!(
         merged.relationships.iter().any(|r| {
-            r.domain.as_deref() == Some("neo4jNodeLabel")
-                && r.name.replace('_', "") == "knowsont001"
+            r.domain.as_deref() == Some("POnt001") && r.name.replace('_', "") == "knowsont001"
         }),
         "graph rel must become a relationship proposal: {:?}",
         merged.relationships
@@ -1403,16 +1405,18 @@ fn ont001_live_discovery_merges_three_sources() {
     // Properties: schema facts must become typed proposals (RED today —
     // discover_ontology_from_ir yields none for connector-bridge facts).
     assert!(
-        merged.properties.iter().any(|p| {
-            p.name == "name" && p.class_name == "postgresTable" && p.value_type == "Text"
-        }),
+        merged
+            .properties
+            .iter()
+            .any(|p| { p.name == "name" && p.class_name == "OntParent" && p.value_type == "Text" }),
         "pg text column must propose a property: {:?}",
         merged.properties
     );
     assert!(
-        merged.properties.iter().any(|p| {
-            p.name == "age" && p.class_name == "postgresTable" && p.value_type == "Int"
-        }),
+        merged
+            .properties
+            .iter()
+            .any(|p| { p.name == "age" && p.class_name == "OntParent" && p.value_type == "Int" }),
         "pg int column must propose an Int property: {:?}",
         merged.properties
     );
@@ -1420,7 +1424,7 @@ fn ont001_live_discovery_merges_three_sources() {
         merged
             .properties
             .iter()
-            .any(|p| p.name == "id" && p.class_name == "postgresTable" && p.required),
+            .any(|p| p.name == "id" && p.class_name == "OntParent" && p.required),
         "pk column must propose a required property: {:?}",
         merged.properties
     );
@@ -1428,7 +1432,7 @@ fn ont001_live_discovery_merges_three_sources() {
         merged
             .properties
             .iter()
-            .any(|p| p.name == "note" && p.class_name == "postgresTable" && !p.required),
+            .any(|p| p.name == "note" && p.class_name == "OntChild" && !p.required),
         "nullable column must propose an optional property: {:?}",
         merged.properties
     );
@@ -1436,7 +1440,7 @@ fn ont001_live_discovery_merges_three_sources() {
         merged
             .properties
             .iter()
-            .any(|p| p.name == "name" && p.class_name == "mongodbCollection"),
+            .any(|p| p.name == "name" && p.class_name == "CertOnt001People"),
         "mongo field must propose a property: {:?}",
         merged.properties
     );
@@ -1444,7 +1448,7 @@ fn ont001_live_discovery_merges_three_sources() {
         merged
             .properties
             .iter()
-            .any(|p| p.name == "profile.city" && p.class_name == "mongodbCollection"),
+            .any(|p| p.name == "profile.city" && p.class_name == "CertOnt001People"),
         "nested mongo field must propose a dotted property: {:?}",
         merged.properties
     );
@@ -1452,7 +1456,7 @@ fn ont001_live_discovery_merges_three_sources() {
         merged
             .properties
             .iter()
-            .any(|p| p.name == "name" && p.class_name == "neo4jNodeLabel"),
+            .any(|p| p.name == "name" && p.class_name == "POnt001"),
         "neo4j label prop must propose a property: {:?}",
         merged.properties
     );

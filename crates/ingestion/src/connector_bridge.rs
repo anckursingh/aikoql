@@ -64,6 +64,11 @@ pub struct ReferenceInfo {
     pub name: Option<String>,
 }
 
+/// The domain class a container proposes: singular PascalCase.
+pub fn class_name_for_container(_container: &str) -> String {
+    String::new()
+}
+
 /// Convert connector metadata into KnowledgeIr.
 ///
 /// - Containers → Entities (type = connector_type + "Table"/"Collection"/"NodeLabel")
@@ -308,10 +313,67 @@ mod tests {
         let ir = connector_metadata_to_ir(&meta);
         assert_eq!(ir.entities.len(), 1);
         assert_eq!(ir.entities[0].name, "analytics.events");
-        assert_eq!(
-            ir.entities[0].type_hint.as_deref(),
-            Some("mongodbCollection")
+        assert_eq!(ir.entities[0].type_hint.as_deref(), Some("Event"));
+    }
+
+    #[test]
+    fn class_name_for_container_is_singular_pascal_case() {
+        for (input, want) in [
+            ("customers", "Customer"),
+            ("order_items", "OrderItem"),
+            ("OrderItems", "OrderItem"),
+            ("Categories", "Category"),
+            ("addresses", "Address"),
+            ("address", "Address"),
+            ("status", "Status"),
+            ("people", "People"),
+            ("2024_sales", "T2024Sale"),
+            ("user data", "UserData"),
+            ("a-b", "AB"),
+            ("cert_ont001_people", "CertOnt001People"),
+            ("P_Ont001", "POnt001"),
+            ("", "Thing"),
+            ("___", "Thing"),
+        ] {
+            assert_eq!(class_name_for_container(input), want, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn each_container_gets_its_own_class() {
+        let meta = discover_connector_schema(
+            "postgres",
+            "shop",
+            &[
+                ("customers", &[("id", "int", true, false, true)]),
+                ("orders", &[("id", "int", true, false, true)]),
+                ("products", &[("id", "int", true, false, true)]),
+            ],
+            &[],
         );
+        let proposal = crate::discover_ontology_from_ir(&connector_metadata_to_ir(&meta));
+        let mut names: Vec<&str> = proposal.classes.iter().map(|c| c.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["Customer", "Order", "Product"]);
+        assert!(
+            names
+                .iter()
+                .all(|n| !n.contains("Table") && !n.contains("postgres")),
+            "the source kind is not a class: {names:?}"
+        );
+    }
+
+    #[test]
+    fn physical_container_stays_in_the_entity_mention() {
+        let meta = discover_connector_schema(
+            "postgres",
+            "shop",
+            &[("customers", &[("id", "int", true, false, true)])],
+            &[],
+        );
+        let ir = connector_metadata_to_ir(&meta);
+        assert_eq!(ir.entities[0].name, "shop.customers");
+        assert!(ir.entities[0].mentions[0].contains("Table 'customers'"));
     }
 
     #[test]

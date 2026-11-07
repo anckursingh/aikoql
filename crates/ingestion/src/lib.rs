@@ -266,8 +266,8 @@ pub use reconcile::{
 
 mod connector_bridge;
 pub use connector_bridge::{
-    connector_metadata_to_ir, discover_connector_schema, ConnectorMetadata, ContainerInfo,
-    FieldInfo, ReferenceInfo,
+    class_name_for_container, connector_metadata_to_ir, discover_connector_schema,
+    ConnectorMetadata, ContainerInfo, FieldInfo, ReferenceInfo,
 };
 
 mod secret_filter;
