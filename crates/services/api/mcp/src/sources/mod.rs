@@ -2,7 +2,11 @@
 //! knowledge, and the ontology drafted from it.
 
 pub(crate) mod introspect;
+pub(crate) mod ontology;
+pub(crate) mod service;
 pub(crate) mod store;
+#[cfg(test)]
+pub(crate) mod testkit;
 
 use serde::Deserialize;
 use std::sync::OnceLock;
@@ -123,6 +127,14 @@ impl SourceConfig {
     /// The connection string from the environment. The error names the variable,
     /// never a value.
     pub(crate) fn connection(&self) -> Result<String, String> {
+        #[cfg(test)]
+        if let Some(c) = TEST_CONNS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&self.name)
+        {
+            return Ok(c.clone());
+        }
         match std::env::var(&self.url_env) {
             Ok(v) if !v.trim().is_empty() => Ok(v),
             Ok(_) => Err(format!(
@@ -159,16 +171,28 @@ pub(crate) fn install(sources: &[SourceConfig]) {
 #[cfg(test)]
 static TEST_SOURCES: std::sync::Mutex<Option<Vec<SourceConfig>>> = std::sync::Mutex::new(None);
 #[cfg(test)]
+static TEST_CONNS: std::sync::Mutex<std::collections::BTreeMap<String, String>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+#[cfg(test)]
 static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Run `f` with `sources` as the configured list; serialised across tests.
 #[cfg(test)]
-pub(crate) fn with_test_sources<R>(sources: Vec<SourceConfig>, f: impl FnOnce() -> R) -> R {
+pub(crate) fn with_test_sources<R>(
+    sources: Vec<SourceConfig>,
+    connections: Vec<(String, String)>,
+    f: impl FnOnce() -> R,
+) -> R {
     let _serial = TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     *TEST_SOURCES.lock().unwrap_or_else(|e| e.into_inner()) = Some(sources);
-    let out = f();
+    *TEST_CONNS.lock().unwrap_or_else(|e| e.into_inner()) = connections.into_iter().collect();
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
     *TEST_SOURCES.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    out
+    TEST_CONNS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    match out {
+        Ok(v) => v,
+        Err(p) => std::panic::resume_unwind(p),
+    }
 }
 
 pub(crate) fn configured() -> Vec<SourceConfig> {
@@ -181,6 +205,28 @@ pub(crate) fn configured() -> Vec<SourceConfig> {
         return v;
     }
     SOURCES.get().cloned().unwrap_or_default()
+}
+
+/// Errors every `/api/v1/sources*` handler returns, and the HTTP status each maps to.
+pub(crate) const NOT_FOUND: &str = "source not found";
+pub(crate) const STALE: &str = "schema changed since preview";
+pub(crate) const NOTHING: &str = "nothing to publish";
+pub(crate) const INVALID: &str = "invalid request: ";
+pub(crate) const NO_SCHEMA: &str = "no recorded schema";
+
+/// HTTP status for a sources error message (None = fall through to the generic mapping).
+pub(crate) fn status_for(msg: &str) -> Option<u16> {
+    if msg == NOT_FOUND {
+        Some(404)
+    } else if msg == STALE || msg.starts_with("expected_version conflict") {
+        Some(409)
+    } else if msg.starts_with(INVALID) || msg.starts_with(NOTHING) || msg.contains(NO_SCHEMA) {
+        Some(400)
+    } else if msg.starts_with("source ") && msg.contains(": ") {
+        Some(502)
+    } else {
+        None
+    }
 }
 
 /// A source by name, visible only to the tenant it belongs to (a global source
@@ -421,7 +467,7 @@ mod config_tests {
             },
             src("shared", SourceKind::Sqlite),
         ];
-        with_test_sources(list, || {
+        with_test_sources(list, vec![], || {
             assert_eq!(find_source("crm", Some("acme")).unwrap().name, "crm");
             assert_eq!(find_source("shared", None).unwrap().name, "shared");
             let other = find_source("crm", Some("globex")).unwrap_err();

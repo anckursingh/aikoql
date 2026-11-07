@@ -2031,4 +2031,99 @@ mod tests {
         assert_eq!(b_wait(&k, &db, &koid)["status"], "extracted");
         m3_cleanup(k, db);
     }
+
+    // ---- source schema discovery routes ----
+
+    #[test]
+    fn the_sources_writes_are_admin_routes_and_the_list_is_not() {
+        for p in ["/api/v1/sources/discover", "/api/v1/sources/ontology"] {
+            assert!(is_admin_route(p), "{p}");
+        }
+        assert!(!is_admin_route("/api/v1/sources"));
+    }
+
+    #[test]
+    fn sources_routes_map_errors_to_the_right_statuses() {
+        use crate::sources::testkit::*;
+        let (k, db) = m3_kernel("sources-routes");
+        let crm = crm_db("routes");
+        let missing = tmp_db("missing-routes")
+            .parent()
+            .unwrap()
+            .join("gone.sqlite");
+        crate::sources::with_test_sources(
+            vec![sqlite_source("crm", None), sqlite_source("broken", None)],
+            vec![
+                ("crm".into(), conn(&crm)),
+                ("broken".into(), conn(&missing)),
+            ],
+            || {
+                let call =
+                    |m: &str, path: &str, body: serde_json::Value| m3_call(&k, &db, m, path, body);
+                let (st, out) = call("GET", "/api/v1/sources", serde_json::json!({}));
+                assert!(st.starts_with("200"), "{st} {out}");
+                assert_eq!(out["data"].as_array().unwrap().len(), 2);
+                assert!(
+                    call("POST", "/api/v1/sources/discover", serde_json::json!({}))
+                        .0
+                        .starts_with("400")
+                );
+                assert!(call(
+                    "POST",
+                    "/api/v1/sources/discover",
+                    serde_json::json!({"source": "nope"})
+                )
+                .0
+                .starts_with("404"));
+                let (st, out) = call(
+                    "POST",
+                    "/api/v1/sources/discover",
+                    serde_json::json!({"source": "broken"}),
+                );
+                assert!(st.starts_with("502"), "{st} {out}");
+                assert!(!out["error"].as_str().unwrap().contains("gone.sqlite"));
+                let (st, out) = call(
+                    "POST",
+                    "/api/v1/sources/discover",
+                    serde_json::json!({"source": "crm"}),
+                );
+                assert!(
+                    st.starts_with("200") && out["data"]["changed"] == true,
+                    "{st} {out}"
+                );
+                let (st, pv) = call(
+                    "POST",
+                    "/api/v1/sources/ontology",
+                    serde_json::json!({"sources": ["crm"], "preview": true}),
+                );
+                assert!(st.starts_with("200"), "{st} {pv}");
+                let (st, _) = call(
+                    "POST",
+                    "/api/v1/sources/ontology",
+                    serde_json::json!({"sources": ["crm"], "preview": false, "fingerprints": {"crm": "stale"}}),
+                );
+                assert!(st.starts_with("409"), "{st}");
+                let (st, ok) = call(
+                    "POST",
+                    "/api/v1/sources/ontology",
+                    serde_json::json!({"sources": ["crm"], "preview": false, "fingerprints": pv["data"]["fingerprints"]}),
+                );
+                assert!(
+                    st.starts_with("200") && ok["data"]["saved"] == true,
+                    "{st} {ok}"
+                );
+                assert!(call("POST", "/api/v1/sources/zzz", serde_json::json!({}))
+                    .0
+                    .starts_with("404"));
+                assert!(call(
+                    "POST",
+                    "/api/v1/sources/ontology",
+                    serde_json::json!({"sources": []})
+                )
+                .0
+                .starts_with("400"));
+            },
+        );
+        m3_cleanup(k, db);
+    }
 }
