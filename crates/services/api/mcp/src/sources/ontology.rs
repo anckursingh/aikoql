@@ -21,6 +21,28 @@ struct Merged {
     warnings: Vec<String>,
 }
 
+/// Was this class written by discovery? The description alone is not proof, since a
+/// human can type the same words: it must also name containers ("<source>.<container>")
+/// that the ontology's mappings tie to this very class, which only discovery writes.
+fn written_by_discovery(class: &J, mappings: &[J]) -> bool {
+    let Some(keys) = class["description"]
+        .as_str()
+        .and_then(|d| d.strip_prefix(DISCOVERED))
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+    else {
+        return false;
+    };
+    let name = name_of(class);
+    keys.split(", ").all(|key| {
+        key.split_once('.').is_some_and(|(_, container)| {
+            mappings
+                .iter()
+                .any(|m| m["physical_type"] == container && m["class"] == name.as_str())
+        })
+    })
+}
+
 fn arr(v: &J, key: &str) -> Vec<J> {
     v.get(key)
         .and_then(|x| x.as_array())
@@ -63,9 +85,7 @@ fn merge(existing: Option<&J>, draft: &J) -> Merged {
                 adds.push(name);
             }
             Some(i) => {
-                let ours = classes[i]["description"]
-                    .as_str()
-                    .is_some_and(|d| d.starts_with(DISCOVERED));
+                let ours = written_by_discovery(&classes[i], &maps);
                 if !ours {
                     warnings.push(format!(
                         "class {name} already exists and was not written by discovery; kept as is"
