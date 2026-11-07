@@ -825,6 +825,7 @@ fn is_admin_route(path: &str) -> bool {
         "/api/v1/backup"
             | "/api/v1/restore"
             | "/api/v1/verify-backup"
+            | "/api/v1/sources"
             | "/api/v1/sources/discover"
             | "/api/v1/sources/ontology"
             | "/api/v1/sources/import"
