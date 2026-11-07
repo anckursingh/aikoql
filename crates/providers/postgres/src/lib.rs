@@ -173,9 +173,47 @@ impl PostgresConnector {
             columns,
             primary_keys: pks,
             row_count_estimate: count,
-            schema: String::new(),
-            unique_groups: Vec::new(),
+            schema: self.table_schema_name(table_name)?,
+            unique_groups: self.unique_groups(table_name)?,
         })
+    }
+
+    /// The (first) non-system schema holding a table of this name.
+    fn table_schema_name(&mut self, table: &str) -> Result<String, String> {
+        let rows = self
+            .client
+            .query(
+                "SELECT n.nspname::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relname = $1 AND c.relkind IN ('r', 'p')
+                   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                 ORDER BY (n.nspname = 'public') DESC, n.nspname LIMIT 1",
+                &[&table],
+            )
+            .map_err(|e| format!("schema of {table}: {e}"))?;
+        Ok(rows.first().map(|r| r.get(0)).unwrap_or_default())
+    }
+
+    /// UNIQUE constraints of a table: columns in key order.
+    fn unique_groups(&mut self, table: &str) -> Result<Vec<Vec<String>>, String> {
+        let rows = self
+            .client
+            .query(
+                "SELECT (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                           FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                           JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum)
+                 FROM pg_constraint con
+                 JOIN pg_class cl ON cl.oid = con.conrelid
+                 JOIN pg_namespace n ON n.oid = cl.relnamespace
+                 WHERE con.contype = 'u' AND cl.relname = $1
+                   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                 ORDER BY con.conname",
+                &[&table],
+            )
+            .map_err(|e| format!("unique constraints of {table}: {e}"))?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| r.get::<_, Option<Vec<String>>>(0))
+            .collect())
     }
 
     /// Introspect all user tables.
@@ -288,41 +326,44 @@ impl PostgresConnector {
         Ok(objects)
     }
 
-    /// List single-column foreign keys. ponytail: a composite FK (same
-    /// constraint_name twice) keeps only its first column pair — MVP schemas
-    /// are single-column.
+    /// Every foreign key with ALL its column pairs, in key order.
     pub fn introspect_foreign_keys(&mut self) -> Result<Vec<ForeignKeyInfo>, String> {
         let rows = self
             .client
             .query(
-                "SELECT tc.constraint_name, tc.table_name, kcu.column_name,
-                        ccu.table_name AS parent_table, ccu.column_name AS parent_column
-                 FROM information_schema.table_constraints tc
-                 JOIN information_schema.key_column_usage kcu
-                   ON tc.constraint_name = kcu.constraint_name
-                  AND tc.table_schema = kcu.table_schema
-                 JOIN information_schema.constraint_column_usage ccu
-                   ON ccu.constraint_name = tc.constraint_name
-                  AND ccu.table_schema = tc.table_schema
-                 WHERE tc.constraint_type = 'FOREIGN KEY'
-                   AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
-                 ORDER BY tc.table_name, tc.constraint_name",
+                "SELECT con.conname::text, cl.relname::text, pcl.relname::text,
+                        (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                           FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                           JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum),
+                        (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                           FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+                           JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum)
+                 FROM pg_constraint con
+                 JOIN pg_class cl ON cl.oid = con.conrelid
+                 JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+                 JOIN pg_class pcl ON pcl.oid = con.confrelid
+                 WHERE con.contype = 'f'
+                   AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
+                 ORDER BY cl.relname, con.conname",
                 &[],
             )
             .map_err(|e| format!("introspect foreign keys: {}", e))?;
         let mut seen = HashSet::new();
         let mut fks = Vec::new();
         for r in &rows {
+            let child_columns: Vec<String> = r.get::<_, Option<Vec<String>>>(3).unwrap_or_default();
+            let parent_columns: Vec<String> =
+                r.get::<_, Option<Vec<String>>>(4).unwrap_or_default();
             let fk = ForeignKeyInfo {
                 constraint_name: r.get(0),
                 child_table: r.get(1),
-                child_column: r.get(2),
-                parent_table: r.get(3),
-                parent_column: r.get(4),
-                child_columns: Vec::new(),
-                parent_columns: Vec::new(),
+                child_column: child_columns.first().cloned().unwrap_or_default(),
+                parent_table: r.get(2),
+                parent_column: parent_columns.first().cloned().unwrap_or_default(),
+                child_columns,
+                parent_columns,
             };
-            if seen.insert(fk.constraint_name.clone()) {
+            if seen.insert((fk.child_table.clone(), fk.constraint_name.clone())) {
                 fks.push(fk);
             }
         }

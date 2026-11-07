@@ -50,7 +50,7 @@ struct Neo4jError {
 /// A label as a safe Cypher identifier body: every backtick doubled, so the
 /// result can sit inside ``(n:`…`)`` without ending the identifier.
 pub fn quote_label(label: &str) -> String {
-    label.to_string()
+    label.replace('`', "``")
 }
 
 /// One property of a label: observed value types and whether every node has it.
@@ -63,8 +63,36 @@ pub struct LabelProp {
 
 /// Property schema from a bounded sample of `properties(n)` maps (the fallback
 /// when `db.schema.nodeTypeProperties()` is unavailable).
-pub fn label_props_from_sample(_rows: &[serde_json::Value]) -> Vec<LabelProp> {
-    Vec::new()
+pub fn label_props_from_sample(rows: &[serde_json::Value]) -> Vec<LabelProp> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let objects: Vec<&serde_json::Map<String, serde_json::Value>> =
+        rows.iter().filter_map(|v| v.as_object()).collect();
+    let mut seen: BTreeMap<&str, (BTreeSet<&'static str>, usize)> = BTreeMap::new();
+    for o in &objects {
+        for (k, v) in o.iter() {
+            let e = seen.entry(k.as_str()).or_default();
+            let ty = match v {
+                serde_json::Value::Null => None,
+                serde_json::Value::Bool(_) => Some("Boolean"),
+                serde_json::Value::Number(n) if n.is_i64() || n.is_u64() => Some("Long"),
+                serde_json::Value::Number(_) => Some("Double"),
+                serde_json::Value::String(_) => Some("String"),
+                serde_json::Value::Array(_) => Some("List"),
+                serde_json::Value::Object(_) => Some("Map"),
+            };
+            if let Some(t) = ty {
+                e.0.insert(t);
+                e.1 += 1;
+            }
+        }
+    }
+    seen.into_iter()
+        .map(|(name, (types, non_null))| LabelProp {
+            name: name.to_string(),
+            types: types.into_iter().map(String::from).collect(),
+            mandatory: non_null == objects.len(),
+        })
+        .collect()
 }
 
 pub struct Neo4jConnector {
@@ -120,8 +148,22 @@ impl Neo4jConnector {
     /// db-scoped /db/neo4j/tx/commit endpoint is the only one that answers
     /// (verified live: legacy 404, db-scoped 200).
     fn cypher(&self, statement: &str) -> Result<Vec<serde_json::Value>, String> {
+        Ok(self
+            .cypher_rows(statement, serde_json::json!({}))?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+
+    /// Like [`cypher`](Self::cypher) but keeps each result row's columns
+    /// together and sends `parameters` (never interpolate user text).
+    fn cypher_rows(
+        &self,
+        statement: &str,
+        parameters: serde_json::Value,
+    ) -> Result<Vec<Vec<serde_json::Value>>, String> {
         let body = serde_json::json!({
-            "statements": [{"statement": statement}]
+            "statements": [{"statement": statement, "parameters": parameters}]
         });
         let resp = self
             .agent
@@ -136,15 +178,11 @@ impl Neo4jConnector {
         if !neo.errors.is_empty() {
             return Err(format!("{}: {}", neo.errors[0].code, neo.errors[0].message));
         }
-        let mut rows = Vec::new();
-        for result in neo.results {
-            for data in result.data {
-                for val in data.row {
-                    rows.push(val);
-                }
-            }
-        }
-        Ok(rows)
+        Ok(neo
+            .results
+            .into_iter()
+            .flat_map(|r| r.data.into_iter().map(|d| d.row))
+            .collect())
     }
 
     // ------------------------------------------------------------------
@@ -171,7 +209,10 @@ impl Neo4jConnector {
 
     /// Get count of nodes for a label.
     pub fn count_nodes(&self, label: &str) -> Result<u64, String> {
-        let rows = self.cypher(&format!("MATCH (n:`{}`) RETURN count(n)", label))?;
+        let rows = self.cypher(&format!(
+            "MATCH (n:`{}`) RETURN count(n)",
+            quote_label(label)
+        ))?;
         rows.first()
             .and_then(|v| v.as_u64())
             .ok_or_else(|| "unexpected count result".to_string())
@@ -184,7 +225,7 @@ impl Neo4jConnector {
     pub fn introspect_label_props(&self, label: &str) -> Result<Vec<String>, String> {
         let rows = self.cypher(&format!(
             "MATCH (n:`{}`) RETURN properties(n) LIMIT 1",
-            label
+            quote_label(label)
         ))?;
         let mut props: Vec<String> = rows
             .first()
@@ -199,18 +240,81 @@ impl Neo4jConnector {
     /// `db.schema.nodeTypeProperties()`, else over a bounded sample.
     pub fn introspect_label_schema(
         &self,
-        _label: &str,
-        _sample_limit: u32,
+        label: &str,
+        sample_limit: u32,
     ) -> Result<Vec<LabelProp>, String> {
-        Ok(Vec::new())
+        let procedure = self.cypher_rows(
+            "CALL db.schema.nodeTypeProperties() \
+             YIELD nodeLabels, propertyName, propertyTypes, mandatory \
+             WHERE $label IN nodeLabels AND propertyName IS NOT NULL \
+             RETURN propertyName, propertyTypes, mandatory",
+            serde_json::json!({ "label": label }),
+        );
+        match procedure {
+            Ok(rows) => {
+                let mut props: Vec<LabelProp> = rows
+                    .iter()
+                    .filter_map(|r| {
+                        Some(LabelProp {
+                            name: r.first()?.as_str()?.to_string(),
+                            types: r
+                                .get(1)?
+                                .as_array()?
+                                .iter()
+                                .filter_map(|t| t.as_str().map(String::from))
+                                .collect(),
+                            mandatory: r.get(2)?.as_bool().unwrap_or(false),
+                        })
+                    })
+                    .collect();
+                props.sort_by(|a, b| a.name.cmp(&b.name));
+                Ok(props)
+            }
+            Err(_) => {
+                let rows = self.cypher_rows(
+                    &format!(
+                        "MATCH (n:`{}`) RETURN properties(n) LIMIT {}",
+                        quote_label(label),
+                        sample_limit.clamp(1, 10_000)
+                    ),
+                    serde_json::json!({}),
+                )?;
+                let maps: Vec<serde_json::Value> = rows
+                    .into_iter()
+                    .filter_map(|r| r.into_iter().next())
+                    .collect();
+                Ok(label_props_from_sample(&maps))
+            }
+        }
     }
 
     /// Distinct (relationship type, from label, to label) patterns, at most `limit`.
     pub fn introspect_rel_patterns(
         &self,
-        _limit: u32,
+        limit: u32,
     ) -> Result<Vec<(String, String, String)>, String> {
-        Ok(Vec::new())
+        let rows = self.cypher_rows(
+            &format!(
+                "MATCH (a)-[r]->(b) \
+                 WITH DISTINCT type(r) AS t, head(labels(a)) AS la, head(labels(b)) AS lb \
+                 WHERE la IS NOT NULL AND lb IS NOT NULL RETURN t, la, lb LIMIT {}",
+                limit.clamp(1, 10_000)
+            ),
+            serde_json::json!({}),
+        )?;
+        let mut out: Vec<(String, String, String)> = rows
+            .iter()
+            .filter_map(|r| {
+                Some((
+                    r.first()?.as_str()?.to_string(),
+                    r.get(1)?.as_str()?.to_string(),
+                    r.get(2)?.as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        Ok(out)
     }
 
     // ------------------------------------------------------------------
@@ -226,7 +330,7 @@ impl Neo4jConnector {
     ) -> Result<(Vec<KnowledgeObject>, HashMap<String, KOID>), String> {
         let stmt = format!(
             "MATCH (n:`{}`) RETURN elementId(n), properties(n), labels(n)",
-            label
+            quote_label(label)
         );
         let body = serde_json::json!({ "statements": [{"statement": stmt}] });
         let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", self.base_url))
@@ -327,7 +431,7 @@ impl Neo4jConnector {
         // re-imports are byte-identical.
         let stmt = format!(
             "MATCH (a)-[r:`{}`]-(b) WHERE elementId(a) < elementId(b) RETURN elementId(startNode(r)), elementId(endNode(r)), type(r), properties(r) ORDER BY elementId(startNode(r)), elementId(endNode(r))",
-            rel_type
+            quote_label(rel_type)
         );
         let body = serde_json::json!({ "statements": [{"statement": stmt}] });
         let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", self.base_url))
@@ -592,7 +696,7 @@ mod tests {
     fn random_json(r: &mut Rng, depth: u32) -> serde_json::Value {
         match r.next() % if depth > 4 { 5 } else { 7 } {
             0 => serde_json::Value::Null,
-            1 => serde_json::json!(r.next() % 2 == 0),
+            1 => serde_json::json!(r.next().is_multiple_of(2)),
             2 => serde_json::json!(r.next() as i64),
             3 => serde_json::json!((r.next() % 1000) as f64 / 7.0),
             4 => serde_json::json!(*r.pick(&["", "a", "\u{0}", "x`y", "ünï", "💥"])),

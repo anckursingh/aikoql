@@ -35,6 +35,9 @@ pub struct TableSchema {
     pub unique_groups: Vec<Vec<String>>,
 }
 
+/// A foreign key under construction: parent table and (seq, from, to) rows.
+type FkGroup = (String, Vec<(i64, String, Option<String>)>);
+
 /// One foreign key (composite keys keep every column pair, in order).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ForeignKeyInfo {
@@ -139,13 +142,139 @@ impl SqliteConnector {
             name: table_name.to_string(),
             columns,
             row_count: count,
-            unique_groups: Vec::new(),
+            unique_groups: self.unique_groups(table_name)?,
         })
+    }
+
+    /// Unique constraints and unique indexes (not the primary key), column order kept.
+    fn unique_groups(&self, table: &str) -> Result<Vec<Vec<String>>, String> {
+        let quoted = table.replace('"', "\"\"");
+        let mut idx = self
+            .conn
+            .prepare(&format!("PRAGMA index_list(\"{quoted}\")"))
+            .map_err(|e| format!("index_list {table}: {e}"))?;
+        // columns: seq, name, unique, origin, partial
+        let rows = idx
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(1)?,
+                    r.get::<_, bool>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| format!("index_list {table}: {e}"))?;
+        let mut groups = Vec::new();
+        for row in rows {
+            let (name, unique, origin) = row.map_err(|e| format!("index row: {e}"))?;
+            if !unique || origin == "pk" {
+                continue;
+            }
+            let mut info = self
+                .conn
+                .prepare(&format!(
+                    "PRAGMA index_info(\"{}\")",
+                    name.replace('"', "\"\"")
+                ))
+                .map_err(|e| format!("index_info {name}: {e}"))?;
+            let cols = info
+                .query_map([], |r| r.get::<_, Option<String>>(2))
+                .map_err(|e| format!("index_info {name}: {e}"))?;
+            let mut group = Vec::new();
+            for c in cols {
+                if let Some(c) = c.map_err(|e| format!("index col: {e}"))? {
+                    group.push(c);
+                }
+            }
+            if !group.is_empty() {
+                groups.push(group);
+            }
+        }
+        Ok(groups)
+    }
+
+    /// Primary-key columns of a table in key order.
+    fn primary_key_columns(&self, table: &str) -> Result<Vec<String>, String> {
+        let mut st = self
+            .conn
+            .prepare(&format!(
+                "PRAGMA table_info(\"{}\")",
+                table.replace('"', "\"\"")
+            ))
+            .map_err(|e| format!("table_info {table}: {e}"))?;
+        let rows = st
+            .query_map([], |r| Ok((r.get::<_, i64>(5)?, r.get::<_, String>(1)?)))
+            .map_err(|e| format!("table_info {table}: {e}"))?;
+        let mut pk: Vec<(i64, String)> = Vec::new();
+        for r in rows {
+            let (order, name) = r.map_err(|e| format!("pk row: {e}"))?;
+            if order > 0 {
+                pk.push((order, name));
+            }
+        }
+        pk.sort();
+        Ok(pk.into_iter().map(|(_, n)| n).collect())
     }
 
     /// Every foreign key of every user table.
     pub fn introspect_foreign_keys(&self) -> Result<Vec<ForeignKeyInfo>, String> {
-        Ok(Vec::new())
+        let mut out = Vec::new();
+        for table in self.list_tables()? {
+            let mut st = self
+                .conn
+                .prepare(&format!(
+                    "PRAGMA foreign_key_list(\"{}\")",
+                    table.replace('"', "\"\"")
+                ))
+                .map_err(|e| format!("foreign_key_list {table}: {e}"))?;
+            // columns: id, seq, table, from, to, on_update, on_delete, match
+            let rows = st
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                    ))
+                })
+                .map_err(|e| format!("foreign_key_list {table}: {e}"))?;
+            let mut by_id: std::collections::BTreeMap<i64, FkGroup> =
+                std::collections::BTreeMap::new();
+            for r in rows {
+                let (id, seq, parent, from, to) = r.map_err(|e| format!("fk row: {e}"))?;
+                by_id
+                    .entry(id)
+                    .or_insert_with(|| (parent, Vec::new()))
+                    .1
+                    .push((seq, from, to));
+            }
+            for (id, (parent, mut cols)) in by_id {
+                cols.sort();
+                // `REFERENCES parent` without columns means the parent's primary key
+                let implicit = if cols.iter().any(|(_, _, to)| to.is_none()) {
+                    self.primary_key_columns(&parent)?
+                } else {
+                    Vec::new()
+                };
+                let parent_columns = cols
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, _, to))| {
+                        to.clone()
+                            .or_else(|| implicit.get(i).cloned())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                out.push(ForeignKeyInfo {
+                    constraint_name: format!("fk_{table}_{id}"),
+                    child_table: table.clone(),
+                    child_columns: cols.into_iter().map(|(_, from, _)| from).collect(),
+                    parent_table: parent,
+                    parent_columns,
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// Introspect all user tables.

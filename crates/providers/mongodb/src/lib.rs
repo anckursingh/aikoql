@@ -51,8 +51,65 @@ impl FieldStats {
 }
 
 /// Field statistics over a slice of documents (pure; no server needed).
-pub fn profile_from_docs(_docs: &[Document]) -> Vec<FieldStats> {
-    Vec::new()
+pub fn profile_from_docs(docs: &[Document]) -> Vec<FieldStats> {
+    use std::collections::{BTreeSet, HashSet};
+    /// Deeper nesting is reported as a plain `Document`, not descended into.
+    const MAX_DEPTH: usize = 64;
+    #[derive(Default)]
+    struct Acc {
+        types: BTreeSet<String>,
+        present: u64,
+        nulls: u64,
+    }
+    fn walk(
+        prefix: &str,
+        doc: &Document,
+        depth: usize,
+        acc: &mut BTreeMap<String, Acc>,
+        once: &mut HashSet<String>,
+    ) {
+        for (k, v) in doc.iter() {
+            let path = if prefix.is_empty() {
+                k.clone()
+            } else {
+                format!("{prefix}.{k}")
+            };
+            let a = acc.entry(path.clone()).or_default();
+            a.types.insert(bson_type_name(v));
+            if once.insert(path.clone()) {
+                a.present += 1;
+                if matches!(v, Bson::Null) {
+                    a.nulls += 1;
+                }
+            }
+            if let Bson::Document(sub) = v {
+                if depth < MAX_DEPTH {
+                    walk(&path, sub, depth + 1, acc, once);
+                }
+            }
+        }
+    }
+    let mut acc: BTreeMap<String, Acc> = BTreeMap::new();
+    for d in docs {
+        walk("", d, 0, &mut acc, &mut HashSet::new());
+    }
+    acc.into_iter()
+        .map(|(name, a)| FieldStats {
+            name,
+            types: a.types.into_iter().collect(),
+            present: a.present,
+            nulls: a.nulls,
+            samples: docs.len() as u64,
+        })
+        .collect()
+}
+
+fn bson_type_name(b: &Bson) -> String {
+    match b {
+        Bson::Document(_) => "Document".into(),
+        Bson::Null => "Null".into(),
+        other => format!("{:?}", other.element_type()),
+    }
 }
 
 pub struct MongoConnector {
@@ -131,10 +188,25 @@ impl MongoConnector {
     /// Field statistics from a random `$sample` of up to `sample_limit` documents.
     pub fn introspect_collection_sampled(
         &self,
-        _name: &str,
-        _sample_limit: u32,
+        name: &str,
+        sample_limit: u32,
     ) -> Result<Vec<FieldStats>, String> {
-        Ok(Vec::new())
+        let docs: Vec<Document> = self.rt.block_on(async {
+            use futures_util::StreamExt;
+            let coll = self.db.collection::<Document>(name);
+            let mut cursor = coll
+                .aggregate(vec![
+                    doc! { "$sample": { "size": sample_limit.clamp(1, 10_000) as i64 } },
+                ])
+                .await
+                .map_err(|e| format!("sample {name}: {e}"))?;
+            let mut out = Vec::new();
+            while let Some(d) = cursor.next().await {
+                out.push(d.map_err(|e| format!("sample {name}: {e}"))?);
+            }
+            Ok::<_, String>(out)
+        })?;
+        Ok(profile_from_docs(&docs))
     }
 
     pub fn introspect_all(&self) -> Result<Vec<CollectionSchema>, String> {
@@ -411,7 +483,7 @@ mod tests {
                     .unwrap_or(&0.0),
             ),
             4 => Bson::String(["", "a\u{0}b", "💥", "x.y"][(r.next() % 4) as usize].to_string()),
-            5 => Bson::Boolean(r.next() % 2 == 0),
+            5 => Bson::Boolean(r.next().is_multiple_of(2)),
             6 => Bson::Array(
                 (0..r.next() % 3)
                     .map(|_| random_bson(r, depth + 1))

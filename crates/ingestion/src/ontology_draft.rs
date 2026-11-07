@@ -79,6 +79,14 @@ fn field_value_type(f: &FieldInfo) -> &'static str {
     connector_type_to_value_type(observed.unwrap_or(&f.data_type))
 }
 
+impl DefinitionDraft {
+    /// The kernel refuses an ontology with no class: a draft from sources with
+    /// no containers has nothing to publish.
+    pub fn publishable(&self) -> bool {
+        !self.classes.is_empty()
+    }
+}
+
 pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -> DefinitionDraft {
     let mut warnings: Vec<String> = Vec::new();
     let entries: Vec<Entry> = sources
@@ -739,6 +747,7 @@ mod tests {
     fn empty_sources_is_an_empty_draft_not_an_error() {
         let d = definition_from_sources(&[], &[]);
         assert!(d.classes.is_empty() && d.warnings.is_empty());
+        assert!(!d.publishable(), "an empty draft has nothing to publish");
         assert!(list(&d, "classes").is_empty() && list(&d, "mappings").is_empty());
     }
 }
