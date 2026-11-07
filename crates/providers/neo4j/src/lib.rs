@@ -47,6 +47,26 @@ struct Neo4jError {
 // Connector
 // ---------------------------------------------------------------------------
 
+/// A label as a safe Cypher identifier body: every backtick doubled, so the
+/// result can sit inside ``(n:`…`)`` without ending the identifier.
+pub fn quote_label(label: &str) -> String {
+    label.to_string()
+}
+
+/// One property of a label: observed value types and whether every node has it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LabelProp {
+    pub name: String,
+    pub types: Vec<String>,
+    pub mandatory: bool,
+}
+
+/// Property schema from a bounded sample of `properties(n)` maps (the fallback
+/// when `db.schema.nodeTypeProperties()` is unavailable).
+pub fn label_props_from_sample(_rows: &[serde_json::Value]) -> Vec<LabelProp> {
+    Vec::new()
+}
+
 pub struct Neo4jConnector {
     base_url: String,
     auth: String, // "Basic <base64>"
@@ -173,6 +193,24 @@ impl Neo4jConnector {
             .unwrap_or_default();
         props.sort();
         Ok(props)
+    }
+
+    /// Property schema of a label: union over the whole label via
+    /// `db.schema.nodeTypeProperties()`, else over a bounded sample.
+    pub fn introspect_label_schema(
+        &self,
+        _label: &str,
+        _sample_limit: u32,
+    ) -> Result<Vec<LabelProp>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Distinct (relationship type, from label, to label) patterns, at most `limit`.
+    pub fn introspect_rel_patterns(
+        &self,
+        _limit: u32,
+    ) -> Result<Vec<(String, String, String)>, String> {
+        Ok(Vec::new())
     }
 
     // ------------------------------------------------------------------
@@ -497,5 +535,110 @@ mod tests {
             deterministic_koid("Person", "4:abc:123"),
             deterministic_koid("Person", "4:abc:123")
         );
+    }
+
+    #[test]
+    fn sample_props_union_types_and_mandatory() {
+        let rows = vec![
+            serde_json::json!({"name": "a", "age": 30}),
+            serde_json::json!({"name": "b", "age": "old", "nick": null}),
+            serde_json::json!({"name": "c"}),
+        ];
+        let props = label_props_from_sample(&rows);
+        let get = |n: &str| {
+            props
+                .iter()
+                .find(|p| p.name == n)
+                .unwrap_or_else(|| panic!("no {n}: {props:?}"))
+        };
+        assert!(get("name").mandatory && get("name").types == ["String"]);
+        assert!(!get("age").mandatory);
+        assert_eq!(get("age").types, ["Long", "String"]);
+        assert!(!get("nick").mandatory);
+        assert!(label_props_from_sample(&[]).is_empty());
+    }
+
+    #[test]
+    fn quote_label_doubles_backticks_so_it_cannot_leave_the_identifier() {
+        assert_eq!(quote_label("Person"), "Person");
+        assert_eq!(quote_label("a`b"), "a``b");
+        let hostile = "x`) DETACH DELETE (m //";
+        let q = format!("MATCH (n:`{}`) RETURN n", quote_label(hostile));
+        // after removing escaped pairs, the only backticks left are the two delimiters
+        assert_eq!(q.replace("``", "").matches('`').count(), 2, "{q}");
+    }
+
+    /// Seeded xorshift: reproducible, no unseeded RNG (env-hygiene gate).
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn pick<'a, T>(&mut self, xs: &'a [T]) -> &'a T {
+            &xs[(self.next() % xs.len() as u64) as usize]
+        }
+    }
+
+    fn fuzz_iters() -> u64 {
+        std::env::var("AIKOQL_FUZZ_ITERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2_000)
+    }
+
+    fn random_json(r: &mut Rng, depth: u32) -> serde_json::Value {
+        match r.next() % if depth > 4 { 5 } else { 7 } {
+            0 => serde_json::Value::Null,
+            1 => serde_json::json!(r.next() % 2 == 0),
+            2 => serde_json::json!(r.next() as i64),
+            3 => serde_json::json!((r.next() % 1000) as f64 / 7.0),
+            4 => serde_json::json!(*r.pick(&["", "a", "\u{0}", "x`y", "ünï", "💥"])),
+            5 => serde_json::Value::Array(
+                (0..r.next() % 4)
+                    .map(|_| random_json(r, depth + 1))
+                    .collect(),
+            ),
+            _ => serde_json::Value::Object(
+                (0..r.next() % 4)
+                    .map(|_| {
+                        (
+                            r.pick(&["a", "b", "c", "k`", "", "ü"]).to_string(),
+                            random_json(r, depth + 1),
+                        )
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    #[test]
+    fn label_props_fuzz_keeps_its_invariants() {
+        for seed in 1..=fuzz_iters() {
+            let mut r = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let rows: Vec<serde_json::Value> =
+                (0..r.next() % 6).map(|_| random_json(&mut r, 0)).collect();
+            let props = label_props_from_sample(&rows); // must not panic
+            let objects: Vec<&serde_json::Map<String, serde_json::Value>> =
+                rows.iter().filter_map(|v| v.as_object()).collect();
+            for p in &props {
+                assert!(!p.types.iter().any(|t| t == "Null"), "seed {seed}: {p:?}");
+                let mut sorted = p.types.clone();
+                sorted.sort();
+                sorted.dedup();
+                assert_eq!(sorted, p.types, "seed {seed}: types sorted and unique");
+                if p.mandatory {
+                    assert!(
+                        !objects.is_empty()
+                            && objects
+                                .iter()
+                                .all(|o| o.get(&p.name).is_some_and(|v| !v.is_null())),
+                        "seed {seed}: mandatory {p:?} over {rows:?}"
+                    );
+                }
+            }
+        }
     }
 }

@@ -22,6 +22,39 @@ pub struct CollectionSchema {
     pub properties: Vec<String>,
 }
 
+/// What a sample of documents showed about one (dotted) field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldStats {
+    pub name: String,
+    /// Observed BSON type names, sorted (`Null` included when seen).
+    pub types: Vec<String>,
+    pub present: u64,
+    pub nulls: u64,
+    pub samples: u64,
+}
+
+impl FieldStats {
+    pub fn presence_ratio(&self) -> f64 {
+        if self.samples == 0 {
+            0.0
+        } else {
+            self.present as f64 / self.samples as f64
+        }
+    }
+    pub fn null_ratio(&self) -> f64 {
+        if self.present == 0 {
+            0.0
+        } else {
+            self.nulls as f64 / self.present as f64
+        }
+    }
+}
+
+/// Field statistics over a slice of documents (pure; no server needed).
+pub fn profile_from_docs(_docs: &[Document]) -> Vec<FieldStats> {
+    Vec::new()
+}
+
 pub struct MongoConnector {
     rt: Runtime,
     #[allow(dead_code)]
@@ -93,6 +126,15 @@ impl MongoConnector {
                 })
             })
             .map_err(|e: String| e)
+    }
+
+    /// Field statistics from a random `$sample` of up to `sample_limit` documents.
+    pub fn introspect_collection_sampled(
+        &self,
+        _name: &str,
+        _sample_limit: u32,
+    ) -> Result<Vec<FieldStats>, String> {
+        Ok(Vec::new())
     }
 
     pub fn introspect_all(&self) -> Result<Vec<CollectionSchema>, String> {
@@ -312,5 +354,123 @@ mod tests {
         collect_keys("", &doc, &mut keys);
         assert!(keys.contains(&"name".into()));
         assert!(keys.contains(&"addr.city".into()));
+    }
+
+    #[test]
+    fn profile_reports_types_presence_and_nulls() {
+        let docs = vec![
+            doc! { "_id": 1, "age": 30, "name": "a", "addr": { "city": "X" } },
+            doc! { "_id": 2, "age": Bson::Null, "name": "b" },
+            doc! { "_id": 3, "age": "unknown", "addr": { "city": "Y" } },
+            doc! { "_id": 4 },
+        ];
+        let stats = profile_from_docs(&docs);
+        let get = |n: &str| {
+            stats
+                .iter()
+                .find(|s| s.name == n)
+                .unwrap_or_else(|| panic!("no {n}: {stats:?}"))
+        };
+        let age = get("age");
+        assert_eq!(age.types, ["Int32", "Null", "String"]);
+        assert_eq!((age.present, age.nulls, age.samples), (3, 1, 4));
+        assert!((age.presence_ratio() - 0.75).abs() < 1e-9);
+        assert!((age.null_ratio() - 1.0 / 3.0).abs() < 1e-9);
+        assert_eq!(get("name").types, ["String"]);
+        assert_eq!(get("addr.city").present, 2);
+        assert_eq!(get("addr").types, ["Document"]);
+        assert_eq!(get("_id").presence_ratio(), 1.0);
+        assert!(profile_from_docs(&[]).is_empty());
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+
+    fn fuzz_iters() -> u64 {
+        std::env::var("AIKOQL_FUZZ_ITERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2_000)
+    }
+
+    fn random_bson(r: &mut Rng, depth: u32) -> Bson {
+        match r.next() % if depth > 5 { 6 } else { 8 } {
+            0 => Bson::Null,
+            1 => Bson::Int32(r.next() as i32),
+            2 => Bson::Int64(r.next() as i64),
+            3 => Bson::Double(
+                *[f64::NAN, f64::INFINITY, -0.0, 1.5]
+                    .get((r.next() % 4) as usize)
+                    .unwrap_or(&0.0),
+            ),
+            4 => Bson::String(["", "a\u{0}b", "💥", "x.y"][(r.next() % 4) as usize].to_string()),
+            5 => Bson::Boolean(r.next() % 2 == 0),
+            6 => Bson::Array(
+                (0..r.next() % 3)
+                    .map(|_| random_bson(r, depth + 1))
+                    .collect(),
+            ),
+            _ => Bson::Document(random_doc(r, depth + 1)),
+        }
+    }
+
+    fn random_doc(r: &mut Rng, depth: u32) -> Document {
+        let mut d = Document::new();
+        for _ in 0..r.next() % 5 {
+            let key = ["a", "b", "c", "x.y", "", "k$", "ü"][(r.next() % 7) as usize];
+            d.insert(key, random_bson(r, depth));
+        }
+        d
+    }
+
+    #[test]
+    fn profile_fuzz_keeps_its_invariants() {
+        for seed in 1..=fuzz_iters() {
+            let mut r = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let docs: Vec<Document> = (0..r.next() % 8).map(|_| random_doc(&mut r, 0)).collect();
+            let stats = profile_from_docs(&docs); // must not panic
+            for s in &stats {
+                assert_eq!(s.samples, docs.len() as u64, "seed {seed}");
+                assert!(
+                    s.present <= s.samples && s.nulls <= s.present,
+                    "seed {seed}: {s:?}"
+                );
+                assert!(
+                    (0.0..=1.0).contains(&s.presence_ratio())
+                        && (0.0..=1.0).contains(&s.null_ratio())
+                );
+                assert!(
+                    !s.types.is_empty() && s.types.windows(2).all(|w| w[0] < w[1]),
+                    "seed {seed}: {s:?}"
+                );
+            }
+            let mut names: Vec<&str> = stats.iter().map(|s| s.name.as_str()).collect();
+            let n = names.len();
+            names.sort();
+            names.dedup();
+            assert_eq!(n, names.len(), "seed {seed}: one entry per field");
+        }
+    }
+
+    #[test]
+    fn profile_survives_200_levels_of_nesting_and_bounds_the_keys() {
+        let mut inner = doc! { "leaf": 1 };
+        for _ in 0..200 {
+            inner = doc! { "n": inner };
+        }
+        let stats = profile_from_docs(&[inner]);
+        assert!(!stats.is_empty());
+        assert!(
+            stats.len() <= 66,
+            "depth is capped, got {} fields",
+            stats.len()
+        );
     }
 }

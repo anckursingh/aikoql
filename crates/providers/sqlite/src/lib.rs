@@ -31,6 +31,19 @@ pub struct TableSchema {
     pub name: String,
     pub columns: Vec<ColumnInfo>,
     pub row_count: i64,
+    /// Column groups under a UNIQUE constraint or unique index (single and composite).
+    pub unique_groups: Vec<Vec<String>>,
+}
+
+/// One foreign key (composite keys keep every column pair, in order).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForeignKeyInfo {
+    /// SQLite names no constraints: `fk_<child>_<n>`.
+    pub constraint_name: String,
+    pub child_table: String,
+    pub child_columns: Vec<String>,
+    pub parent_table: String,
+    pub parent_columns: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +139,13 @@ impl SqliteConnector {
             name: table_name.to_string(),
             columns,
             row_count: count,
+            unique_groups: Vec::new(),
         })
+    }
+
+    /// Every foreign key of every user table.
+    pub fn introspect_foreign_keys(&self) -> Result<Vec<ForeignKeyInfo>, String> {
+        Ok(Vec::new())
     }
 
     /// Introspect all user tables.
@@ -377,6 +396,54 @@ mod tests {
             .map(|c| c.name.as_str())
             .collect();
         assert_eq!(pk_cols, vec!["id"]);
+    }
+
+    #[test]
+    fn foreign_keys_keep_every_column_of_a_composite_key() {
+        let conn = SqliteConnector::open(":memory:").unwrap();
+        conn.conn
+            .execute_batch(
+                "CREATE TABLE parent (a INTEGER, b INTEGER, PRIMARY KEY (a, b));
+                 CREATE TABLE solo (id INTEGER PRIMARY KEY);
+                 CREATE TABLE child (id INTEGER PRIMARY KEY, pa INTEGER, pb INTEGER, sid INTEGER,
+                   FOREIGN KEY (pa, pb) REFERENCES parent (a, b),
+                   FOREIGN KEY (sid) REFERENCES solo);",
+            )
+            .unwrap();
+        let fks = conn.introspect_foreign_keys().unwrap();
+        assert_eq!(fks.len(), 2, "{fks:?}");
+        let composite = fks.iter().find(|f| f.parent_table == "parent").unwrap();
+        assert_eq!(composite.child_table, "child");
+        assert_eq!(composite.child_columns, ["pa", "pb"]);
+        assert_eq!(composite.parent_columns, ["a", "b"]);
+        // `REFERENCES solo` names no column: it means the parent's primary key
+        let implicit = fks.iter().find(|f| f.parent_table == "solo").unwrap();
+        assert_eq!(implicit.child_columns, ["sid"]);
+        assert_eq!(implicit.parent_columns, ["id"]);
+        assert_ne!(composite.constraint_name, implicit.constraint_name);
+    }
+
+    #[test]
+    fn unique_groups_list_constraints_and_unique_indexes_but_not_the_pk() {
+        let conn = SqliteConnector::open(":memory:").unwrap();
+        conn.conn
+            .execute_batch(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY, code TEXT UNIQUE, x INTEGER, y INTEGER, z TEXT,
+                   UNIQUE (x, y));
+                 CREATE UNIQUE INDEX t_z ON t (z);
+                 CREATE INDEX t_plain ON t (code);",
+            )
+            .unwrap();
+        let mut groups = conn.introspect_table("t").unwrap().unique_groups;
+        groups.sort();
+        assert_eq!(
+            groups,
+            vec![
+                vec!["code".to_string()],
+                vec!["x".into(), "y".into()],
+                vec!["z".into()]
+            ]
+        );
     }
 
     #[test]

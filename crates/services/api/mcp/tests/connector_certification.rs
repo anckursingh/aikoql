@@ -1742,3 +1742,148 @@ fn e2e004_multisource_query_single_coherent_result() {
         "no ingest-dir evidence in the coherent result: {types:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Source-schema discovery (provider hardening) — live cells, env-gated
+// ---------------------------------------------------------------------------
+
+#[test]
+fn src_pg_composite_fk_unique_groups_schema_and_hostile_names() {
+    let Some(live) = connectors::Live::pg() else {
+        return;
+    };
+    let dsn = connectors::pg_private_db(&live.dsn, "cert_src_pg");
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE parent (a INT, b INT, PRIMARY KEY (a, b))",
+            "CREATE TABLE child (id INT PRIMARY KEY, pa INT, pb INT, code TEXT UNIQUE, x INT, y INT,
+               UNIQUE (x, y), FOREIGN KEY (pa, pb) REFERENCES parent (a, b))",
+            "CREATE SCHEMA hr",
+            "CREATE TABLE hr.staff (id INT PRIMARY KEY)",
+            "CREATE TABLE \"we\"\"ird name\" (\"col umn\" INT PRIMARY KEY)",
+            "CREATE TABLE \"order\" (id INT PRIMARY KEY)",
+        ],
+    );
+    let mut conn = aikoql_postgres::PostgresConnector::connect(&dsn).expect("pg connect");
+    let fks = conn.introspect_foreign_keys().expect("fks");
+    let fk = fks
+        .iter()
+        .find(|f| f.child_table == "child")
+        .expect("child fk");
+    assert_eq!(fk.child_columns, ["pa", "pb"]);
+    assert_eq!(fk.parent_columns, ["a", "b"]);
+    assert_eq!(
+        (fk.child_column.as_str(), fk.parent_column.as_str()),
+        ("pa", "a")
+    );
+
+    let child = conn.introspect_table("child").expect("child");
+    let mut groups = child.unique_groups.clone();
+    groups.sort();
+    assert_eq!(
+        groups,
+        vec![vec!["code".to_string()], vec!["x".into(), "y".into()]]
+    );
+    assert_eq!(child.schema, "public");
+    assert_eq!(conn.introspect_table("staff").expect("staff").schema, "hr");
+
+    let all: Vec<String> = conn
+        .introspect_all()
+        .expect("all")
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert!(
+        all.contains(&"we\"ird name".to_string()) && all.contains(&"order".to_string()),
+        "{all:?}"
+    );
+}
+
+#[test]
+fn src_mongo_sampled_profile_reports_presence_and_types() {
+    let Some(live) = connectors::Live::mongo() else {
+        return;
+    };
+    let coll = "cert_src_mongo";
+    connectors::mongo_seed(
+        &live.mongo_uri,
+        &live.mongo_db,
+        coll,
+        vec![
+            mongodb::bson::doc! { "_id": 1, "age": 30, "name": "a" },
+            mongodb::bson::doc! { "_id": 2, "age": "old" },
+            mongodb::bson::doc! { "_id": 3, "name": "c", "age": mongodb::bson::Bson::Null },
+        ],
+    );
+    let conn =
+        aikoql_mongodb::MongoConnector::connect(&live.mongo_uri, &live.mongo_db).expect("mongo");
+    let stats = conn
+        .introspect_collection_sampled(coll, 100)
+        .expect("sampled");
+    let age = stats.iter().find(|s| s.name == "age").expect("age");
+    assert_eq!(age.types, ["Int32", "Null", "String"]);
+    assert_eq!(age.samples, 3);
+    assert!(
+        (stats
+            .iter()
+            .find(|s| s.name == "name")
+            .expect("name")
+            .presence_ratio()
+            - 2.0 / 3.0)
+            .abs()
+            < 1e-9
+    );
+}
+
+#[test]
+fn src_neo4j_label_schema_rel_patterns_and_no_label_injection() {
+    let Some(live) = connectors::Live::neo4j() else {
+        return;
+    };
+    let (uri, user, pass) = (&live.neo4j_uri, &live.neo4j_user, &live.neo4j_password);
+    connectors::neo4j_exec(
+        uri,
+        user,
+        pass,
+        &[
+            "MATCH (n:SrcPerson) DETACH DELETE n",
+            "MATCH (n:SrcVictim) DETACH DELETE n",
+            "CREATE (:SrcPerson {name:'a', age:30}), (:SrcPerson {name:'b', age:'old'}), (:SrcPerson {name:'c'})",
+            "MATCH (a:SrcPerson {name:'a'}), (b:SrcPerson {name:'b'}) CREATE (a)-[:SRC_KNOWS]->(b)",
+            "CREATE (:SrcVictim {keep:'me'})",
+        ],
+    );
+    let conn = aikoql_neo4j::Neo4jConnector::connect(uri, user, pass).expect("neo4j");
+    // a hostile label must not leave its identifier and run a second clause
+    let hostile =
+        "SrcPerson`) WITH n MATCH (v:SrcVictim) DETACH DELETE v WITH count(*) AS c MATCH (n:`SrcPerson";
+    let _ = conn.count_nodes(hostile);
+    let _ = conn.introspect_label_props(hostile);
+    let _ = conn.introspect_label_schema(hostile, 10);
+    assert_eq!(
+        conn.count_nodes("SrcVictim").expect("victim count"),
+        1,
+        "the injected DETACH DELETE must not have run"
+    );
+    let props = conn
+        .introspect_label_schema("SrcPerson", 100)
+        .expect("schema");
+    let get = |n: &str| {
+        props
+            .iter()
+            .find(|p| p.name == n)
+            .unwrap_or_else(|| panic!("no {n}: {props:?}"))
+    };
+    assert!(get("name").mandatory && !get("age").mandatory, "{props:?}");
+    assert!(get("age").types.len() == 2, "{props:?}");
+    let rels = conn.introspect_rel_patterns(50).expect("rels");
+    assert!(
+        rels.contains(&(
+            "SRC_KNOWS".to_string(),
+            "SrcPerson".to_string(),
+            "SrcPerson".to_string()
+        )),
+        "{rels:?}"
+    );
+}

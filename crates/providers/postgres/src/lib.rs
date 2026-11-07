@@ -35,9 +35,13 @@ pub struct ColumnInfo {
 #[derive(Clone, Debug)]
 pub struct TableSchema {
     pub name: String,
+    /// Postgres schema (namespace) the table lives in.
+    pub schema: String,
     pub columns: Vec<ColumnInfo>,
     pub primary_keys: Vec<String>,
     pub row_count_estimate: i64,
+    /// Column groups under a UNIQUE constraint (single and composite), in key order.
+    pub unique_groups: Vec<Vec<String>>,
 }
 
 /// One foreign key as discovered from information_schema.
@@ -45,9 +49,13 @@ pub struct TableSchema {
 pub struct ForeignKeyInfo {
     pub constraint_name: String,
     pub child_table: String,
+    /// First column pair — kept for single-column callers.
     pub child_column: String,
     pub parent_table: String,
     pub parent_column: String,
+    /// Every column pair of the constraint, in key order.
+    pub child_columns: Vec<String>,
+    pub parent_columns: Vec<String>,
 }
 
 /// The import connector.
@@ -165,6 +173,8 @@ impl PostgresConnector {
             columns,
             primary_keys: pks,
             row_count_estimate: count,
+            schema: String::new(),
+            unique_groups: Vec::new(),
         })
     }
 
@@ -309,6 +319,8 @@ impl PostgresConnector {
                 child_column: r.get(2),
                 parent_table: r.get(3),
                 parent_column: r.get(4),
+                child_columns: Vec::new(),
+                parent_columns: Vec::new(),
             };
             if seen.insert(fk.constraint_name.clone()) {
                 fks.push(fk);
