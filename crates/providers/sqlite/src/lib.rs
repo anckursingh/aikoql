@@ -351,14 +351,14 @@ impl SqliteConnector {
         tenant: Option<&str>,
         max_rows: u64,
     ) -> Result<(Vec<KnowledgeObject>, bool), String> {
-        let _ = max_rows;
+        let limit = max_rows.saturating_add(1).min(i64::MAX as u64);
         let col_names: Vec<String> = schema
             .columns
             .iter()
             .map(|c| format!("\"{}\"", c.name.replace('"', "\"\"")))
             .collect();
         let query = format!(
-            "SELECT {} FROM \"{}\"",
+            "SELECT {} FROM \"{}\" LIMIT {limit}",
             col_names.join(", "),
             schema.name.replace('"', "\"\"")
         );
@@ -437,7 +437,9 @@ impl SqliteConnector {
                 extensions: ExtensionMap::new(),
             });
         }
-        Ok((objects, false))
+        let truncated = objects.len() as u64 > max_rows;
+        objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
+        Ok((objects, truncated))
     }
 }
 

@@ -234,12 +234,13 @@ impl MongoConnector {
         tenant: Option<&str>,
         max_rows: u64,
     ) -> Result<(Vec<KnowledgeObject>, bool), String> {
-        let _ = max_rows;
+        let limit = max_rows.saturating_add(1).min(i64::MAX as u64) as i64;
         self.rt
             .block_on(async {
                 let coll = self.db.collection::<Document>(&schema.name);
                 let mut cursor = coll
                     .find(doc! {})
+                    .limit(limit)
                     .await
                     .map_err(|e| format!("import {}: {}", schema.name, e))?;
                 use futures_util::StreamExt;
@@ -275,7 +276,9 @@ impl MongoConnector {
                         extensions: ExtensionMap::new(),
                     });
                 }
-                Ok((objects, false))
+                let truncated = objects.len() as u64 > max_rows;
+                objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
+                Ok((objects, truncated))
             })
             .map_err(|e: String| e)
     }

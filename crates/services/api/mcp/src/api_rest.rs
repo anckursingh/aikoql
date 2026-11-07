@@ -151,6 +151,10 @@ fn route_inner(
             need_auth()?;
             crate::sources::service::tool_sources_discover(k, &args(), db_path)
         }
+        ("POST", "/api/v1/sources/import") => {
+            need_auth()?;
+            crate::sources::import::tool_sources_import(k, &args(), db_path)
+        }
         ("POST", "/api/v1/sources/ontology") => {
             need_auth()?;
             crate::sources::ontology::tool_sources_ontology(k, &args(), db_path)
@@ -811,6 +815,7 @@ fn is_admin_route(path: &str) -> bool {
             | "/api/v1/verify-backup"
             | "/api/v1/sources/discover"
             | "/api/v1/sources/ontology"
+            | "/api/v1/sources/import"
     )
 }
 
@@ -2055,7 +2060,11 @@ mod tests {
 
     #[test]
     fn the_sources_writes_are_admin_routes_and_the_list_is_not() {
-        for p in ["/api/v1/sources/discover", "/api/v1/sources/ontology"] {
+        for p in [
+            "/api/v1/sources/discover",
+            "/api/v1/sources/ontology",
+            "/api/v1/sources/import",
+        ] {
             assert!(is_admin_route(p), "{p}");
         }
         assert!(!is_admin_route("/api/v1/sources"));

@@ -303,7 +303,7 @@ impl PostgresConnector {
         tenant: Option<&str>,
         max_rows: u64,
     ) -> Result<(Vec<KnowledgeObject>, bool), String> {
-        let _ = max_rows;
+        let limit = max_rows.saturating_add(1).min(i64::MAX as u64);
         let col_list: Vec<String> = schema
             .columns
             .iter()
@@ -319,7 +319,7 @@ impl PostgresConnector {
             })
             .collect();
         let query = format!(
-            "SELECT {} FROM {}",
+            "SELECT {} FROM {} LIMIT {limit}",
             col_list.join(", "),
             quote_ident(&schema.name)
         );
@@ -371,7 +371,9 @@ impl PostgresConnector {
                 extensions: ExtensionMap::new(),
             });
         }
-        Ok((objects, false))
+        let truncated = objects.len() as u64 > max_rows;
+        objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
+        Ok((objects, truncated))
     }
 
     /// Every foreign key with ALL its column pairs, in key order.

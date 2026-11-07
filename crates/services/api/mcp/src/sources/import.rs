@@ -1,10 +1,202 @@
 //! `POST /api/v1/sources/import`: copy chosen containers of a source into the
 //! knowledge base as objects typed by the physical container name.
 
-use crate::{Kernel, J};
+use super::introspect::scrub;
+use super::{
+    args_obj, audit, find_source, name_arg, store, tenant_arg, SourceKind, INVALID, NO_SCHEMA,
+};
+use crate::imports::{fresh_run_id, ImportSink};
+use crate::{json, Kernel, Subject, J};
+use aikoql_kernel::KnowledgeObject;
+use std::collections::{BTreeMap, HashSet};
 
-pub(crate) fn tool_sources_import(_k: &Kernel, _args: &J, _db_path: &str) -> Result<J, String> {
-    Err("todo".into())
+/// Rows of one container, capped; `true` = the container had more.
+type Fetched = (Vec<KnowledgeObject>, bool);
+
+fn fetch(
+    kind: SourceKind,
+    conn: &str,
+    database: &str,
+    ms: u64,
+    container: &str,
+    tenant: Option<&str>,
+    cap: u64,
+) -> Result<Fetched, String> {
+    match kind {
+        SourceKind::Sqlite => {
+            let c = aikoql_sqlite::SqliteConnector::open_read_only(conn, ms)?;
+            let schema = c.introspect_table_with(container, false)?;
+            c.import_table_limited(&schema, tenant, cap)
+        }
+        SourceKind::Postgres => {
+            let mut c = aikoql_postgres::PostgresConnector::connect_with_timeout(conn, Some(ms))?;
+            c.read_only_session()?;
+            let schema = c.introspect_table_with(container, false)?;
+            c.import_table_limited(&schema, tenant, cap)
+        }
+        SourceKind::Mongodb => {
+            let c = aikoql_mongodb::MongoConnector::connect_with_timeout(conn, database, Some(ms))?;
+            let schema = aikoql_mongodb::CollectionSchema {
+                name: container.to_string(),
+                document_count: 0,
+                properties: Vec::new(),
+            };
+            c.import_collection_limited(&schema, tenant, cap)
+        }
+        other => Err(format!(
+            "import is not supported for {} sources",
+            other.as_str()
+        )),
+    }
+}
+
+/// `POST /api/v1/sources/import {source, containers, tenant?}`.
+pub(crate) fn tool_sources_import(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let result = run(k, args);
+    match &result {
+        Ok(r) => audit(
+            db_path,
+            args,
+            "imported",
+            &format!(
+                "source={} containers={} truncated={}",
+                args.get("source").and_then(|s| s.as_str()).unwrap_or(""),
+                r["imported"]
+                    .as_object()
+                    .map(|m| m.keys().cloned().collect::<Vec<_>>().join(","))
+                    .unwrap_or_default(),
+                r["truncated"]
+            ),
+        ),
+        Err(e) => audit(
+            db_path,
+            args,
+            "error",
+            &format!("import reason={}", e.chars().take(60).collect::<String>()),
+        ),
+    }
+    result
+}
+
+fn run(k: &Kernel, args: &J) -> Result<J, String> {
+    let o = args_obj(args)?;
+    let name = name_arg(o.get("source"), "source")?;
+    let tenant = tenant_arg(o)?;
+    let containers: Vec<String> = match o.get("containers") {
+        Some(J::Array(a)) if !a.is_empty() && a.len() <= 100 => a
+            .iter()
+            .map(|v| match v {
+                J::String(s) if !s.is_empty() && s.chars().count() <= 1_000 => Ok(s.clone()),
+                _ => Err(format!(
+                    "{INVALID}containers must be strings of 1-1000 characters"
+                )),
+            })
+            .collect::<Result<_, _>>()?,
+        _ => {
+            return Err(format!(
+                "{INVALID}containers must be a list of 1-100 container names"
+            ))
+        }
+    };
+    let src = find_source(&name, tenant.as_deref())?;
+    let importer = match src.kind {
+        SourceKind::Sqlite => "sqlite-importer",
+        SourceKind::Postgres => "pg-importer",
+        SourceKind::Mongodb => "mongo-importer",
+        other => {
+            return Err(format!(
+                "{INVALID}import is not supported for {} sources; use the CLI import",
+                other.as_str()
+            ))
+        }
+    };
+    let snapshot = store::latest_snapshot(k, &src)?
+        .ok_or_else(|| format!("source {name} has {NO_SCHEMA} - discover it first"))?;
+    let known: HashSet<&str> = snapshot
+        .containers
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    for c in &containers {
+        if !known.contains(c.as_str()) {
+            let shown: String = c.chars().take(40).flat_map(char::escape_debug).collect();
+            return Err(format!(
+                "{INVALID}unknown container '{shown}' - discover the source first"
+            ));
+        }
+    }
+    let conn = src.connection()?;
+    let mut subject = Subject::new(importer);
+    if let Some(t) = &src.tenant {
+        subject = subject.in_tenant(t);
+    }
+    let run_id = fresh_run_id();
+    let sink = ImportSink::new(k, run_id.clone(), subject.clone(), vec![conn.clone()]);
+    let tag = format!("src:{}", src.name);
+    let (mut imported, mut unchanged) = (BTreeMap::new(), BTreeMap::new());
+    let (mut truncated, mut skipped) = (Vec::new(), Vec::new());
+    let skip = |c: &str, why: String| json!({"container": c, "reason": why});
+
+    for c in &containers {
+        // Objects are keyed by (container, primary key): never overwrite another source's.
+        let foreign = k
+            .scan_by_type(&subject, c)
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|ko| {
+                ko.metadata.tenant.as_deref() == src.tenant.as_deref()
+                    && !ko.metadata.tags.contains(&tag)
+            });
+        if foreign {
+            skipped.push(skip(
+                c,
+                "this type already holds objects from another source (or a CLI import); not overwritten".into(),
+            ));
+            continue;
+        }
+        let database = src.database.as_deref().unwrap_or("");
+        let (objects, cut) = match fetch(
+            src.kind,
+            &conn,
+            database,
+            src.timeout_secs.saturating_mul(1000),
+            c,
+            src.tenant.as_deref(),
+            src.import_max_rows,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                skipped.push(skip(c, scrub(&e, &conn)));
+                continue;
+            }
+        };
+        let (mut wrote, mut same) = (0u64, 0u64);
+        let mut failure = None;
+        for mut ko in objects {
+            ko.metadata.tags.push(tag.clone());
+            match sink.put(ko, importer, "imported by source discovery") {
+                Ok(true) => wrote += 1,
+                Ok(false) => same += 1,
+                Err(e) => {
+                    failure = Some(scrub(&e.to_string(), &conn));
+                    break;
+                }
+            }
+        }
+        if let Some(e) = failure {
+            skipped.push(skip(c, format!("failed after {} rows: {e}", wrote + same)));
+            continue;
+        }
+        imported.insert(c.clone(), wrote);
+        unchanged.insert(c.clone(), same);
+        if cut {
+            truncated.push(c.clone());
+        }
+    }
+    Ok(json!({
+        "run_id": run_id, "imported": imported, "unchanged": unchanged,
+        "truncated": truncated, "skipped": skipped,
+    }))
 }
 
 #[cfg(test)]
@@ -290,7 +482,7 @@ mod tests {
                     [(r.next() % 5) as usize];
                 let x: Option<f64> =
                     [None, Some(f64::INFINITY), Some(-0.0), Some(1.5e300)][(r.next() % 4) as usize];
-                let b: Option<Vec<u8>> = (r.next() % 3 == 0).then(|| vec![0u8, 255, 7]);
+                let b: Option<Vec<u8>> = r.next().is_multiple_of(3).then(|| vec![0u8, 255, 7]);
                 c.execute(
                     "INSERT INTO f VALUES (?1,?2,?3,?4,?5)",
                     rusqlite::params![id, text, n, x, b],
