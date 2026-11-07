@@ -909,7 +909,7 @@ mod tests {
         let Some(dsn) = live("AIKOQL_TEST_PG_DSN") else {
             return;
         };
-        let admin = format!("{dsn}");
+        let admin = dsn.clone();
         let mut c = postgres::Client::connect(&admin, postgres::NoTls).unwrap();
         c.batch_execute("DROP DATABASE IF EXISTS src_t7_pg")
             .unwrap();
