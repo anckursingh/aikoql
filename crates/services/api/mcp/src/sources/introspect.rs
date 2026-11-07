@@ -1185,8 +1185,10 @@ mod tests {
     #[test]
     fn gate_survives_a_panicking_call() {
         let g = Gate::new(4);
+        // generous on purpose: with RUST_BACKTRACE=1 (CI) Windows spent ~48s resolving the
+        // panic's backtrace, and a short limit would report "timed out" instead of the panic
         let e = g
-            .run(Duration::from_secs(2), || -> Result<u8, String> {
+            .run(Duration::from_secs(600), || -> Result<u8, String> {
                 panic!("driver bug")
             })
             .unwrap_err();
