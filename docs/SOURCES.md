@@ -47,12 +47,13 @@ Unknown keys are rejected. With no `[[sources]]`, nothing changes and Studio say
 - **Read-only.** SQLite is opened `READ_ONLY` (the file is byte-identical afterwards), the Postgres session
   is set read-only, ClickHouse requests carry `readonly=1`. Use a read-only database account anyway:
   MongoDB and Neo4j cannot be forced read-only from the client.
-- **Admin only.** `discover`, `ontology` and `import` need the `admin` role in multi-user mode. Listing
-  is readable. A tenant's sources are invisible to other tenants; a missing and a foreign source answer
+- **Admin only.** Every sources route, listing included, needs the `admin` role in multi-user mode. A tenant's sources are invisible to other tenants; a missing and a foreign source answer
   identically (`404 source not found`).
 - **Bounded.** Every call has a deadline. A source that accepts a connection and then goes silent fails
-  at its timeout (the blocking driver call runs behind a deadline gate; at most 8 abandoned calls may be
-  stuck at once, after which new calls are refused until they clear). Containers are capped at
+  at its timeout. The driver also stops its own work just inside that limit (a SQLite interrupt, a MongoDB
+  operation deadline, PostgreSQL `statement_timeout`, ClickHouse `max_execution_time`, the Neo4j request
+  timeout), so the thread returns and its slot frees. As a backstop the call runs behind a gate: at most 8
+  abandoned calls may be stuck at once, after which new calls are refused until they clear. Containers are capped at
   `max_containers`; imports at `import_max_rows`.
 - **Audited.** Each call writes one id-only line (`tool: sources`): source, outcome, fingerprint prefix.
 
@@ -88,9 +89,11 @@ Declared types (SQL, ClickHouse) and observed types (Mongo, Neo4j) are marked di
   warnings (type conflicts, name clashes, composite foreign keys, observed-only fields) and the schema
   `fingerprints` it was computed from.
 - **Publish needs the fingerprints you reviewed** (else `409 schema changed since preview`) and, when a
-  hand-written ontology exists, its `expected_version`. It merges into the tenant's manual ontology and
+  ontology is active, its `expected_version` (the preview's `active_version`; `base` says whether that is a
+  `manual` or an `auto-discovered` ontology, whose classes are carried over). It merges into the tenant's ontology and
   **never changes what a human wrote**: existing classes, properties, relationships and mappings win;
-  classes discovery itself created earlier are refreshed with new columns; identical content writes nothing.
+  classes discovery itself created earlier are refreshed with new columns (a class counts as discovery's only if its
+  description names containers that the ontology's mappings tie to that class; typing "Discovered from…" is not enough); identical content writes nothing.
 - **Drift never rewrites the ontology.** A schema change after publishing is recorded and reported; the
   ontology stays as approved until someone previews and publishes again.
 
@@ -118,7 +121,7 @@ the **physical** container name, tagged `src:<source>`.
 
 | route | role | |
 |---|---|---|
-| `GET /api/v1/sources[?tenant=]` | any signed-in | configured sources + last run |
+| `GET /api/v1/sources[?tenant=]` | admin | configured sources + last run |
 | `POST /api/v1/sources/discover` `{source, mode?, tenant?}` | admin | read and record the schema |
 | `POST /api/v1/sources/ontology` | admin | preview / publish |
 | `POST /api/v1/sources/import` `{source, containers, tenant?}` | admin | copy tables |
@@ -148,8 +151,8 @@ mid-import then resume; a silent source; and route fuzz.
 - Imports are synchronous and per-row committed; see Importing.
 - Two sources of the same kind with a same-named table pool their objects under one type; the second import
   is refused, and the ontology preview warns about the shared physical type.
-- **Tenant isolation is by request parameter.** REST sessions carry no tenant claim of their own, so a signed-in
-  user chooses the tenant, exactly as for the ontology and graph routes. A source's tenant keeps tenants' data
-  apart, but it is not an authorization boundary between mutually untrusting tenants; the `admin` role gates every
-  write.
+- **Tenant isolation is by request parameter.** REST sessions carry no tenant claim of their own, so the caller
+  chooses the tenant, exactly as for the ontology and graph routes. That is why every sources route is admin-only:
+  an administrator is a global operator. A source's tenant keeps tenants' data apart, but it is not an
+  authorization boundary between mutually untrusting tenants; per-user tenancy would be an auth-model change.
 - No Studio form for adding a source: sources are operator configuration by design.

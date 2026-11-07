@@ -16,7 +16,7 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   row-capped, idempotent). Publishing merges into the manual ontology and never changes what a person wrote;
   schema drift is reported, not applied. `MATCH <Class>` reads every mapped source and translates `WHERE`
   property names through each mapping's `property_map`. New REST routes: `GET /api/v1/sources`,
-  `POST /api/v1/sources/{discover,ontology,import}` (admin). See `docs/SOURCES.md`.
+  `POST /api/v1/sources/{discover,ontology,import}` (all admin). See `docs/SOURCES.md`.
 - ClickHouse provider (`aikoql-clickhouse`): read-only, parameterised schema introspection over HTTP.
 - Provider introspection: composite foreign keys, unique groups and schema namespaces (Postgres), foreign
   keys (SQLite), sampled field profiles (Mongo), schema procedures (Neo4j); capped imports.
