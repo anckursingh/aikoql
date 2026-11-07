@@ -650,7 +650,7 @@ mod tests {
             }
         }));
         let c = connect(&url).unwrap();
-        let e = c.introspect_all(10).err().expect("too large");
+        let e = c.introspect_all(10).expect_err("too large");
         assert!(e.contains("too large"), "{e}");
     }
 
@@ -695,7 +695,7 @@ mod tests {
         }));
         let c = ClickHouseConnector::connect_with_timeout(&url, "d", Some(1_000)).unwrap();
         let t = Instant::now();
-        let e = c.introspect_all(10).err().expect("timeout");
+        let e = c.introspect_all(10).expect_err("timeout");
         assert!(t.elapsed() < Duration::from_secs(4), "{:?}", t.elapsed());
         assert!(e.contains("timed out"), "{e}");
     }
