@@ -270,6 +270,10 @@ pub use connector_bridge::{
     ConnectorMetadata, ContainerInfo, FieldInfo, FieldProfile, Provenance, ReferenceInfo,
 };
 
+mod ontology_draft;
+pub use ontology_draft::{
+    definition_from_sources, ClassMerge, ClassStatus, DefinitionDraft, DraftClass, SourceInput,
+};
 mod source_schema;
 pub use source_schema::{diff_metadata, ContainerDiff, SchemaDiff};
 

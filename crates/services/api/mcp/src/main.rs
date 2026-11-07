@@ -44,6 +44,7 @@ mod s3;
 mod sampling;
 mod session;
 mod shell;
+mod sources;
 mod studio;
 mod tls;
 mod tool_registry;
