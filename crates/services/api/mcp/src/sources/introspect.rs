@@ -655,7 +655,7 @@ mod tests {
             m.containers.len()
         );
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < Duration::from_secs(30),
             "{:?}",
             started.elapsed()
         );

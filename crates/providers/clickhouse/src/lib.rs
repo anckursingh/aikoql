@@ -42,9 +42,12 @@ pub struct ClickHouseConnector {
 }
 
 /// Did this error come from the deadline? Decided by the underlying `io::Error`
-/// kind (Unix reports a socket timeout as WouldBlock, Windows as TimedOut with
-/// text that never says "timed out"), else by having used the whole budget.
+/// kind: a timeout kind (Unix: WouldBlock, Windows: TimedOut) is one at any speed,
+/// while any other kind (refused, reset, …) is definitely not — Windows reports a
+/// refused connection only after ~2s, which must not read as a timeout. Only
+/// when no I/O error is visible does using up the whole budget mean a timeout.
 fn is_timeout(err: &(dyn std::error::Error + 'static), elapsed: Duration, limit: Duration) -> bool {
+    let mut saw_io = false;
     let mut cur = Some(err);
     while let Some(e) = cur {
         if let Some(io) = e.downcast_ref::<std::io::Error>() {
@@ -54,10 +57,11 @@ fn is_timeout(err: &(dyn std::error::Error + 'static), elapsed: Duration, limit:
             ) {
                 return true;
             }
+            saw_io = true;
         }
         cur = e.source();
     }
-    elapsed >= limit
+    !saw_io && elapsed >= limit
 }
 
 fn percent_decode(s: &str) -> String {
@@ -723,5 +727,50 @@ mod tests {
                 "{status}: must not retry or follow"
             );
         }
+    }
+
+    #[derive(Debug)]
+    struct Wrapped(std::io::Error);
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "wrapped")
+        }
+    }
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn a_refusal_is_never_a_timeout_however_long_it_took() {
+        use std::io::{Error, ErrorKind};
+        let (slow, quick, limit) = (
+            Duration::from_secs(3),
+            Duration::from_millis(5),
+            Duration::from_secs(1),
+        );
+        // Windows reports a refused connection only after ~2s: still "unreachable"
+        for kind in [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::ConnectionReset,
+            ErrorKind::AddrNotAvailable,
+        ] {
+            assert!(
+                !is_timeout(&Wrapped(Error::from(kind)), slow, limit),
+                "{kind:?} after {slow:?}"
+            );
+        }
+        // the timeout kinds are timeouts at any speed (Unix: WouldBlock, Windows: TimedOut)
+        for kind in [ErrorKind::TimedOut, ErrorKind::WouldBlock] {
+            assert!(
+                is_timeout(&Wrapped(Error::from(kind)), quick, limit),
+                "{kind:?}"
+            );
+        }
+        // no I/O error to read: only then does using up the whole budget mean a timeout
+        let opaque = std::fmt::Error;
+        assert!(is_timeout(&opaque, slow, limit));
+        assert!(!is_timeout(&opaque, quick, limit));
     }
 }
