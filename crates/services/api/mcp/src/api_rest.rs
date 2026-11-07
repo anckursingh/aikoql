@@ -2072,15 +2072,17 @@ mod tests {
     // ---- source schema discovery routes ----
 
     #[test]
-    fn the_sources_writes_are_admin_routes_and_the_list_is_not() {
+    fn every_sources_route_is_an_admin_route() {
+        // REST sessions carry no tenant and `tenant` is a request parameter, so a
+        // non-admin could otherwise list any tenant's configured sources
         for p in [
+            "/api/v1/sources",
             "/api/v1/sources/discover",
             "/api/v1/sources/ontology",
             "/api/v1/sources/import",
         ] {
             assert!(is_admin_route(p), "{p}");
         }
-        assert!(!is_admin_route("/api/v1/sources"));
     }
 
     #[test]

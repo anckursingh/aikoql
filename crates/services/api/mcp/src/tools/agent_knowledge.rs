@@ -699,7 +699,9 @@ pub(crate) fn tool_save_ontology(k: &Kernel, args: &J) -> Result<J, String> {
     let def = aikoql_kernel::OntologyDef::from_property_map(&props)
         .map_err(|e| format!("invalid ontology: {e}"))?;
     // the read-then-create below must be atomic: unserialised, two first saves each see
-    // "no manual ontology" and each create one, the later silently shadowing the earlier
+    // "no manual ontology" and each create one, the later silently shadowing the earlier.
+    // A process-local lock is enough: storage holds an exclusive file lock on the data
+    // directory (a second writer process fails closed) and HA standbys are read-only.
     static SAVE_ONTOLOGY: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one_save_at_a_time = SAVE_ONTOLOGY.lock().unwrap_or_else(|e| e.into_inner());
     let existing = crate::http::active_ontology_for(k, tenant.as_deref())
