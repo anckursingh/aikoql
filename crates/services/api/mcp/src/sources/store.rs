@@ -5,12 +5,26 @@
 //! fingerprint writes nothing. No connection string is ever stored.
 
 use super::SourceConfig;
-use crate::Kernel;
-use aikoql_ingestion::{ConnectorMetadata, SchemaDiff};
+use crate::helpers::{parse_properties, value_to_json};
+use crate::{
+    json, ExtensionMap, Kernel, Metadata, Origin, ReferentialPolicy, RememberRequest,
+    SecurityDescriptor, Subject, Value, J,
+};
+use aikoql_ingestion::{
+    diff_metadata, ConnectorMetadata, ContainerInfo, ReferenceInfo, SchemaDiff,
+};
+use aikoql_kernel::{ForgetMode, KnowledgeObject, PropertyMap};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 pub(crate) const T_SOURCE: &str = "aikoql:source";
 pub(crate) const T_TABLE: &str = "aikoql:source-table";
 pub(crate) const T_RUN: &str = "aikoql:schema-run";
+
+/// One snapshot writer at a time: a check-then-write over KOs must not race
+/// with itself (single-node; discovery is a rare admin action).
+static WRITER: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug)]
 pub(crate) struct SnapshotOutcome {
@@ -21,20 +35,220 @@ pub(crate) struct SnapshotOutcome {
     pub previous_fingerprint: Option<String>,
 }
 
+fn subject(src: &SourceConfig) -> Subject {
+    let s = Subject::with_roles("source-discovery", &["admin"]);
+    match &src.tenant {
+        Some(t) => s.in_tenant(t),
+        None => s,
+    }
+}
+
+fn text<'a>(ko: &'a KnowledgeObject, key: &str) -> Option<&'a str> {
+    match ko.properties.get(key) {
+        Some(Value::Text(s)) => Some(s.as_str()),
+        _ => None,
+    }
+}
+
+fn props_of(j: &J) -> PropertyMap {
+    parse_properties(&json!({ "properties": j })).unwrap_or_default()
+}
+
+fn json_of(ko: &KnowledgeObject, key: &str) -> J {
+    ko.properties.get(key).map(value_to_json).unwrap_or(J::Null)
+}
+
+/// This source's live KOs of one type (same tenant, same source name).
+fn owned(k: &Kernel, src: &SourceConfig, ty: &str) -> Result<Vec<KnowledgeObject>, String> {
+    let key = if ty == T_SOURCE { "name" } else { "source" };
+    Ok(k.scan_by_type(&subject(src), ty)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|ko| {
+            ko.metadata.tenant.as_deref() == src.tenant.as_deref()
+                && text(ko, key) == Some(src.name.as_str())
+        })
+        .collect())
+}
+
+fn write(
+    k: &Kernel,
+    src: &SourceConfig,
+    ty: &str,
+    existing: Option<&KnowledgeObject>,
+    props: PropertyMap,
+    note: &str,
+) -> Result<String, String> {
+    let r = k
+        .remember(RememberRequest {
+            context: subject(src).into(),
+            koid: existing.map(|e| e.koid),
+            expected_version: Some(existing.map_or(0, |e| e.version)),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: ty.into(),
+                tenant: src.tenant.clone(),
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: Some(SecurityDescriptor {
+                owner: "system".into(),
+                acl: vec![],
+                classification: None,
+            }),
+            extensions: ExtensionMap::new(),
+            origin: Origin::System,
+            note: Some(note.into()),
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(r.koid.to_hex())
+}
+
+/// Hash of a container's schema (row counts are volatile and excluded).
+fn container_hash(c: &ContainerInfo) -> String {
+    let mut stable = c.clone();
+    stable.row_count = None;
+    let body = serde_json::to_string(&stable).unwrap_or_default();
+    Sha256::digest(body.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 pub(crate) fn record_snapshot(
-    _k: &Kernel,
-    _src: &SourceConfig,
-    _meta: &ConnectorMetadata,
+    k: &Kernel,
+    src: &SourceConfig,
+    meta: &ConnectorMetadata,
 ) -> Result<SnapshotOutcome, String> {
-    Err("todo".into())
+    let _writer = WRITER.lock().unwrap_or_else(|e| e.into_inner());
+    let fingerprint = meta.fingerprint();
+    let source_ko = owned(k, src, T_SOURCE)?.into_iter().next();
+    let stored_fp = source_ko
+        .as_ref()
+        .and_then(|ko| text(ko, "fingerprint").map(String::from));
+    if stored_fp.as_deref() == Some(fingerprint.as_str()) {
+        return Ok(SnapshotOutcome {
+            run_koid: None,
+            fingerprint,
+            changed: false,
+            diff: SchemaDiff::default(),
+            previous_fingerprint: stored_fp,
+        });
+    }
+    let previous = latest_snapshot(k, src)?;
+    let diff = diff_metadata(&previous.clone().unwrap_or_default(), meta);
+
+    let mut refs = meta.references.clone();
+    refs.sort_by(|a, b| (&a.from_container, &a.name).cmp(&(&b.from_container, &b.name)));
+    write(
+        k,
+        src,
+        T_SOURCE,
+        source_ko.as_ref(),
+        props_of(&json!({
+            "name": src.name,
+            "kind": meta.connector_type,
+            "label": meta.label,
+            "database": src.database,
+            "fingerprint": fingerprint,
+            "containers": meta.containers.len(),
+            "truncated": meta.truncated,
+            "version": meta.version,
+            "references": serde_json::to_value(&refs).map_err(|e| e.to_string())?,
+        })),
+        "source schema recorded",
+    )?;
+
+    let mut existing: BTreeMap<String, KnowledgeObject> = owned(k, src, T_TABLE)?
+        .into_iter()
+        .filter_map(|ko| text(&ko, "name").map(|n| (n.to_string(), ko.clone())))
+        .collect();
+    for c in &meta.containers {
+        let hash = container_hash(c);
+        let old = existing.remove(&c.name);
+        if old.as_ref().and_then(|ko| text(ko, "hash")) == Some(hash.as_str()) {
+            // schema unchanged; refresh nothing (row counts are volatile)
+            continue;
+        }
+        write(
+            k,
+            src,
+            T_TABLE,
+            old.as_ref(),
+            props_of(&json!({
+                "source": src.name,
+                "name": c.name,
+                "hash": hash,
+                "container": serde_json::to_value(c).map_err(|e| e.to_string())?,
+            })),
+            "source table recorded",
+        )?;
+    }
+    for (_, gone) in existing {
+        k.forget(
+            subject(src),
+            &gone.koid,
+            ForgetMode::Tombstone,
+            Some(gone.version),
+            Some("container no longer in the source".into()),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let run_koid = write(
+        k,
+        src,
+        T_RUN,
+        None,
+        props_of(&json!({
+            "source": src.name,
+            "fingerprint": fingerprint,
+            "previous": stored_fp,
+            "containers": meta.containers.len(),
+            "truncated": meta.truncated,
+            "diff": serde_json::to_value(&diff).map_err(|e| e.to_string())?,
+        })),
+        "schema changed",
+    )?;
+    Ok(SnapshotOutcome {
+        run_koid: Some(run_koid),
+        fingerprint,
+        changed: true,
+        diff,
+        previous_fingerprint: stored_fp,
+    })
 }
 
 /// The latest recorded schema of the source, rebuilt from its KOs.
 pub(crate) fn latest_snapshot(
-    _k: &Kernel,
-    _src: &SourceConfig,
+    k: &Kernel,
+    src: &SourceConfig,
 ) -> Result<Option<ConnectorMetadata>, String> {
-    Ok(None)
+    let Some(source_ko) = owned(k, src, T_SOURCE)?.into_iter().next() else {
+        return Ok(None);
+    };
+    let mut containers: Vec<ContainerInfo> = owned(k, src, T_TABLE)?
+        .iter()
+        .filter_map(|ko| serde_json::from_value(json_of(ko, "container")).ok())
+        .collect();
+    containers.sort_by(|a, b| a.name.cmp(&b.name));
+    let references: Vec<ReferenceInfo> =
+        serde_json::from_value(json_of(&source_ko, "references")).unwrap_or_default();
+    Ok(Some(ConnectorMetadata {
+        connector_type: text(&source_ko, "kind").unwrap_or_default().to_string(),
+        label: text(&source_ko, "label").unwrap_or_default().to_string(),
+        containers,
+        references,
+        version: text(&source_ko, "version").map(String::from),
+        truncated: matches!(
+            source_ko.properties.get("truncated"),
+            Some(Value::Bool(true))
+        ),
+    }))
 }
 
 #[cfg(test)]
