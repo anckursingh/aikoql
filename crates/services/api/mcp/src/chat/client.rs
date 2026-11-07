@@ -66,12 +66,20 @@ pub(crate) fn reachable(url: &str, timeout: Duration) -> bool {
 /// `io::Error` kind (Unix reports a socket timeout as WouldBlock, Windows as
 /// TimedOut with text that never says "timed out"), and otherwise by the call
 /// having used up its whole budget.
-fn is_timeout(
-    _err: &(dyn std::error::Error + 'static),
-    _elapsed: Duration,
-    _limit: Duration,
-) -> bool {
-    false
+fn is_timeout(err: &(dyn std::error::Error + 'static), elapsed: Duration, limit: Duration) -> bool {
+    let mut cur = Some(err);
+    while let Some(e) = cur {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) {
+                return true;
+            }
+        }
+        cur = e.source();
+    }
+    elapsed >= limit
 }
 
 /// One prompt in, one completion out.
@@ -98,10 +106,9 @@ impl Generate for HttpModel {
         } else {
             format!("{base}/v1/chat/completions")
         };
-        let mut req = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(self.cfg.timeout_secs))
-            .build()
-            .post(&url);
+        let limit = Duration::from_secs(self.cfg.timeout_secs);
+        let started = std::time::Instant::now();
+        let mut req = ureq::AgentBuilder::new().timeout(limit).build().post(&url);
         if let Some(name) = &self.cfg.api_key_env {
             let key = std::env::var(name)
                 .map_err(|_| format!("model api key env var {name} is not set"))?;
@@ -115,7 +122,7 @@ impl Generate for HttpModel {
             }))
             .map_err(|e| match e {
                 ureq::Error::Status(code, _) => format!("model returned HTTP {code}"),
-                ureq::Error::Transport(t) if t.to_string().contains("timed out") => {
+                ureq::Error::Transport(t) if is_timeout(&t, started.elapsed(), limit) => {
                     "model timed out".into()
                 }
                 ureq::Error::Transport(_) => "model unreachable".into(),
@@ -125,7 +132,7 @@ impl Generate for HttpModel {
             .take(MAX_BODY as u64 + 1)
             .read_to_end(&mut body)
             .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::TimedOut {
+                if is_timeout(&e, started.elapsed(), limit) {
                     "model timed out".to_string()
                 } else {
                     "model unreachable".to_string()
