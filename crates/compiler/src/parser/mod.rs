@@ -164,31 +164,66 @@ pub fn compile_with_ontology_scoped(
     // physical type_name for the Scan operator.
     match (&stmt, ontology) {
         (ast::Statement::Match(m), Some(ont)) => {
-            let pts = ont.physical_types_for_class(&m.entity);
-            if pts.is_empty() {
+            let mappings = ont.mappings_for_class(&m.entity);
+            if mappings.is_empty() {
                 Ok(vec![plan])
             } else {
-                pts.into_iter()
-                    .map(|(_source, physical_type)| {
+                mappings
+                    .into_iter()
+                    .map(|me| {
                         let mut plan = plan.clone();
-                        // Replace the Scan's type_name with the physical type.
+                        // canonical property -> this source's physical column; when
+                        // several columns claim one canonical name the first
+                        // (lexicographic) wins, deterministically
+                        let mut physical_of: std::collections::BTreeMap<&str, &str> =
+                            std::collections::BTreeMap::new();
+                        for (physical, canonical) in &me.property_map {
+                            physical_of
+                                .entry(canonical.as_str())
+                                .or_insert(physical.as_str());
+                        }
+                        let mut scan_seen = false;
                         for op in &mut plan.operators {
-                            if let IrOp::Scan {
-                                ref mut type_name, ..
-                            } = op
-                            {
-                                *type_name = physical_type.clone();
-                                break;
+                            match op {
+                                // Replace the Scan's type_name with the physical type.
+                                IrOp::Scan { type_name, .. } if !scan_seen => {
+                                    *type_name = me.physical_type.clone();
+                                    scan_seen = true;
+                                }
+                                IrOp::Filter { predicates } => {
+                                    predicates
+                                        .iter_mut()
+                                        .for_each(|p| rename_properties(p, &physical_of));
+                                }
+                                _ => {}
                             }
                         }
-                        plan.description =
-                            Some(format!("MATCH {} (mapped to {})", m.entity, physical_type));
+                        plan.description = Some(format!(
+                            "MATCH {} (mapped to {})",
+                            m.entity, me.physical_type
+                        ));
                         Ok(plan)
                     })
                     .collect()
             }
         }
         _ => Ok(vec![plan]),
+    }
+}
+
+/// Rewrite canonical property names in a predicate to a source's physical
+/// column names; names with no mapping pass through unchanged.
+fn rename_properties(p: &mut Predicate, physical_of: &std::collections::BTreeMap<&str, &str>) {
+    match p {
+        Predicate::Cmp { property, .. } => {
+            if let Some(physical) = physical_of.get(property.as_str()) {
+                *property = (*physical).to_string();
+            }
+        }
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            rename_properties(a, physical_of);
+            rename_properties(b, physical_of);
+        }
     }
 }
 
@@ -911,9 +946,10 @@ mod tests {
 
     // ---- ontology expansion translates WHERE property names per mapping ----
 
-    fn customer_ontology(
-        extra: Vec<(&str, &str, &[(&str, &str)])>,
-    ) -> aikoql_kernel::OntologyRegistry {
+    /// (source, physical type, physical column -> canonical property)
+    type MappingSpec<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    fn customer_ontology(extra: Vec<MappingSpec>) -> aikoql_kernel::OntologyRegistry {
         use aikoql_kernel::knowledge::ontology::PropertyDef;
         use aikoql_kernel::{ClassDef, MappingEntry, OntologyDef, OntologyRegistry};
         let property_defs = ["email", "name"]

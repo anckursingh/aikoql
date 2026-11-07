@@ -616,9 +616,9 @@ impl OntologyRegistry {
         self.probes.load(Ordering::Relaxed)
     }
 
-    /// Get all (source, physical_type) pairs that map to the given class,
-    /// its superclasses (inherited), or its subclasses.
-    pub fn physical_types_for_class(&self, class: &str) -> Vec<(String, String)> {
+    /// The mappings that apply to the given class, its superclasses
+    /// (inherited) or its subclasses.
+    pub fn mappings_for_class(&self, class: &str) -> Vec<&MappingEntry> {
         self.def
             .mappings
             .iter()
@@ -627,6 +627,14 @@ impl OntologyRegistry {
                     || self.is_subclass_of(class, &me.class)  // query class IS_A mapping class (inherited up)
                     || self.is_subclass_of(&me.class, class) // mapping class IS_A query class (subclasses)
             })
+            .collect()
+    }
+
+    /// Get all (source, physical_type) pairs that map to the given class,
+    /// its superclasses (inherited), or its subclasses.
+    pub fn physical_types_for_class(&self, class: &str) -> Vec<(String, String)> {
+        self.mappings_for_class(class)
+            .into_iter()
             .map(|me| (me.source.clone(), me.physical_type.clone()))
             .collect()
     }
