@@ -61,20 +61,87 @@ pub(crate) struct SourceConfig {
 
 impl SourceConfig {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        let shown: String = self
+            .name
+            .chars()
+            .take(40)
+            .flat_map(char::escape_debug)
+            .collect();
+        let bad = |msg: &str| Err(format!("source '{shown}': {msg}"));
+        let plain =
+            |t: &str| !t.is_empty() && t.chars().count() <= 128 && !t.chars().any(char::is_control);
+        if self.name.is_empty()
+            || self.name.len() > 64
+            || !self
+                .name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return bad("name must be 1-64 characters of [A-Za-z0-9_-]");
+        }
+        let env_ok = self.url_env.len() <= 128
+            && self
+                .url_env
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && self
+                .url_env
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !env_ok {
+            return bad("url_env must be an environment variable name ([A-Za-z_][A-Za-z0-9_]*)");
+        }
+        match &self.database {
+            Some(d) if !plain(d) => return bad("database must be 1-128 printable characters"),
+            None if matches!(self.kind, SourceKind::Mongodb | SourceKind::Clickhouse) => {
+                return bad("database is required for this kind")
+            }
+            _ => {}
+        }
+        if self.tenant.as_deref().is_some_and(|t| !plain(t)) {
+            return bad("tenant must be 1-128 printable characters");
+        }
+        if !(1..=10_000).contains(&self.sample_limit) {
+            return bad("sample_limit must be 1-10000");
+        }
+        if !(1..=100_000).contains(&self.max_containers) {
+            return bad("max_containers must be 1-100000");
+        }
+        if !(1..=600).contains(&self.timeout_secs) {
+            return bad("timeout_secs must be 1-600");
+        }
+        if !(1..=100_000_000).contains(&self.import_max_rows) {
+            return bad("import_max_rows must be 1-100000000");
+        }
         Ok(())
     }
 
     /// The connection string from the environment. The error names the variable,
     /// never a value.
     pub(crate) fn connection(&self) -> Result<String, String> {
-        Err("todo".into())
+        match std::env::var(&self.url_env) {
+            Ok(v) if !v.trim().is_empty() => Ok(v),
+            Ok(_) => Err(format!(
+                "source {}: env var {} is empty",
+                self.name, self.url_env
+            )),
+            Err(_) => Err(format!(
+                "source {}: env var {} is not set",
+                self.name, self.url_env
+            )),
+        }
     }
 }
 
 /// Validate a whole `[[sources]]` list (per-entry rules plus unique names).
 pub(crate) fn validate_sources(sources: &[SourceConfig]) -> Result<(), String> {
+    let mut seen = std::collections::BTreeSet::new();
     for s in sources {
         s.validate()?;
+        if !seen.insert(s.name.as_str()) {
+            return Err(format!("duplicate source name {}", s.name));
+        }
     }
     Ok(())
 }
@@ -117,8 +184,10 @@ pub(crate) fn configured() -> Vec<SourceConfig> {
 /// to a request with no tenant). "Not found" is the same for a missing source
 /// and another tenant's: existence is not leaked.
 pub(crate) fn find_source(name: &str, tenant: Option<&str>) -> Result<SourceConfig, String> {
-    let _ = (name, tenant);
-    Err("todo".into())
+    configured()
+        .into_iter()
+        .find(|s| s.name == name && s.tenant.as_deref() == tenant)
+        .ok_or_else(|| "source not found".to_string())
 }
 
 #[cfg(test)]
