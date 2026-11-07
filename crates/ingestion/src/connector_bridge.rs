@@ -236,6 +236,24 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
                 confidence: 1.0,
                 evidence: connector_evidence(&source_id, &meta.connector_type),
             });
+            if let Some(p) = &field.profile {
+                facts.push(FactCandidate {
+                    snippet: None,
+                    statement: format!(
+                        "{}.{}.{} observed: types=[{}] presence={:.2} null={:.2} samples={}",
+                        meta.label,
+                        container.name,
+                        field.name,
+                        p.types.join(", "),
+                        p.presence_ratio,
+                        p.null_ratio,
+                        p.samples
+                    ),
+                    entities: vec![entity_name.clone()],
+                    confidence: 0.8,
+                    evidence: connector_evidence(&source_id, &meta.connector_type),
+                });
+            }
         }
     }
 

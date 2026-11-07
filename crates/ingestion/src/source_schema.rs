@@ -1,8 +1,10 @@
 //! Source-schema identity: a stable fingerprint of a `ConnectorMetadata` and a
 //! structural diff between two snapshots of the same source.
 
-use crate::connector_bridge::ConnectorMetadata;
+use crate::connector_bridge::{ConnectorMetadata, ContainerInfo};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContainerDiff {
@@ -32,12 +34,116 @@ impl ConnectorMetadata {
     /// SHA-256 hex of the schema's identity: names, types, keys, nullability,
     /// references and observed type sets; never row counts, sample sizes or ratios.
     pub fn fingerprint(&self) -> String {
-        String::new()
+        let mut lines: Vec<String> = Vec::new();
+        for c in &self.containers {
+            let mut uniques: Vec<String> = c
+                .unique_groups
+                .iter()
+                .map(|g| {
+                    let mut g = g.clone();
+                    g.sort();
+                    g.join(",")
+                })
+                .collect();
+            uniques.sort();
+            lines.push(format!(
+                "C|{}|{}|{}",
+                c.schema.as_deref().unwrap_or(""),
+                c.name,
+                uniques.join(";")
+            ));
+            for f in &c.fields {
+                let mut observed = f
+                    .profile
+                    .as_ref()
+                    .map(|p| p.types.clone())
+                    .unwrap_or_default();
+                observed.sort();
+                lines.push(format!(
+                    "F|{}|{}|{}|{}|{}|{}|{:?}|{}",
+                    c.name,
+                    f.name,
+                    f.data_type,
+                    f.is_primary_key,
+                    f.nullable,
+                    f.is_unique,
+                    f.provenance,
+                    observed.join(",")
+                ));
+            }
+        }
+        for r in &self.references {
+            lines.push(format!(
+                "R|{}|{}|{}|{}|{}",
+                r.from_container,
+                r.from_fields.join(","),
+                r.to_container,
+                r.to_fields.join(","),
+                r.name.as_deref().unwrap_or("")
+            ));
+        }
+        lines.sort();
+        let mut h = Sha256::new();
+        h.update(self.connector_type.as_bytes());
+        h.update([u8::from(self.truncated)]);
+        for l in &lines {
+            h.update(l.as_bytes());
+            h.update(b"\n");
+        }
+        h.finalize().iter().map(|b| format!("{b:02x}")).collect()
     }
 }
 
-pub fn diff_metadata(_old: &ConnectorMetadata, _new: &ConnectorMetadata) -> SchemaDiff {
-    SchemaDiff::default()
+/// What changed between two snapshots of one source, by container and field name.
+pub fn diff_metadata(old: &ConnectorMetadata, new: &ConnectorMetadata) -> SchemaDiff {
+    let names = |m: &ConnectorMetadata| -> BTreeSet<String> {
+        m.containers.iter().map(|c| c.name.clone()).collect()
+    };
+    let (o, n) = (names(old), names(new));
+    let mut diff = SchemaDiff {
+        added_containers: n.difference(&o).cloned().collect(),
+        removed_containers: o.difference(&n).cloned().collect(),
+        changed: Vec::new(),
+    };
+    for nc in &new.containers {
+        let Some(oc) = old.containers.iter().find(|c| c.name == nc.name) else {
+            continue;
+        };
+        let types = |c: &ContainerInfo| -> BTreeMap<String, String> {
+            c.fields
+                .iter()
+                .map(|f| (f.name.clone(), f.data_type.clone()))
+                .collect()
+        };
+        let (ot, nt) = (types(oc), types(nc));
+        let cd = ContainerDiff {
+            name: nc.name.clone(),
+            added_fields: nt
+                .keys()
+                .filter(|k| !ot.contains_key(*k))
+                .cloned()
+                .collect(),
+            removed_fields: ot
+                .keys()
+                .filter(|k| !nt.contains_key(*k))
+                .cloned()
+                .collect(),
+            type_changes: nt
+                .iter()
+                .filter_map(|(k, v)| match ot.get(k) {
+                    Some(old_t) if old_t != v => Some((k.clone(), old_t.clone(), v.clone())),
+                    _ => None,
+                })
+                .collect(),
+        };
+        if !(cd.added_fields.is_empty()
+            && cd.removed_fields.is_empty()
+            && cd.type_changes.is_empty())
+        {
+            diff.changed.push(cd);
+        }
+    }
+    diff
 }
 
 #[cfg(test)]
