@@ -1,0 +1,12 @@
+[package]
+name = "aikoql-clickhouse"
+description = "ClickHouse schema discovery — read-only introspection over the HTTP interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+ureq = { version = "2", features = ["json"] }
+serde_json = "1"
