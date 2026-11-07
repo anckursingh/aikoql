@@ -58,6 +58,12 @@ pub struct SqliteConnector {
 }
 
 impl SqliteConnector {
+    /// Open an existing database file strictly read-only: never creates the file,
+    /// never writes, and gives up on a lock after `busy_ms`.
+    pub fn open_read_only(_path: &str, _busy_ms: u64) -> Result<Self, String> {
+        Err("todo".into())
+    }
+
     /// Open a SQLite database file. `:memory:` for an in-memory database.
     pub fn open(path: &str) -> Result<Self, String> {
         let conn = if path == ":memory:" {
@@ -92,8 +98,19 @@ impl SqliteConnector {
         Ok(tables)
     }
 
-    /// Introspect a table: columns, types, PK.
+    /// Introspect a table: columns, types, PK, exact row count.
     pub fn introspect_table(&self, table_name: &str) -> Result<TableSchema, String> {
+        self.introspect_table_with(table_name, true)
+    }
+
+    /// Like [`introspect_table`](Self::introspect_table); with `count = false` the
+    /// table is not scanned and `row_count` is `-1`.
+    pub fn introspect_table_with(
+        &self,
+        table_name: &str,
+        count: bool,
+    ) -> Result<TableSchema, String> {
+        let _ = count;
         // PRAGMA table_info gives: cid, name, type, notnull, dflt_value, pk
         let mut stmt = self
             .conn
@@ -611,5 +628,121 @@ mod tests {
         let k1 = deterministic_koid("users", &["1".into()]);
         let k2 = deterministic_koid("users", &["1".into()]);
         assert_eq!(k1, k2);
+    }
+
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "aikoql-sqlite-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("db.sqlite")
+    }
+
+    #[test]
+    fn open_read_only_never_creates_a_missing_file() {
+        let p = tmp_path("missing");
+        assert!(SqliteConnector::open_read_only(p.to_str().unwrap(), 200).is_err());
+        assert!(!p.exists(), "read-only open must not create the file");
+    }
+
+    #[test]
+    fn open_read_only_rejects_a_file_that_is_not_a_database() {
+        let p = tmp_path("garbage");
+        std::fs::write(
+            &p,
+            b"this is definitely not a sqlite database, just text ".repeat(50),
+        )
+        .unwrap();
+        let r =
+            SqliteConnector::open_read_only(p.to_str().unwrap(), 200).and_then(|c| c.list_tables());
+        assert!(r.is_err(), "{r:?}");
+        let empty = tmp_path("empty");
+        std::fs::write(&empty, b"").unwrap();
+        // a zero-byte file is a valid empty database to SQLite: no tables, and no write
+        let tables = SqliteConnector::open_read_only(empty.to_str().unwrap(), 200)
+            .and_then(|c| c.list_tables());
+        assert!(tables.map(|t| t.is_empty()).unwrap_or(true));
+    }
+
+    #[test]
+    fn a_read_only_connection_cannot_write() {
+        let p = tmp_path("ro");
+        let rw = SqliteConnector::open(p.to_str().unwrap()).unwrap();
+        rw.conn
+            .execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t VALUES (1);")
+            .unwrap();
+        drop(rw);
+        let ro = SqliteConnector::open_read_only(p.to_str().unwrap(), 200).unwrap();
+        assert_eq!(ro.list_tables().unwrap(), ["t"]);
+        let w = ro.conn.execute_batch("INSERT INTO t VALUES (2)");
+        assert!(
+            w.is_err(),
+            "write on a read-only connection must fail: {w:?}"
+        );
+        assert!(ro.conn.execute_batch("CREATE TABLE u (x)").is_err());
+    }
+
+    #[test]
+    fn schema_only_introspection_does_not_scan_the_table() {
+        let c = SqliteConnector::open(":memory:").unwrap();
+        c.conn
+            .execute_batch(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t VALUES (1),(2),(3);",
+            )
+            .unwrap();
+        assert_eq!(c.introspect_table_with("t", false).unwrap().row_count, -1);
+        assert_eq!(c.introspect_table_with("t", true).unwrap().row_count, 3);
+    }
+
+    #[test]
+    fn a_locked_database_fails_within_the_busy_timeout() {
+        let p = tmp_path("locked");
+        let rw = SqliteConnector::open(p.to_str().unwrap()).unwrap();
+        rw.conn
+            .execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY);")
+            .unwrap();
+        rw.conn
+            .execute_batch("BEGIN EXCLUSIVE; INSERT INTO t VALUES (1);")
+            .unwrap(); // writer holds the lock
+        let started = std::time::Instant::now();
+        let r =
+            SqliteConnector::open_read_only(p.to_str().unwrap(), 300).and_then(|c| c.list_tables());
+        assert!(
+            r.is_err(),
+            "a reader must not read through an exclusive lock: {r:?}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        rw.conn.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn hostile_table_and_column_names_introspect_without_injection() {
+        let c = SqliteConnector::open(":memory:").unwrap();
+        let long = "n".repeat(300);
+        c.conn
+            .execute_batch(&format!(
+                "CREATE TABLE victim (id INTEGER PRIMARY KEY);
+                 CREATE TABLE \"x\"\"; DROP TABLE victim; --\" (\"a b\" INTEGER PRIMARY KEY, \"it's\" TEXT);
+                 CREATE TABLE \"{long}\" (\"order\" INTEGER);
+                 CREATE TABLE \"ünï\u{202e}💥\" (c INTEGER);"
+            ))
+            .unwrap();
+        let all = c.introspect_all().unwrap();
+        assert_eq!(all.len(), 4);
+        assert!(all.iter().any(|t| t.name == "x\"; DROP TABLE victim; --"));
+        assert!(all.iter().any(|t| t.name == long));
+        c.introspect_foreign_keys().unwrap();
+        assert!(
+            c.list_tables().unwrap().contains(&"victim".to_string()),
+            "nothing was injected"
+        );
     }
 }

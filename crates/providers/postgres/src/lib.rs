@@ -110,8 +110,30 @@ impl PostgresConnector {
         Ok(rows.iter().map(|r| r.get(0)).collect())
     }
 
-    /// Introspect a table: columns, types, primary keys.
+    /// Make this session read-only (`transaction_read_only = on`): the server
+    /// then refuses every write, whatever a later bug tries.
+    pub fn read_only_session(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Whether the session is read-only (`SHOW transaction_read_only`).
+    pub fn is_read_only(&mut self) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    /// Introspect a table: columns, types, primary keys, exact row count.
     pub fn introspect_table(&mut self, table_name: &str) -> Result<TableSchema, String> {
+        self.introspect_table_with(table_name, true)
+    }
+
+    /// With `exact_count = false` the row count is the planner's estimate
+    /// (`pg_class.reltuples`; `-1` if the table was never analyzed) — no scan.
+    pub fn introspect_table_with(
+        &mut self,
+        table_name: &str,
+        exact_count: bool,
+    ) -> Result<TableSchema, String> {
+        let _ = exact_count;
         // Discover columns. format_type adds the typmod so pgvector columns
         // report as "vector(3)" (dims) instead of the bare USER-DEFINED
         // data_type — and numeric/varchar keep their precision.

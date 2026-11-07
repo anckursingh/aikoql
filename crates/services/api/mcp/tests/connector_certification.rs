@@ -1941,3 +1941,42 @@ fn src_clickhouse_introspects_a_real_server_read_only() {
     .expect("connect");
     assert!(hostile.introspect_all(10).expect("hostile db").is_empty());
 }
+
+#[test]
+fn src_pg_read_only_session_and_estimate_without_scanning() {
+    let Some(live) = connectors::Live::pg() else {
+        return;
+    };
+    let dsn = connectors::pg_private_db(&live.dsn, "cert_src_pg_ro");
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE ro_t (id INT PRIMARY KEY, v TEXT)",
+            "INSERT INTO ro_t SELECT g, 'x' FROM generate_series(1, 1000) g",
+            "ANALYZE ro_t",
+        ],
+    );
+    let mut conn =
+        aikoql_postgres::PostgresConnector::connect_with_timeout(&dsn, Some(10_000)).expect("pg");
+    assert!(
+        !conn.is_read_only().expect("show"),
+        "a fresh session is read-write"
+    );
+    conn.read_only_session().expect("set");
+    assert!(
+        conn.is_read_only().expect("show"),
+        "the session must now refuse writes"
+    );
+    let t = conn.introspect_table_with("ro_t", false).expect("light");
+    assert!(
+        (900..=1100).contains(&t.row_count_estimate),
+        "estimate {}",
+        t.row_count_estimate
+    );
+    assert_eq!(
+        conn.introspect_table_with("ro_t", true)
+            .expect("exact")
+            .row_count_estimate,
+        1000
+    );
+}

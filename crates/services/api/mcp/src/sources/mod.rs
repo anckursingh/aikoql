@@ -1,6 +1,8 @@
 //! Source schema discovery: configured external databases, their schema as
 //! knowledge, and the ontology drafted from it.
 
+pub(crate) mod introspect;
+
 use serde::Deserialize;
 use std::sync::OnceLock;
 
