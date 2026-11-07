@@ -214,6 +214,58 @@ pub(crate) const NOTHING: &str = "nothing to publish";
 pub(crate) const INVALID: &str = "invalid request: ";
 pub(crate) const NO_SCHEMA: &str = "no recorded schema";
 
+/// The request arguments as an object (a missing body is `{}` only where the
+/// caller allows it).
+pub(crate) fn args_obj(args: &crate::J) -> Result<&serde_json::Map<String, crate::J>, String> {
+    args.as_object()
+        .ok_or_else(|| format!("{INVALID}arguments must be a JSON object"))
+}
+
+fn printable(t: &str) -> bool {
+    !t.is_empty() && t.chars().count() <= 128 && !t.chars().any(char::is_control)
+}
+
+/// The request's tenant (`None` = the global scope).
+pub(crate) fn tenant_arg(o: &serde_json::Map<String, crate::J>) -> Result<Option<String>, String> {
+    match o.get("tenant") {
+        None | Some(crate::J::Null) => Ok(None),
+        Some(crate::J::String(t)) if printable(t) => Ok(Some(t.clone())),
+        _ => Err(format!("{INVALID}tenant must be a non-empty string")),
+    }
+}
+
+/// A source name argument: a string of 1-64 characters.
+pub(crate) fn name_arg(v: Option<&crate::J>, what: &str) -> Result<String, String> {
+    match v {
+        Some(crate::J::String(n)) if !n.is_empty() && n.chars().count() <= 64 => Ok(n.clone()),
+        _ => Err(format!(
+            "{INVALID}{what} must be a string of 1-64 characters"
+        )),
+    }
+}
+
+/// One id-only audit line. ASCII-only and short on purpose: `audit_log` cuts its
+/// detail at 200 bytes with a raw slice, which would panic inside a multi-byte character.
+pub(crate) fn audit(db_path: &str, args: &crate::J, outcome: &str, detail: &str) {
+    let ascii = |s: &str, n: usize| -> String {
+        s.chars()
+            .filter(|c| c.is_ascii_graphic() || *c == ' ')
+            .take(n)
+            .collect()
+    };
+    let who = args
+        .get("subject")
+        .and_then(|s| s.as_str())
+        .unwrap_or("anonymous");
+    crate::audit::audit_log(
+        db_path,
+        &ascii(who, 40),
+        "sources",
+        outcome,
+        &ascii(detail, 150),
+    );
+}
+
 /// HTTP status for a sources error message (None = fall through to the generic mapping).
 pub(crate) fn status_for(msg: &str) -> Option<u16> {
     if msg == NOT_FOUND {

@@ -44,7 +44,6 @@ mod s3;
 mod sampling;
 mod session;
 mod shell;
-#[allow(dead_code)] // consumed incrementally by tasks 7-9; REMOVE at the end of task 9
 mod sources;
 mod studio;
 mod tls;

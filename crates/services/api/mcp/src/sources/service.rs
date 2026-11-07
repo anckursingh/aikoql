@@ -1,13 +1,93 @@
 //! `GET /api/v1/sources` and `POST /api/v1/sources/discover`.
 
-use crate::{Kernel, J};
+use super::introspect::{introspect_source, Mode};
+use super::{args_obj, audit, find_source, name_arg, store, tenant_arg, INVALID};
+use crate::{json, Kernel, J};
 
-pub(crate) fn tool_sources_list(_k: &Kernel, _args: &J) -> Result<J, String> {
-    Err("todo".into())
+/// `GET /api/v1/sources`: the sources of the request's tenant with their last run.
+pub(crate) fn tool_sources_list(k: &Kernel, args: &J) -> Result<J, String> {
+    let empty = serde_json::Map::new();
+    let o = if args.is_null() {
+        &empty
+    } else {
+        args_obj(args)?
+    };
+    let tenant = tenant_arg(o)?;
+    let mut out = Vec::new();
+    for s in super::configured()
+        .into_iter()
+        .filter(|s| s.tenant == tenant)
+    {
+        out.push(json!({
+            "name": s.name,
+            "kind": s.kind.as_str(),
+            "tenant": s.tenant,
+            "database": s.database,
+            "last": store::last_summary(k, &s)?,
+        }));
+    }
+    Ok(J::Array(out))
 }
 
-pub(crate) fn tool_sources_discover(_k: &Kernel, _args: &J, _db_path: &str) -> Result<J, String> {
-    Err("todo".into())
+/// `POST /api/v1/sources/discover {source, mode?, tenant?}`.
+pub(crate) fn tool_sources_discover(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let result = discover(k, args);
+    match &result {
+        Ok(r) => audit(
+            db_path,
+            args,
+            "discovered",
+            &format!(
+                "source={} changed={} fp={}",
+                r["source"].as_str().unwrap_or(""),
+                r["changed"],
+                r["fingerprint"]
+                    .as_str()
+                    .unwrap_or("")
+                    .chars()
+                    .take(12)
+                    .collect::<String>()
+            ),
+        ),
+        Err(e) => audit(
+            db_path,
+            args,
+            "error",
+            &format!(
+                "source={} reason={}",
+                args.get("source").and_then(|s| s.as_str()).unwrap_or("?"),
+                e.chars().take(60).collect::<String>()
+            ),
+        ),
+    }
+    result
+}
+
+fn discover(k: &Kernel, args: &J) -> Result<J, String> {
+    let o = args_obj(args)?;
+    let name = name_arg(o.get("source"), "source")?;
+    let tenant = tenant_arg(o)?;
+    let mode = match o.get("mode") {
+        None | Some(J::Null) => Mode::Schema,
+        Some(J::String(m)) if m == "schema" => Mode::Schema,
+        Some(J::String(m)) if m == "sample" => Mode::Sample,
+        _ => return Err(format!("{INVALID}mode must be \"schema\" or \"sample\"")),
+    };
+    let src = find_source(&name, tenant.as_deref())?;
+    let meta = introspect_source(&src, mode)?;
+    let out = store::record_snapshot(k, &src, &meta)?;
+    Ok(json!({
+        "source": src.name,
+        "changed": out.changed,
+        "fingerprint": out.fingerprint,
+        "previous_fingerprint": out.previous_fingerprint,
+        "run_koid": out.run_koid,
+        "diff": serde_json::to_value(&out.diff).map_err(|e| e.to_string())?,
+        "containers": meta.containers.len(),
+        "references": meta.references.len(),
+        "truncated": meta.truncated,
+        "version": meta.version,
+    }))
 }
 
 #[cfg(test)]

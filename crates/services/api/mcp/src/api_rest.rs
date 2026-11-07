@@ -80,7 +80,9 @@ pub fn route_v1(
         Err(msg) => {
             // 409: a CAS on expected_version lost the race, or a document's
             // batches are still running / were cut short by a restart
-            let code = if msg.contains("VERSION_CONFLICT")
+            let code = if let Some(c) = crate::sources::status_for(&msg) {
+                c
+            } else if msg.contains("VERSION_CONFLICT")
                 || msg.starts_with(crate::tools::ingestion::STILL_PROCESSING)
                 || msg.starts_with(crate::tools::ingestion::INTERRUPTED)
             {
@@ -93,7 +95,7 @@ pub fn route_v1(
                 || msg.starts_with("expected_version required")
             {
                 400
-            } else if msg.contains("not found") || msg.contains("NotFound") {
+            } else if msg.contains("not found") || msg.contains("NotFound") || msg == "Not Found" {
                 404
             } else if msg.contains("AccessDenied")
                 || msg.contains("login")
@@ -140,6 +142,18 @@ fn route_inner(
         ("GET", "/api/v1/backups") => {
             need_auth()?;
             tool_list_backups(db_path)
+        }
+        ("GET", "/api/v1/sources") => {
+            need_auth()?;
+            crate::sources::service::tool_sources_list(k, &args())
+        }
+        ("POST", "/api/v1/sources/discover") => {
+            need_auth()?;
+            crate::sources::service::tool_sources_discover(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/sources/ontology") => {
+            need_auth()?;
+            crate::sources::ontology::tool_sources_ontology(k, &args(), db_path)
         }
         ("GET", "/api/v1/ontology") => {
             need_auth()?;
@@ -792,7 +806,11 @@ fn is_write_route(path: &str, body: &str) -> bool {
 fn is_admin_route(path: &str) -> bool {
     matches!(
         path,
-        "/api/v1/backup" | "/api/v1/restore" | "/api/v1/verify-backup"
+        "/api/v1/backup"
+            | "/api/v1/restore"
+            | "/api/v1/verify-backup"
+            | "/api/v1/sources/discover"
+            | "/api/v1/sources/ontology"
     )
 }
 
@@ -805,6 +823,7 @@ fn json_response(code: u16, body: &J) -> (String, String, String) {
         404 => "404 Not Found",
         409 => "409 Conflict",
         429 => "429 Too Many Requests",
+        502 => "502 Bad Gateway",
         _ => "500 Internal Server Error",
     };
     (

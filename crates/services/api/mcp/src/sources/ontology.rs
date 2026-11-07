@@ -1,10 +1,338 @@
 //! `POST /api/v1/sources/ontology`: preview and publish the ontology drafted
 //! from recorded source schemas, merged into the tenant's manual ontology.
 
-use crate::{Kernel, J};
+use super::{
+    args_obj, audit, find_source, name_arg, store, tenant_arg, INVALID, NOTHING, NO_SCHEMA, STALE,
+};
+use crate::helpers::value_to_json;
+use crate::{json, Kernel, J};
+use aikoql_ingestion::{definition_from_sources, ClassMerge, ClassStatus, SourceInput};
+use std::collections::BTreeMap;
 
-pub(crate) fn tool_sources_ontology(_k: &Kernel, _args: &J, _db_path: &str) -> Result<J, String> {
-    Err("todo".into())
+const DISCOVERED: &str = "Discovered from";
+
+/// What publishing would do to the tenant's manual ontology.
+struct Merged {
+    definition: J,
+    adds: Vec<String>,
+    refreshed: Vec<String>,
+    untouched: Vec<String>,
+    mappings: Vec<J>,
+    warnings: Vec<String>,
+}
+
+fn arr(v: &J, key: &str) -> Vec<J> {
+    v.get(key)
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn name_of(v: &J) -> String {
+    v.get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Merge the discovered draft into the existing manual ontology: what a human
+/// wrote is never changed; discovered classes are added; classes that discovery
+/// itself wrote earlier are refreshed (properties unioned); existing mappings win.
+fn merge(existing: Option<&J>, draft: &J) -> Merged {
+    let mut warnings = Vec::new();
+    let base = existing.cloned().unwrap_or_else(|| {
+        json!({
+            "namespace": draft["namespace"], "version": draft["version"],
+            "classes": [], "relationships": [], "property_defs": [], "mappings": [],
+        })
+    });
+    let mut def = base.clone();
+    let (mut classes, mut rels, mut pdefs, mut maps) = (
+        arr(&base, "classes"),
+        arr(&base, "relationships"),
+        arr(&base, "property_defs"),
+        arr(&base, "mappings"),
+    );
+    let (mut adds, mut refreshed, mut added_maps) = (Vec::new(), Vec::new(), Vec::new());
+
+    for dc in arr(draft, "classes") {
+        let name = name_of(&dc);
+        match classes.iter().position(|c| name_of(c) == name) {
+            None => {
+                classes.push(dc);
+                adds.push(name);
+            }
+            Some(i) => {
+                let ours = classes[i]["description"]
+                    .as_str()
+                    .is_some_and(|d| d.starts_with(DISCOVERED));
+                if !ours {
+                    warnings.push(format!(
+                        "class {name} already exists and was not written by discovery; kept as is"
+                    ));
+                    continue;
+                }
+                let mut props: Vec<J> = arr(&classes[i], "properties");
+                for p in arr(&dc, "properties") {
+                    if !props.contains(&p) {
+                        props.push(p);
+                    }
+                }
+                let changed = props != arr(&classes[i], "properties")
+                    || classes[i]["description"] != dc["description"];
+                classes[i]["properties"] = J::Array(props);
+                classes[i]["description"] = dc["description"].clone();
+                if changed {
+                    refreshed.push(name);
+                }
+            }
+        }
+    }
+    for pd in arr(draft, "property_defs") {
+        match pdefs.iter().find(|e| name_of(e) == name_of(&pd)) {
+            None => pdefs.push(pd),
+            Some(e) if e["type"] != pd["type"] => warnings.push(format!(
+                "property {} is {} in the existing ontology but {} in discovery; kept the existing type",
+                name_of(&pd), e["type"], pd["type"]
+            )),
+            Some(_) => {}
+        }
+    }
+    for r in arr(draft, "relationships") {
+        if !rels.iter().any(|e| name_of(e) == name_of(&r)) {
+            rels.push(r);
+        }
+    }
+    for m in arr(draft, "mappings") {
+        let key = |x: &J| (x["source"].clone(), x["physical_type"].clone());
+        match maps.iter().find(|e| key(e) == key(&m)) {
+            None => {
+                added_maps.push(m.clone());
+                maps.push(m);
+            }
+            Some(e) if e["class"] != m["class"] => warnings.push(format!(
+                "{} {} is already mapped to {}; the discovered mapping to {} was skipped",
+                m["source"].as_str().unwrap_or(""),
+                m["physical_type"].as_str().unwrap_or(""),
+                e["class"],
+                m["class"]
+            )),
+            Some(_) => {}
+        }
+    }
+    let untouched = classes
+        .iter()
+        .map(name_of)
+        .filter(|n| !adds.contains(n) && !refreshed.contains(n))
+        .collect();
+    def["classes"] = J::Array(classes);
+    def["relationships"] = J::Array(rels);
+    def["property_defs"] = J::Array(pdefs);
+    def["mappings"] = J::Array(maps);
+    Merged {
+        definition: def,
+        adds,
+        refreshed,
+        untouched,
+        mappings: added_maps,
+        warnings,
+    }
+}
+
+pub(crate) fn tool_sources_ontology(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let result = run(k, args);
+    let detail = |what: &str| {
+        format!(
+            "{what} sources={}",
+            args.get("sources")
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        )
+    };
+    match &result {
+        Ok(r) if r["preview"] == true => audit(db_path, args, "previewed", &detail("preview")),
+        Ok(r) => audit(
+            db_path,
+            args,
+            "published",
+            &format!("{} saved={}", detail("apply"), r["saved"]),
+        ),
+        Err(e) => audit(
+            db_path,
+            args,
+            "error",
+            &format!(
+                "{} reason={}",
+                detail("ontology"),
+                e.chars().take(50).collect::<String>()
+            ),
+        ),
+    }
+    result
+}
+
+fn run(k: &Kernel, args: &J) -> Result<J, String> {
+    let o = args_obj(args)?;
+    let tenant = tenant_arg(o)?;
+    let names: Vec<String> = match o.get("sources") {
+        Some(J::Array(a)) if !a.is_empty() && a.len() <= 50 => a
+            .iter()
+            .map(|n| name_arg(Some(n), "sources[]"))
+            .collect::<Result<_, _>>()?,
+        _ => {
+            return Err(format!(
+                "{INVALID}sources must be a list of 1-50 source names"
+            ))
+        }
+    };
+    let preview = match o.get("preview") {
+        None | Some(J::Null) => true,
+        Some(J::Bool(b)) => *b,
+        _ => return Err(format!("{INVALID}preview must be true or false")),
+    };
+    let merges: Vec<ClassMerge> = match o.get("merges") {
+        None | Some(J::Null) => Vec::new(),
+        Some(J::Array(a)) if a.len() <= 1_000 => a
+            .iter()
+            .map(|p| match p.as_array().map(Vec::as_slice) {
+                Some([J::String(x), J::String(y)]) => Ok(ClassMerge { a: x.clone(), b: y.clone() }),
+                _ => Err(format!("{INVALID}merges must be a list of [\"source.container\", \"source.container\"] pairs")),
+            })
+            .collect::<Result<_, _>>()?,
+        _ => return Err(format!("{INVALID}merges must be a list of pairs")),
+    };
+    let given: BTreeMap<String, String> = match o.get("fingerprints") {
+        None | Some(J::Null) => BTreeMap::new(),
+        Some(J::Object(m)) => m
+            .iter()
+            .map(|(k, v)| {
+                v.as_str()
+                    .map(|s| (k.clone(), s.to_string()))
+                    .ok_or_else(|| {
+                        format!("{INVALID}fingerprints must map source names to strings")
+                    })
+            })
+            .collect::<Result<_, _>>()?,
+        _ => return Err(format!("{INVALID}fingerprints must be an object")),
+    };
+    let expected_version =
+        match o.get("expected_version") {
+            None | Some(J::Null) => None,
+            Some(v) => Some(v.as_u64().ok_or_else(|| {
+                format!("{INVALID}expected_version must be a non-negative integer")
+            })?),
+        };
+
+    let mut unique = names.clone();
+    unique.dedup();
+    let mut snapshots = Vec::new();
+    for n in &unique {
+        let src = find_source(n, tenant.as_deref())?;
+        let meta = store::latest_snapshot(k, &src)?
+            .ok_or_else(|| format!("source {n} has {NO_SCHEMA} - discover it first"))?;
+        snapshots.push((src, meta));
+    }
+    let inputs: Vec<SourceInput> = snapshots
+        .iter()
+        .map(|(s, m)| SourceInput {
+            name: &s.name,
+            kind: s.kind.as_str(),
+            meta: m,
+        })
+        .collect();
+    let draft = definition_from_sources(&inputs, &merges);
+    if !draft.publishable() {
+        return Err(format!("{NOTHING}: no containers were discovered"));
+    }
+    let fingerprints: BTreeMap<String, String> = snapshots
+        .iter()
+        .map(|(s, m)| (s.name.clone(), m.fingerprint()))
+        .collect();
+
+    let existing =
+        crate::http::active_ontology_for(k, tenant.as_deref()).filter(|(_, src)| *src == "manual");
+    let existing_json = existing.as_ref().map(|(ko, _)| {
+        J::Object(
+            ko.properties
+                .iter()
+                .map(|(k, v)| (k.clone(), value_to_json(v)))
+                .collect(),
+        )
+    });
+    let active_version = existing.as_ref().map(|(ko, _)| ko.version);
+    let merged = merge(existing_json.as_ref(), &draft.definition);
+
+    let mut warnings = draft.warnings.clone();
+    warnings.extend(merged.warnings.clone());
+    let classes: Vec<J> = draft
+        .classes
+        .iter()
+        .map(|c| match &c.status {
+            ClassStatus::New => json!({"name": c.name, "sources": c.sources, "status": "new"}),
+            ClassStatus::PossibleDuplicate { with } => {
+                json!({"name": c.name, "sources": c.sources, "status": "possible_duplicate", "with": with})
+            }
+        })
+        .collect();
+    let summary = json!({
+        "classes": classes, "adds": merged.adds, "refreshed": merged.refreshed,
+        "untouched": merged.untouched, "mappings": merged.mappings, "warnings": warnings,
+        "fingerprints": fingerprints, "active_version": active_version,
+    });
+    if preview {
+        let mut out = summary;
+        out["preview"] = json!(true);
+        return Ok(out);
+    }
+
+    // apply: the reviewer must have seen exactly this schema
+    if fingerprints.iter().any(|(n, fp)| given.get(n) != Some(fp)) {
+        if given.is_empty() {
+            return Err(format!(
+                "{INVALID}fingerprints from the preview are required to publish"
+            ));
+        }
+        return Err(STALE.to_string());
+    }
+    if let Some(current) = active_version {
+        match expected_version {
+            None => {
+                return Err(format!(
+                    "expected_version required: the current version is {current}"
+                ))
+            }
+            Some(v) if v != current => {
+                return Err(format!(
+                    "expected_version conflict: the current version is {current}"
+                ))
+            }
+            Some(_) => {}
+        }
+    }
+    let mut out = summary;
+    out["preview"] = json!(false);
+    if existing_json.as_ref() == Some(&merged.definition) {
+        out["saved"] = json!(false);
+        out["version"] = json!(active_version);
+        return Ok(out);
+    }
+    let mut save = json!({"definition": merged.definition});
+    if let Some(t) = &tenant {
+        save["tenant"] = json!(t);
+    }
+    if let Some(v) = expected_version {
+        save["expected_version"] = json!(v);
+    }
+    for key in ["subject", "roles"] {
+        if let Some(v) = args.get(key) {
+            save[key] = v.clone();
+        }
+    }
+    let saved = crate::tools::tool_save_ontology(k, &save)?;
+    out["saved"] = json!(true);
+    out["koid"] = saved["koid"].clone();
+    out["version"] = saved["version"].clone();
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -291,13 +619,11 @@ mod tests {
     #[test]
     fn nothing_to_publish_is_a_clean_client_error() {
         let k = kernel();
-        let empty = tmp_db("empty");
-        make(&empty, "CREATE TABLE sqlite_dummy_check (x);");
-        let db = tmp_db("noneyet");
-        make(&db, "SELECT 1;");
+        let undiscovered = tmp_db("noneyet");
+        make(&undiscovered, "SELECT 1;");
         with_test_sources(
             vec![sqlite_source("crm", None)],
-            vec![("crm".into(), conn(&db))],
+            vec![("crm".into(), conn(&undiscovered))],
             || {
                 let e =
                     tool_sources_ontology(&k, &json!({"sources": ["crm"], "preview": true}), "x")
@@ -306,13 +632,11 @@ mod tests {
                     e.contains(crate::sources::NO_SCHEMA),
                     "not discovered yet: {e}"
                 );
-                let db_empty = tmp_db("zero");
-                make(&db_empty, "SELECT 1;");
-                drop(db_empty);
+                assert_eq!(crate::sources::status_for(&e), Some(400));
             },
         );
-        let zero = tmp_db("zero2");
-        make(&zero, "SELECT 1;");
+        let zero = tmp_db("zero");
+        make(&zero, "SELECT 1;"); // a valid database with no tables
         with_test_sources(
             vec![sqlite_source("z", None)],
             vec![("z".into(), conn(&zero))],

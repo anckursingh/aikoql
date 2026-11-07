@@ -223,6 +223,18 @@ pub(crate) fn record_snapshot(
     })
 }
 
+/// `{fingerprint, containers, truncated}` of the last recorded schema, or null.
+pub(crate) fn last_summary(k: &Kernel, src: &SourceConfig) -> Result<J, String> {
+    Ok(match owned(k, src, T_SOURCE)?.into_iter().next() {
+        None => J::Null,
+        Some(ko) => json!({
+            "fingerprint": text(&ko, "fingerprint"),
+            "containers": json_of(&ko, "containers"),
+            "truncated": json_of(&ko, "truncated"),
+        }),
+    })
+}
+
 /// The latest recorded schema of the source, rebuilt from its KOs.
 pub(crate) fn latest_snapshot(
     k: &Kernel,
