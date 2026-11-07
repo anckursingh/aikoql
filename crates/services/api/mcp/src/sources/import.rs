@@ -1,7 +1,7 @@
 //! `POST /api/v1/sources/import`: copy chosen containers of a source into the
 //! knowledge base as objects typed by the physical container name.
 
-use super::introspect::scrub;
+use super::introspect::{scrub, GATE};
 use super::{
     args_obj, audit, find_source, name_arg, store, tenant_arg, SourceKind, INVALID, NO_SCHEMA,
 };
@@ -154,16 +154,27 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             ));
             continue;
         }
-        let database = src.database.as_deref().unwrap_or("");
-        let (objects, cut) = match fetch(
-            src.kind,
-            &conn,
-            database,
+        let (kind, conn_c, container, tenant_c) =
+            (src.kind, conn.clone(), c.clone(), src.tenant.clone());
+        let (database, ms, cap) = (
+            src.database.clone().unwrap_or_default(),
             src.timeout_secs.saturating_mul(1000),
-            c,
-            src.tenant.as_deref(),
             src.import_max_rows,
-        ) {
+        );
+        // an import may legitimately run long, but not forever: a generous deadline
+        let deadline =
+            std::time::Duration::from_millis(ms.saturating_mul(20).clamp(60_000, 600_000));
+        let (objects, cut) = match GATE.run(deadline, move || {
+            fetch(
+                kind,
+                &conn_c,
+                &database,
+                ms,
+                &container,
+                tenant_c.as_deref(),
+                cap,
+            )
+        }) {
             Ok(v) => v,
             Err(e) => {
                 skipped.push(skip(c, scrub(&e, &conn)));

@@ -71,14 +71,17 @@ fn percent_decode(s: &str) -> String {
 /// request gives up at the deadline; abandoned threads are counted, and when
 /// too many are still stuck new calls are refused instead of piling up.
 pub(crate) struct Gate {
-    stuck: std::sync::atomic::AtomicUsize,
+    stuck: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     max: usize,
 }
 
+/// Process-wide: at most this many abandoned calls may be stuck at once.
+pub(crate) static GATE: std::sync::LazyLock<Gate> = std::sync::LazyLock::new(|| Gate::new(8));
+
 impl Gate {
-    pub(crate) const fn new(max: usize) -> Gate {
+    pub(crate) fn new(max: usize) -> Gate {
         Gate {
-            stuck: std::sync::atomic::AtomicUsize::new(0),
+            stuck: Default::default(),
             max,
         }
     }
@@ -92,8 +95,47 @@ impl Gate {
         limit: std::time::Duration,
         f: impl FnOnce() -> Result<T, String> + Send + 'static,
     ) -> Result<T, String> {
-        let _ = (limit, self.max, f);
-        Err("todo".into())
+        use std::sync::atomic::{AtomicU8, Ordering::SeqCst};
+        use std::sync::{mpsc, Arc};
+        if self.stuck() >= self.max {
+            return Err(
+                "too many calls are still waiting on unresponsive sources; try again later".into(),
+            );
+        }
+        // 0 = running, 1 = finished, 2 = abandoned by the waiter
+        let state = Arc::new(AtomicU8::new(0));
+        let (tx, rx) = mpsc::channel();
+        let (st, stuck) = (state.clone(), self.stuck.clone());
+        std::thread::Builder::new()
+            .name("source-call".into())
+            .spawn(move || {
+                let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+                if st.swap(1, SeqCst) == 2 {
+                    stuck.fetch_sub(1, SeqCst); // a straggler came home
+                }
+                let _ = tx.send(out);
+            })
+            .map_err(|e| format!("could not start the source call: {e}"))?;
+        let failed = || "the source call failed unexpectedly".to_string();
+        match rx.recv_timeout(limit) {
+            Ok(Ok(v)) => v,
+            Ok(Err(_panic)) => Err(failed()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // count first, then claim: a finish racing in between must find the
+                // count already there to undo
+                self.stuck.fetch_add(1, SeqCst);
+                if state.compare_exchange(0, 2, SeqCst, SeqCst).is_ok() {
+                    Err(format!("timed out after {}s", limit.as_secs().max(1)))
+                } else {
+                    self.stuck.fetch_sub(1, SeqCst);
+                    match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                        Ok(Ok(v)) => v,
+                        _ => Err(failed()),
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(failed()),
+        }
     }
 }
 
@@ -265,22 +307,21 @@ pub(crate) fn introspect_with(
         Mode::Schema => src.sample_limit.min(20),
         Mode::Sample => src.sample_limit,
     };
-    let result = match src.kind {
-        SourceKind::Sqlite => sqlite_meta(conn, ms, max),
-        SourceKind::Postgres => postgres_meta(conn, ms, max),
-        SourceKind::Mongodb => mongo_meta(
-            conn,
-            src.database.as_deref().unwrap_or(""),
-            ms,
-            max,
-            sample,
-            mode,
-        ),
-        SourceKind::Neo4j => neo4j_meta(conn, ms, max, sample, mode),
-        SourceKind::Clickhouse => {
-            clickhouse_meta(conn, src.database.as_deref().unwrap_or(""), ms, max)
-        }
-    };
+    let (kind, conn_owned, database) = (
+        src.kind,
+        conn.to_string(),
+        src.database.clone().unwrap_or_default(),
+    );
+    let result = GATE.run(
+        std::time::Duration::from_millis(ms + 1_500),
+        move || match kind {
+            SourceKind::Sqlite => sqlite_meta(&conn_owned, ms, max),
+            SourceKind::Postgres => postgres_meta(&conn_owned, ms, max),
+            SourceKind::Mongodb => mongo_meta(&conn_owned, &database, ms, max, sample, mode),
+            SourceKind::Neo4j => neo4j_meta(&conn_owned, ms, max, sample, mode),
+            SourceKind::Clickhouse => clickhouse_meta(&conn_owned, &database, ms, max),
+        },
+    );
     let (containers, references, truncated, version) =
         result.map_err(|e| format!("source {}: {}", src.name, scrub(&e, conn)))?;
     Ok(ConnectorMetadata {

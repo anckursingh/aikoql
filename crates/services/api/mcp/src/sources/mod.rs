@@ -44,7 +44,7 @@ fn d_timeout() -> u64 {
     15
 }
 fn d_rows() -> u64 {
-    100_000
+    10_000
 }
 
 /// One `[[sources]]` entry. The connection string is never in the file: `url_env`
