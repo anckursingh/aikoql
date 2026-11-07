@@ -125,7 +125,7 @@ function switchPanel(name) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panel = document.getElementById('panel-' + name);
   if (panel) panel.classList.add('active');
-  const titles = { query:'Query Editor', graph:'Knowledge Graph', explorer:'Knowledge Explorer', schema:'Schema Explorer', ontology:'Ontology', inspector:'KO Inspector', admin:'Administration', timeline:'Timeline', provenance:'Provenance', debugger:'Program Debugger', benchmarks:'Benchmark Center', profiler:'Query Profiler', providers:'Provider Manager', documents:'Document Explorer' };
+  const titles = { query:'Query Editor', graph:'Knowledge Graph', explorer:'Knowledge Explorer', schema:'Schema Explorer', ontology:'Ontology', inspector:'KO Inspector', admin:'Administration', timeline:'Timeline', provenance:'Provenance', debugger:'Program Debugger', benchmarks:'Benchmark Center', profiler:'Query Profiler', providers:'Provider Manager', documents:'Document Explorer', sources:'Data Sources' };
   document.getElementById('panel-title').textContent = titles[name] || name;
   document.getElementById('panel-breadcrumb').textContent = '';
   if (name === 'graph') initGraph();
@@ -137,6 +137,7 @@ function switchPanel(name) {
   if (name === 'debugger') loadDebuggerPrograms();
   if (name === 'benchmarks') loadBenchmarks();
   if (name === 'documents') loadDocuments();
+  if (name === 'sources') loadSourcesPanel();
 }
 document.querySelectorAll('#sidebar nav button').forEach(b => {
   b.addEventListener('click', () => switchPanel(b.dataset.panel));
@@ -182,6 +183,9 @@ function loadTenants() {
     const ot = document.getElementById('ontology-tenant'), cur = ot.value;
     ot.innerHTML = '<option value="">Global</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
     ot.value = cur;
+    const st = document.getElementById('sources-tenant'), srcCur = st.value;
+    st.innerHTML = '<option value="">Global</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
+    st.value = srcCur;
     document.getElementById('graph-tenant').innerHTML = '<option value="">All tenants</option>' + [...tenants].map(t => '<option>'+esc(t)+'</option>').join('');
   }).catch(() => {});
 }
@@ -1564,6 +1568,118 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ═══════════════════════════════════════════
+// Panel: Data Sources (/api/v1/sources*)
+// ═══════════════════════════════════════════
+const sourcesState = { merges: [], names: [], fingerprints: null, activeVersion: null };
+function sourcesBody(extra) {
+  const t = document.getElementById('sources-tenant').value;
+  return Object.assign(t ? {tenant: t} : {}, extra);
+}
+function sourcesMsg(text) { document.getElementById('sources-msg').textContent = text; }
+function describeDiff(d) {
+  const parts = [];
+  if ((d.added_containers || []).length) parts.push('added ' + d.added_containers.join(', '));
+  if ((d.removed_containers || []).length) parts.push('removed ' + d.removed_containers.join(', '));
+  (d.changed || []).forEach(c => parts.push(c.name + ': +' + (c.added_fields || []).length + ' -' + (c.removed_fields || []).length + ' fields, ' + (c.type_changes || []).length + ' retyped'));
+  return parts.join('; ');
+}
+function renderSourceCard(s) {
+  const last = s.last;
+  const names = last ? (last.container_names || []).slice(0, 100) : [];
+  return '<div class="card" style="margin-bottom:10px;">'
+    + '<label style="float:right;font-size:11px;"><input type="checkbox" class="src-pick" data-name="'+esc(s.name)+'"> include in ontology</label>'
+    + '<h4>'+esc(s.name)+' <span class="badge badge-cyan">'+esc(s.kind)+'</span> <span style="font-size:11px;color:var(--muted);">'+esc(s.tenant ? '@' + s.tenant : '')+'</span></h4>'
+    + '<div style="font-size:11px;color:var(--muted);margin:4px 0;">'+esc(last ? last.containers + ' containers' + (last.truncated ? ' (list truncated)' : '') + ' · schema ' + String(last.fingerprint).slice(0, 10) : 'not discovered yet')+'</div>'
+    + '<button class="btn btn-pri btn-sm" data-click="discoverSource" data-name="'+esc(s.name)+'">Discover</button>'
+    + '<div style="margin:8px 0;font-size:11px;">'
+    + names.map(n => '<label style="display:inline-block;margin-right:12px;"><input type="checkbox" class="imp-pick" data-source="'+esc(s.name)+'" data-name="'+esc(n)+'"> '+esc(n)+'</label>').join('')
+    + '</div>'
+    + '<button class="btn btn-sec btn-sm" data-click="importSource" data-name="'+esc(s.name)+'">Import checked tables</button>'
+    + '</div>';
+}
+async function loadSourcesPanel() {
+  const list = document.getElementById('sources-list');
+  try {
+    const t = document.getElementById('sources-tenant').value;
+    const rows = (await api('/api/v1/sources' + (t ? '?tenant=' + encodeURIComponent(t) : ''))).data || [];
+    list.innerHTML = rows.length ? rows.map(renderSourceCard).join('') : '<div class="empty-state">No sources configured — see docs/SOURCES.md</div>';
+  } catch (e) {
+    list.innerHTML = '<div class="card" style="border-color:var(--red);">'+esc(e.message)+'</div>';
+  }
+}
+async function discoverSource(name) {
+  const out = document.getElementById('sources-result');
+  out.innerHTML = '<div class="loading">Reading the schema...</div>';
+  try {
+    const d = (await apiPost('/api/v1/sources/discover', sourcesBody({source: name}))).data;
+    out.innerHTML = '<div class="card">'+esc(d.source + ': ' + d.containers + ' containers, ' + d.references + ' references' + (d.truncated ? ' (truncated)' : '') + (d.changed ? ' — schema changed since the last run' : ' — unchanged'))+'<div style="font-size:11px;color:var(--muted);">'+esc(describeDiff(d.diff))+'</div></div>';
+    loadSourcesPanel();
+  } catch (e) {
+    out.innerHTML = '<div class="card" style="border-color:var(--red);">'+esc(e.message)+'</div>';
+  }
+}
+function renderSourcesPreview(p) {
+  return '<div class="card"><h4>Proposed ontology</h4>'
+    + '<table style="font-size:12px;border-collapse:collapse;">'
+    + (p.classes || []).map(c => '<tr><td style="padding:2px 8px;"><input type="checkbox" class="cls-pick" data-class="'+esc(c.name)+'" data-ref="'+esc((c.sources || [])[0])+'"></td><td>'+esc(c.name)+'</td><td><span class="badge '+esc(c.status === 'new' ? 'badge-green' : 'badge-orange')+'">'+esc(c.status === 'new' ? 'new' : 'possible duplicate')+'</span></td><td class="mono" style="font-size:10px;">'+esc((c.sources || []).join(', '))+'</td></tr>').join('')
+    + '</table>'
+    + '<div style="font-size:11px;margin-top:8px;">Adds: '+esc((p.adds || []).join(', ') || 'none')+'</div>'
+    + '<div style="font-size:11px;">Refreshed: '+esc((p.refreshed || []).join(', ') || 'none')+'</div>'
+    + '<div style="font-size:11px;">Left untouched: '+esc((p.untouched || []).join(', ') || 'none')+'</div>'
+    + (p.warnings || []).map(w => '<div style="font-size:11px;color:var(--orange);">'+esc(w)+'</div>').join('')
+    + '<div style="margin-top:10px;"><button class="btn btn-sec btn-sm" data-click="mergeSelectedClasses">Merge the two checked classes</button> <button class="btn btn-pri btn-sm" data-click="applySourceOntology">Publish</button></div>'
+    + '</div>';
+}
+async function previewSources() {
+  const names = [...document.querySelectorAll('.src-pick:checked')].map(e => e.dataset.name);
+  if (!names.length) { sourcesMsg('Check at least one source first.'); return; }
+  const out = document.getElementById('sources-preview');
+  try {
+    const p = (await apiPost('/api/v1/sources/ontology', sourcesBody({sources: names, merges: sourcesState.merges, preview: true}))).data;
+    Object.assign(sourcesState, {names: names, fingerprints: p.fingerprints, activeVersion: p.active_version});
+    out.innerHTML = renderSourcesPreview(p);
+    sourcesMsg('Preview ready — nothing has been written.');
+  } catch (e) {
+    out.innerHTML = '';
+    sourcesMsg(e.message);
+  }
+}
+function mergeSelectedClasses() {
+  const picked = [...document.querySelectorAll('.cls-pick:checked')];
+  if (picked.length !== 2) { sourcesMsg('Check exactly two classes to merge.'); return; }
+  sourcesState.merges.push([picked[0].dataset.ref, picked[1].dataset.ref]);
+  return previewSources();
+}
+async function applySourceOntology() {
+  if (!sourcesState.fingerprints) { sourcesMsg('Preview first.'); return; }
+  const body = sourcesBody({sources: sourcesState.names, merges: sourcesState.merges, preview: false, fingerprints: sourcesState.fingerprints});
+  if (sourcesState.activeVersion !== null && sourcesState.activeVersion !== undefined) body.expected_version = sourcesState.activeVersion;
+  try {
+    const r = (await apiPost('/api/v1/sources/ontology', body)).data;
+    sourcesMsg(r.saved ? 'Published — ontology version ' + r.version + '.' : 'Nothing to change — the ontology already matches.');
+    sourcesState.merges = [];
+    sourcesState.fingerprints = null;
+  } catch (e) {
+    sourcesMsg(/schema changed/.test(e.message) ? 'The schema changed since the preview — preview again.' : e.message);
+  }
+}
+async function importSource(name) {
+  const picked = [...document.querySelectorAll('.imp-pick:checked')].filter(e => e.dataset.source === name).map(e => e.dataset.name);
+  if (!picked.length) { sourcesMsg('Check at least one table to import.'); return; }
+  const out = document.getElementById('sources-result');
+  out.innerHTML = '<div class="loading">Importing...</div>';
+  try {
+    const r = (await apiPost('/api/v1/sources/import', sourcesBody({source: name, containers: picked}))).data;
+    const lines = Object.keys(r.imported).map(c => c + ': ' + r.imported[c] + ' written, ' + r.unchanged[c] + ' unchanged' + (r.truncated.indexOf(c) >= 0 ? ' (row cap reached)' : ''));
+    r.skipped.forEach(s => lines.push(s.container + ': skipped — ' + s.reason));
+    out.innerHTML = '<div class="card">'+lines.map(l => '<div>'+esc(l)+'</div>').join('')+'</div>';
+    sourcesMsg('Import finished.');
+  } catch (e) {
+    out.innerHTML = '<div class="card" style="border-color:var(--red);">'+esc(e.message)+'</div>';
+  }
+}
+
+// ═══════════════════════════════════════════
 // Event delegation — the page has NO inline handlers or inline scripts, so the
 // CSP can say script-src 'self'. Markup names an action with data-click /
 // data-change / data-input; values travel in data-* attributes (never in code).
@@ -1612,6 +1728,12 @@ const ACTIONS = Object.assign(Object.create(null), {
   loadProgramDeps: el => loadProgramDeps(el.dataset.koid),
   runBenchmark: el => runBenchmark(el.dataset.koid),
   compileDocument: el => compileDocument(el.dataset.koid),
+  loadSourcesPanel: el => loadSourcesPanel(),
+  discoverSource: el => discoverSource(el.dataset.name),
+  previewSourceOntology: el => previewSources(),
+  mergeSelectedClasses: el => mergeSelectedClasses(),
+  applySourceOntology: el => applySourceOntology(),
+  importSource: el => importSource(el.dataset.name),
   signInSso: el => location.href = '/api/login/sso',
 });
 function dispatchAction(attr, ev) {

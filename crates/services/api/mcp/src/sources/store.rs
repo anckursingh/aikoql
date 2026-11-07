@@ -227,11 +227,20 @@ pub(crate) fn record_snapshot(
 pub(crate) fn last_summary(k: &Kernel, src: &SourceConfig) -> Result<J, String> {
     Ok(match owned(k, src, T_SOURCE)?.into_iter().next() {
         None => J::Null,
-        Some(ko) => json!({
-            "fingerprint": text(&ko, "fingerprint"),
-            "containers": json_of(&ko, "containers"),
-            "truncated": json_of(&ko, "truncated"),
-        }),
+        Some(ko) => {
+            let mut names: Vec<String> = owned(k, src, T_TABLE)?
+                .iter()
+                .filter_map(|t| text(t, "name").map(String::from))
+                .collect();
+            names.sort();
+            names.truncate(500);
+            json!({
+                "fingerprint": text(&ko, "fingerprint"),
+                "containers": json_of(&ko, "containers"),
+                "truncated": json_of(&ko, "truncated"),
+                "container_names": names,
+            })
+        }
     })
 }
 

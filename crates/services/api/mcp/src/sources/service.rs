@@ -210,7 +210,10 @@ mod tests {
                     .unwrap();
                 let after = tool_sources_list(&k, &json!({"tenant": "acme"})).unwrap();
                 assert_eq!(after[0]["last"]["containers"], 2);
-                assert_eq!(after[0]["last"]["container_names"], json!(["customers", "orders"]));
+                assert_eq!(
+                    after[0]["last"]["container_names"],
+                    json!(["customers", "orders"])
+                );
                 assert_eq!(after[0]["kind"], "sqlite");
                 assert!(
                     after[0].get("url_env").is_none() && after[0].get("connection").is_none(),
