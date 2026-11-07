@@ -228,6 +228,7 @@ pub(crate) fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> 
                                 is_primary_key: f["is_primary_key"].as_bool().unwrap_or(false),
                                 nullable: f["nullable"].as_bool().unwrap_or(true),
                                 is_unique: f["is_unique"].as_bool().unwrap_or(false),
+                                ..Default::default()
                             })
                             .collect()
                     })
@@ -237,6 +238,7 @@ pub(crate) fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> 
                     name,
                     fields,
                     row_count: t["row_count"].as_u64(),
+                    ..Default::default()
                 }
             })
             .collect();
@@ -278,6 +280,7 @@ pub(crate) fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> 
             containers,
             references,
             version: None,
+            ..Default::default()
         }
     } else {
         // ponytail: empty metadata for unknown schemas — agent should call

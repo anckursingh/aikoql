@@ -22,10 +22,13 @@ pub struct ConnectorMetadata {
     pub references: Vec<ReferenceInfo>,
     /// Server version, if known.
     pub version: Option<String>,
+    /// The container list was cut at a configured maximum.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// A table, collection, or node label.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ContainerInfo {
     /// Container name (table name, collection name, node label).
     pub name: String,
@@ -33,10 +36,33 @@ pub struct ContainerInfo {
     pub fields: Vec<FieldInfo>,
     /// Approximate row count, if known.
     pub row_count: Option<u64>,
+    /// Namespace inside the source (Postgres schema), if it has one.
+    #[serde(default)]
+    pub schema: Option<String>,
+    /// Column groups with a unique constraint (single and composite).
+    #[serde(default)]
+    pub unique_groups: Vec<Vec<String>>,
+}
+
+/// Whether a field's type was declared by the source or only observed in a sample.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Provenance {
+    #[default]
+    Declared,
+    Observed,
+}
+
+/// What a sample of values showed about a field (observed schemas only).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FieldProfile {
+    pub types: Vec<String>,
+    pub presence_ratio: f64,
+    pub null_ratio: f64,
+    pub samples: u64,
 }
 
 /// A column, field, or property within a container.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct FieldInfo {
     pub name: String,
     /// SQL type, GraphQL type, BSON type, etc.
@@ -47,6 +73,10 @@ pub struct FieldInfo {
     pub nullable: bool,
     /// Whether this field has a unique constraint.
     pub is_unique: bool,
+    #[serde(default)]
+    pub provenance: Provenance,
+    #[serde(default)]
+    pub profile: Option<FieldProfile>,
 }
 
 /// A foreign key, graph relationship, or document reference.
@@ -259,9 +289,11 @@ pub fn discover_connector_schema(
                     is_primary_key: *pk,
                     nullable: *nullable,
                     is_unique: *unique,
+                    ..Default::default()
                 })
                 .collect(),
             row_count: None,
+            ..Default::default()
         })
         .collect();
 
@@ -284,6 +316,7 @@ pub fn discover_connector_schema(
         containers,
         references,
         version: None,
+        ..Default::default()
     }
 }
 
@@ -418,6 +451,36 @@ mod tests {
                 .iter()
                 .all(|n| !n.contains("Table") && !n.contains("postgres")),
             "the source kind is not a class: {names:?}"
+        );
+    }
+
+    #[test]
+    fn observed_fields_add_a_profile_fact_and_no_property_noise() {
+        let mut meta = discover_connector_schema(
+            "mongodb",
+            "crm",
+            &[("people", &[("age", "bson", false, true, false)])],
+            &[],
+        );
+        let plain = crate::discover_ontology_from_ir(&connector_metadata_to_ir(&meta));
+        meta.containers[0].fields[0].provenance = Provenance::Observed;
+        meta.containers[0].fields[0].profile = Some(FieldProfile {
+            types: vec!["Int".into(), "Null".into()],
+            presence_ratio: 0.91,
+            null_ratio: 0.04,
+            samples: 1000,
+        });
+        let ir = connector_metadata_to_ir(&meta);
+        let fact = ir
+            .facts
+            .iter()
+            .find(|f| f.statement.contains("observed"))
+            .expect("an observed-profile fact");
+        assert!(fact.statement.contains("Int, Null") && fact.statement.contains("0.91"));
+        assert_eq!(
+            crate::discover_ontology_from_ir(&ir).properties.len(),
+            plain.properties.len(),
+            "the profile fact must not invent properties"
         );
     }
 

@@ -267,8 +267,11 @@ pub use reconcile::{
 mod connector_bridge;
 pub use connector_bridge::{
     class_name_for_container, connector_metadata_to_ir, discover_connector_schema,
-    ConnectorMetadata, ContainerInfo, FieldInfo, ReferenceInfo,
+    ConnectorMetadata, ContainerInfo, FieldInfo, FieldProfile, Provenance, ReferenceInfo,
 };
+
+mod source_schema;
+pub use source_schema::{diff_metadata, ContainerDiff, SchemaDiff};
 
 mod secret_filter;
 pub use secret_filter::{filter_secrets, SecretFinding, SecretKind, ALL_KINDS};

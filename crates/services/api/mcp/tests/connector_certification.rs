@@ -1216,8 +1216,10 @@ fn ont001_live_discovery_merges_three_sources() {
                         is_primary_key: c.is_primary_key,
                         nullable: c.is_nullable,
                         is_unique: false,
+                        ..Default::default()
                     })
                     .collect(),
+                ..Default::default()
             })
             .collect();
         let references = fks
@@ -1236,6 +1238,7 @@ fn ont001_live_discovery_merges_three_sources() {
             containers,
             references,
             version: None,
+            ..Default::default()
         });
     }
 
@@ -1272,8 +1275,10 @@ fn ont001_live_discovery_merges_three_sources() {
                         data_type: "bson".into(),
                         nullable: true,
                         is_unique: false,
+                        ..Default::default()
                     })
                     .collect(),
+                ..Default::default()
             })
             .collect();
         metas.push(ConnectorMetadata {
@@ -1282,6 +1287,7 @@ fn ont001_live_discovery_merges_three_sources() {
             containers,
             references: vec![],
             version: None,
+            ..Default::default()
         });
     }
 
@@ -1323,10 +1329,12 @@ fn ont001_live_discovery_merges_three_sources() {
                         is_primary_key: false,
                         nullable: true,
                         is_unique: false,
+                        ..Default::default()
                     })
                     .collect(),
                 name: l,
                 row_count: conn.count_nodes(label).ok(),
+                ..Default::default()
             })
             .collect();
         let references: Vec<ReferenceInfo> = conn
@@ -1348,6 +1356,7 @@ fn ont001_live_discovery_merges_three_sources() {
             containers,
             references,
             version: None,
+            ..Default::default()
         });
     }
 
