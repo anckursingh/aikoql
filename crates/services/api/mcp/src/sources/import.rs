@@ -21,11 +21,12 @@ fn fetch(
     container: &str,
     tenant: Option<&str>,
     cap: u64,
-    _deadline: std::time::Duration,
+    deadline: std::time::Duration,
 ) -> Result<Fetched, String> {
     match kind {
         SourceKind::Sqlite => {
-            let c = aikoql_sqlite::SqliteConnector::open_read_only(conn, ms)?;
+            let c =
+                aikoql_sqlite::SqliteConnector::open_read_only(conn, ms)?.with_deadline(deadline);
             let schema = c.introspect_table_with(container, false)?;
             c.import_table_limited(&schema, tenant, cap)
         }
@@ -36,7 +37,8 @@ fn fetch(
             c.import_table_limited(&schema, tenant, cap)
         }
         SourceKind::Mongodb => {
-            let c = aikoql_mongodb::MongoConnector::connect_with_timeout(conn, database, Some(ms))?;
+            let c = aikoql_mongodb::MongoConnector::connect_with_timeout(conn, database, Some(ms))?
+                .with_deadline(deadline);
             let schema = aikoql_mongodb::CollectionSchema {
                 name: container.to_string(),
                 document_count: 0,
@@ -174,7 +176,8 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
                 &container,
                 tenant_c.as_deref(),
                 cap,
-                deadline,
+                // stop on our own just before the gate gives up, so the thread returns
+                deadline.saturating_sub(std::time::Duration::from_secs(1)),
             )
         }) {
             Ok(v) => v,

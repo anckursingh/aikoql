@@ -159,7 +159,8 @@ impl MongoConnector {
     /// Give every operation of this connector until `d` from now; later ones fail
     /// with "timed out" and the in-flight future is dropped, so the caller's thread
     /// returns instead of waiting on an unresponsive server.
-    pub fn with_deadline(self, _d: std::time::Duration) -> Self {
+    pub fn with_deadline(mut self, d: std::time::Duration) -> Self {
+        self.deadline = Some(std::time::Instant::now() + d);
         self
     }
 
@@ -167,43 +168,52 @@ impl MongoConnector {
         &self,
         fut: impl std::future::Future<Output = Result<T, String>>,
     ) -> Result<T, String> {
-        self.rt.block_on(fut)
+        let Some(deadline) = self.deadline else {
+            return self.rt.block_on(fut);
+        };
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        // the timer must be created inside the runtime, hence the async block
+        self.rt
+            .block_on(async { tokio::time::timeout(left, fut).await })
+            .unwrap_or_else(|_| Err("timed out".to_string()))
     }
 
     pub fn list_collections(&self) -> Result<Vec<String>, String> {
-        self.rt
-            .block_on(async { self.db.list_collection_names().await })
-            .map_err(|e| format!("list collections: {}", e))
+        self.block(async {
+            self.db
+                .list_collection_names()
+                .await
+                .map_err(|e| format!("list collections: {}", e))
+        })
     }
 
     pub fn introspect_collection(&self, name: &str) -> Result<CollectionSchema, String> {
-        self.rt
-            .block_on(async {
-                let coll = self.db.collection::<Document>(name);
-                let count = coll
-                    .count_documents(doc! {})
-                    .await
-                    .map_err(|e| format!("count {}: {}", name, e))?;
-                let mut props: Vec<String> = Vec::new();
-                let opts = mongodb::options::FindOptions::builder().limit(100).build();
-                let mut cursor = coll
-                    .find(doc! {})
-                    .with_options(opts)
-                    .await
-                    .map_err(|e| format!("sample {}: {}", name, e))?;
-                use futures_util::StreamExt;
-                while let Some(Ok(d)) = cursor.next().await {
-                    collect_keys("", &d, &mut props);
-                }
-                props.sort();
-                props.dedup();
-                Ok(CollectionSchema {
-                    name: name.to_string(),
-                    document_count: count,
-                    properties: props,
-                })
+        self.block(async {
+            let coll = self.db.collection::<Document>(name);
+            let count = coll
+                .count_documents(doc! {})
+                .await
+                .map_err(|e| format!("count {}: {}", name, e))?;
+            let mut props: Vec<String> = Vec::new();
+            let opts = mongodb::options::FindOptions::builder().limit(100).build();
+            let mut cursor = coll
+                .find(doc! {})
+                .with_options(opts)
+                .await
+                .map_err(|e| format!("sample {}: {}", name, e))?;
+            use futures_util::StreamExt;
+            while let Some(Ok(d)) = cursor.next().await {
+                collect_keys("", &d, &mut props);
+            }
+            props.sort();
+            props.dedup();
+            Ok(CollectionSchema {
+                name: name.to_string(),
+                document_count: count,
+                properties: props,
             })
-            .map_err(|e: String| e)
+        })
+        .map_err(|e: String| e)
     }
 
     /// Field statistics from a random `$sample` of up to `sample_limit` documents.
@@ -212,7 +222,7 @@ impl MongoConnector {
         name: &str,
         sample_limit: u32,
     ) -> Result<Vec<FieldStats>, String> {
-        let docs: Vec<Document> = self.rt.block_on(async {
+        let docs: Vec<Document> = self.block(async {
             use futures_util::StreamExt;
             let coll = self.db.collection::<Document>(name);
             let mut cursor = coll
@@ -256,52 +266,51 @@ impl MongoConnector {
         max_rows: u64,
     ) -> Result<(Vec<KnowledgeObject>, bool), String> {
         let limit = max_rows.saturating_add(1).min(i64::MAX as u64) as i64;
-        self.rt
-            .block_on(async {
-                let coll = self.db.collection::<Document>(&schema.name);
-                let mut cursor = coll
-                    .find(doc! {})
-                    .limit(limit)
-                    .await
-                    .map_err(|e| format!("import {}: {}", schema.name, e))?;
-                use futures_util::StreamExt;
-                let mut objects = Vec::new();
-                while let Some(Ok(doc)) = cursor.next().await {
-                    let (props, koid) = document_to_ko(&doc, &schema.name);
-                    objects.push(KnowledgeObject {
-                        koid,
-                        version: 0,
-                        commit_ts: 0,
-                        metadata: Metadata {
-                            type_name: schema.name.clone(),
-                            tenant: tenant.map(String::from),
-                            schema_version: 1,
-                            tags: vec!["imported".into(), "source:mongodb".into()],
-                        },
-                        properties: props,
-                        semantic: None,
-                        relationships: vec![],
-                        event_refs: vec![],
-                        security: SecurityDescriptor {
-                            // Must equal the runner subject "mongo-importer" —
-                            // a mismatch makes every commit ACCESS_DENIED and
-                            // the whole import a silent no-op (item 2 lesson).
-                            owner: "mongo-importer".into(),
-                            acl: vec![],
-                            classification: None,
-                        },
-                        lifecycle: Lifecycle {
-                            state: LifecycleState::Draft,
-                            origin: Origin::Human,
-                        },
-                        extensions: ExtensionMap::new(),
-                    });
-                }
-                let truncated = objects.len() as u64 > max_rows;
-                objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
-                Ok((objects, truncated))
-            })
-            .map_err(|e: String| e)
+        self.block(async {
+            let coll = self.db.collection::<Document>(&schema.name);
+            let mut cursor = coll
+                .find(doc! {})
+                .limit(limit)
+                .await
+                .map_err(|e| format!("import {}: {}", schema.name, e))?;
+            use futures_util::StreamExt;
+            let mut objects = Vec::new();
+            while let Some(Ok(doc)) = cursor.next().await {
+                let (props, koid) = document_to_ko(&doc, &schema.name);
+                objects.push(KnowledgeObject {
+                    koid,
+                    version: 0,
+                    commit_ts: 0,
+                    metadata: Metadata {
+                        type_name: schema.name.clone(),
+                        tenant: tenant.map(String::from),
+                        schema_version: 1,
+                        tags: vec!["imported".into(), "source:mongodb".into()],
+                    },
+                    properties: props,
+                    semantic: None,
+                    relationships: vec![],
+                    event_refs: vec![],
+                    security: SecurityDescriptor {
+                        // Must equal the runner subject "mongo-importer" —
+                        // a mismatch makes every commit ACCESS_DENIED and
+                        // the whole import a silent no-op (item 2 lesson).
+                        owner: "mongo-importer".into(),
+                        acl: vec![],
+                        classification: None,
+                    },
+                    lifecycle: Lifecycle {
+                        state: LifecycleState::Draft,
+                        origin: Origin::Human,
+                    },
+                    extensions: ExtensionMap::new(),
+                });
+            }
+            let truncated = objects.len() as u64 > max_rows;
+            objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
+            Ok((objects, truncated))
+        })
+        .map_err(|e: String| e)
     }
 }
 

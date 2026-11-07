@@ -312,12 +312,14 @@ pub(crate) fn introspect_with(
         conn.to_string(),
         src.database.clone().unwrap_or_default(),
     );
+    // the connector ends its own work just inside the gate's limit, so the thread returns
+    let own = std::time::Duration::from_millis(ms + 1_000);
     let result = GATE.run(
         std::time::Duration::from_millis(ms + 1_500),
         move || match kind {
-            SourceKind::Sqlite => sqlite_meta(&conn_owned, ms, max),
+            SourceKind::Sqlite => sqlite_meta(&conn_owned, ms, max, own),
             SourceKind::Postgres => postgres_meta(&conn_owned, ms, max),
-            SourceKind::Mongodb => mongo_meta(&conn_owned, &database, ms, max, sample, mode),
+            SourceKind::Mongodb => mongo_meta(&conn_owned, &database, ms, max, sample, mode, own),
             SourceKind::Neo4j => neo4j_meta(&conn_owned, ms, max, sample, mode),
             SourceKind::Clickhouse => clickhouse_meta(&conn_owned, &database, ms, max),
         },
@@ -344,8 +346,8 @@ fn cap(mut names: Vec<String>, max: usize) -> (Vec<String>, bool) {
     (names, truncated)
 }
 
-fn sqlite_meta(path: &str, ms: u64, max: usize) -> Result<Parts, String> {
-    let c = aikoql_sqlite::SqliteConnector::open_read_only(path, ms)?;
+fn sqlite_meta(path: &str, ms: u64, max: usize, own: std::time::Duration) -> Result<Parts, String> {
+    let c = aikoql_sqlite::SqliteConnector::open_read_only(path, ms)?.with_deadline(own);
     let (names, truncated) = cap(c.list_tables()?, max);
     let included: HashSet<String> = names.iter().cloned().collect();
     let mut containers = Vec::with_capacity(names.len());
@@ -411,8 +413,10 @@ fn mongo_meta(
     max: usize,
     sample: u32,
     mode: Mode,
+    own: std::time::Duration,
 ) -> Result<Parts, String> {
-    let c = aikoql_mongodb::MongoConnector::connect_with_timeout(uri, database, Some(ms))?;
+    let c = aikoql_mongodb::MongoConnector::connect_with_timeout(uri, database, Some(ms))?
+        .with_deadline(own);
     let names: Vec<String> = c
         .list_collections()?
         .into_iter()

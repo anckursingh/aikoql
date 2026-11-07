@@ -55,13 +55,24 @@ pub struct ForeignKeyInfo {
 
 pub struct SqliteConnector {
     conn: Connection,
+    /// Dropped with the connector; that wakes and ends the deadline watchdog.
+    watchdog: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl SqliteConnector {
     /// Stop this connector's own work `d` from now: a statement still running then
     /// is interrupted. The caller's thread returns instead of spinning on, which a
     /// waiter that merely gave up could never make it do.
-    pub fn with_deadline(self, _d: std::time::Duration) -> Self {
+    pub fn with_deadline(mut self, d: std::time::Duration) -> Self {
+        let handle = self.conn.get_interrupt_handle();
+        let (done, rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            // dropping the connector drops `done`, which ends the wait early
+            if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(d) {
+                handle.interrupt();
+            }
+        });
+        self.watchdog = Some(done);
         self
     }
 
@@ -91,7 +102,10 @@ impl SqliteConnector {
             r.get::<_, i64>(0)
         })
         .map_err(short)?;
-        Ok(SqliteConnector { conn })
+        Ok(SqliteConnector {
+            conn,
+            watchdog: None,
+        })
     }
 
     /// Open a SQLite database file. `:memory:` for an in-memory database.
@@ -105,7 +119,10 @@ impl SqliteConnector {
             )
         }
         .map_err(|e| format!("SQLite open failed: {}", e))?;
-        Ok(SqliteConnector { conn })
+        Ok(SqliteConnector {
+            conn,
+            watchdog: None,
+        })
     }
 
     // ------------------------------------------------------------------
