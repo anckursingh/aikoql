@@ -218,6 +218,46 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn the_deadline_counts_from_the_start_of_the_call_not_from_the_open() {
+        use crate::sources::testkit::{make, tmp_db};
+        let p = tmp_db("budget");
+        make(
+            &p,
+            "CREATE TABLE seed (id INTEGER);
+             CREATE VIEW v AS SELECT count(*) AS n FROM
+               (WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT x FROM c);",
+        );
+        // a writer holds the file for 900ms: the open alone uses most of a 1.5s budget
+        let writer = rusqlite::Connection::open(&p).unwrap();
+        writer
+            .execute_batch("BEGIN EXCLUSIVE; INSERT INTO seed VALUES (1);")
+            .unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            writer.execute_batch("COMMIT").unwrap();
+        });
+        let conn = p.to_str().unwrap().to_string();
+        let started = std::time::Instant::now();
+        let r = fetch(
+            SourceKind::Sqlite,
+            &conn,
+            "",
+            5_000,
+            "v",
+            None,
+            10,
+            std::time::Duration::from_millis(1500),
+        );
+        let took = started.elapsed();
+        release.join().unwrap();
+        assert!(r.is_err(), "a runaway read must fail");
+        assert!(
+            took < std::time::Duration::from_millis(2100),
+            "the budget restarted after the open: the call took {took:?} against a 1.5s budget"
+        );
+    }
+
+    #[test]
     fn a_hung_source_call_ends_and_frees_its_gate_slot() {
         use crate::sources::introspect::Gate;
         use crate::sources::testkit::{make, tmp_db};
