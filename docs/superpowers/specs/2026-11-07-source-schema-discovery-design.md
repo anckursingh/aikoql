@@ -53,4 +53,7 @@ selected containers.
 
 ## Non-goals
 Studio credential entry; CDC/continuous sync; ClickHouse row import; fuzzy/ML class matching;
-query-time `property_map` translation is a stretch task (T13) and is dropped if the compiler change is not small.
+query-time `property_map` translation is a stretch task (T14) and is dropped if the compiler change is not small.
+
+## Quality bar (added 2026-11-07, owner request)
+Robustness is part of the product: every layer carries seeded fuzz, metamorphic and adversarial tests; hostile identifiers must not inject into Cypher/SQL/ClickHouse; read-only sources must be provably untouched; no secret may appear anywhere it could be read back; a capstone suite (T13) attacks the assembled system (secret sweep, tenant matrix, crash consistency, slowloris source, resource bounds).
