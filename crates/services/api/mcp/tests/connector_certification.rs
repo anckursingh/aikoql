@@ -1887,3 +1887,57 @@ fn src_neo4j_label_schema_rel_patterns_and_no_label_injection() {
         "{rels:?}"
     );
 }
+
+#[test]
+fn src_clickhouse_introspects_a_real_server_read_only() {
+    let Some(live) = connectors::Live::clickhouse() else {
+        return;
+    };
+    connectors::clickhouse_exec(
+        &live.clickhouse_url,
+        &live.clickhouse_db,
+        &[
+            "DROP TABLE IF EXISTS src_events",
+            "CREATE TABLE src_events (ts DateTime, user_id UInt64, note Nullable(String), kind LowCardinality(String)) \
+             ENGINE = MergeTree PARTITION BY toYYYYMM(ts) ORDER BY (toDate(ts), user_id)",
+            "INSERT INTO src_events VALUES (now(), 1, NULL, 'a'), (now(), 2, 'x', 'b')",
+            "DROP TABLE IF EXISTS `we\"ird tab`",
+            "CREATE TABLE `we\"ird tab` (`c o l` Int32) ENGINE = Log",
+        ],
+    );
+    let conn = aikoql_clickhouse::ClickHouseConnector::connect_with_timeout(
+        &live.clickhouse_url,
+        &live.clickhouse_db,
+        Some(15_000),
+    )
+    .expect("connect");
+    assert!(!conn.version().is_empty());
+    let tables = conn.introspect_all(500).expect("introspect");
+    let ev = tables
+        .iter()
+        .find(|t| t.name == "src_events")
+        .expect("src_events");
+    assert_eq!(ev.engine, "MergeTree");
+    assert_eq!(ev.sorting_key, ["toDate(ts)", "user_id"]);
+    assert_eq!(ev.partition_key, "toYYYYMM(ts)");
+    let col = |n: &str| {
+        ev.columns
+            .iter()
+            .find(|c| c.name == n)
+            .unwrap_or_else(|| panic!("no {n}"))
+    };
+    assert!(col("note").is_nullable && !col("note").is_low_cardinality);
+    assert!(col("kind").is_low_cardinality && col("kind").ch_type == "String");
+    assert_eq!(col("user_id").ch_type, "UInt64");
+    assert!(tables
+        .iter()
+        .any(|t| t.name == "we\"ird tab" && t.columns.iter().any(|c| c.name == "c o l")));
+    // the database name is a bound parameter: a hostile one finds nothing and breaks nothing
+    let hostile = aikoql_clickhouse::ClickHouseConnector::connect_with_timeout(
+        &live.clickhouse_url,
+        "analytics' OR 1=1 --",
+        Some(15_000),
+    )
+    .expect("connect");
+    assert!(hostile.introspect_all(10).expect("hostile db").is_empty());
+}

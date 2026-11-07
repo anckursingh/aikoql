@@ -17,6 +17,7 @@ aikoql-postgres = { path = "../../../providers/postgres" }
 aikoql-sqlite = { path = "../../../providers/sqlite" }
 aikoql-mongodb = { path = "../../../providers/mongodb" }
 aikoql-neo4j = { path = "../../../providers/neo4j" }
+aikoql-clickhouse = { path = "../../../providers/clickhouse" }
 aikoql-ingestion = { path = "../../../ingestion" }
 aikoql-semantic = { path = "../../../engines/semantic" }
 aikoql-scheduler = { path = "../../../engines/scheduler" }

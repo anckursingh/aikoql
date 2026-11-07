@@ -37,6 +37,9 @@ pub struct Live {
     pub neo4j_uri: String,
     pub neo4j_user: String,
     pub neo4j_password: String,
+    /// ClickHouse HTTP URL (may carry `user:password@`) and database.
+    pub clickhouse_url: String,
+    pub clickhouse_db: String,
 }
 
 impl Live {
@@ -145,7 +148,26 @@ impl Live {
             neo4j_uri: String::new(),
             neo4j_user: String::new(),
             neo4j_password: String::new(),
+            clickhouse_url: String::new(),
+            clickhouse_db: String::new(),
         }
+    }
+
+    /// Live ClickHouse over HTTP (`AIKOQL_TEST_CLICKHOUSE_URL`, `_DB`).
+    pub fn clickhouse() -> Option<Live> {
+        let url = match Self::env_opt("AIKOQL_TEST_CLICKHOUSE_URL") {
+            Some(u) => u,
+            None => return Self::skip("clickhouse", &["AIKOQL_TEST_CLICKHOUSE_URL"]),
+        };
+        let db = Self::env_opt("AIKOQL_TEST_CLICKHOUSE_DB").unwrap_or_else(|| "default".into());
+        aikoql_clickhouse::ClickHouseConnector::connect_with_timeout(&url, &db, Some(15_000))
+            .unwrap_or_else(|e| panic!("live clickhouse probe failed: {e}"));
+        Some(Live {
+            kind: "clickhouse",
+            clickhouse_url: url,
+            clickhouse_db: db,
+            ..Live::blank()
+        })
     }
 }
 
@@ -545,5 +567,23 @@ impl Drop for McpQueryClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// Run seed statements against ClickHouse (one HTTP request per statement;
+/// seeding is the only place these tests write to a source).
+pub fn clickhouse_exec(url: &str, db: &str, stmts: &[&str]) {
+    let (scheme, rest) = url.split_once("://").expect("clickhouse url");
+    let (userinfo, host) = rest.rsplit_once('@').map_or(("", rest), |(u, h)| (u, h));
+    let (user, pass) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+    for s in stmts {
+        let mut req = ureq::post(&format!("{scheme}://{host}/")).query("database", db);
+        if !user.is_empty() {
+            req = req
+                .set("X-ClickHouse-User", user)
+                .set("X-ClickHouse-Key", pass);
+        }
+        req.send_string(s)
+            .unwrap_or_else(|e| panic!("clickhouse seed `{s}`: {e}"));
     }
 }

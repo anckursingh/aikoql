@@ -32,34 +32,316 @@ pub struct TableSchema {
 }
 
 pub struct ClickHouseConnector {
-    #[allow(dead_code)]
     base: String,
-    #[allow(dead_code)]
     database: String,
+    user: Option<String>,
+    password: Option<String>,
+    agent: ureq::Agent,
+    limit: Duration,
+    version: String,
+}
+
+/// Did this error come from the deadline? Decided by the underlying `io::Error`
+/// kind (Unix reports a socket timeout as WouldBlock, Windows as TimedOut with
+/// text that never says "timed out"), else by having used the whole budget.
+fn is_timeout(err: &(dyn std::error::Error + 'static), elapsed: Duration, limit: Duration) -> bool {
+    let mut cur = Some(err);
+    while let Some(e) = cur {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) {
+                return true;
+            }
+        }
+        cur = e.source();
+    }
+    elapsed >= limit
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `(base url without credentials, user, password)`. Never echoes the input.
+fn split_url(url: &str) -> Result<(String, Option<String>, Option<String>), String> {
+    let invalid = || "invalid ClickHouse URL".to_string();
+    let (scheme, rest) = url.split_once("://").ok_or_else(invalid)?;
+    if scheme != "http" && scheme != "https" {
+        return Err(invalid());
+    }
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    let (userinfo, host) = match authority.rfind('@') {
+        Some(i) => (Some(&authority[..i]), &authority[i + 1..]),
+        None => (None, authority),
+    };
+    if host.is_empty() {
+        return Err(invalid());
+    }
+    let (user, pass) = match userinfo {
+        None => (None, None),
+        Some(ui) => match ui.split_once(':') {
+            Some((u, p)) => (Some(percent_decode(u)), Some(percent_decode(p))),
+            None => (Some(percent_decode(ui)), None),
+        },
+    };
+    Ok((
+        format!("{scheme}://{host}{}", path.trim_end_matches('/')),
+        user,
+        pass,
+    ))
+}
+
+fn str_field(v: &serde_json::Value, key: &str) -> String {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A UInt64 that ClickHouse may send as a JSON number, a quoted string or null.
+fn u64_field(v: &serde_json::Value, key: &str) -> u64 {
+    match v.get(key) {
+        Some(serde_json::Value::Number(n)) => n.as_u64().unwrap_or(0),
+        Some(serde_json::Value::String(s))
+            if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            s.parse().unwrap_or(u64::MAX)
+        }
+        _ => 0,
+    }
+}
+
+/// Split a key expression list on top-level commas (`toDate(ts), id`).
+fn split_key(expr: &str) -> Vec<String> {
+    let (mut out, mut depth, mut cur) = (Vec::new(), 0i32, String::new());
+    for c in expr.chars() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth <= 0 => {
+                out.push(cur.trim().to_string());
+                cur.clear();
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_string());
+    }
+    out.retain(|k| !k.is_empty());
+    out
+}
+
+fn unwrap_type(declared: &str) -> (String, bool, bool) {
+    let (mut t, mut nullable, mut low) = (declared.trim(), false, false);
+    loop {
+        if let Some(inner) = t
+            .strip_prefix("LowCardinality(")
+            .and_then(|x| x.strip_suffix(')'))
+        {
+            low = true;
+            t = inner.trim();
+        } else if let Some(inner) = t
+            .strip_prefix("Nullable(")
+            .and_then(|x| x.strip_suffix(')'))
+        {
+            nullable = true;
+            t = inner.trim();
+        } else {
+            return (t.to_string(), nullable, low);
+        }
+    }
 }
 
 impl ClickHouseConnector {
     /// Connect (one `SELECT version()`); `url` may carry `user:password@`.
     pub fn connect_with_timeout(
-        _url: &str,
-        _database: &str,
-        _timeout_ms: Option<u64>,
+        url: &str,
+        database: &str,
+        timeout_ms: Option<u64>,
     ) -> Result<Self, String> {
-        Err("todo".into())
-    }
-
-    /// Up to `max_tables` tables of the database with their columns and keys.
-    pub fn introspect_all(&self, _max_tables: usize) -> Result<Vec<TableSchema>, String> {
-        Ok(Vec::new())
+        let (base, user, password) = split_url(url)?;
+        let limit = Duration::from_millis(timeout_ms.unwrap_or(15_000).max(1));
+        let agent = ureq::AgentBuilder::new()
+            .timeout(limit)
+            .redirects(0)
+            .build();
+        let mut c = ClickHouseConnector {
+            base,
+            database: database.to_string(),
+            user,
+            password,
+            agent,
+            limit,
+            version: String::new(),
+        };
+        let rows = c.query("SELECT version()", &[])?;
+        c.version = rows
+            .first()
+            .and_then(|r| r.get("version()"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .chars()
+            .filter(|ch| ch.is_ascii_graphic())
+            .take(64)
+            .collect();
+        Ok(c)
     }
 
     pub fn version(&self) -> &str {
-        ""
+        &self.version
+    }
+
+    /// Run one read-only statement; `params` become `param_<name>` query
+    /// parameters bound to `{name:Type}` placeholders in `sql`.
+    fn query(&self, sql: &str, params: &[(&str, &str)]) -> Result<Vec<serde_json::Value>, String> {
+        let started = std::time::Instant::now();
+        let mut req = self
+            .agent
+            .post(&format!("{}/", self.base))
+            .query("readonly", "1")
+            .query("default_format", "JSONEachRow")
+            .query(
+                "max_execution_time",
+                &(self.limit.as_secs().max(1)).to_string(),
+            );
+        for (k, v) in params {
+            req = req.query(&format!("param_{k}"), v);
+        }
+        if let Some(u) = &self.user {
+            req = req.set("X-ClickHouse-User", u);
+        }
+        if let Some(p) = &self.password {
+            req = req.set("X-ClickHouse-Key", p);
+        }
+        let resp = match req.send_string(sql) {
+            Ok(r) => r,
+            Err(ureq::Error::Status(code, r)) => {
+                let body = r.into_string().unwrap_or_default();
+                return Err(format!(
+                    "clickhouse returned HTTP {code}: {}",
+                    self.scrub(&body)
+                ));
+            }
+            Err(ureq::Error::Transport(t)) => {
+                return Err(if is_timeout(&t, started.elapsed(), self.limit) {
+                    "clickhouse timed out".into()
+                } else {
+                    "clickhouse unreachable".into()
+                });
+            }
+        };
+        if resp.status() >= 300 {
+            return Err(format!(
+                "clickhouse sent an unexpected redirect (HTTP {})",
+                resp.status()
+            ));
+        }
+        use std::io::Read;
+        let mut body = Vec::new();
+        resp.into_reader()
+            .take(MAX_BODY as u64 + 1)
+            .read_to_end(&mut body)
+            .map_err(|e| {
+                if is_timeout(&e, started.elapsed(), self.limit) {
+                    "clickhouse timed out".to_string()
+                } else {
+                    "clickhouse unreachable".to_string()
+                }
+            })?;
+        if body.len() > MAX_BODY {
+            return Err("clickhouse reply too large".into());
+        }
+        let text =
+            String::from_utf8(body).map_err(|_| "clickhouse reply was not UTF-8".to_string())?;
+        text.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                serde_json::from_str(l).map_err(|_| "clickhouse reply was not JSON".to_string())
+            })
+            .collect()
+    }
+
+    /// A server message made safe to show: control characters out, the
+    /// password (if any) redacted, length bounded.
+    fn scrub(&self, msg: &str) -> String {
+        let mut m: String = msg.chars().filter(|c| !c.is_control()).take(160).collect();
+        if let Some(p) = self.password.as_deref().filter(|p| !p.is_empty()) {
+            m = m.replace(p, "***");
+        }
+        m
+    }
+
+    /// Up to `max_tables + 1` tables (the extra row tells the caller the list
+    /// was cut) with their columns and keys.
+    pub fn introspect_all(&self, max_tables: usize) -> Result<Vec<TableSchema>, String> {
+        let n = (max_tables + 1).to_string();
+        let params = [("db", self.database.as_str()), ("n", n.as_str())];
+        let tables = self.query(
+            "SELECT name, engine, sorting_key, primary_key, partition_key, total_rows \
+             FROM system.tables WHERE database = {db:String} AND NOT is_temporary \
+             ORDER BY name LIMIT {n:UInt32}",
+            &params,
+        )?;
+        let columns = self.query(
+            "SELECT table, name, type, is_in_primary_key FROM system.columns \
+             WHERE database = {db:String} AND table IN \
+               (SELECT name FROM system.tables WHERE database = {db:String} AND NOT is_temporary \
+                ORDER BY name LIMIT {n:UInt32}) \
+             ORDER BY table, position",
+            &params,
+        )?;
+        let mut out: Vec<TableSchema> = tables
+            .iter()
+            .take(max_tables + 1)
+            .map(|t| TableSchema {
+                name: str_field(t, "name"),
+                engine: str_field(t, "engine"),
+                columns: Vec::new(),
+                sorting_key: split_key(&str_field(t, "sorting_key")),
+                primary_key: split_key(&str_field(t, "primary_key")),
+                partition_key: str_field(t, "partition_key"),
+                row_count_estimate: u64_field(t, "total_rows"),
+            })
+            .collect();
+        for c in &columns {
+            let table = str_field(c, "table");
+            let Some(t) = out.iter_mut().find(|t| t.name == table) else {
+                continue;
+            };
+            let (ch_type, is_nullable, is_low_cardinality) = unwrap_type(&str_field(c, "type"));
+            t.columns.push(ColumnInfo {
+                name: str_field(c, "name"),
+                ch_type,
+                is_nullable,
+                is_low_cardinality,
+                in_primary_key: u64_field(c, "is_in_primary_key") != 0,
+            });
+        }
+        Ok(out)
     }
 }
-
-#[allow(dead_code)]
-const _: Duration = Duration::from_secs(0);
 
 #[cfg(test)]
 mod tests {
