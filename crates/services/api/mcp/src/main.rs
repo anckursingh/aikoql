@@ -283,6 +283,7 @@ fn main() {
     // AG-01: once per process (serve runs once)
     crate::tool_registry::CORE_PROFILE.get_or_init(|| cfg.tool_profile == "core");
     crate::tools::ingestion::INGEST_POLICY.get_or_init(|| cfg.ingestion_policy.clone());
+    crate::sources::install(&cfg.sources);
     let model_dir_flag = cfg.model_dir;
     let model_auto_install = cfg.model_auto_install;
     MEMORY_DIR.set(memory_dir).ok();

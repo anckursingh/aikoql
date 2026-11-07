@@ -71,6 +71,9 @@ pub(crate) struct RuntimeConfig {
     /// HLD §54/§55: `[ingestion]` limits and enable flags for document
     /// extraction and compile (defaults: `ProcessingPolicy::default()`).
     pub ingestion_policy: aikoql_ingestion::ProcessingPolicy,
+    /// `[[sources]]`: external databases Studio may introspect (names only —
+    /// connection strings stay in the environment).
+    pub sources: Vec<crate::sources::SourceConfig>,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -163,6 +166,7 @@ struct TomlConfig {
     logging: Option<TomlLogging>,
     /// Missing keys keep their defaults; unknown keys are rejected.
     ingestion: Option<aikoql_ingestion::ProcessingPolicy>,
+    sources: Option<Vec<crate::sources::SourceConfig>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -354,6 +358,7 @@ pub(crate) fn load(
         ha_ttl_ms: 10_000,
         tool_profile: "full".into(),
         ingestion_policy: aikoql_ingestion::ProcessingPolicy::default(),
+        sources: Vec::new(),
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -433,6 +438,11 @@ pub(crate) fn load(
                 .validate()
                 .map_err(|e| format!("config {path}: ingestion.{e}"))?;
             cfg.ingestion_policy = policy;
+        }
+        if let Some(sources) = t.sources {
+            crate::sources::validate_sources(&sources)
+                .map_err(|e| format!("config {path}: sources.{e}"))?;
+            cfg.sources = sources;
         }
         if let Some(a) = t.auth {
             if let Some(users) = a.users {
@@ -1303,6 +1313,32 @@ employee = ["salary", "ssn"]
             load_t(&argv(&["aikoql-mcp", "--config", &zero]), None, None).is_err(),
             "a zero page limit would refuse every document"
         );
+    }
+
+    #[test]
+    fn sources_absent_means_none() {
+        assert!(load_bare(&argv(&["aikoql-mcp"]))
+            .unwrap()
+            .sources
+            .is_empty());
+    }
+
+    #[test]
+    fn sources_from_toml_parse_validate_and_reject_typos() {
+        let ok = tmp_toml(
+            "[[sources]]\nname = \"crm\"\nkind = \"postgres\"\nurl_env = \"CRM_URL\"\ntenant = \"acme\"\n\n[[sources]]\nname = \"logs\"\nkind = \"mongodb\"\nurl_env = \"LOGS_URI\"\ndatabase = \"logs\"\nsample_limit = 50\n",
+        );
+        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &ok]), None, None).unwrap();
+        assert_eq!(cfg.sources.len(), 2);
+        assert_eq!(cfg.sources[0].tenant.as_deref(), Some("acme"));
+        assert_eq!(cfg.sources[1].sample_limit, 50);
+        let typo = tmp_toml(
+            "[[sources]]\nname = \"a\"\nkind = \"sqlite\"\nurl_env = \"X\"\ndatabse = \"d\"\n",
+        );
+        let e = load_t(&argv(&["aikoql-mcp", "--config", &typo]), None, None).unwrap_err();
+        assert!(e.contains("databse"), "{e}");
+        let dup = tmp_toml("[[sources]]\nname = \"a\"\nkind = \"sqlite\"\nurl_env = \"X\"\n[[sources]]\nname = \"a\"\nkind = \"sqlite\"\nurl_env = \"Y\"\n");
+        assert!(load_t(&argv(&["aikoql-mcp", "--config", &dup]), None, None).is_err());
     }
 
     #[test]
