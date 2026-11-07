@@ -379,7 +379,7 @@ fn draft_fuzz_always_valid() {
         );
         let containers: usize = metas.iter().map(|(_, _, m)| m.containers.len()).sum();
         assert!(
-            d.classes.len() <= containers.max(0),
+            d.classes.len() <= containers,
             "seed {seed}: more classes than containers"
         );
         // every container is reachable from exactly one class
