@@ -233,6 +233,8 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <button data-panel="documents" title="Document Explorer">
         <span class="ico">📄</span><span class="lbl">Documents</span>
       </button>
+      <button data-panel="sources" title="Data Sources — discover external schemas">
+        <span class="ico">🗄️</span><span class="lbl">Data Sources</span>
       <button data-panel="ask" title="Ask — grounded answers from your knowledge">
         <span class="ico">💬</span><span class="lbl">Ask</span>
       </button>
@@ -404,6 +406,22 @@ tr:hover td { background: rgba(108,199,240,0.03); }
         </div>
         <div id="documents-list"><div class="loading">Loading documents...</div></div>
         <div id="doc-compile-result" style="margin-top:12px;"></div>
+      </div>
+
+      <!-- ── Data Sources ── -->
+      <div class="panel" id="panel-sources">
+        <div class="card" style="margin-bottom:12px;">
+          <h3>🗄️ Data Sources</h3>
+          <p style="font-size:11px;color:var(--muted);">External databases the operator configured in <code>aikoql.toml</code>. <b>Discover</b> reads the schema only (no rows) and records it as knowledge. <b>Preview</b> proposes one ontology class per table; merging and <b>Publish</b> are explicit, and what you wrote by hand is never changed. <b>Import</b> copies chosen tables as objects.</p>
+          <label style="font-size:11px;color:var(--muted);">Tenant <select id="sources-tenant" data-change="loadSourcesPanel"><option value="">Global</option></select></label>
+        </div>
+        <div id="sources-list"><div class="loading">Loading sources...</div></div>
+        <div class="card" style="margin:12px 0;">
+          <button class="btn btn-sec btn-sm" data-click="previewSourceOntology">Preview ontology for the checked sources</button>
+          <div id="sources-msg" style="margin-top:8px;font-size:12px;" role="status"></div>
+        </div>
+        <div id="sources-result"></div>
+        <div id="sources-preview"></div>
       </div>
 
       <!-- ── Ask ── -->
@@ -1278,6 +1296,40 @@ mod tests {
         assert!(
             !studio_html(false, Some(&other)).contains("data-audit-export"),
             "a license without the flag must not carry the export button"
+        );
+    }
+
+    /// A merge once left a panel unclosed, nesting the Admin panel inside a hidden
+    /// one: every control in it silently stopped working. Only a browser run saw it;
+    /// this catches the class cheaply.
+    #[test]
+    fn studio_page_div_tags_balance_and_every_panel_is_a_top_level_sibling() {
+        let page = page_for_tests();
+        let (open, close) = (page.matches("<div").count(), page.matches("</div>").count());
+        assert_eq!(
+            open, close,
+            "unbalanced <div> tags in the Studio page: {open} open, {close} closed"
+        );
+        // each `class="panel"` div must open at the same nesting depth
+        let mut depth = 0i32;
+        let mut depths = std::collections::BTreeSet::new();
+        let mut rest: &str = page;
+        while let Some(i) = rest.find('<') {
+            rest = &rest[i..];
+            if rest.starts_with("</div>") {
+                depth -= 1;
+            } else if rest.starts_with("<div") {
+                if rest.starts_with("<div class=\"panel\"") {
+                    depths.insert(depth);
+                }
+                depth += 1;
+            }
+            rest = &rest[1..];
+        }
+        assert_eq!(
+            depths.len(),
+            1,
+            "panels open at different nesting depths: {depths:?}"
         );
     }
 }

@@ -26,6 +26,7 @@ members = [
     "crates/providers/sqlite",
     "crates/providers/mongodb",
     "crates/providers/neo4j",
+    "crates/providers/clickhouse",
     "crates/storage/aikoql-v2",
     "crates/certification",
 ]

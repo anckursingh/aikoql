@@ -46,6 +46,7 @@ mod s3;
 mod sampling;
 mod session;
 mod shell;
+mod sources;
 mod studio;
 mod tls;
 mod tool_registry;
@@ -284,6 +285,7 @@ fn main() {
     // AG-01: once per process (serve runs once)
     crate::tool_registry::CORE_PROFILE.get_or_init(|| cfg.tool_profile == "core");
     crate::tools::ingestion::INGEST_POLICY.get_or_init(|| cfg.ingestion_policy.clone());
+    crate::sources::install(&cfg.sources);
     if let Some(chat) = &cfg.chat {
         let _ = crate::chat::client::CHAT_CONFIG.set(chat.clone());
     }

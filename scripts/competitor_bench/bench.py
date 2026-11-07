@@ -11,6 +11,12 @@ Engines:
   neo4j     — neo4j:5-community container, Cypher + vector index (CI-07)
   qdrant    — qdrant/qdrant container, vector search
   mongodb   — mongo:7 container, documents (CI-07)
+  clickhouse — clickhouse/clickhouse-server:24.8 (LTS), the OLAP column —
+               the device-identity/telemetry shape (Prelude, Fingerprint):
+               point_read, structured_filter, vector_recall (cosineDistance
+               scan) and the composed knowledge_query; updates are async
+               mutations and there are no multi-statement txns, so
+               point_write/transactions/graph are no_analog.
 
 Workload mapping (cell order is fixed across engines):
   point_read        aikoql get(koid)                  vs SELECT ... WHERE koid
@@ -39,6 +45,7 @@ Known caveats (documented in REPORT.md, not hidden):
 """
 
 import csv
+import base64
 import json
 import math
 import os
@@ -49,6 +56,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import psutil
@@ -834,6 +843,157 @@ def bench_mongo(ds):
             "ingest_s": round(ingest_s, 2)}
 
 
+# ---------------------------------------------------------------- clickhouse
+
+CH_URL = "http://127.0.0.1:8123"
+
+
+def ch_q(sql, rows=None):
+    """One ClickHouse HTTP round-trip: SELECT comes back as JSONCompact
+    data rows; `rows` turns the call into an INSERT ... FORMAT JSONEachRow
+    with `rows` as the body. No client dep — HTTP is the wire protocol."""
+    url = CH_URL + "/?default_format=JSONCompact&query=" + \
+        urllib.parse.quote(sql, safe="")
+    body = None if rows is None else \
+        "\n".join(json.dumps(r) for r in rows).encode()
+    req = urllib.request.Request(url, data=body or b"", method="POST")
+    req.add_header("Authorization", "Basic "
+                   + base64.b64encode(b"bench:bench").decode())
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        out = resp.read().decode()
+    return json.loads(out)["data"] if out else []
+
+
+def bench_clickhouse(ds):
+    cpu0 = container_cpu_usec("bench-ch")
+    t0 = time.perf_counter()
+    note_koids = [f"ch-note-{n['i']}" for n in ds["notes"]]
+    event_koids = [f"ch-event-{e['i']}" for e in ds["events"]]
+    ch_q("DROP TABLE IF EXISTS notes")
+    ch_q("DROP TABLE IF EXISTS events")
+    ch_q("DROP TABLE IF EXISTS mentions")
+    ch_q("DROP TABLE IF EXISTS derived_from")
+    # The ORDER BY key IS ClickHouse's index (the sparse primary index) and
+    # is built inside the timed ingest window — the same window where the
+    # other engines create their indexes. No separate CREATE INDEX exists.
+    ch_q("CREATE TABLE notes (koid String, seq UInt32, topic String, "
+         "body String, embedding Array(Float32)) "
+         "ENGINE = MergeTree ORDER BY koid")
+    ch_q("CREATE TABLE events (koid String, label String) "
+         "ENGINE = MergeTree ORDER BY koid")
+    ch_q("CREATE TABLE mentions (note_koid String, event_koid String) "
+         "ENGINE = MergeTree ORDER BY note_koid")
+    ch_q("CREATE TABLE derived_from (note_koid String, target_koid String) "
+         "ENGINE = MergeTree ORDER BY note_koid")
+    ch_q("INSERT INTO notes FORMAT JSONEachRow",
+         [{"koid": k, "seq": n["i"], "topic": n["topic"], "body": n["body"],
+           "embedding": n["vec"]} for k, n in zip(note_koids, ds["notes"])])
+    ch_q("INSERT INTO events FORMAT JSONEachRow",
+         [{"koid": k, "label": e["label"]}
+          for k, e in zip(event_koids, ds["events"])])
+    ch_q("INSERT INTO mentions FORMAT JSONEachRow",
+         [{"note_koid": note_koids[a], "event_koid": event_koids[b]}
+          for a, b in ds["mentions"]])
+    ch_q("INSERT INTO derived_from FORMAT JSONEachRow",
+         [{"note_koid": note_koids[a], "target_koid": note_koids[b]}
+          for a, b in ds["derived"]])
+    ingest_s = time.perf_counter() - t0
+
+    read_pairs = [(note_koids[i], ds["notes"][i]) for i in ds["read_ids"]]
+    cats_set = {note_koids[n["i"]] for n in ds["notes"] if n["body"] == "cats"}
+    kq_expect = {
+        note_koids[i]: ({event_koids[b] for a, b in ds["mentions"] if a == i}
+                        | {note_koids[b] for a, b in ds["derived"] if a == i})
+        for i in ds["read_ids"]
+    }
+    vec = "[1.0, 0.0]"
+
+    def connect():
+        return None  # stateless HTTP — "cold" is the first round-trip
+
+    def build_read(c):
+        rng = random.Random(7)
+
+        def op():
+            koid, note = rng.choice(read_pairs)
+            rows = ch_q(f"SELECT topic FROM notes WHERE koid = '{koid}'")
+            return bool(rows) and rows[0][0] == note["topic"]
+
+        return op
+
+    def build_filter(c):
+        def op():
+            rows = ch_q("SELECT koid FROM notes WHERE topic = 'pet'")
+            return len(rows) == len(ds["notes"]) // 2
+
+        return op
+
+    def build_vector(c):
+        def op():
+            # Brute-force cosine over the whole table — the honest analog of
+            # the report's pgvector leg (no ANN index either side of it).
+            rows = ch_q("SELECT koid FROM notes ORDER BY "
+                        f"cosineDistance(embedding, {vec}) LIMIT 10")
+            return (len(rows) == 10
+                    and all(r[0] in cats_set for r in rows))
+
+        return op
+
+    def build_knowledge_query(c):
+        # CI-07 — the composed CH stack, same legs as the PG column:
+        # identity + scope filter + app-side edge walk + the semantic leg
+        # in SQL (cosineDistance scan) + app-side RRF fusion.
+        rng = random.Random(7)
+
+        def op():
+            koid, note = rng.choice(read_pairs)
+            # 1. identity resolution — sparse-index lookup on seq
+            rows = ch_q(f"SELECT koid FROM notes WHERE seq = {note['i']}")
+            anchor = rows[0][0] if rows else None
+            # 2. metadata filter — the query's scope gate
+            trows = ch_q(f"SELECT topic FROM notes WHERE koid = '{anchor}'") \
+                if anchor else []
+            topic = trows[0][0] if trows else None
+            # 3. traversal — app-side edge walk over the edge tables
+            reach = set()
+            if topic == "pet":
+                reach = {r[0] for r in ch_q(
+                    f"SELECT event_koid FROM mentions WHERE note_koid = '{anchor}'")}
+                reach |= {r[0] for r in ch_q(
+                    f"SELECT target_koid FROM derived_from WHERE note_koid = '{anchor}'")}
+            # 4. semantic — cosine over the pet scope
+            vrank = [r[0] for r in ch_q(
+                "SELECT koid FROM notes WHERE topic = 'pet' "
+                f"ORDER BY cosineDistance(embedding, {vec})")]
+            # 5. ranking — app-side RRF over the text + vector legs
+            trank = [r[0] for r in ch_q(
+                "SELECT koid FROM notes WHERE topic = 'pet' "
+                "AND body LIKE '%cats%' ORDER BY seq")]
+            ranked = rrf_topk(trank, vrank)
+            ok = (anchor == koid and topic == note["topic"]
+                  and len(ranked) == 10
+                  and all(k in cats_set for k in ranked))
+            if topic == "pet":
+                ok = ok and reach == kq_expect[koid]
+            return ok
+
+        return op
+
+    workloads = run_engine(
+        connect, lambda c: None,
+        [build_read, None, build_filter, None, None, build_vector,
+         build_knowledge_query])
+
+    rss_kb = docker_rss("bench-ch")
+    cpu1 = container_cpu_usec("bench-ch")
+    return {"workloads": workloads, "rss_kb": rss_kb,
+            "memory_mb": None if rss_kb is None else rss_kb // 1024,
+            "disk_bytes": docker_du("bench-ch", ["/var/lib/clickhouse"]),
+            "cpu_seconds": None if cpu0 is None or cpu1 is None
+                          else round((cpu1 - cpu0) / 1e6, 3),
+            "ingest_s": round(ingest_s, 2)}
+
+
 # ---------------------------------------------------------------- helpers
 
 def container_cpu_usec(name):
@@ -909,7 +1069,8 @@ def engine_meta():
     # None — the arch gate pins the tags in benchmark.yml, the laptop is the
     # canonical measuring host.
     meta = {"aikoql": importlib.metadata.version("aikoql")}
-    for name in ["bench-pg", "bench-neo4j", "bench-qdrant", "bench-mongo"]:
+    for name in ["bench-pg", "bench-neo4j", "bench-qdrant", "bench-mongo",
+                 "bench-ch"]:
         key = name.removeprefix("bench-")
         try:
             img = subprocess.run(
@@ -969,6 +1130,9 @@ def main():
 
     print("mongodb ingest + cells ...")
     engines["mongodb"] = bench_mongo(ds)
+
+    print("clickhouse ingest + cells ...")
+    engines["clickhouse"] = bench_clickhouse(ds)
 
     sha = git_sha()
     result = {

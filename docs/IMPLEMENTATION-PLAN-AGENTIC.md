@@ -262,6 +262,15 @@ and a `lesson` KO type distilled by AG-12 sampling.
   chain, now documented as such. Checkpoint format unchanged (vectors
   were never persisted). The RSS gate (≤ 1005 MB at 1M) is verified by
   the next 1M bench run, not by a unit test.
+- *Status (2026-11-02): the 1M bench run happened; the RSS gate is NOT
+  closed.* rss 3 458 MB vs the 1 005 MB baseline — the comparison is
+  stale: the baseline was a 6-cell Windows x64 stamp (knowledge_query
+  added 2026-09-25, after it), this is a 7-cell macOS ARM stamp, and the
+  harness samples rss with the 500k-row filter result still resident in
+  the Python process. Measured wins from the same run (REPORT §Scale):
+  1M vector_recall 17 002 → 0.35 ms, structured_filter 22 912 → 2 420 ms,
+  knowledge_query 6.6 ms at 1M. Re-measure against a same-shape,
+  same-machine baseline before calling the gate closed.
 - *Problem:* 1M vector_recall 17.0 s, brute force (REPORT §Scale). An HNSW
   exists (`engines/vector`, attached to `find_similar` since M18) — the
   first step is to establish why the certified cell does not use it

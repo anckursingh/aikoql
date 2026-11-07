@@ -105,3 +105,11 @@ format = "text"
 # max_ocr_seconds = 600        # OCR wall-clock budget per document
 # enable_ocr = true            # false: scans are stored without OCR text
 # enable_visual_analysis = true
+
+# External data sources Studio may introspect (docs/SOURCES.md). The connection
+# string lives in the environment variable named by url_env, never in this file.
+# [[sources]]
+# name = "crm"
+# kind = "postgres"        # postgres | mongodb | neo4j | sqlite | clickhouse
+# url_env = "CRM_DSN"
+# tenant = "acme"          # optional: the source belongs to one tenant

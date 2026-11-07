@@ -9,5 +9,5 @@ repository.workspace = true
 [dependencies]
 aikoql-kernel = { path = "../../kernel" }
 mongodb = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 futures-util = "0.3"

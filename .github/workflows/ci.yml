@@ -363,6 +363,19 @@ jobs:
           --health-interval 5s
           --health-timeout 10s
           --health-retries 12
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        env:
+          CLICKHOUSE_USER: aikoql
+          CLICKHOUSE_PASSWORD: aikoql-ci
+          CLICKHOUSE_DB: analytics
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget -qO- http://localhost:8123/ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -378,6 +391,8 @@ jobs:
           AIKOQL_TEST_NEO4J_URI: http://localhost:7474
           AIKOQL_TEST_NEO4J_USER: neo4j
           AIKOQL_TEST_NEO4J_PASSWORD: aikoql-ci
+          AIKOQL_TEST_CLICKHOUSE_URL: http://aikoql:aikoql-ci@localhost:8123
+          AIKOQL_TEST_CLICKHOUSE_DB: analytics
 
   # MVP-QA-001 §23: certification artifacts must always match the §9.1
   # registry — --self-test pins the decision logic, --check regenerates and

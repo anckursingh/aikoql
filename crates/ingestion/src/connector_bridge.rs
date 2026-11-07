@@ -22,10 +22,13 @@ pub struct ConnectorMetadata {
     pub references: Vec<ReferenceInfo>,
     /// Server version, if known.
     pub version: Option<String>,
+    /// The container list was cut at a configured maximum.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// A table, collection, or node label.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ContainerInfo {
     /// Container name (table name, collection name, node label).
     pub name: String,
@@ -33,10 +36,33 @@ pub struct ContainerInfo {
     pub fields: Vec<FieldInfo>,
     /// Approximate row count, if known.
     pub row_count: Option<u64>,
+    /// Namespace inside the source (Postgres schema), if it has one.
+    #[serde(default)]
+    pub schema: Option<String>,
+    /// Column groups with a unique constraint (single and composite).
+    #[serde(default)]
+    pub unique_groups: Vec<Vec<String>>,
+}
+
+/// Whether a field's type was declared by the source or only observed in a sample.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Provenance {
+    #[default]
+    Declared,
+    Observed,
+}
+
+/// What a sample of values showed about a field (observed schemas only).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FieldProfile {
+    pub types: Vec<String>,
+    pub presence_ratio: f64,
+    pub null_ratio: f64,
+    pub samples: u64,
 }
 
 /// A column, field, or property within a container.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct FieldInfo {
     pub name: String,
     /// SQL type, GraphQL type, BSON type, etc.
@@ -47,6 +73,10 @@ pub struct FieldInfo {
     pub nullable: bool,
     /// Whether this field has a unique constraint.
     pub is_unique: bool,
+    #[serde(default)]
+    pub provenance: Provenance,
+    #[serde(default)]
+    pub profile: Option<FieldProfile>,
 }
 
 /// A foreign key, graph relationship, or document reference.
@@ -62,6 +92,69 @@ pub struct ReferenceInfo {
     pub to_fields: Vec<String>,
     /// Relationship name (FK constraint name, edge label, etc.).
     pub name: Option<String>,
+}
+
+/// The domain class a container proposes: singular PascalCase.
+pub fn class_name_for_container(container: &str) -> String {
+    let mut words: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    for c in container.chars() {
+        if !c.is_alphanumeric() {
+            if !cur.is_empty() {
+                words.push(std::mem::take(&mut cur));
+            }
+            prev_lower = false;
+            continue;
+        }
+        if c.is_uppercase() && prev_lower {
+            words.push(std::mem::take(&mut cur));
+        }
+        cur.push(c);
+        prev_lower = c.is_lowercase();
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    let Some(last) = words.last_mut() else {
+        return "Thing".into();
+    };
+    *last = singular(last);
+    let name: String = words
+        .iter()
+        .map(|w| {
+            let mut cs = w.chars();
+            cs.next()
+                .map(|f| f.to_uppercase().chain(cs).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect();
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("T{name}")
+    } else {
+        name
+    }
+}
+
+/// Heuristic singular of a table-ish word: `ies→y`, `sses→ss`, a lone
+/// trailing `s` (not `ss`/`us`/`is`). Irregular plurals are left alone.
+fn singular(w: &str) -> String {
+    let lower = w.to_ascii_lowercase();
+    let n = w.len();
+    if lower.ends_with("ies") && n > 4 {
+        format!("{}y", &w[..n - 3])
+    } else if lower.ends_with("sses") {
+        w[..n - 2].to_string()
+    } else if lower.ends_with('s')
+        && !lower.ends_with("ss")
+        && !lower.ends_with("us")
+        && !lower.ends_with("is")
+        && n > 3
+    {
+        w[..n - 1].to_string()
+    } else {
+        w.to_string()
+    }
 }
 
 /// Convert connector metadata into KnowledgeIr.
@@ -85,7 +178,7 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
 
         entities.push(EntityCandidate {
             name: entity_name.clone(),
-            type_hint: Some(format!("{}{}", meta.connector_type, container_type)),
+            type_hint: Some(class_name_for_container(&container.name)),
             mentions: vec![format!(
                 "{} '{}' with {} fields (approx {} rows)",
                 container_type,
@@ -143,6 +236,24 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
                 confidence: 1.0,
                 evidence: connector_evidence(&source_id, &meta.connector_type),
             });
+            if let Some(p) = &field.profile {
+                facts.push(FactCandidate {
+                    snippet: None,
+                    statement: format!(
+                        "{}.{}.{} observed: types=[{}] presence={:.2} null={:.2} samples={}",
+                        meta.label,
+                        container.name,
+                        field.name,
+                        p.types.join(", "),
+                        p.presence_ratio,
+                        p.null_ratio,
+                        p.samples
+                    ),
+                    entities: vec![entity_name.clone()],
+                    confidence: 0.8,
+                    evidence: connector_evidence(&source_id, &meta.connector_type),
+                });
+            }
         }
     }
 
@@ -196,9 +307,11 @@ pub fn discover_connector_schema(
                     is_primary_key: *pk,
                     nullable: *nullable,
                     is_unique: *unique,
+                    ..Default::default()
                 })
                 .collect(),
             row_count: None,
+            ..Default::default()
         })
         .collect();
 
@@ -221,6 +334,7 @@ pub fn discover_connector_schema(
         containers,
         references,
         version: None,
+        ..Default::default()
     }
 }
 
@@ -308,10 +422,97 @@ mod tests {
         let ir = connector_metadata_to_ir(&meta);
         assert_eq!(ir.entities.len(), 1);
         assert_eq!(ir.entities[0].name, "analytics.events");
-        assert_eq!(
-            ir.entities[0].type_hint.as_deref(),
-            Some("mongodbCollection")
+        assert_eq!(ir.entities[0].type_hint.as_deref(), Some("Event"));
+    }
+
+    #[test]
+    fn class_name_for_container_is_singular_pascal_case() {
+        for (input, want) in [
+            ("customers", "Customer"),
+            ("order_items", "OrderItem"),
+            ("OrderItems", "OrderItem"),
+            ("Categories", "Category"),
+            ("addresses", "Address"),
+            ("address", "Address"),
+            ("status", "Status"),
+            ("people", "People"),
+            ("2024_sales", "T2024Sale"),
+            ("user data", "UserData"),
+            ("a-b", "AB"),
+            ("cert_ont001_people", "CertOnt001People"),
+            ("P_Ont001", "POnt001"),
+            ("", "Thing"),
+            ("___", "Thing"),
+        ] {
+            assert_eq!(class_name_for_container(input), want, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn each_container_gets_its_own_class() {
+        let meta = discover_connector_schema(
+            "postgres",
+            "shop",
+            &[
+                ("customers", &[("id", "int", true, false, true)]),
+                ("orders", &[("id", "int", true, false, true)]),
+                ("products", &[("id", "int", true, false, true)]),
+            ],
+            &[],
         );
+        let proposal = crate::discover_ontology_from_ir(&connector_metadata_to_ir(&meta));
+        let mut names: Vec<&str> = proposal.classes.iter().map(|c| c.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["Customer", "Order", "Product"]);
+        assert!(
+            names
+                .iter()
+                .all(|n| !n.contains("Table") && !n.contains("postgres")),
+            "the source kind is not a class: {names:?}"
+        );
+    }
+
+    #[test]
+    fn observed_fields_add_a_profile_fact_and_no_property_noise() {
+        let mut meta = discover_connector_schema(
+            "mongodb",
+            "crm",
+            &[("people", &[("age", "bson", false, true, false)])],
+            &[],
+        );
+        let plain = crate::discover_ontology_from_ir(&connector_metadata_to_ir(&meta));
+        meta.containers[0].fields[0].provenance = Provenance::Observed;
+        meta.containers[0].fields[0].profile = Some(FieldProfile {
+            types: vec!["Int".into(), "Null".into()],
+            presence_ratio: 0.91,
+            null_ratio: 0.04,
+            samples: 1000,
+        });
+        let ir = connector_metadata_to_ir(&meta);
+        let fact = ir
+            .facts
+            .iter()
+            .find(|f| f.statement.contains("observed"))
+            .expect("an observed-profile fact");
+        assert!(fact.statement.contains("Int, Null") && fact.statement.contains("0.91"));
+        assert_eq!(
+            crate::discover_ontology_from_ir(&ir).properties.len(),
+            plain.properties.len(),
+            "the profile fact must not invent properties"
+        );
+    }
+
+    #[test]
+    fn physical_container_stays_in_the_entity_mention() {
+        let meta = discover_connector_schema(
+            "postgres",
+            "shop",
+            &[("customers", &[("id", "int", true, false, true)])],
+            &[],
+        );
+        let ir = connector_metadata_to_ir(&meta);
+        assert_eq!(ir.entities[0].name, "shop.customers");
+        assert!(ir.entities[0].mentions[0].contains("Table 'customers'"));
     }
 
     #[test]

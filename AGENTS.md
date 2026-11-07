@@ -34,6 +34,7 @@ the architect review.
 | `docs/server-contract.md`, `docs/transaction-contract.md`, `docs/version-compatibility.md` | wire/transaction/version contracts |
 | `docs/MRFC-0020-Encryption-Key-Management-Architecture.md`, `docs/checksum-threat-model.md` | security: key management, checksum guarantees and non-guarantees |
 | `docs/MRFC-0060-Constraint-Engine-HLD-LLD.md`, `docs/MRFC-0070-Agent-Knowledge-Interface-and-Engineering-Knowledge-Compiler.md` | constraint engine; knowledge compiler |
+| `docs/SOURCES.md` | external data sources: `[[sources]]` config, schema discovery as knowledge, the preview/merge/publish ontology flow, import, security model, `scripts/fuzz-sources.sh` |
 | `docs/CHAT.md` | the Ask chat: `[chat]` config, the grounded query→answer flow, serving the model, known limits, `scripts/chat-eval.py` |
 | `docs/sdk-proxy-decision.md` | why the Go/TS/Java SDKs and cluster proxy were deleted (re-adopt triggers included) |
 | `docs/IMPLEMENTATION-PLAN-PHASE5.md`, `docs/TESTING-PLAN-PHASE5.md` | the M0–M47 campaign record (shipped; ledger rows and traps) |

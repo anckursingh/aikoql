@@ -164,31 +164,66 @@ pub fn compile_with_ontology_scoped(
     // physical type_name for the Scan operator.
     match (&stmt, ontology) {
         (ast::Statement::Match(m), Some(ont)) => {
-            let pts = ont.physical_types_for_class(&m.entity);
-            if pts.is_empty() {
+            let mappings = ont.mappings_for_class(&m.entity);
+            if mappings.is_empty() {
                 Ok(vec![plan])
             } else {
-                pts.into_iter()
-                    .map(|(_source, physical_type)| {
+                mappings
+                    .into_iter()
+                    .map(|me| {
                         let mut plan = plan.clone();
-                        // Replace the Scan's type_name with the physical type.
+                        // canonical property -> this source's physical column; when
+                        // several columns claim one canonical name the first
+                        // (lexicographic) wins, deterministically
+                        let mut physical_of: std::collections::BTreeMap<&str, &str> =
+                            std::collections::BTreeMap::new();
+                        for (physical, canonical) in &me.property_map {
+                            physical_of
+                                .entry(canonical.as_str())
+                                .or_insert(physical.as_str());
+                        }
+                        let mut scan_seen = false;
                         for op in &mut plan.operators {
-                            if let IrOp::Scan {
-                                ref mut type_name, ..
-                            } = op
-                            {
-                                *type_name = physical_type.clone();
-                                break;
+                            match op {
+                                // Replace the Scan's type_name with the physical type.
+                                IrOp::Scan { type_name, .. } if !scan_seen => {
+                                    *type_name = me.physical_type.clone();
+                                    scan_seen = true;
+                                }
+                                IrOp::Filter { predicates } => {
+                                    predicates
+                                        .iter_mut()
+                                        .for_each(|p| rename_properties(p, &physical_of));
+                                }
+                                _ => {}
                             }
                         }
-                        plan.description =
-                            Some(format!("MATCH {} (mapped to {})", m.entity, physical_type));
+                        plan.description = Some(format!(
+                            "MATCH {} (mapped to {})",
+                            m.entity, me.physical_type
+                        ));
                         Ok(plan)
                     })
                     .collect()
             }
         }
         _ => Ok(vec![plan]),
+    }
+}
+
+/// Rewrite canonical property names in a predicate to a source's physical
+/// column names; names with no mapping pass through unchanged.
+fn rename_properties(p: &mut Predicate, physical_of: &std::collections::BTreeMap<&str, &str>) {
+    match p {
+        Predicate::Cmp { property, .. } => {
+            if let Some(physical) = physical_of.get(property.as_str()) {
+                *property = (*physical).to_string();
+            }
+        }
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            rename_properties(a, physical_of);
+            rename_properties(b, physical_of);
+        }
     }
 }
 
@@ -907,5 +942,143 @@ mod tests {
             }
             other => panic!("expected Or node: {other:?}"),
         }
+    }
+
+    // ---- ontology expansion translates WHERE property names per mapping ----
+
+    /// (source, physical type, physical column -> canonical property)
+    type MappingSpec<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    fn customer_ontology(extra: Vec<MappingSpec>) -> aikoql_kernel::OntologyRegistry {
+        use aikoql_kernel::knowledge::ontology::PropertyDef;
+        use aikoql_kernel::{ClassDef, MappingEntry, OntologyDef, OntologyRegistry};
+        let property_defs = ["email", "name"]
+            .iter()
+            .map(|n| {
+                (
+                    n.to_string(),
+                    PropertyDef {
+                        name: n.to_string(),
+                        value_type: "Text".into(),
+                        required: false,
+                        nullable: true,
+                    },
+                )
+            })
+            .collect();
+        let mut classes = std::collections::BTreeMap::new();
+        classes.insert(
+            "Customer".to_string(),
+            ClassDef {
+                name: "Customer".into(),
+                parent: None,
+                description: None,
+                properties: vec!["email".into(), "name".into()],
+            },
+        );
+        let mappings = extra
+            .into_iter()
+            .map(|(source, physical, pm)| MappingEntry {
+                source: source.into(),
+                physical_type: physical.into(),
+                class: "Customer".into(),
+                property_map: pm
+                    .iter()
+                    .map(|(a, b)| (a.to_string(), b.to_string()))
+                    .collect(),
+            })
+            .collect();
+        OntologyRegistry::new(OntologyDef {
+            namespace: "t".into(),
+            version: "1".into(),
+            classes,
+            relationships: std::collections::BTreeMap::new(),
+            property_defs,
+            mappings,
+        })
+        .unwrap()
+    }
+
+    fn filter_props(plan: &IrPlan) -> Vec<String> {
+        fn walk(p: &Predicate, out: &mut Vec<String>) {
+            match p {
+                Predicate::Cmp { property, .. } => out.push(property.clone()),
+                Predicate::And(a, b) | Predicate::Or(a, b) => {
+                    walk(a, out);
+                    walk(b, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for op in &plan.operators {
+            if let IrOp::Filter { predicates } = op {
+                predicates.iter().for_each(|p| walk(p, &mut out));
+            }
+        }
+        out
+    }
+
+    fn plan_for(ont: &aikoql_kernel::OntologyRegistry, q: &str, physical: &str) -> IrPlan {
+        let plans = compile_with_ontology(q, "u", &SchemaRegistry::new(), Some(ont)).unwrap();
+        plans
+            .into_iter()
+            .find(|p| {
+                p.description
+                    .as_deref()
+                    .is_some_and(|d| d.ends_with(&format!("(mapped to {physical})")))
+            })
+            .unwrap_or_else(|| panic!("no plan mapped to {physical}"))
+    }
+
+    #[test]
+    fn where_uses_each_sources_physical_property_name() {
+        let ont = customer_ontology(vec![
+            ("sqlite", "customers", &[("email", "email")]),
+            ("sqlite", "clients", &[("email_address", "email")]),
+        ]);
+        let q = "MATCH Customer WHERE email == \"a@x.test\" RETURN *";
+        assert_eq!(filter_props(&plan_for(&ont, q, "customers")), ["email"]);
+        assert_eq!(
+            filter_props(&plan_for(&ont, q, "clients")),
+            ["email_address"]
+        );
+    }
+
+    #[test]
+    fn nested_and_or_predicates_are_translated_and_unmapped_names_pass_through() {
+        let ont = customer_ontology(vec![("sqlite", "clients", &[("email_address", "email")])]);
+        let q = "MATCH Customer WHERE email == \"a\" AND name == \"b\" RETURN *";
+        let props = filter_props(&plan_for(&ont, q, "clients"));
+        assert_eq!(
+            props,
+            ["email_address", "name"],
+            "email is renamed, name has no mapping and passes through"
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_mapping_picks_the_first_physical_column_deterministically() {
+        // two physical columns claim the canonical name `email`
+        let ont = customer_ontology(vec![(
+            "sqlite",
+            "clients",
+            &[("work_email", "email"), ("home_email", "email")],
+        )]);
+        let q = "MATCH Customer WHERE email == \"a\" RETURN *";
+        assert_eq!(filter_props(&plan_for(&ont, q, "clients")), ["home_email"]);
+    }
+
+    #[test]
+    fn querying_the_physical_type_directly_is_unchanged() {
+        let ont = customer_ontology(vec![("sqlite", "clients", &[("email_address", "email")])]);
+        let plans = compile_with_ontology(
+            "MATCH clients WHERE email_address == \"a\" RETURN *",
+            "u",
+            &SchemaRegistry::new(),
+            Some(&ont),
+        )
+        .unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(filter_props(&plans[0]), ["email_address"]);
     }
 }

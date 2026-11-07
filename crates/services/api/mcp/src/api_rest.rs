@@ -84,6 +84,8 @@ pub fn route_v1(
                 503
             } else if msg.starts_with("question must be") {
                 400
+            } else if let Some(c) = crate::sources::status_for(&msg) {
+                c
             } else if msg.contains("VERSION_CONFLICT")
                 || msg.starts_with(crate::tools::ingestion::STILL_PROCESSING)
                 || msg.starts_with(crate::tools::ingestion::INTERRUPTED)
@@ -97,7 +99,7 @@ pub fn route_v1(
                 || msg.starts_with("expected_version required")
             {
                 400
-            } else if msg.contains("not found") || msg.contains("NotFound") {
+            } else if msg.contains("not found") || msg.contains("NotFound") || msg == "Not Found" {
                 404
             } else if msg.contains("AccessDenied")
                 || msg.contains("login")
@@ -144,6 +146,22 @@ fn route_inner(
         ("GET", "/api/v1/backups") => {
             need_auth()?;
             tool_list_backups(db_path)
+        }
+        ("GET", "/api/v1/sources") => {
+            need_auth()?;
+            crate::sources::service::tool_sources_list(k, &args())
+        }
+        ("POST", "/api/v1/sources/discover") => {
+            need_auth()?;
+            crate::sources::service::tool_sources_discover(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/sources/import") => {
+            need_auth()?;
+            crate::sources::import::tool_sources_import(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/sources/ontology") => {
+            need_auth()?;
+            crate::sources::ontology::tool_sources_ontology(k, &args(), db_path)
         }
         ("POST", "/api/v1/chat") => {
             need_auth()?;
@@ -804,7 +822,13 @@ fn is_write_route(path: &str, body: &str) -> bool {
 fn is_admin_route(path: &str) -> bool {
     matches!(
         path,
-        "/api/v1/backup" | "/api/v1/restore" | "/api/v1/verify-backup"
+        "/api/v1/backup"
+            | "/api/v1/restore"
+            | "/api/v1/verify-backup"
+            | "/api/v1/sources"
+            | "/api/v1/sources/discover"
+            | "/api/v1/sources/ontology"
+            | "/api/v1/sources/import"
     )
 }
 
@@ -817,6 +841,7 @@ fn json_response(code: u16, body: &J) -> (String, String, String) {
         404 => "404 Not Found",
         409 => "409 Conflict",
         429 => "429 Too Many Requests",
+        502 => "502 Bad Gateway",
         503 => "503 Service Unavailable",
         _ => "500 Internal Server Error",
     };
@@ -2045,6 +2070,106 @@ mod tests {
         m3_cleanup(k, db);
     }
 
+    // ---- source schema discovery routes ----
+
+    #[test]
+    fn every_sources_route_is_an_admin_route() {
+        // REST sessions carry no tenant and `tenant` is a request parameter, so a
+        // non-admin could otherwise list any tenant's configured sources
+        for p in [
+            "/api/v1/sources",
+            "/api/v1/sources/discover",
+            "/api/v1/sources/ontology",
+            "/api/v1/sources/import",
+        ] {
+            assert!(is_admin_route(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn sources_routes_map_errors_to_the_right_statuses() {
+        use crate::sources::testkit::*;
+        let (k, db) = m3_kernel("sources-routes");
+        let crm = crm_db("routes");
+        let missing = tmp_db("missing-routes")
+            .parent()
+            .unwrap()
+            .join("gone.sqlite");
+        crate::sources::with_test_sources(
+            vec![sqlite_source("crm", None), sqlite_source("broken", None)],
+            vec![
+                ("crm".into(), conn(&crm)),
+                ("broken".into(), conn(&missing)),
+            ],
+            || {
+                let call =
+                    |m: &str, path: &str, body: serde_json::Value| m3_call(&k, &db, m, path, body);
+                let (st, out) = call("GET", "/api/v1/sources", serde_json::json!({}));
+                assert!(st.starts_with("200"), "{st} {out}");
+                assert_eq!(out["data"].as_array().unwrap().len(), 2);
+                assert!(
+                    call("POST", "/api/v1/sources/discover", serde_json::json!({}))
+                        .0
+                        .starts_with("400")
+                );
+                assert!(call(
+                    "POST",
+                    "/api/v1/sources/discover",
+                    serde_json::json!({"source": "nope"})
+                )
+                .0
+                .starts_with("404"));
+                let (st, out) = call(
+                    "POST",
+                    "/api/v1/sources/discover",
+                    serde_json::json!({"source": "broken"}),
+                );
+                assert!(st.starts_with("502"), "{st} {out}");
+                assert!(!out["error"].as_str().unwrap().contains("gone.sqlite"));
+                let (st, out) = call(
+                    "POST",
+                    "/api/v1/sources/discover",
+                    serde_json::json!({"source": "crm"}),
+                );
+                assert!(
+                    st.starts_with("200") && out["data"]["changed"] == true,
+                    "{st} {out}"
+                );
+                let (st, pv) = call(
+                    "POST",
+                    "/api/v1/sources/ontology",
+                    serde_json::json!({"sources": ["crm"], "preview": true}),
+                );
+                assert!(st.starts_with("200"), "{st} {pv}");
+                let (st, _) = call(
+                    "POST",
+                    "/api/v1/sources/ontology",
+                    serde_json::json!({"sources": ["crm"], "preview": false, "fingerprints": {"crm": "stale"}}),
+                );
+                assert!(st.starts_with("409"), "{st}");
+                let (st, ok) = call(
+                    "POST",
+                    "/api/v1/sources/ontology",
+                    serde_json::json!({"sources": ["crm"], "preview": false, "fingerprints": pv["data"]["fingerprints"]}),
+                );
+                assert!(
+                    st.starts_with("200") && ok["data"]["saved"] == true,
+                    "{st} {ok}"
+                );
+                assert!(call("POST", "/api/v1/sources/zzz", serde_json::json!({}))
+                    .0
+                    .starts_with("404"));
+                assert!(call(
+                    "POST",
+                    "/api/v1/sources/ontology",
+                    serde_json::json!({"sources": []})
+                )
+                .0
+                .starts_with("400"));
+            },
+        );
+        m3_cleanup(k, db);
+    }
     // ---- tenant chat (M10): the REST surface; the model path is covered in chat/ ----
 
     fn m10_call(

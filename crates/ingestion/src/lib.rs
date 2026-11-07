@@ -266,9 +266,16 @@ pub use reconcile::{
 
 mod connector_bridge;
 pub use connector_bridge::{
-    connector_metadata_to_ir, discover_connector_schema, ConnectorMetadata, ContainerInfo,
-    FieldInfo, ReferenceInfo,
+    class_name_for_container, connector_metadata_to_ir, discover_connector_schema,
+    ConnectorMetadata, ContainerInfo, FieldInfo, FieldProfile, Provenance, ReferenceInfo,
 };
+
+mod ontology_draft;
+pub use ontology_draft::{
+    definition_from_sources, ClassMerge, ClassStatus, DefinitionDraft, DraftClass, SourceInput,
+};
+mod source_schema;
+pub use source_schema::{diff_metadata, ContainerDiff, SchemaDiff};
 
 mod secret_filter;
 pub use secret_filter::{filter_secrets, redact_text, SecretFinding, SecretKind, ALL_KINDS};
