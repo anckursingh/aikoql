@@ -1,0 +1,182 @@
+{
+ "corpus": [
+  "AGENTS.md",
+  "README.md",
+  "CHANGELOG.md"
+ ],
+ "note": "hand-written from the three ingested documents; never derived from model output",
+ "questions": [
+  {
+   "question": "What is AIKOQL?",
+   "answerable": true,
+   "expect_text": [
+    "knowledge database"
+   ]
+  },
+  {
+   "question": "What license is AIKOQL released under?",
+   "answerable": true,
+   "expect_text": [
+    "AGPL"
+   ]
+  },
+  {
+   "question": "How many fewer tokens does an agent read with recall slices?",
+   "answerable": true,
+   "expect_text": [
+    "99.95"
+   ]
+  },
+  {
+   "question": "Which transports does the MCP server support?",
+   "answerable": true,
+   "expect_text": [
+    "Streamable HTTP"
+   ]
+  },
+  {
+   "question": "Where is the enterprise license key stored?",
+   "answerable": true,
+   "expect_text": [
+    ".aikoql-license"
+   ]
+  },
+  {
+   "question": "Which signature algorithm verifies the enterprise license key?",
+   "answerable": true,
+   "expect_text": [
+    "ed25519"
+   ]
+  },
+  {
+   "question": "Which roles exist in the enterprise tier?",
+   "answerable": true,
+   "expect_text": [
+    "viewer"
+   ]
+  },
+  {
+   "question": "Which environment variable seeds the bootstrap admin password?",
+   "answerable": true,
+   "expect_text": [
+    "AIKOQL_ADMIN_PASSWORD"
+   ]
+  },
+  {
+   "question": "What is the default audit retention in days?",
+   "answerable": true,
+   "expect_text": [
+    "90"
+   ]
+  },
+  {
+   "question": "How do I export the audit log as JSONL?",
+   "answerable": true,
+   "expect_text": [
+    "--export-jsonl"
+   ]
+  },
+  {
+   "question": "What is the enterprise multi-user limitation in v1?",
+   "answerable": true,
+   "expect_text": [
+    "single-node"
+   ]
+  },
+  {
+   "question": "What must be done after any new commit in this repository?",
+   "answerable": true,
+   "expect_text": [
+    "dogfood-review-loop"
+   ]
+  },
+  {
+   "question": "Which document is the active launch plan?",
+   "answerable": true,
+   "expect_text": [
+    "IMPLEMENTATION-PLAN-LAUNCH"
+   ]
+  },
+  {
+   "question": "Which file is the review-disposition state machine?",
+   "answerable": true,
+   "expect_text": [
+    "PR6-TDD-DISPOSITIONS"
+   ]
+  },
+  {
+   "question": "Which storage engine is the only one used?",
+   "answerable": true,
+   "expect_text": [
+    "aikoql-v2"
+   ]
+  },
+  {
+   "question": "Where does the Studio web console live in the source tree?",
+   "answerable": true,
+   "expect_text": [
+    "studio.rs"
+   ]
+  },
+  {
+   "question": "Which script checks test environment hygiene?",
+   "answerable": true,
+   "expect_text": [
+    "check-test-env-hygiene"
+   ]
+  },
+  {
+   "question": "Which document explains why the Go, TypeScript and Java SDKs were deleted?",
+   "answerable": true,
+   "expect_text": [
+    "sdk-proxy-decision"
+   ]
+  },
+  {
+   "question": "What does the TDD convention require first?",
+   "answerable": true,
+   "expect_text": [
+    "RED"
+   ]
+  },
+  {
+   "question": "Which workflow owns the benchmarks?",
+   "answerable": true,
+   "expect_text": [
+    "benchmark.yml"
+   ]
+  },
+  {
+   "question": "Where is the dogfood knowledge base kept?",
+   "answerable": true,
+   "expect_text": [
+    "kb/"
+   ]
+  },
+  {
+   "question": "What is the airspeed velocity of an unladen swallow?",
+   "answerable": false,
+   "expect_text": []
+  },
+  {
+   "question": "Who won the 2022 football world cup?",
+   "answerable": false,
+   "expect_text": []
+  },
+  {
+   "question": "What is the capital of Australia?",
+   "answerable": false,
+   "expect_text": []
+  },
+  {
+   "question": "What is the price of the enterprise tier per seat?",
+   "answerable": false,
+   "expect_text": []
+  },
+  {
+   "question": "What is a good recipe for sourdough bread?",
+   "answerable": false,
+   "expect_text": []
+  }
+ ]
+}

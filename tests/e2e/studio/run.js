@@ -49,12 +49,64 @@ const freePort = () => new Promise((res, rej) => {
 });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// A scripted OpenAI-style model. It answers the query skill with a fixed
+// MATCH (or a refusal for "unknowable") and the answer skill with a claim that
+// quotes the one Company fact; the evidence id it cites is made up, because
+// a real model is shown statements, not koids (the server attributes them).
+function startChatStub(state) {
+  const http = require('http');
+  const queryFor = q => /unknowable/.test(q) ? { query: null, refusal_reason: 'cannot be answered' } : { query: 'MATCH Company RETURN *', refusal_reason: null };
+  const answerFor = q => ({
+    answer: /hostile/.test(q) ? HOSTILE : 'Acme is a company.', grounded: true,
+    claims: [{ statement: 'Company Acme: name=Acme', evidence_ids: ['model-cannot-know-koids'] }], refusal_reason: null,
+  });
+  return new Promise(resolve => {
+    const srv = http.createServer((req, resp) => {
+      let body = '';
+      req.on('data', d => { body += d; });
+      req.on('end', async () => {
+        let prompt = ''; try { prompt = JSON.parse(body).messages[0].content; } catch (_) { /* not our shape */ }
+        const q = (/^Question: (.*)$/m.exec(prompt) || [])[1] || '';
+        const reply = prompt.includes('Knowledge context:') ? answerFor(q) : queryFor(q);
+        if (/slow/.test(q)) await sleep(900);
+        resp.setHeader('Content-Type', 'application/json');
+        resp.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: JSON.stringify(reply) } }] }));
+      });
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+}
+
+// A second server WITHOUT [chat]: the Ask panel must say so instead of offering a box.
+async function checkChatDisabledNotice(browser) {
+  const port = await freePort();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aikoql-studio-e2e-nochat-'));
+  const server = spawn(BIN, ['serve', '--metrics-addr', `127.0.0.1:${port}`, path.join(dir, 'db')], {
+    env: { ...process.env, AIKOQL_ADMIN_PASSWORD: PW }, stdio: 'ignore',
+  });
+  try {
+    const base = `http://127.0.0.1:${port}`;
+    for (let i = 0; i < 120; i++) { try { if ((await fetch(base + '/health')).ok) break; } catch (_) { /* not up yet */ } await sleep(500); }
+    const pg = await (await browser.newContext()).newPage();
+    await pg.goto(base + '/studio');
+    await pg.fill('#login-user', 'admin'); await pg.fill('#login-pass', PW);
+    await pg.click('[data-click="doLogin"]'); await pg.waitForTimeout(1500);
+    await pg.locator('button[data-panel="ask"]').click({ timeout: 2000 }).catch(() => {});
+    await pg.waitForTimeout(800);
+    const notice = await pg.locator('#ask-disabled:visible').count() ? await pg.innerText('#ask-disabled') : '';
+    ok('Ask panel shows the not-configured notice when chat is disabled',
+      /No model configured/.test(notice) && /docs\/CHAT\.md/.test(notice) && (await pg.locator('#ask-form:visible').count()) === 0, notice);
+  } finally { server.kill(); fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
 async function main() {
   const port = await freePort();
   const BASE = `http://127.0.0.1:${port}`;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aikoql-studio-e2e-'));
   // max_pages = 2: the 4-slide deck below is read in two batches
-  fs.writeFileSync(path.join(dir, 'aikoql.toml'), '[ingestion]\nmax_pages = 2\n');
+  const chatState = { companyKoid: '' };
+  const chatStub = await startChatStub(chatState);
+  fs.writeFileSync(path.join(dir, 'aikoql.toml'), `[ingestion]\nmax_pages = 2\n[chat]\nurl = "http://127.0.0.1:${chatStub.address().port}"\nmodel = "e2e-stub"\n`);
   const server = spawn(BIN, ['serve', '--config', path.join(dir, 'aikoql.toml'), '--metrics-addr', `127.0.0.1:${port}`, path.join(dir, 'db')], {
     env: { ...process.env, AIKOQL_ADMIN_PASSWORD: PW }, stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -63,6 +115,7 @@ async function main() {
   const cleanup = async () => {
     try { if (browser) await browser.close(); } catch (_) { /* best effort */ }
     server.kill();
+    chatStub.close();
     fs.rmSync(dir, { recursive: true, force: true });
   };
   try {
@@ -73,10 +126,11 @@ async function main() {
     const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok };
     const rem = async b => (await fetch(BASE + '/api/v1/remember', { method: 'POST', headers: H, body: JSON.stringify(b) })).json();
     await rem({ type_name: 'Person', properties: { name: HOSTILE, city: 'Paris' }, tenant: 't1' });
-    await rem({ type_name: 'Company', properties: { name: 'Acme' }, tenant: 't1' });
+    chatState.companyKoid = (await rem({ type_name: 'Company', properties: { name: 'Acme' }, tenant: 't1' })).data.koid;
     await rem({ type_name: 'Person', properties: { name: 'Solo' } });
 
     browser = await chromium.launch({ executablePath: CHROME, headless: true });
+    await checkChatDisabledNotice(browser);
     const page = await (await browser.newContext()).newPage();
     const consoleErrors = [], requests = [], expected404 = new Set();
     let dialogs = 0;
@@ -178,6 +232,42 @@ async function main() {
     ok('tenant save loads its own definition back', /acme-ns/.test(await page.inputValue('#ontology-yaml-input')), await page.inputValue('#ontology-yaml-input'));
     await page.selectOption('#ontology-tenant', ''); await page.waitForTimeout(700);
     ok('switching back to Global shows the global ontology', /e2e-ns/.test(await page.inputValue('#ontology-yaml-input')), await page.inputValue('#ontology-yaml-input'));
+
+    // ---- Ask: a grounded answer, a refusal, a koid link, a hostile answer ---
+    const askSubmit = async q => {
+      await page.fill('#ask-question', q, { timeout: 1500 }).catch(() => {});
+      await page.press('#ask-question', 'Control+Enter', { timeout: 1500 }).catch(() => {});
+      await page.waitForSelector('#ask-result .badge', { timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(300);
+    };
+    await page.locator('button[data-panel="ask"]').click({ timeout: 2000 }).catch(() => {});
+    await page.waitForTimeout(900);
+    await page.selectOption('#ask-tenant', 't1', { timeout: 1500 }).catch(() => {});
+    await askSubmit('Which companies exist?');
+    ok('a grounded answer shows the green badge and its facts',
+      await page.evaluate(() => { const r = document.getElementById('ask-result'); return !!r && !!r.querySelector('.badge-green') && /Acme is a company/.test(r.innerText) && /Company Acme: name=Acme/.test(r.textContent); }), await page.innerText('#ask-result').catch(() => 'no panel'));
+    await page.locator('#ask-result summary').click({ timeout: 2000 }).catch(() => {});
+    await page.locator('#ask-result a[data-click="openInInspector"]').first().click({ timeout: 2000 }).catch(() => {});
+    await page.waitForTimeout(700);
+    ok('claim evidence is the real koid the server matched, not the model\'s id',
+      await page.evaluate(k => { const a = document.querySelector('#ask-result a[data-click="openInInspector"]'); return !!a && a.dataset.koid === k; }, chatState.companyKoid));
+    ok('a koid link opens the Inspector',
+      await page.evaluate(() => document.getElementById('panel-inspector').classList.contains('active') && document.getElementById('inspector-search-input').value.length > 8));
+    await page.locator('button[data-panel="ask"]').click({ timeout: 2000 }).catch(() => {}); await page.waitForTimeout(500);
+    await askSubmit('an unknowable thing');
+    ok('a refused answer shows the amber badge',
+      await page.evaluate(() => { const r = document.getElementById('ask-result'); return !!r && !!r.querySelector('.badge-orange') && !r.querySelector('.badge-green') && /UNKNOWN/.test(r.innerText); }), await page.innerText('#ask-result').catch(() => ''));
+    await askSubmit('hostile companies');
+    ok('a hostile answer string is rendered inertly',
+      await page.evaluate(() => { const r = document.getElementById('ask-result'); return !!r && r.querySelectorAll('img,[onerror]').length === 0 && !window.__pwned && r.textContent.includes('<img src=x'); }));
+    await page.fill('#ask-question', 'slow companies', { timeout: 1500 }).catch(() => {});
+    await page.click('#ask-submit', { timeout: 1500 }).catch(() => {});
+    const inFlight = await page.evaluate(() => { const b = document.getElementById('ask-submit'); return !!b && b.disabled; });
+    await page.waitForTimeout(3500); // two model calls of ~0.9s each
+    ok('the Ask button is disabled while a request is in flight and enabled after',
+      inFlight && await page.evaluate(() => !document.getElementById('ask-submit').disabled));
+    ok('no CSP violation and no console error on the Ask panel',
+      (await page.evaluate(() => window.__csp)).length === 0 && consoleErrors.filter(e => !/Failed to load resource/.test(e)).length === 0, consoleErrors.join(' || '));
 
     // ---- sweep: every delegated control, in every panel, must REACT -------
     const SKIP = new Set(['logout', 'adminRestoreBackup', 'signInSso', 'downloadAuditExport']);

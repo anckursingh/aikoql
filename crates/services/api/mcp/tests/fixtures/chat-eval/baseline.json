@@ -1,0 +1,62 @@
+{
+ "metrics": {
+  "false_refusal_rate": {
+   "detail": {
+    "hits": 0,
+    "of": 21
+   },
+   "value": 0.0
+  },
+  "groundedness": {
+   "detail": {
+    "hits": 21,
+    "of": 21
+   },
+   "value": 1.0
+  },
+  "ko_precision": {
+   "detail": {
+    "hits": 8,
+    "of": 168
+   },
+   "value": 0.047619047619047616
+  },
+  "ko_recall": {
+   "detail": {
+    "hits": 5,
+    "of": 21
+   },
+   "value": 0.23809523809523808
+  },
+  "query_compile_rate": {
+   "detail": {
+    "hits": 0,
+    "of": 26
+   },
+   "value": 0.0
+  },
+  "secret_leak_rate": {
+   "detail": {
+    "hits": 0,
+    "of": 26
+   },
+   "value": 0.0
+  },
+  "unknown_precision": {
+   "detail": {
+    "hits": 0,
+    "of": 0
+   },
+   "value": null
+  },
+  "unknown_recall": {
+   "detail": {
+    "hits": 0,
+    "of": 5
+   },
+   "value": 0.0
+  }
+ },
+ "model": "stub",
+ "questions": 26
+}

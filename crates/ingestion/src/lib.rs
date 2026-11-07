@@ -271,7 +271,7 @@ pub use connector_bridge::{
 };
 
 mod secret_filter;
-pub use secret_filter::{filter_secrets, SecretFinding, SecretKind, ALL_KINDS};
+pub use secret_filter::{filter_secrets, redact_text, SecretFinding, SecretKind, ALL_KINDS};
 
 mod reconciliation_workflow;
 pub use reconciliation_workflow::{

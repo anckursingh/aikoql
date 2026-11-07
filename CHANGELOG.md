@@ -7,6 +7,15 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Tenant chat ("Ask")
+- `POST /api/v1/chat` and a Studio **Ask** panel answer questions from a tenant's knowledge with any
+  OpenAI-compatible model endpoint (`[chat]` in `aikoql.toml`; unset = disabled, 503 / "No model
+  configured"). The model may write one read-only `MATCH` query; otherwise the server retrieves within the
+  tenant. At most 8 facts / 2000 characters reach the model, secrets redacted first. The server verifies
+  every claim quotes a retrieved fact and attaches the evidence itself; anything else becomes an
+  `UNKNOWN:` refusal. Each call writes an id-only audit line. `GET /api/v1/chat/status` reports
+  `{enabled, model, reachable}`. See `docs/CHAT.md`; `scripts/chat-eval.py` scores a model.
+
 ### Large documents
 - A multi-page document over an `[ingestion]` limit (`max_pages`, image/asset counts, image size, OCR time)
   is no longer refused: it is stored at once (status `processing`) and read in background batches of
