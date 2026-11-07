@@ -65,8 +65,66 @@ pub struct ReferenceInfo {
 }
 
 /// The domain class a container proposes: singular PascalCase.
-pub fn class_name_for_container(_container: &str) -> String {
-    String::new()
+pub fn class_name_for_container(container: &str) -> String {
+    let mut words: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    for c in container.chars() {
+        if !c.is_alphanumeric() {
+            if !cur.is_empty() {
+                words.push(std::mem::take(&mut cur));
+            }
+            prev_lower = false;
+            continue;
+        }
+        if c.is_uppercase() && prev_lower {
+            words.push(std::mem::take(&mut cur));
+        }
+        cur.push(c);
+        prev_lower = c.is_lowercase();
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    let Some(last) = words.last_mut() else {
+        return "Thing".into();
+    };
+    *last = singular(last);
+    let name: String = words
+        .iter()
+        .map(|w| {
+            let mut cs = w.chars();
+            cs.next()
+                .map(|f| f.to_uppercase().chain(cs).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect();
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("T{name}")
+    } else {
+        name
+    }
+}
+
+/// Heuristic singular of a table-ish word: `ies→y`, `sses→ss`, a lone
+/// trailing `s` (not `ss`/`us`/`is`). Irregular plurals are left alone.
+fn singular(w: &str) -> String {
+    let lower = w.to_ascii_lowercase();
+    let n = w.len();
+    if lower.ends_with("ies") && n > 4 {
+        format!("{}y", &w[..n - 3])
+    } else if lower.ends_with("sses") {
+        w[..n - 2].to_string()
+    } else if lower.ends_with('s')
+        && !lower.ends_with("ss")
+        && !lower.ends_with("us")
+        && !lower.ends_with("is")
+        && n > 3
+    {
+        w[..n - 1].to_string()
+    } else {
+        w.to_string()
+    }
 }
 
 /// Convert connector metadata into KnowledgeIr.
@@ -90,7 +148,7 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
 
         entities.push(EntityCandidate {
             name: entity_name.clone(),
-            type_hint: Some(format!("{}{}", meta.connector_type, container_type)),
+            type_hint: Some(class_name_for_container(&container.name)),
             mentions: vec![format!(
                 "{} '{}' with {} fields (approx {} rows)",
                 container_type,
