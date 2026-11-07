@@ -62,6 +62,18 @@ pub(crate) fn reachable(url: &str, timeout: Duration) -> bool {
         .is_some_and(|a| TcpStream::connect_timeout(&a, timeout).is_ok())
 }
 
+/// Did this transport error come from the deadline? Decided by the underlying
+/// `io::Error` kind (Unix reports a socket timeout as WouldBlock, Windows as
+/// TimedOut with text that never says "timed out"), and otherwise by the call
+/// having used up its whole budget.
+fn is_timeout(
+    _err: &(dyn std::error::Error + 'static),
+    _elapsed: Duration,
+    _limit: Duration,
+) -> bool {
+    false
+}
+
 /// One prompt in, one completion out.
 pub(crate) trait Generate {
     fn generate(&self, prompt: &str) -> Result<String, String>;
@@ -146,6 +158,52 @@ mod tests {
             api_key_env: None,
             timeout_secs: 5,
         }
+    }
+
+    #[derive(Debug)]
+    struct Wrapped(std::io::Error);
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "wrapped")
+        }
+    }
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn is_timeout_reads_the_io_kind_not_the_message() {
+        use std::io::{Error, ErrorKind};
+        let (quick, limit) = (Duration::from_millis(5), Duration::from_secs(1));
+        // the Windows wording carries no "timed out" at all
+        let win = Error::new(
+            ErrorKind::TimedOut,
+            "os error 10060: the connected party did not properly respond",
+        );
+        assert!(is_timeout(&win, quick, limit));
+        assert!(is_timeout(
+            &Error::from(ErrorKind::WouldBlock),
+            quick,
+            limit
+        ));
+        assert!(
+            is_timeout(&Wrapped(Error::from(ErrorKind::TimedOut)), quick, limit),
+            "found down the source chain"
+        );
+        // a refusal that returned at once is not a timeout
+        assert!(!is_timeout(
+            &Error::from(ErrorKind::ConnectionRefused),
+            quick,
+            limit
+        ));
+        // an unclassified failure after the whole budget is
+        assert!(is_timeout(
+            &Error::other("odd"),
+            Duration::from_secs(1),
+            limit
+        ));
     }
 
     #[test]
