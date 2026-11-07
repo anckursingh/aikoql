@@ -58,6 +58,13 @@ pub struct SqliteConnector {
 }
 
 impl SqliteConnector {
+    /// Stop this connector's own work `d` from now: a statement still running then
+    /// is interrupted. The caller's thread returns instead of spinning on, which a
+    /// waiter that merely gave up could never make it do.
+    pub fn with_deadline(self, _d: std::time::Duration) -> Self {
+        self
+    }
+
     /// Open an existing database file strictly read-only: never creates the file,
     /// never writes, and gives up on a lock after `busy_ms`.
     pub fn open_read_only(path: &str, busy_ms: u64) -> Result<Self, String> {
@@ -735,6 +742,47 @@ mod tests {
             .unwrap();
         assert_eq!(c.introspect_table_with("t", false).unwrap().row_count, -1);
         assert_eq!(c.introspect_table_with("t", true).unwrap().row_count, 3);
+    }
+
+    #[test]
+    fn a_runaway_statement_is_interrupted_at_the_deadline() {
+        let p = tmp_path("runaway");
+        Connection::open(&p)
+            .unwrap()
+            .execute_batch("CREATE TABLE t (id INTEGER);")
+            .unwrap();
+        let c = SqliteConnector::open_read_only(p.to_str().unwrap(), 300)
+            .unwrap()
+            .with_deadline(std::time::Duration::from_millis(300));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r = c.conn.query_row(
+                "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) FROM c",
+                [],
+                |r| r.get::<_, i64>(0),
+            );
+            let _ = tx.send(r.map_err(|e| e.to_string()));
+        });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(5));
+        let err = r
+            .expect("the statement was still running 5s after a 300ms deadline")
+            .unwrap_err();
+        assert!(err.contains("interrupt"), "{err}");
+    }
+
+    #[test]
+    fn a_connector_dropped_before_its_deadline_leaves_nothing_running() {
+        let p = tmp_path("dropped");
+        Connection::open(&p)
+            .unwrap()
+            .execute_batch("CREATE TABLE t (id INTEGER);")
+            .unwrap();
+        for _ in 0..50 {
+            let c = SqliteConnector::open_read_only(p.to_str().unwrap(), 300)
+                .unwrap()
+                .with_deadline(std::time::Duration::from_secs(3600));
+            assert!(c.list_tables().is_ok());
+        }
     }
 
     #[test]

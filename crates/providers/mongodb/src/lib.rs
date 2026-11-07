@@ -117,6 +117,8 @@ pub struct MongoConnector {
     #[allow(dead_code)]
     client: Client, // held for lifetime; db borrows from it
     db: mongodb::Database,
+    /// Absolute time after which this connector abandons its own work.
+    deadline: Option<std::time::Instant>,
 }
 
 impl MongoConnector {
@@ -146,7 +148,26 @@ impl MongoConnector {
             let db = client.database(database);
             Ok::<_, String>((client, db))
         })?;
-        Ok(MongoConnector { rt, client, db })
+        Ok(MongoConnector {
+            rt,
+            client,
+            db,
+            deadline: None,
+        })
+    }
+
+    /// Give every operation of this connector until `d` from now; later ones fail
+    /// with "timed out" and the in-flight future is dropped, so the caller's thread
+    /// returns instead of waiting on an unresponsive server.
+    pub fn with_deadline(self, _d: std::time::Duration) -> Self {
+        self
+    }
+
+    fn block<T>(
+        &self,
+        fut: impl std::future::Future<Output = Result<T, String>>,
+    ) -> Result<T, String> {
+        self.rt.block_on(fut)
     }
 
     pub fn list_collections(&self) -> Result<Vec<String>, String> {
@@ -380,6 +401,31 @@ fn deterministic_koid(table: &str, parts: &[String]) -> KOID {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_operation_that_never_returns_fails_at_the_deadline() {
+        let c = MongoConnector::connect_with_timeout("mongodb://127.0.0.1:1", "d", Some(500))
+            .unwrap()
+            .with_deadline(std::time::Duration::from_millis(300));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r: Result<(), String> = c.block(std::future::pending());
+            let _ = tx.send(r);
+        });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(5));
+        let err = r
+            .expect("still blocked 5s after a 300ms deadline")
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+    }
+
+    #[test]
+    fn a_connector_without_a_deadline_is_unbounded_by_it() {
+        let c =
+            MongoConnector::connect_with_timeout("mongodb://127.0.0.1:1", "d", Some(500)).unwrap();
+        let r: Result<u8, String> = c.block(async { Ok(7) });
+        assert_eq!(r, Ok(7));
+    }
 
     #[test]
     fn bson_scalars_to_value() {

@@ -21,6 +21,7 @@ fn fetch(
     container: &str,
     tenant: Option<&str>,
     cap: u64,
+    _deadline: std::time::Duration,
 ) -> Result<Fetched, String> {
     match kind {
         SourceKind::Sqlite => {
@@ -173,6 +174,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
                 &container,
                 tenant_c.as_deref(),
                 cap,
+                deadline,
             )
         }) {
             Ok(v) => v,
@@ -212,6 +214,33 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hung_source_call_ends_and_frees_its_gate_slot() {
+        use crate::sources::introspect::Gate;
+        use crate::sources::testkit::{make, tmp_db};
+        // a view whose every read runs forever: the source never answers
+        let p = tmp_db("hang");
+        make(
+            &p,
+            "CREATE TABLE seed (id INTEGER);
+             CREATE VIEW v AS SELECT count(*) AS n FROM
+               (WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT x FROM c);",
+        );
+        let gate = Gate::new(2);
+        let conn = p.to_str().unwrap().to_string();
+        let deadline = std::time::Duration::from_millis(400);
+        let r = gate.run(std::time::Duration::from_millis(1500), move || {
+            fetch(SourceKind::Sqlite, &conn, "", 300, "v", None, 10, deadline)
+        });
+        assert!(r.is_err(), "a hung source must fail the call");
+        // the abandoned thread must actually end, not spin until the process dies
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while gate.stuck() > 0 && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(gate.stuck(), 0, "the gate slot was never freed");
+    }
+
     use super::*;
     use crate::json;
     use crate::sources::service::tool_sources_discover;
