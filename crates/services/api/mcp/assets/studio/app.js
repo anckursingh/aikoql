@@ -68,8 +68,12 @@ window.addEventListener('load', async () => {
 function authHeaders(extra) {
   return Object.assign({'X-Aikoql-Csrf': '1'}, extra || {}, authToken ? {'Authorization': 'Bearer ' + authToken} : {});
 }
-async function api(url) {
-  const res = await fetch(url, {headers: authHeaders()});
+// One transport for every verb: CSRF header, JSON, a dead session returns to
+// sign-in (whatever the verb), and one error shape.
+async function request(method, url, body) {
+  const init = {method: method, headers: authHeaders(body === undefined ? {} : {'Content-Type': 'application/json'})};
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const res = await fetch(url, init);
   // S-10 (POC-4): a 401 means the server restarted and dropped the session —
   // return to the login overlay instead of leaking the raw body into a panel.
   if (res.status === 401) {
@@ -79,28 +83,33 @@ async function api(url) {
   }
   if (!res.ok) {
     let msg = 'HTTP ' + res.status;
-    try { const body = await res.json(); if (body.error) msg = body.error; } catch(_) {}
-    throw new Error(msg);
-  }
-  return res.json();
-}
-async function apiPost(url, body) {
-  const res = await fetch(url, {method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify(body||{})});
-  if (!res.ok) {
-    let msg = 'HTTP ' + res.status;
     try { const b = await res.json(); if (b.error) msg = b.error; } catch(_) {}
     throw new Error(msg);
   }
   return res.json();
 }
-async function apiPut(url, body) {
-  const res = await fetch(url, {method:'PUT', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify(body||{})});
-  if (!res.ok) {
-    let msg = 'HTTP ' + res.status;
-    try { const b = await res.json(); if (b.error) msg = b.error; } catch(_) {}
-    throw new Error(msg);
-  }
-  return res.json();
+async function api(url) { return request('GET', url); }
+async function apiPost(url, body) { return request('POST', url, body || {}); }
+async function apiPut(url, body) { return request('PUT', url, body || {}); }
+
+// Notifications: a polite live region; errors are alerts. Text only, never markup.
+function toast(kind, text, ms) {
+  const box = document.getElementById('toasts');
+  if (!box) return;
+  const t = document.createElement('div');
+  t.className = 'toast toast-' + kind;
+  t.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  const msg = document.createElement('span');
+  msg.textContent = text;
+  const x = document.createElement('button');
+  x.className = 'toast-x';
+  x.setAttribute('aria-label', 'Dismiss notification');
+  x.dataset.click = 'dismissToast';
+  x.textContent = '×';
+  t.append(msg, x);
+  box.append(t);
+  while (box.children.length > 4) box.firstChild.remove();
+  setTimeout(() => t.remove(), ms || (kind === 'error' ? 9000 : 4000));
 }
 
 // Epoch millis → "YYYY-MM-DD HH:MM:SS (13s ago)".
@@ -1776,6 +1785,7 @@ document.getElementById('ask-question').addEventListener('keydown', e => { if ((
 // ═══════════════════════════════════════════
 const ACTIONS = Object.assign(Object.create(null), {
   doLogin: el => doLogin(),
+  dismissToast: el => el.parentElement.remove(),
   skipToContent: el => { const c = document.getElementById('panel-content'); c.setAttribute('tabindex', '-1'); c.focus(); },
   logout: el => logout(),
   runQuery: el => runQuery(),

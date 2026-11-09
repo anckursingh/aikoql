@@ -171,6 +171,15 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .metric-big { font-size: 28px; font-weight: 700; color: var(--accent); }
 .metric-label { font-size: 11px; color: var(--muted); }
 
+/* ── Notifications ── */
+#toasts { position: fixed; right: 16px; bottom: 36px; z-index: 250; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); }
+.toast { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,0.4); }
+.toast-success { border-left-color: var(--green); }
+.toast-error { border-left-color: var(--red); }
+.toast span { flex: 1; word-break: break-word; }
+.toast-x { background: none; border: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.toast-x:hover { color: var(--text); }
+
 /* ── Accessibility & orientation ── */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 .skip { position: fixed; top: -48px; left: 8px; z-index: 300; padding: 8px 14px; background: var(--accent); color: #0a0a12; border: none; border-radius: 0 0 6px 6px; font-weight: 600; font-size: 12px; cursor: pointer; }
@@ -192,6 +201,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 </head>
 <body>
 <button class="skip" data-click="skipToContent">Skip to content</button>
+<div id="toasts" role="region" aria-label="Notifications" aria-live="polite"></div>
 
 <!-- ── Login ── -->
 <div id="login-overlay">
@@ -1355,7 +1365,10 @@ mod tests {
         let page = page_for_tests();
         let i = page.find(name).unwrap_or_else(|| panic!("no {name}"));
         let rest = &page[i + name.len()..];
-        let end = rest.find("\nasync function ").min(rest.find("\nfunction ")).unwrap_or(rest.len());
+        let end = rest
+            .find("\nasync function ")
+            .min(rest.find("\nfunction "))
+            .unwrap_or(rest.len());
         rest[..end].to_string()
     }
 
@@ -1364,23 +1377,51 @@ mod tests {
         let page = page_for_tests();
         assert!(page.contains("async function request(method, url, body)"));
         let request = js_fn("async function request(method, url, body)");
-        assert!(request.contains("res.status === 401") && request.contains("showLogin()"), "401 must return to sign-in for EVERY verb");
-        assert!(request.contains("X-Aikoql-Csrf") || request.contains("authHeaders("), "CSRF header on every request");
-        for (name, verb) in [("async function api(", "GET"), ("async function apiPost(", "POST"), ("async function apiPut(", "PUT")] {
+        assert!(
+            request.contains("res.status === 401") && request.contains("showLogin()"),
+            "401 must return to sign-in for EVERY verb"
+        );
+        assert!(
+            request.contains("X-Aikoql-Csrf") || request.contains("authHeaders("),
+            "CSRF header on every request"
+        );
+        for (name, verb) in [
+            ("async function api(", "GET"),
+            ("async function apiPost(", "POST"),
+            ("async function apiPut(", "PUT"),
+        ] {
             let body = js_fn(name);
-            assert!(body.contains(&format!("request('{verb}'")), "{name} must delegate to request: {body}");
-            assert!(!body.contains("fetch("), "{name} must not duplicate the transport");
+            assert!(
+                body.contains(&format!("request('{verb}'")),
+                "{name} must delegate to request: {body}"
+            );
+            assert!(
+                !body.contains("fetch("),
+                "{name} must not duplicate the transport"
+            );
         }
     }
 
     #[test]
     fn notifications_are_a_polite_live_region_with_alerts_for_errors() {
         let page = page_for_tests();
-        assert!(page.contains("id=\"toasts\"") && page.contains("aria-live=\"polite\""), "a live region");
+        assert!(
+            page.contains("id=\"toasts\"") && page.contains("aria-live=\"polite\""),
+            "a live region"
+        );
         let toast = js_fn("function toast(kind, text");
-        assert!(toast.contains("'alert'") && toast.contains("'status'"), "errors are alerts, the rest status");
-        assert!(toast.contains("textContent"), "toast text is set as text, never markup");
-        assert!(page.contains("\n  dismissToast:"), "dismiss goes through the allowlist");
+        assert!(
+            toast.contains("'alert'") && toast.contains("'status'"),
+            "errors are alerts, the rest status"
+        );
+        assert!(
+            toast.contains("textContent"),
+            "toast text is set as text, never markup"
+        );
+        assert!(
+            page.contains("\n  dismissToast:"),
+            "dismiss goes through the allowlist"
+        );
         assert!(page.contains("aria-label"), "the dismiss control is named");
     }
 
