@@ -33,6 +33,12 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   row → Inspector, row count and elapsed time, nested values shown as JSON.
 - **Never lose work:** the query draft survives a reload; named saved queries and a history of what ran;
   Ctrl/Cmd+S now saves for real (it used to say "auto-saved" and store nothing).
+- **Light theme:** Auto (follows the system) / Light / Dark, applied before first paint; the editor and the
+  graph follow it; every colour is a token, and both palettes are tested for WCAG AA.
+- **Phones and tablets:** the navigation becomes a drawer under 800px, controls are touch-sized, inputs do not
+  trigger a zoom, and no panel scrolls the page sideways at 390px (tables scroll inside the page).
+- **One working tenant** in the header, applied to every panel and remembered; a panel can still be pointed
+  elsewhere without moving where another panel writes.
 - **Feedback:** toast notifications (live region; errors are alerts); one request helper, so a session that
   expired mid-write returns to sign-in for every verb, not just reads.
 

@@ -161,6 +161,28 @@ function fmtTime(ms) {
 // ═══════════════════════════════════════════
 // Navigation
 // ═══════════════════════════════════════════
+// Phone navigation: a drawer. On wider screens these are no-ops (the rail is always there).
+function setNav(open) {
+  document.getElementById('app').classList.toggle('nav-open', open);
+  document.getElementById('nav-backdrop').hidden = !open;
+  const t = document.getElementById('nav-toggle');
+  t.setAttribute('aria-expanded', open ? 'true' : 'false');
+  t.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+}
+function toggleNav() {
+  if (document.getElementById('app').classList.contains('nav-open')) { closeNav(); return; }
+  setNav(true);
+  const first = document.querySelector('#sidebar nav button.active') || document.querySelector('#sidebar nav button');
+  if (first) first.focus();
+}
+function closeNav() {
+  if (!document.getElementById('app').classList.contains('nav-open')) return;
+  setNav(false);
+  document.getElementById('nav-toggle').focus();
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeNav(); });
+window.addEventListener('resize', () => { if (window.innerWidth >= 800) setNav(false); });
+
 // Routing: a panel is a place with an address (#/ontology). Refresh, Back/Forward
 // and a pasted link all land on the same panel. Only #/<panel> hashes are ours:
 // the SSO hand-off carries its credentials in the hash and must be left alone.
@@ -173,6 +195,7 @@ window.addEventListener('hashchange', () => {
   if (p && p !== activePanel) switchPanel(p, true);
 });
 function switchPanel(name, fromRoute) {
+  closeNav();
   activePanel = name;
   if (!fromRoute && location.hash !== '#/' + name) history.pushState(null, '', '#/' + name);
   document.querySelectorAll('#sidebar nav button').forEach(b => {
@@ -2119,6 +2142,8 @@ document.getElementById('ask-question').addEventListener('keydown', e => { if ((
 // ═══════════════════════════════════════════
 const ACTIONS = Object.assign(Object.create(null), {
   doLogin: el => doLogin(),
+  toggleNav: el => toggleNav(),
+  closeNav: el => closeNav(),
   cycleTheme: el => cycleTheme(),
   setTenantContext: el => setTenantContext(el),
   closePalette: el => closePalette(),

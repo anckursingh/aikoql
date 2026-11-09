@@ -113,6 +113,19 @@ real) · E3 one request helper + toasts · E4 sortable/copyable/exportable resul
 E5 command palette. Measured: muted-text contrast 2.9:1 → 5.5:1; nothing below 11px; every
 control reachable by keyboard. P1 and P2 are next, in the order above.
 
+**P1 so far (same day):** global working tenant (header; one-way, a panel override stays local) ·
+light theme (Auto/Light/Dark, system-following, no flash, editor and graph follow, both palettes tested
+for AA) · responsive layout (drawer under 800px, 40px touch targets, 16px inputs, no sideways scroll on
+any of the 16 panels at 390px). Real-Chrome checks: 151.
+
+**Parked (decided with the product owner):**
+- *Empty-source guidance.* A source that discovers 0 containers prints only the counts; it should say
+  "this database has no tables — check the database name or credentials" with the likely causes.
+  (Hit for real: a demo database seeded wrongly looked like a product bug.)
+
+**Still open from P1:** first-run guidance and actionable empty states · honest paging for the chunked
+query view (rename + server-side paging) · KOID links between Inspector, Graph and Explorer.
+
 ## 5. Non-goals
 No framework or bundler; no third-party CDN; no change to the auth/CSRF/CSP model; no new
 backend endpoints for P0.

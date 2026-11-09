@@ -152,7 +152,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); heig
 #sidebar:hover .user-badge, #sidebar:has(:focus-visible) .user-badge { font-size: 12px; }
 
 /* ── Main ── */
-#main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+#main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 #panel-header { padding: 10px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; min-height: 44px; background: var(--panel); }
 #panel-header h2 { font-size: 13px; font-weight: 600; color: var(--accent); letter-spacing: -0.3px; }
 #panel-header .breadcrumb { font-size: 11px; color: var(--muted); }
@@ -320,11 +320,42 @@ td a:hover { text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+/* ── Phones: the navigation is a drawer ── */
+#nav-toggle { display: none; }
+@media (max-width: 799px) {
+  #nav-toggle { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; background: var(--btn-sec); color: var(--text); border: none; border-radius: 6px; font-size: 18px; cursor: pointer; }
+  #sidebar, #sidebar:hover, #sidebar:has(:focus-visible) { position: fixed; left: 0; top: 0; bottom: 0; width: 280px; min-width: 280px; align-items: stretch; transform: translateX(-104%); visibility: hidden; transition: transform 0.18s, visibility 0s 0.18s; z-index: 230; box-shadow: 8px 0 32px rgba(0,0,0,0.45); overflow-y: auto; }
+  #app.nav-open #sidebar { transform: none; visibility: visible; transition: transform 0.18s; }
+  #sidebar .logo { padding-left: 14px; }
+  #sidebar .logo-text { display: inline-block; margin-left: 10px; }
+  #sidebar .nav-group { display: block; margin-left: 0; }
+  #sidebar nav button .lbl { opacity: 1; }
+  #sidebar .user-badge { font-size: 12px; }
+  #nav-backdrop { position: fixed; inset: 0; background: var(--scrim); z-index: 225; }
+  #nav-backdrop[hidden] { display: none; }
+  #main { width: 100%; }
+  #panel-header { flex-wrap: wrap; padding: 8px 12px; gap: 8px; }
+  #panel-content { padding: 12px; }
+  .card { overflow-x: auto; }
+  .input-row, .query-toolbar, .res-bar, .lib-row { flex-wrap: wrap; }
+  .btn { min-height: 40px; }
+  /* !important: panel rules such as .lib-row input are more specific, and a phone zooms into anything under 16px */
+  input, select, textarea { font-size: 16px !important; min-height: 40px; }
+  /* a table wider than the screen scrolls inside the page; it never widens the page */
+  #panel-content table { display: block; max-width: 100%; overflow-x: auto; }
+  #tenant-context { max-width: 150px; }
+  .login-card { width: min(380px, calc(100vw - 32px)); padding: 28px 22px; }
+  #graph-area { height: calc(100dvh - 200px); min-height: 320px; }
+  .graph-toolbar input { width: 150px; }
+  #palette { top: 6vh; }
+  #toasts { left: 12px; right: 12px; max-width: none; }
+}
 </style>
 </head>
 <body>
 <button class="skip" data-click="skipToContent">Skip to content</button>
 <div id="toasts" role="region" aria-label="Notifications" aria-live="polite"></div>
+<div id="nav-backdrop" data-click="closeNav" hidden></div>
 <div id="palette-backdrop" data-click="closePalette" hidden></div>
 <div id="palette" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
   <input id="palette-input" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" aria-label="Type a command" placeholder="Type a command or search…  (↑ ↓ to move · Enter to run · Esc to close)" autocomplete="off" spellcheck="false">
@@ -408,6 +439,7 @@ td a:hover { text-decoration: underline; }
   </div>
   <div id="main">
     <div id="panel-header">
+      <button id="nav-toggle" data-click="toggleNav" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">☰</button>
       <h2 id="panel-title">Query Editor</h2>
       <span class="breadcrumb" id="panel-breadcrumb"></span>
       <span class="header-spacer"></span>
@@ -1915,18 +1947,39 @@ mod tests {
             assert!(page.contains(needle), "missing {needle}");
         }
         for action in ["toggleNav", "closeNav"] {
-            assert!(page.contains(&format!("\n  {action}:")), "{action} not in ACTIONS");
+            assert!(
+                page.contains(&format!("\n  {action}:")),
+                "{action} not in ACTIONS"
+            );
         }
         let css = studio_css();
         let small = &css[css.find("@media (max-width: 799px)").unwrap()..];
-        assert!(small.contains("visibility: hidden"), "a closed drawer must leave the tab order");
-        assert!(small.contains("min-height: 40px"), "touch targets are at least 40px");
-        assert!(small.contains("font-size: 16px"), "inputs are 16px so a phone does not zoom on focus");
+        assert!(
+            small.contains("visibility: hidden"),
+            "a closed drawer must leave the tab order"
+        );
+        assert!(
+            small.contains("min-height: 40px"),
+            "touch targets are at least 40px"
+        );
+        assert!(
+            small.contains("font-size: 16px"),
+            "inputs are 16px so a phone does not zoom on focus"
+        );
         // a flex child defaults to min-width:auto and would let wide content push the page sideways
-        assert!(css.contains("#main { flex: 1; min-width: 0;") || css.contains("min-width: 0"), "main may shrink");
+        assert!(
+            css.contains("#main { flex: 1; min-width: 0;") || css.contains("min-width: 0"),
+            "main may shrink"
+        );
         let close = js_fn("function closeNav(");
-        assert!(close.contains("nav-toggle") && close.contains("focus"), "closing returns focus to the toggle");
-        assert!(js_fn("function switchPanel(").contains("closeNav"), "choosing a panel closes the drawer");
+        assert!(
+            close.contains("nav-toggle") && close.contains("focus"),
+            "closing returns focus to the toggle"
+        );
+        assert!(
+            js_fn("function switchPanel(").contains("closeNav"),
+            "choosing a panel closes the drawer"
+        );
     }
 
     #[test]
