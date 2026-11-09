@@ -58,7 +58,9 @@ run_tests() {
 if [ -n "${AIKOQL_TEST_S3_ENDPOINT:-}" ]; then
   if command -v mc >/dev/null; then
     mc alias set s3it "$AIKOQL_TEST_S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" >/dev/null
-    mc mb --ignore-existing "s3it/$AIKOQL_TEST_S3_BUCKET" >/dev/null
+    # a bucket-scoped token (R2, AWS) cannot create buckets: it must already exist
+    mc mb --ignore-existing "s3it/$AIKOQL_TEST_S3_BUCKET" >/dev/null ||
+      echo "s3-it: could not create $AIKOQL_TEST_S3_BUCKET; assuming it exists" >&2
   fi
   run_tests "the given store"
   exit 0
