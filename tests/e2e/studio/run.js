@@ -605,6 +605,33 @@ async function main() {
     await page.emulateMedia({ colorScheme: 'dark' }); await page.waitForTimeout(200);
     ok('auto tracks a system change live', lum(await css('body', 'backgroundColor')) < 0.05);
     await page.emulateMedia({ colorScheme: null });
+    // ---- P1: a phone ----
+    await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
+    ok('on a phone the navigation toggle is shown and the drawer is closed', await page.isVisible('#nav-toggle') && await page.isHidden('#sidebar') && (await page.getAttribute('#nav-toggle', 'aria-expanded')) === 'false');
+    await page.click('#nav-toggle'); await page.waitForTimeout(350);
+    ok('the toggle opens the drawer, labelled, with a backdrop', await page.isVisible('#sidebar') && (await page.getAttribute('#nav-toggle', 'aria-expanded')) === 'true' && await page.isVisible('#nav-backdrop') && (await css('#sidebar nav button .lbl', 'opacity')) === '1');
+    await page.click('button[data-panel="graph"]'); await page.waitForTimeout(500);
+    ok('choosing a panel closes the drawer and goes there', (await panel()) === 'graph' && await page.isHidden('#sidebar') && (await page.getAttribute('#nav-toggle', 'aria-expanded')) === 'false', await panel());
+    await page.click('#nav-toggle'); await page.waitForTimeout(300); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+    ok('Escape closes it and returns focus to the toggle', await page.isHidden('#sidebar') && (await page.evaluate(() => document.activeElement.id)) === 'nav-toggle');
+    await page.click('#nav-toggle'); await page.waitForTimeout(300); await page.click('#nav-backdrop', { position: { x: 380, y: 400 } }); await page.waitForTimeout(300);
+    ok('tapping outside closes it', await page.isHidden('#sidebar'));
+    const overflowing = [];
+    for (const name of await page.$$eval('#sidebar nav button[data-panel]', b => b.map(x => x.dataset.panel))) {
+      await page.evaluate(n => { location.hash = '#/' + n; }, name); await page.waitForTimeout(1300);
+      const w = await page.evaluate(() => ({ doc: document.scrollingElement.scrollWidth, view: window.innerWidth, content: document.getElementById('panel-content').scrollWidth, contentView: document.getElementById('panel-content').clientWidth, main: document.getElementById('main').getBoundingClientRect().width }));
+      if (w.doc > w.view + 1 || w.content > w.contentView + 1 || w.main > w.view + 1) overflowing.push(name + ' ' + JSON.stringify(w));
+    }
+    ok('no panel makes the page scroll sideways on a phone', overflowing.length === 0, overflowing.join(' ; '));
+    await page.evaluate(() => { location.hash = '#/query'; }); await page.waitForTimeout(500);
+    const runBox = await page.locator('[data-click="runQuery"]').boundingBox();
+    ok('buttons are touch-sized on a phone (>= 40px tall)', runBox && runBox.height >= 40, JSON.stringify(runBox));
+    ok('form inputs are 16px so the phone does not zoom on focus', (await css('#query-save-name', 'fontSize')) === '16px', await css('#query-save-name', 'fontSize'));
+    await page.setViewportSize({ width: 900, height: 700 }); await page.waitForTimeout(300);
+    ok('a tablet keeps the compact rail and no toggle', await page.isHidden('#nav-toggle') && await page.isVisible('#sidebar'));
+    await page.setViewportSize({ width: 1280, height: 720 }); await page.waitForTimeout(300);
+    ok('on a desktop there is no toggle and the sidebar is open', await page.isHidden('#nav-toggle') && await page.isVisible('#sidebar'));
+    await page.evaluate(() => { location.hash = '#/query'; });
     // ---- a dead cookie falls back to the form; signing in must still work ---
     await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });

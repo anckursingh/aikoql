@@ -1899,6 +1899,36 @@ mod tests {
         );
     }
 
+    // ---- P1: responsive layout ----
+
+    #[test]
+    fn on_a_phone_the_navigation_is_a_drawer_with_a_named_toggle() {
+        let page = page_for_tests();
+        for needle in [
+            "id=\"nav-toggle\"",
+            "aria-controls=\"sidebar\"",
+            "aria-expanded=\"false\"",
+            "id=\"nav-backdrop\"",
+            "@media (max-width: 799px)",
+            "#app.nav-open #sidebar",
+        ] {
+            assert!(page.contains(needle), "missing {needle}");
+        }
+        for action in ["toggleNav", "closeNav"] {
+            assert!(page.contains(&format!("\n  {action}:")), "{action} not in ACTIONS");
+        }
+        let css = studio_css();
+        let small = &css[css.find("@media (max-width: 799px)").unwrap()..];
+        assert!(small.contains("visibility: hidden"), "a closed drawer must leave the tab order");
+        assert!(small.contains("min-height: 40px"), "touch targets are at least 40px");
+        assert!(small.contains("font-size: 16px"), "inputs are 16px so a phone does not zoom on focus");
+        // a flex child defaults to min-width:auto and would let wide content push the page sideways
+        assert!(css.contains("#main { flex: 1; min-width: 0;") || css.contains("min-width: 0"), "main may shrink");
+        let close = js_fn("function closeNav(");
+        assert!(close.contains("nav-toggle") && close.contains("focus"), "closing returns focus to the toggle");
+        assert!(js_fn("function switchPanel(").contains("closeNav"), "choosing a panel closes the drawer");
+    }
+
     #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
