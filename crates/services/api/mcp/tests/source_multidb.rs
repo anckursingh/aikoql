@@ -1226,3 +1226,161 @@ fn neo4j_nodes_and_relationships_import_through_the_route() {
     capped.assert_no_secret_anywhere();
     clean();
 }
+
+/// ClickHouse tables import through the production route: every type exact,
+/// replacing engines at their latest versions, a view readable, a big table cut
+/// at the row cap quickly and reported, and nothing leaked.
+#[test]
+fn clickhouse_tables_import_through_the_route() {
+    let Some(ch) = connectors::Live::clickhouse() else {
+        return;
+    };
+    let db = format!("md_imp_{}", std::process::id());
+    let exec = |stmts: &[String]| {
+        let refs: Vec<&str> = stmts.iter().map(String::as_str).collect();
+        connectors::clickhouse_exec(&ch.clickhouse_url, "default", &refs);
+    };
+    exec(&[
+        format!("DROP DATABASE IF EXISTS {db}"),
+        format!("CREATE DATABASE {db}"),
+        format!(
+            "CREATE TABLE {db}.zoo (id UInt64, i64 Int64, u64 UInt64, f Float64, fnan Float64, dec Decimal(20, 5), \
+             decbig Decimal(38, 10), s String, nul Nullable(String), arr Array(UInt64), mp Map(String, UInt8), \
+             tp Tuple(a UInt8, b String), d Date, dt DateTime, dt64 DateTime64(3), en Enum8('a' = 1, 'b' = 2), \
+             u UUID, ip IPv4, lc LowCardinality(String), b Bool) ENGINE = MergeTree ORDER BY id"
+        ),
+        format!(
+            "INSERT INTO {db}.zoo VALUES (1, -9223372036854775808, 18446744073709551615, 0.1, nan, 12345.67, \
+             123456789012345678901234567.8901234567, 'héllo ✓', NULL, [1, 2], {{'a': 1}}, (1, 'x'), '2026-01-02', \
+             '2026-01-02 03:04:05', '2026-01-02 03:04:05.123', 'b', '123e4567-e89b-12d3-a456-426614174000', \
+             '192.168.0.1', 'lc', true)"
+        ),
+        format!("INSERT INTO {db}.zoo (id) VALUES (2)"),
+        format!("CREATE TABLE {db}.versions (k UInt32, v String, ver UInt32) ENGINE = ReplacingMergeTree(ver) ORDER BY k"),
+        format!("INSERT INTO {db}.versions VALUES (1, 'old', 1)"),
+        format!("INSERT INTO {db}.versions VALUES (1, 'new', 2)"),
+        format!("INSERT INTO {db}.versions VALUES (2, 'only', 1)"),
+        format!("CREATE VIEW {db}.recent AS SELECT id, s FROM {db}.zoo WHERE id = 1"),
+        format!("CREATE TABLE {db}.empty (id UInt8) ENGINE = MergeTree ORDER BY id"),
+        format!("CREATE TABLE {db}.big (id UInt64, label String) ENGINE = MergeTree ORDER BY id"),
+        format!("INSERT INTO {db}.big SELECT number, toString(number) FROM numbers(100000)"),
+    ]);
+    let toml = |cap: u32| {
+        format!("[[sources]]\nname = \"olap\"\nkind = \"clickhouse\"\nurl_env = \"MD_CH\"\ndatabase = \"{db}\"\nimport_max_rows = {cap}\n")
+    };
+    let l = Live::start(
+        "chimp",
+        &toml(10_000),
+        &[("MD_CH", &ch.clickhouse_url)],
+        &["aikoql-dev-only"],
+    );
+    l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "olap"}),
+    );
+    let i = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["zoo", "versions", "recent", "empty"]}),
+    );
+    assert_eq!(i["skipped"], serde_json::json!([]), "{i}");
+    assert_eq!(
+        (
+            i["imported"]["zoo"].clone(),
+            i["imported"]["versions"].clone(),
+            i["imported"]["recent"].clone(),
+            i["imported"]["empty"].clone()
+        ),
+        (2.into(), 2.into(), 1.into(), 0.into()),
+        "FINAL: the replaced version is not a row; {i}"
+    );
+
+    let zoo = query(&l, "MATCH zoo RETURN *");
+    let rows = zoo["results"].as_array().unwrap();
+    let full = rows
+        .iter()
+        .find(|r| r["properties"]["id"] == 1)
+        .expect("row 1");
+    let want = serde_json::json!({
+        "id": 1, "i64": i64::MIN, "u64": "18446744073709551615", "f": 0.1, "fnan": "nan", "dec": 12345.67,
+        "decbig": "123456789012345678901234567.8901234567", "s": "héllo ✓", "nul": null, "arr": [1, 2],
+        "mp": {"a": 1}, "tp": {"a": 1, "b": "x"}, "d": "2026-01-02", "dt": "2026-01-02 03:04:05",
+        "dt64": "2026-01-02 03:04:05.123", "en": "b", "u": "123e4567-e89b-12d3-a456-426614174000",
+        "ip": "192.168.0.1", "lc": "lc", "b": true,
+    });
+    for (k, v) in want.as_object().unwrap() {
+        assert_eq!(&full["properties"][k], v, "column {k}: {full}");
+    }
+    let versions = query(&l, "MATCH versions RETURN *");
+    let mut seen: Vec<(i64, String)> = versions["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["properties"]["k"].as_i64().unwrap(),
+                r["properties"]["v"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    seen.sort();
+    assert_eq!(seen, [(1, "new".to_string()), (2, "only".to_string())]);
+    assert_eq!(
+        query(&l, "MATCH recent RETURN *")["results"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // idempotent: the same snapshot again writes nothing
+    let again = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["zoo", "versions"]}),
+    );
+    assert_eq!(
+        (
+            again["imported"]["zoo"].clone(),
+            again["unchanged"]["zoo"].clone()
+        ),
+        (0.into(), 2.into()),
+        "{again}"
+    );
+
+    // a big table is cut at the cap, quickly, and says so
+    let capped = Live::start(
+        "chimpcap",
+        &toml(1_000),
+        &[("MD_CH", &ch.clickhouse_url)],
+        &["aikoql-dev-only"],
+    );
+    capped.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "olap"}),
+    );
+    let started = Instant::now();
+    let c = capped.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["big"]}),
+    );
+    assert_eq!(c["imported"]["big"], 1_000, "{c}");
+    assert_eq!(c["truncated"], serde_json::json!(["big"]));
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "cutting a 100k-row table took {:?}",
+        started.elapsed()
+    );
+    // the cut is the first 1000 rows in sorting-key order, repeatably
+    let ids: std::collections::BTreeSet<i64> = query(&capped, "MATCH big RETURN *")["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["properties"]["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(
+        (ids.first().copied(), ids.last().copied()),
+        (Some(0), Some(999))
+    );
+    l.assert_no_secret_anywhere();
+    capped.assert_no_secret_anywhere();
+    exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
+}

@@ -48,10 +48,17 @@ fn fetch(
             };
             c.import_collection_limited(&schema, tenant, cap)
         }
-        other => Err(format!(
-            "import is not supported for {} sources",
-            other.as_str()
-        )),
+        // a graph is read whole by `fetch_neo4j` (relationships need every label), never per container
+        SourceKind::Neo4j => Err("neo4j containers are imported as one graph".to_string()),
+        SourceKind::Clickhouse => {
+            let c = aikoql_clickhouse::ClickHouseConnector::connect_with_timeout(
+                conn,
+                database,
+                Some(ms),
+            )?;
+            let t = c.introspect_table(container)?;
+            c.import_table_limited(&t, tenant, cap)
+        }
     }
 }
 
@@ -169,12 +176,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
         SourceKind::Postgres => "pg-importer",
         SourceKind::Mongodb => "mongo-importer",
         SourceKind::Neo4j => "neo4j-importer",
-        other => {
-            return Err(format!(
-                "{INVALID}import is not supported for {} sources; use the CLI import",
-                other.as_str()
-            ))
-        }
+        SourceKind::Clickhouse => "clickhouse-importer",
     };
     let snapshot = store::latest_snapshot(k, &src)?
         .ok_or_else(|| format!("source {name} has {NO_SCHEMA} - discover it first"))?;
@@ -572,21 +574,6 @@ mod tests {
                     .any(|t| t == "src:crm"));
             },
         );
-    }
-
-    #[test]
-    fn a_kind_without_an_in_server_importer_is_refused_clearly() {
-        let k = kernel();
-        let mut s = sqlite_source("crm", None);
-        s.kind = SourceKind::Clickhouse;
-        s.database = Some("d".into());
-        with_test_sources(vec![s], vec![("crm".into(), "x".into())], || {
-            let e = import(&k, &["t"]).unwrap_err();
-            assert!(
-                e.starts_with(INVALID) && e.contains("not supported") && e.contains("CLI"),
-                "{e}"
-            );
-        });
     }
 
     #[test]
