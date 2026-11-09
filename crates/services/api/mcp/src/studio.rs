@@ -1228,6 +1228,70 @@ mod tests {
         );
     }
 
+    // ---- E1: accessible, labelled, routable navigation (docs/STUDIO-ENHANCEMENTS.md) ----
+
+    fn css_color(name: &str) -> (f64, f64, f64) {
+        let page = page_for_tests();
+        let i = page.find(&format!("{name}: #")).unwrap_or_else(|| panic!("no {name}"));
+        let hex = &page[i + name.len() + 3..i + name.len() + 9];
+        let c = |k: usize| f64::from(u8::from_str_radix(&hex[k..k + 2], 16).unwrap()) / 255.0;
+        (c(0), c(2), c(4))
+    }
+
+    fn luminance((r, g, b): (f64, f64, f64)) -> f64 {
+        let f = |c: f64| if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+        0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+    }
+
+    fn contrast(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
+        let (la, lb) = (luminance(a), luminance(b));
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    #[test]
+    fn secondary_text_meets_wcag_aa_on_the_page_and_on_cards() {
+        for bg in ["--bg", "--panel"] {
+            for fg in ["--muted", "--text", "--accent"] {
+                let c = contrast(css_color(fg), css_color(bg));
+                assert!(c >= 4.5, "{fg} on {bg} is {c:.2}:1, below WCAG AA (4.5)");
+            }
+        }
+    }
+
+    #[test]
+    fn navigation_is_a_labelled_landmark_whose_buttons_are_all_closed_and_named() {
+        let page = page_for_tests();
+        assert!(page.contains("<nav aria-label=\"Main\""), "the rail must be a named navigation landmark");
+        let start = page.find("<nav").unwrap();
+        let nav = &page[start..start + page[start..].find("</nav>").unwrap()];
+        let (open, close) = (nav.matches("<button").count(), nav.matches("</button>").count());
+        assert_eq!(open, close, "an unclosed <button> in the navigation (the Data Sources entry was one)");
+        assert!(open >= 16, "{open} nav buttons");
+        for b in nav.split("<button").skip(1) {
+            assert!(b.contains("data-panel=\""), "{b}");
+            assert!(b.contains("class=\"lbl\""), "every entry has a visible text label, not only an icon: {b}");
+        }
+    }
+
+    #[test]
+    fn the_page_is_keyboard_and_motion_friendly() {
+        let page = page_for_tests();
+        assert!(page.contains(":focus-visible"), "a visible focus ring");
+        assert!(page.contains("prefers-reduced-motion"), "reduced motion is honoured");
+        assert!(page.contains("data-click=\"skipToContent\""), "a skip-to-content control");
+        assert!(page.contains("#sidebar:focus-within"), "labels appear on keyboard focus, not only on hover");
+    }
+
+    #[test]
+    fn panels_are_routable() {
+        let page = page_for_tests();
+        for needle in ["hashchange", "'#/' +", "aria-current", "document.title"] {
+            assert!(page.contains(needle), "router piece missing: {needle}");
+        }
+        // an SSO hand-off puts #token=... in the hash: the router must leave it alone
+        assert!(page.contains("^#\\/") || page.contains("startsWith('#/')"), "the router must only claim #/panel hashes");
+    }
+
     #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
