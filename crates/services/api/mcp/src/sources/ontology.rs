@@ -557,6 +557,54 @@ mod tests {
         });
     }
 
+    // ---- an identity key declared AFTER the first publish (found on the case study) ----
+
+    fn onto(class_desc: &str, identity: Option<Vec<&str>>) -> J {
+        let mut m = json!({"source": "clickhouse", "physical_type": "t", "class": "T", "property_map": {}});
+        if let Some(cols) = identity {
+            m["identity"] = json!(cols);
+        }
+        json!({"namespace": "sources", "version": "1.0", "relationships": [], "property_defs": [],
+               "classes": [{"name": "T", "description": class_desc, "properties": []}],
+               "mappings": [m]})
+    }
+
+    fn draft_with(identity: Option<Vec<&str>>) -> J {
+        let mut d = onto("Discovered from s.t", identity);
+        d["mappings"][0]["property_map"] = json!({});
+        d
+    }
+
+    fn identity_of(m: &Merged) -> J {
+        m.definition["mappings"][0]["identity"].clone()
+    }
+
+    #[test]
+    fn a_key_declared_later_fills_a_mapping_that_had_none() {
+        let existing = onto("Discovered from s.t", None);
+        let m = merge(Some(&existing), &draft_with(Some(vec!["visitor_id"])));
+        assert_eq!(identity_of(&m), json!(["visitor_id"]), "{}", m.definition);
+        assert_ne!(m.definition, existing, "the publish must register as a change");
+    }
+
+    #[test]
+    fn a_key_may_be_corrected_on_a_class_discovery_wrote_but_never_over_a_humans() {
+        // discovery's own class: the new declaration replaces the old
+        let ours = onto("Discovered from s.t", Some(vec!["a"]));
+        assert_eq!(identity_of(&merge(Some(&ours), &draft_with(Some(vec!["b"])))), json!(["b"]));
+        // a hand-written class keeps its key, and says so
+        let theirs = onto("our own T", Some(vec!["a"]));
+        let m = merge(Some(&theirs), &draft_with(Some(vec!["b"])));
+        assert_eq!(identity_of(&m), json!(["a"]));
+        assert!(m.warnings.iter().any(|w| w.contains("identity") && w.contains("kept")), "{:?}", m.warnings);
+        // a draft with no key never erases one
+        let kept = merge(Some(&ours), &draft_with(None));
+        assert_eq!(identity_of(&kept), json!(["a"]));
+        // and an unchanged key is not a change
+        let same = merge(Some(&ours), &draft_with(Some(vec!["a"])));
+        assert_eq!(same.definition, ours);
+    }
+
     #[test]
     fn preview_writes_nothing_and_describes_the_draft() {
         let (k, crm, shop) = (kernel(), crm_db("p1"), shop_db("p1"));
