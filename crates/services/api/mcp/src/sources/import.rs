@@ -576,6 +576,80 @@ mod tests {
         );
     }
 
+    // ---- declared identity keys (docs/ONTOLOGY-IN-PRACTICE.md, Phase A) ----
+
+    fn publish_with_identity(k: &Kernel, key: &str, cols: &[&str]) {
+        let p = crate::sources::ontology::tool_sources_ontology(
+            k,
+            &json!({"sources": ["crm"], "preview": true}),
+            "x",
+        )
+        .unwrap();
+        let r = crate::sources::ontology::tool_sources_ontology(
+            k,
+            &json!({"sources": ["crm"], "preview": false, "fingerprints": p["fingerprints"],
+                    "identities": {key: cols}}),
+            "x",
+        )
+        .unwrap();
+        assert_eq!(r["saved"], true, "{r}");
+    }
+
+    fn visits_of(k: &Kernel, who: &str) -> Option<(i64, u64)> {
+        live(k, "activity", None)
+            .into_iter()
+            .find(|ko| ko.properties.get("visitor") == Some(&Value::Text(who.into())))
+            .and_then(|ko| match ko.properties.get("visits") {
+                Some(Value::Int(n)) => Some((*n, ko.version)),
+                _ => None,
+            })
+    }
+
+    #[test]
+    fn a_declared_identity_key_makes_a_re_import_update_in_place_and_prunes_what_vanished() {
+        let (k, db) = (kernel(), tmp_db("idkey"));
+        // no primary key, no unique constraint: the source says nothing about identity
+        make(
+            &db,
+            "CREATE TABLE activity (visitor TEXT, visits INTEGER);
+             INSERT INTO activity VALUES ('a', 1), ('b', 2);",
+        );
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            publish_with_identity(&k, "crm.activity", &["visitor"]);
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(r["imported"]["activity"], 2, "{r}");
+            assert_eq!(live(&k, "activity", None).len(), 2, "two rows, two objects");
+
+            // the source changes one row: the SAME object gets a second version
+            make(&db, "UPDATE activity SET visits = 5 WHERE visitor = 'a';");
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!((r["imported"]["activity"].clone(), r["unchanged"]["activity"].clone()), (json!(1), json!(1)), "{r}");
+            assert_eq!(live(&k, "activity", None).len(), 2, "no duplicate object");
+            assert_eq!(visits_of(&k, "a"), Some((5, 2)), "version 2 of the same object");
+
+            // a row that vanished from a complete import is retired, not left as a stale twin
+            make(&db, "DELETE FROM activity WHERE visitor = 'b';");
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(r["pruned"]["activity"], 1, "{r}");
+            assert!(visits_of(&k, "b").is_none(), "b is no longer live");
+            assert_eq!(visits_of(&k, "a"), Some((5, 2)));
+
+            // an ambiguous key is refused loudly: collapsing two rows would silently lose one
+            make(&db, "INSERT INTO activity VALUES ('a', 9);");
+            let before = head(&k);
+            let r = import(&k, &["activity"]).unwrap();
+            let why = r["skipped"][0]["reason"].as_str().unwrap_or_default().to_string();
+            assert!(why.contains("not unique") && why.contains("visitor"), "{r}");
+            assert_eq!(head(&k), before, "nothing was written for the refused container");
+            // ...and so is a row with no value for the key
+            make(&db, "DELETE FROM activity WHERE visits = 9; INSERT INTO activity VALUES (NULL, 3);");
+            let r = import(&k, &["activity"]).unwrap();
+            let why = r["skipped"][0]["reason"].as_str().unwrap_or_default().to_string();
+            assert!(why.contains("no value") && why.contains("visitor"), "{r}");
+        });
+    }
+
     #[test]
     fn import_never_writes_to_the_source_file() {
         let (k, db) = (kernel(), items_db("imp7", 3));
