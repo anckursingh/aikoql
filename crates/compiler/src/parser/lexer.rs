@@ -340,6 +340,22 @@ mod tests {
     }
 
     #[test]
+    fn a_hyphen_joins_a_namespaced_type_name_only() {
+        let ts = tokens("MATCH aikoql:source-table RETURN *");
+        assert_eq!(ts[1], Token::Ident("aikoql:source-table".into()));
+        assert_eq!(ts[2], Token::Return);
+        let ts = tokens("MATCH ns:a-b-c WHERE x == 1 RETURN *");
+        assert_eq!(ts[1], Token::Ident("ns:a-b-c".into()));
+        // outside a namespaced name a hyphen is still not part of a word
+        let ts = tokens("MATCH a-b RETURN *");
+        assert_eq!(ts[1], Token::Ident("a".into()));
+        assert!(matches!(ts[2], Token::Error(_)), "{ts:?}");
+        // a trailing or doubled hyphen after a namespace is not swallowed into the name
+        let ts = tokens("MATCH ns:a- RETURN *");
+        assert_eq!(ts[1], Token::Ident("ns:a".into()), "{ts:?}");
+    }
+
+    #[test]
     fn lex_similar_traverse() {
         let ts = tokens("MATCH Person SIMILAR TO \"John\" TRAVERSE managed_by RETURN explain");
         assert_eq!(ts[0], Token::Match);

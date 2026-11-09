@@ -747,3 +747,168 @@ fn a_suggested_merge_with_aligned_properties_queries_across_both_databases() {
     assert_eq!(gold["results"].as_array().unwrap().len(), 2, "{gold}");
     l.assert_no_secret_anywhere();
 }
+
+/// The stored schema KO of one container, read back through the query language.
+fn stored_container(l: &Live, source: &str, name: &str) -> serde_json::Value {
+    let q = query(l, "MATCH aikoql:source-table RETURN *");
+    q["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| {
+            r["properties"]["source"] == source && r["properties"]["container"]["name"] == name
+        })
+        .unwrap_or_else(|| panic!("no stored schema for {source}.{name}: {q}"))["properties"]
+        ["container"]
+        .clone()
+}
+
+/// Postgres indexes (incl. unique indexes that are not constraints, expression
+/// and partial indexes) and CHECK constraints are discovered, persisted, and
+/// their later change shows in the diff.
+#[test]
+fn postgres_indexes_unique_indexes_and_checks_are_discovered_and_diffed() {
+    let Some(pg) = connectors::Live::pg() else {
+        return;
+    };
+    let dsn =
+        connectors::pg_private_db(&pg.dsn, &format!("cert_multidb_idx_{}", std::process::id()));
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE accounts (id INT PRIMARY KEY, email TEXT NOT NULL, handle TEXT, org INT, seq INT, \
+              code TEXT, balance NUMERIC CHECK (balance >= 0), CONSTRAINT handle_fmt CHECK (handle ~ '^[a-z]+$'))",
+            "CREATE UNIQUE INDEX accounts_email_uidx ON accounts (lower(email))",
+            "CREATE UNIQUE INDEX accounts_org_seq_uidx ON accounts (org, seq)",
+            "CREATE UNIQUE INDEX accounts_handle_partial ON accounts (handle) WHERE handle IS NOT NULL",
+            "CREATE UNIQUE INDEX accounts_code_uidx ON accounts (code)",
+            "CREATE INDEX accounts_balance_idx ON accounts USING hash (balance)",
+        ],
+    );
+    let l = Live::start(
+        "pgidx",
+        "[[sources]]\nname = \"pg\"\nkind = \"postgres\"\nurl_env = \"MD_PG\"\n",
+        &[("MD_PG", &dsn)],
+        &["aikoql-dev-only"],
+    );
+    l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "pg"}),
+    );
+    let c = stored_container(&l, "pg", "accounts");
+    let idx = |name: &str| {
+        c["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["name"] == name)
+            .unwrap_or_else(|| panic!("no index {name}: {}", c["indexes"]))
+            .clone()
+    };
+    assert!(
+        c["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["name"] != "accounts_pkey"),
+        "the primary key is not a secondary index: {}",
+        c["indexes"]
+    );
+    let email = idx("accounts_email_uidx");
+    assert_eq!(
+        (
+            email["unique"].clone(),
+            email["columns"][0].as_str().map(str::to_lowercase)
+        ),
+        (true.into(), Some("lower(email)".to_string())),
+        "{email}"
+    );
+    let org = idx("accounts_org_seq_uidx");
+    assert_eq!(
+        (org["unique"].clone(), org["columns"].clone()),
+        (true.into(), serde_json::json!(["org", "seq"]))
+    );
+    let partial = idx("accounts_handle_partial");
+    assert!(
+        partial["predicate"]
+            .as_str()
+            .unwrap()
+            .contains("handle IS NOT NULL"),
+        "{partial}"
+    );
+    let balance = idx("accounts_balance_idx");
+    assert_eq!(
+        (balance["unique"].clone(), balance["method"].clone()),
+        (false.into(), "hash".into())
+    );
+
+    // uniqueness the SOURCE guarantees: a full-column unique index counts, an
+    // expression or partial one does not
+    let groups = c["unique_groups"].to_string();
+    assert!(
+        groups.contains("[\"org\",\"seq\"]"),
+        "composite unique index: {groups}"
+    );
+    assert!(
+        groups.contains("[\"code\"]"),
+        "single unique index: {groups}"
+    );
+    assert!(
+        !groups.contains("handle") && !groups.contains("lower"),
+        "partial/expression index is no guarantee: {groups}"
+    );
+    let code = c["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "code")
+        .unwrap();
+    assert_eq!(code["is_unique"], true, "{code}");
+    let handle = c["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "handle")
+        .unwrap();
+    assert_eq!(handle["is_unique"], false, "{handle}");
+
+    let checks = c["checks"].to_string();
+    assert!(
+        checks.contains("handle_fmt") && checks.contains("handle ~"),
+        "{checks}"
+    );
+    assert!(
+        checks.contains("accounts_balance_check") && checks.contains(">="),
+        "{checks}"
+    );
+
+    // an unchanged source is a no-op; a new index and a dropped check show in the diff
+    let again = l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "pg"}),
+    );
+    assert_eq!(again["changed"], false);
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE INDEX accounts_tail_idx ON accounts (seq DESC)",
+            "ALTER TABLE accounts DROP CONSTRAINT handle_fmt",
+        ],
+    );
+    let drift = l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "pg"}),
+    );
+    assert_eq!(drift["changed"], true);
+    assert_eq!(
+        drift["diff"]["changed"][0]["added_indexes"],
+        serde_json::json!(["accounts_tail_idx"]),
+        "{drift}"
+    );
+    assert_eq!(
+        drift["diff"]["changed"][0]["removed_checks"],
+        serde_json::json!(["handle_fmt"]),
+        "{drift}"
+    );
+    l.assert_no_secret_anywhere();
+}
