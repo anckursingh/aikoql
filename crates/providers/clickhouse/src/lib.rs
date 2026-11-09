@@ -395,6 +395,27 @@ impl ClickHouseConnector {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Row import
+// ---------------------------------------------------------------------------
+
+use aikoql_kernel::{KnowledgeObject, Value, KOID};
+
+/// A cell as an aikoql value, read by its declared ClickHouse type.
+fn value_from_json(_v: &serde_json::Value, _ch_type: &str) -> Value {
+    Value::Null
+}
+
+/// A deterministic 128-bit identity for one row of a table.
+fn row_koid(_table: &str, _identity: &str) -> KOID {
+    KOID([0; 16])
+}
+
+/// The import statement for a table, `limit` rows at most.
+fn import_sql(_t: &TableSchema, _limit: u64) -> String {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -841,5 +862,157 @@ mod tests {
         let opaque = std::fmt::Error;
         assert!(is_timeout(&opaque, slow, limit));
         assert!(!is_timeout(&opaque, quick, limit));
+    }
+
+    fn j(s: &str) -> serde_json::Value {
+        serde_json::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn cells_are_read_by_their_declared_type_without_losing_a_digit() {
+        use std::collections::BTreeMap;
+        let t = |s: &str| Value::Text(s.to_string());
+        for (json, ty, want) in [
+            (r#""5""#, "UInt64", Value::Int(5)),
+            (
+                r#""18446744073709551615""#,
+                "UInt64",
+                t("18446744073709551615"),
+            ),
+            (r#""-9223372036854775808""#, "Int64", Value::Int(i64::MIN)),
+            (
+                r#""170141183460469231731687303715884105727""#,
+                "Int128",
+                t("170141183460469231731687303715884105727"),
+            ),
+            ("7", "UInt8", Value::Int(7)),
+            ("-7", "Int32", Value::Int(-7)),
+            ("0.1", "Float64", Value::Float(0.1)),
+            (r#""nan""#, "Float32", t("nan")),
+            (r#""-inf""#, "Float64", t("-inf")),
+            ("null", "String", Value::Null),
+            ("true", "Bool", Value::Bool(true)),
+            (r#""12345.67000""#, "Decimal(10, 5)", Value::Float(12345.67)),
+            (
+                r#""123456789012345678901234.5""#,
+                "Decimal(38, 1)",
+                t("123456789012345678901234.5"),
+            ),
+            (r#""h\u00e9llo \u2713""#, "String", t("héllo ✓")),
+            (
+                r#""2026-01-02 03:04:05""#,
+                "DateTime",
+                t("2026-01-02 03:04:05"),
+            ),
+            (r#""2026-01-02""#, "Date", t("2026-01-02")),
+            (
+                r#""123e4567-e89b-12d3-a456-426614174000""#,
+                "UUID",
+                t("123e4567-e89b-12d3-a456-426614174000"),
+            ),
+            (
+                r#"["1","2"]"#,
+                "Array(UInt64)",
+                Value::List(vec![Value::Int(1), Value::Int(2)]),
+            ),
+            (
+                r#"["a",null]"#,
+                "Array(Nullable(String))",
+                Value::List(vec![t("a"), Value::Null]),
+            ),
+            (
+                r#"{"a":1}"#,
+                "Map(String, UInt8)",
+                Value::Map(BTreeMap::from([("a".to_string(), Value::Int(1))])),
+            ),
+            (
+                r#"[1,"x"]"#,
+                "Tuple(UInt8, String)",
+                Value::List(vec![Value::Int(1), t("x")]),
+            ),
+            (
+                r#"{"a":1,"b":"x"}"#,
+                "Tuple(a UInt8, b String)",
+                Value::Map(BTreeMap::from([
+                    ("a".to_string(), Value::Int(1)),
+                    ("b".to_string(), t("x")),
+                ])),
+            ),
+            (
+                r#"[["1"],["2","3"]]"#,
+                "Array(Array(UInt64))",
+                Value::List(vec![
+                    Value::List(vec![Value::Int(1)]),
+                    Value::List(vec![Value::Int(2), Value::Int(3)]),
+                ]),
+            ),
+        ] {
+            assert_eq!(value_from_json(&j(json), ty), want, "{json} as {ty}");
+        }
+    }
+
+    #[test]
+    fn a_row_identity_is_deterministic_wide_and_content_sensitive() {
+        let a = row_koid("events", r#"{"id":"1","kind":"x"}"#);
+        assert_eq!(a, row_koid("events", r#"{"id":"1","kind":"x"}"#));
+        assert_ne!(a, row_koid("events", r#"{"id":"1","kind":"y"}"#));
+        assert_ne!(
+            a,
+            row_koid("other", r#"{"id":"1","kind":"x"}"#),
+            "the table is part of identity"
+        );
+        assert_ne!(
+            a.0[8..],
+            [0u8; 8],
+            "128 bits are used, not 64 padded with zeros"
+        );
+    }
+
+    fn table(engine: &str, sorting: &[&str], cols: &[&str]) -> TableSchema {
+        TableSchema {
+            name: "t".into(),
+            engine: engine.into(),
+            columns: cols
+                .iter()
+                .map(|c| ColumnInfo {
+                    name: c.to_string(),
+                    ch_type: "String".into(),
+                    is_nullable: false,
+                    is_low_cardinality: false,
+                    in_primary_key: false,
+                })
+                .collect(),
+            sorting_key: sorting.iter().map(|s| s.to_string()).collect(),
+            primary_key: Vec::new(),
+            partition_key: String::new(),
+            row_count_estimate: 0,
+            as_select: String::new(),
+            dependents: Vec::new(),
+            skip_indexes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_import_statement_is_bounded_ordered_and_quotes_every_identifier() {
+        let sql = import_sql(
+            &table("MergeTree", &["toDate(ts)", "id"], &["id", "a`b", "x\\y"]),
+            10,
+        );
+        assert!(sql.contains("FROM {db:Identifier}.{t:Identifier}"), "{sql}");
+        assert!(sql.contains("`a``b`") && sql.contains("`x\\\\y`"), "{sql}");
+        assert!(sql.contains("ORDER BY toDate(ts), id"), "{sql}");
+        assert!(
+            sql.ends_with("LIMIT 11"),
+            "one extra row proves truncation: {sql}"
+        );
+        assert!(!sql.contains("FINAL"), "{sql}");
+        // the logical rows of a replacing engine are its latest versions
+        assert!(import_sql(&table("ReplacingMergeTree", &["id"], &["id"]), 1).contains(" FINAL"));
+        assert!(import_sql(&table("CollapsingMergeTree", &["id"], &["id"]), 1).contains(" FINAL"));
+        assert!(!import_sql(&table("SummingMergeTree", &["id"], &["id"]), 1).contains("FINAL"));
+        // no sorting key: no ORDER BY clause
+        assert!(!import_sql(&table("Log", &[], &["id"]), 1).contains("ORDER BY"));
+        // the extra-row arithmetic cannot overflow
+        assert!(import_sql(&table("Log", &[], &["id"]), u64::MAX).contains("LIMIT"));
     }
 }
