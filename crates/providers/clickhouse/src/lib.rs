@@ -29,6 +29,21 @@ pub struct TableSchema {
     pub primary_key: Vec<String>,
     pub partition_key: String,
     pub row_count_estimate: u64,
+    /// A view's defining query (`SELECT ...`); empty for a plain table.
+    pub as_select: String,
+    /// Tables / views that read from this one (materialized views, views).
+    pub dependents: Vec<String>,
+    /// Data-skipping indexes.
+    pub skip_indexes: Vec<SkipIndex>,
+}
+
+/// A data-skipping index: `INDEX name expr TYPE kind GRANULARITY n`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkipIndex {
+    pub name: String,
+    pub expr: String,
+    pub kind: String,
+    pub granularity: u64,
 }
 
 pub struct ClickHouseConnector {
@@ -119,6 +134,18 @@ fn str_field(v: &serde_json::Value, key: &str) -> String {
         .and_then(|x| x.as_str())
         .unwrap_or_default()
         .to_string()
+}
+
+/// An `Array(String)` column (absent or null is empty).
+fn str_array(v: &serde_json::Value, key: &str) -> Vec<String> {
+    v.get(key)
+        .and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A UInt64 that ClickHouse may send as a JSON number, a quoted string or null.
@@ -303,8 +330,10 @@ impl ClickHouseConnector {
         let n = (max_tables + 1).to_string();
         let params = [("db", self.database.as_str()), ("n", n.as_str())];
         let tables = self.query(
-            "SELECT name, engine, sorting_key, primary_key, partition_key, total_rows \
+            "SELECT name, engine, sorting_key, primary_key, partition_key, total_rows, \
+                    as_select, dependencies_table \
              FROM system.tables WHERE database = {db:String} AND NOT is_temporary \
+               AND NOT startsWith(name, '.inner') \
              ORDER BY name LIMIT {n:UInt32}",
             &params,
         )?;
@@ -312,8 +341,13 @@ impl ClickHouseConnector {
             "SELECT table, name, type, is_in_primary_key FROM system.columns \
              WHERE database = {db:String} AND table IN \
                (SELECT name FROM system.tables WHERE database = {db:String} AND NOT is_temporary \
-                ORDER BY name LIMIT {n:UInt32}) \
+                  AND NOT startsWith(name, '.inner') ORDER BY name LIMIT {n:UInt32}) \
              ORDER BY table, position",
+            &params,
+        )?;
+        let skips = self.query(
+            "SELECT table, name, type, expr, granularity FROM system.data_skipping_indices \
+             WHERE database = {db:String} ORDER BY table, name LIMIT 100000",
             &params,
         )?;
         let mut out: Vec<TableSchema> = tables
@@ -327,8 +361,22 @@ impl ClickHouseConnector {
                 primary_key: split_key(&str_field(t, "primary_key")),
                 partition_key: str_field(t, "partition_key"),
                 row_count_estimate: u64_field(t, "total_rows"),
+                as_select: str_field(t, "as_select"),
+                dependents: str_array(t, "dependencies_table"),
+                skip_indexes: Vec::new(),
             })
             .collect();
+        for s in &skips {
+            let table = str_field(s, "table");
+            if let Some(t) = out.iter_mut().find(|t| t.name == table) {
+                t.skip_indexes.push(SkipIndex {
+                    name: str_field(s, "name"),
+                    expr: str_field(s, "expr"),
+                    kind: str_field(s, "type"),
+                    granularity: u64_field(s, "granularity"),
+                });
+            }
+        }
         for c in &columns {
             let table = str_field(c, "table");
             let Some(t) = out.iter_mut().find(|t| t.name == table) else {
@@ -471,8 +519,13 @@ mod tests {
                 Reply::ok(&rows(&[r#"{"version()":"24.8.4.13"}"#]))
             } else if sql.contains("system.tables") && !sql.contains("system.columns") {
                 Reply::ok(&rows(&[
-                    r#"{"name":"events","engine":"MergeTree","sorting_key":"toDate(ts), user_id","primary_key":"toDate(ts)","partition_key":"toYYYYMM(ts)","total_rows":"1234"}"#,
+                    r#"{"name":"events","engine":"MergeTree","sorting_key":"toDate(ts), user_id","primary_key":"toDate(ts)","partition_key":"toYYYYMM(ts)","total_rows":"1234","as_select":"","dependencies_table":["daily"]}"#,
                     r#"{"name":"users","engine":"MergeTree","sorting_key":"id","primary_key":"id","partition_key":"","total_rows":null}"#,
+                    r#"{"name":"daily","engine":"MaterializedView","sorting_key":"","primary_key":"","partition_key":"","total_rows":null,"as_select":"SELECT toDate(ts) AS d FROM events","dependencies_table":[]}"#,
+                ]))
+            } else if sql.contains("system.data_skipping_indices") {
+                Reply::ok(&rows(&[
+                    r#"{"table":"events","name":"idx_note","type":"bloom_filter","expr":"note","granularity":"4"}"#,
                 ]))
             } else if sql.contains("system.columns") {
                 Reply::ok(&rows(&[
@@ -499,8 +552,24 @@ mod tests {
         let c = connect(&url).unwrap();
         assert_eq!(c.version(), "24.8.4.13");
         let t = c.introspect_all(100).unwrap();
-        assert_eq!(t.len(), 2);
+        assert_eq!(t.len(), 3);
         let ev = t.iter().find(|t| t.name == "events").unwrap();
+        assert_eq!(ev.dependents, ["daily"]);
+        assert_eq!(
+            ev.skip_indexes,
+            [SkipIndex {
+                name: "idx_note".into(),
+                expr: "note".into(),
+                kind: "bloom_filter".into(),
+                granularity: 4
+            }]
+        );
+        let mv = t.iter().find(|t| t.name == "daily").unwrap();
+        assert_eq!(
+            (mv.engine.as_str(), mv.as_select.as_str()),
+            ("MaterializedView", "SELECT toDate(ts) AS d FROM events")
+        );
+        assert!(mv.dependents.is_empty() && mv.skip_indexes.is_empty());
         assert_eq!(ev.engine, "MergeTree");
         assert_eq!(
             ev.sorting_key,

@@ -276,8 +276,61 @@ fn map_clickhouse(t: &aikoql_clickhouse::TableSchema) -> ContainerInfo {
             })
             .collect(),
         row_count: Some(t.row_count_estimate),
+        kind: match t.engine.as_str() {
+            "MaterializedView" => Some("materialized_view".to_string()),
+            "View" | "LiveView" | "WindowView" => Some("view".to_string()),
+            _ => None,
+        },
+        properties: [
+            ("engine", t.engine.clone()),
+            ("sorting_key", t.sorting_key.join(", ")),
+            ("primary_key", t.primary_key.join(", ")),
+            ("partition_key", t.partition_key.clone()),
+            ("as_select", t.as_select.chars().take(4_000).collect()),
+        ]
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| (k.to_string(), v))
+        .collect(),
+        indexes: t
+            .skip_indexes
+            .iter()
+            .map(|i| aikoql_ingestion::IndexInfo {
+                name: i.name.clone(),
+                columns: vec![i.expr.clone()],
+                unique: false,
+                method: Some(i.kind.clone()),
+                predicate: None,
+            })
+            .collect(),
         ..Default::default()
     }
+}
+
+/// Views point at the tables they read: `view -derived_from-> table`.
+fn clickhouse_lineage(tables: &[aikoql_clickhouse::TableSchema]) -> Vec<ReferenceInfo> {
+    let known: HashSet<&str> = tables.iter().map(|t| t.name.as_str()).collect();
+    let mut out: Vec<ReferenceInfo> = tables
+        .iter()
+        .flat_map(|source| {
+            source
+                .dependents
+                .iter()
+                .filter(|d| known.contains(d.as_str()))
+                .map(|view| ReferenceInfo {
+                    from_container: view.clone(),
+                    from_fields: Vec::new(),
+                    to_container: source.name.clone(),
+                    to_fields: Vec::new(),
+                    name: Some("derived_from".to_string()),
+                })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        (&a.from_container, &a.to_container).cmp(&(&b.from_container, &b.to_container))
+    });
+    out.dedup_by(|a, b| a.from_container == b.from_container && a.to_container == b.to_container);
+    out
 }
 
 fn map_postgres(t: &aikoql_postgres::TableSchema) -> ContainerInfo {
@@ -547,7 +600,7 @@ fn clickhouse_meta(url: &str, database: &str, ms: u64, max: usize) -> Result<Par
     let version = Some(c.version().to_string()).filter(|v| !v.is_empty());
     Ok((
         tables.iter().map(map_clickhouse).collect(),
-        Vec::new(),
+        clickhouse_lineage(&tables),
         truncated,
         version,
     ))
@@ -928,6 +981,61 @@ mod tests {
             .all(|f| f.profile.is_none()));
     }
 
+    fn ch_table(name: &str, engine: &str, dependents: &[&str]) -> aikoql_clickhouse::TableSchema {
+        aikoql_clickhouse::TableSchema {
+            name: name.into(),
+            engine: engine.into(),
+            columns: Vec::new(),
+            sorting_key: vec!["a".into(), "b".into()],
+            primary_key: vec!["a".into()],
+            partition_key: String::new(),
+            row_count_estimate: 0,
+            as_select: if engine.ends_with("View") {
+                "SELECT 1".into()
+            } else {
+                String::new()
+            },
+            dependents: dependents.iter().map(|d| d.to_string()).collect(),
+            skip_indexes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn clickhouse_views_storage_properties_and_lineage_map() {
+        let events = ch_table("events", "MergeTree", &["daily", "recent", "gone"]);
+        let daily = ch_table("daily", "MaterializedView", &[]);
+        let recent = ch_table("recent", "View", &[]);
+        let c = map_clickhouse(&events);
+        assert_eq!(c.kind, None);
+        assert_eq!(c.properties["engine"], "MergeTree");
+        assert_eq!(c.properties["sorting_key"], "a, b");
+        assert!(
+            !c.properties.contains_key("partition_key"),
+            "empty facts are not recorded"
+        );
+        assert!(!c.properties.contains_key("as_select"));
+        assert_eq!(
+            map_clickhouse(&daily).kind.as_deref(),
+            Some("materialized_view")
+        );
+        assert_eq!(map_clickhouse(&recent).kind.as_deref(), Some("view"));
+        assert_eq!(map_clickhouse(&daily).properties["as_select"], "SELECT 1");
+        // lineage: a view points at the table it reads; a dependent outside the list is dropped
+        let refs = clickhouse_lineage(&[events, daily, recent]);
+        let pairs: Vec<(&str, &str)> = refs
+            .iter()
+            .map(|r| (r.from_container.as_str(), r.to_container.as_str()))
+            .collect();
+        assert_eq!(pairs, [("daily", "events"), ("recent", "events")]);
+        assert!(refs
+            .iter()
+            .all(|r| r.name.as_deref() == Some("derived_from")));
+        // a very long defining query is bounded
+        let mut long = ch_table("v", "View", &[]);
+        long.as_select = "x".repeat(50_000);
+        assert_eq!(map_clickhouse(&long).properties["as_select"].len(), 4_000);
+    }
+
     #[test]
     fn clickhouse_tables_map_keys_and_nullability() {
         let t = aikoql_clickhouse::TableSchema {
@@ -953,6 +1061,9 @@ mod tests {
             primary_key: vec!["ts".into()],
             partition_key: String::new(),
             row_count_estimate: 42,
+            as_select: String::new(),
+            dependents: Vec::new(),
+            skip_indexes: Vec::new(),
         };
         let c = map_clickhouse(&t);
         assert_eq!(
