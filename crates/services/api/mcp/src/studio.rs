@@ -1193,17 +1193,35 @@ mod tests {
             .find("function renderSourcesPreview")
             .map(|i| &page[i..])
             .expect("renderSourcesPreview");
-        let render = &block[..block.find("\nasync function previewSources").expect("end of render")];
-        assert!(render.contains("p.suggestions"), "the preview must render suggestions");
-        assert!(render.contains("applySuggestion"), "each suggestion offers an Apply");
+        let render = &block[..block
+            .find("\nasync function previewSources")
+            .expect("end of render")];
+        assert!(
+            render.contains("p.suggestions"),
+            "the preview must render suggestions"
+        );
+        assert!(
+            render.contains("applySuggestion"),
+            "each suggestion offers an Apply"
+        );
         // every value of a suggestion goes through esc()
-        for field in ["s.a", "s.b", "s.evidence", "pr.a_field", "pr.b_field", "s.confidence"] {
+        for field in ["s.a", "s.b", "pr.a_field", "pr.b_field", "s.confidence"] {
             if let Some(i) = render.find(field) {
                 let before = &render[i.saturating_sub(12)..i];
-                assert!(before.contains("esc("), "{field} is concatenated unescaped: ...{before}");
+                assert!(
+                    before.contains("esc("),
+                    "{field} is concatenated unescaped: ...{before}"
+                );
             }
         }
-        assert!(page.contains("\n  applySuggestion:"), "applySuggestion is not in ACTIONS");
+        assert!(
+            render.contains("'+esc(e)+'"),
+            "evidence lines must be escaped"
+        );
+        assert!(
+            page.contains("\n  applySuggestion:"),
+            "applySuggestion is not in ACTIONS"
+        );
         assert!(
             page.contains("properties: (s.properties || [])"),
             "applying sends the accepted property alignments"

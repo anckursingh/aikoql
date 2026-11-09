@@ -255,6 +255,7 @@ async function main() {
     await tryClick('[data-click="previewSourceOntology"]');
     const preview1 = await page.innerText('#sources-preview').catch(() => '');
     ok('Preview proposes one class per table, as new', /Customer/.test(preview1) && /Order/.test(preview1) && /Client/.test(preview1) && /new/.test(preview1), preview1.slice(0, 200));
+    ok('Preview suggests merging the two customer tables, as advice only', /Suggested merges/.test(preview1) && /crm\.customers/.test(preview1) && /shop\.clients/.test(preview1) && await page.locator('[data-click="applySuggestion"]').count() >= 1, preview1.slice(0, 300));
     await page.locator('.cls-pick[data-class="Customer"]').check({ timeout: 2000 }).catch(() => {});
     await page.locator('.cls-pick[data-class="Client"]').check({ timeout: 2000 }).catch(() => {});
     await tryClick('[data-click="mergeSelectedClasses"]');
