@@ -1003,3 +1003,113 @@ fn neo4j_constraints_and_indexes_are_discovered() {
         .all(|i| i["name"] != "index_343aff4e" && !i["columns"].as_array().unwrap().is_empty()));
     cleanup();
 }
+
+/// ClickHouse storage facts (engine, keys, skipping indexes), views and
+/// materialized views with their lineage; a materialized view's hidden inner
+/// table is not a container of its own.
+#[test]
+fn clickhouse_storage_views_and_lineage_are_discovered() {
+    let Some(ch) = connectors::Live::clickhouse() else {
+        return;
+    };
+    let db = format!("md_view_{}", std::process::id());
+    let exec = |stmts: &[String]| {
+        let refs: Vec<&str> = stmts.iter().map(String::as_str).collect();
+        connectors::clickhouse_exec(&ch.clickhouse_url, "default", &refs);
+    };
+    exec(&[
+        format!("DROP DATABASE IF EXISTS {db}"),
+        format!("CREATE DATABASE {db}"),
+        format!(
+            "CREATE TABLE {db}.events (id UInt64, kind LowCardinality(String), at DateTime, note Nullable(String), \
+             INDEX idx_note note TYPE bloom_filter GRANULARITY 4) ENGINE = MergeTree \
+             PARTITION BY toYYYYMM(at) PRIMARY KEY kind ORDER BY (kind, id)"
+        ),
+        format!("CREATE TABLE {db}.rollup_target (day Date, n UInt64) ENGINE = SummingMergeTree ORDER BY day"),
+        format!(
+            "CREATE MATERIALIZED VIEW {db}.events_daily ENGINE = SummingMergeTree ORDER BY day \
+             AS SELECT toDate(at) AS day, count() AS n FROM {db}.events GROUP BY day"
+        ),
+        format!(
+            "CREATE MATERIALIZED VIEW {db}.to_rollup TO {db}.rollup_target \
+             AS SELECT toDate(at) AS day, count() AS n FROM {db}.events GROUP BY day"
+        ),
+        format!("CREATE VIEW {db}.recent AS SELECT id, kind FROM {db}.events WHERE kind = 'x'"),
+    ]);
+    let l = Live::start(
+        "chview",
+        &format!("[[sources]]\nname = \"olap\"\nkind = \"clickhouse\"\nurl_env = \"MD_CH\"\ndatabase = \"{db}\"\n"),
+        &[("MD_CH", &ch.clickhouse_url)],
+        &["aikoql-dev-only"],
+    );
+    let d = l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "olap"}),
+    );
+    // events, rollup_target, events_daily, to_rollup, recent - the inner storage table is hidden
+    assert_eq!(d["containers"], 5, "{d}");
+
+    let events = stored_container(&l, "olap", "events");
+    assert_eq!(
+        events["kind"],
+        serde_json::Value::Null,
+        "a plain table has no kind: {events}"
+    );
+    let p = &events["properties"];
+    assert_eq!(p["engine"], "MergeTree", "{events}");
+    assert_eq!(p["sorting_key"], "kind, id");
+    assert_eq!(p["primary_key"], "kind");
+    assert_eq!(p["partition_key"], "toYYYYMM(at)");
+    let skip = events["indexes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["name"] == "idx_note")
+        .expect("skipping index");
+    assert_eq!(
+        (
+            skip["columns"].clone(),
+            skip["method"].clone(),
+            skip["unique"].clone()
+        ),
+        (
+            serde_json::json!(["note"]),
+            "bloom_filter".into(),
+            false.into()
+        ),
+        "{skip}"
+    );
+
+    let mv = stored_container(&l, "olap", "events_daily");
+    assert_eq!(mv["kind"], "materialized_view", "{mv}");
+    assert!(
+        mv["properties"]["as_select"]
+            .as_str()
+            .unwrap()
+            .contains("FROM"),
+        "{mv}"
+    );
+    assert_eq!(stored_container(&l, "olap", "recent")["kind"], "view");
+    assert_eq!(
+        stored_container(&l, "olap", "to_rollup")["kind"],
+        "materialized_view"
+    );
+
+    // lineage: each view is derived from the table it reads
+    let src = query(&l, "MATCH aikoql:source RETURN *");
+    let refs = src["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["properties"]["name"] == "olap")
+        .unwrap()["properties"]["references"]
+        .to_string();
+    for view in ["events_daily", "to_rollup"] {
+        assert!(
+            refs.contains(view) && refs.contains("derived_from"),
+            "{view} not derived from events: {refs}"
+        );
+    }
+    l.assert_no_secret_anywhere();
+    exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
+}
