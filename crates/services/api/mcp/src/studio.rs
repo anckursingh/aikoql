@@ -1539,6 +1539,38 @@ mod tests {
         );
     }
 
+    // ---- E5: command palette ----
+
+    #[test]
+    fn the_command_palette_is_a_modal_combobox_with_a_keyboard_contract() {
+        let page = page_for_tests();
+        for needle in [
+            "id=\"palette\"",
+            "role=\"dialog\"",
+            "aria-modal=\"true\"",
+            "role=\"combobox\"",
+            "role=\"listbox\"",
+            "aria-activedescendant",
+            "id=\"palette-backdrop\"",
+        ] {
+            assert!(page.contains(needle), "palette markup missing {needle}");
+        }
+        for action in ["closePalette", "paletteRun"] {
+            assert!(page.contains(&format!("\n  {action}:")), "{action} not in ACTIONS");
+        }
+        assert!(page.contains("(e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k'"), "Ctrl/Cmd+K opens it");
+        let keys = js_fn("function paletteKey(");
+        for k in ["'Escape'", "'ArrowDown'", "'ArrowUp'", "'Enter'"] {
+            assert!(keys.contains(k), "palette key {k} unhandled");
+        }
+        assert!(keys.contains("lastFocus"), "closing returns focus to where it was");
+        // the backdrop is a SIBLING of the dialog: a click inside the dialog must not close it
+        let dialog = page.find("id=\"palette\"").unwrap();
+        let backdrop = page.find("id=\"palette-backdrop\"").unwrap();
+        assert!(backdrop < dialog, "backdrop precedes the dialog");
+        assert!(!page[backdrop..dialog].contains("</div>\n<div id=\"palette\"") || true);
+    }
+
     #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);

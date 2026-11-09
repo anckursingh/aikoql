@@ -523,6 +523,38 @@ async function main() {
     await page.click('#query-results a[data-click="openInInspector"]'); await page.waitForTimeout(600);
     ok('a row links to its object in the Inspector', (await panel()) === 'inspector' && (await page.inputValue('#inspector-search-input')).length > 8, await panel());
     await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
+    // ---- E5: the command palette ----
+    await page.fill('#query-save-name', 'palette query'); await page.evaluate(() => window.__cmSetValue('MATCH Company RETURN *')); await page.click('[data-click="saveQuery"]'); await page.waitForTimeout(300);
+    await page.evaluate(() => window.__cmSetValue('MATCH Person RETURN *'));
+    await page.focus('button[data-panel="query"]');
+    await page.keyboard.press('Control+k'); await page.waitForTimeout(300);
+    ok('Ctrl+K opens the palette with focus in its input', await page.isVisible('#palette') && (await page.evaluate(() => document.activeElement.id)) === 'palette-input');
+    ok('the palette is an announced modal combobox', (await page.getAttribute('#palette', 'role')) === 'dialog' && (await page.getAttribute('#palette-input', 'role')) === 'combobox');
+    ok('an empty palette lists every panel and the actions', (await page.locator('#palette-list [role=option]').count()) >= 20);
+    await page.keyboard.type('onto'); await page.waitForTimeout(200);
+    ok('typing ranks the best match first', /Ontology/.test(await page.locator('#palette-list [role=option]').first().innerText()), await page.locator('#palette-list [role=option]').first().innerText());
+    ok('the first match is the active descendant', (await page.getAttribute('#palette-input', 'aria-activedescendant')) === (await page.locator('#palette-list [role=option]').first().getAttribute('id')));
+    await page.keyboard.press('Enter'); await page.waitForTimeout(500);
+    ok('Enter goes there and closes the palette', (await panel()) === 'ontology' && await page.isHidden('#palette'), await panel());
+    await page.keyboard.press('Control+k'); await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+    ok('Escape closes it and returns focus to where it was', await page.isHidden('#palette') && (await page.evaluate(() => document.activeElement.tagName)) !== 'BODY');
+    await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
+    await page.keyboard.press('Control+k'); await page.keyboard.type('palette q'); await page.waitForTimeout(200);
+    ok('saved queries are in the palette', /palette query/.test(await page.locator('#palette-list [role=option]').first().innerText()));
+    await page.keyboard.press('Enter'); await page.waitForTimeout(300);
+    ok('choosing one loads it into the editor', (await cm()) === 'MATCH Company RETURN *', await cm());
+    await page.keyboard.press('Control+k'); await page.keyboard.type('run'); await page.waitForTimeout(200);
+    await page.keyboard.press('Enter'); await page.waitForTimeout(1200);
+    ok('"Run query" runs the query from anywhere', /\d+ rows? · \d+ ms/.test(await page.innerText('#query-results')), await page.innerText('#query-results'));
+    await page.keyboard.press('Control+k'); await page.keyboard.type('zzzqqq'); await page.waitForTimeout(200);
+    ok('no match says so, politely', /No matching commands/.test(await page.innerText('#palette-list')) && (await page.locator('#palette-list [role=option]').count()) === 0);
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Control+k'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); await page.waitForTimeout(100);
+    ok('arrow keys move the selection', (await page.locator('#palette-list [role=option][aria-selected=true]').count()) === 1 && (await page.locator('#palette-list [role=option]').nth(2).getAttribute('aria-selected')) === 'true');
+    await page.click('#palette-backdrop', { position: { x: 5, y: 5 } }); await page.waitForTimeout(200);
+    ok('clicking outside closes it', await page.isHidden('#palette'));
+    ok('fuzzy ranking: a prefix beats a scattered match, a miss is rejected', await page.evaluate(() => fuzzyScore('onto', 'Ontology') > fuzzyScore('onto', 'Go to Ontology panel...x') && fuzzyScore('onto', 'Ontology') > fuzzyScore('onty', 'Ontology') && fuzzyScore('zzz', 'Ontology') === -1 && fuzzyScore('', 'anything') === 0));
+    await page.evaluate(() => { const o = Object.keys(localStorage).filter(k => k.includes('.saved')); o.forEach(k => localStorage.setItem(k, '[]')); });
     // ---- a dead cookie falls back to the form; signing in must still work ---
     await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });
