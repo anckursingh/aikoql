@@ -689,6 +689,65 @@ mod tests {
         );
     }
 
+    fn observed_type_of(types: &[&str]) -> (String, Vec<String>) {
+        let mut m = meta(
+            "mongodb",
+            "crm",
+            &[("people", &[("v", "bson", false, true, false)])],
+            &[],
+        );
+        m.containers[0].fields[0].provenance = Provenance::Observed;
+        m.containers[0].fields[0].profile = Some(FieldProfile {
+            types: types.iter().map(|t| t.to_string()).collect(),
+            presence_ratio: 1.0,
+            null_ratio: 0.0,
+            samples: 10,
+        });
+        let d = definition_from_sources(
+            &[SourceInput { name: "crm", kind: "mongodb", meta: &m }],
+            &[],
+        );
+        let ty = list(&d, "property_defs")
+            .iter()
+            .find(|p| p["name"] == "v")
+            .unwrap()["type"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        (ty, d.warnings)
+    }
+
+    #[test]
+    fn mixed_observed_types_widen_to_text_with_a_warning() {
+        let (ty, warnings) = observed_type_of(&["Int32", "Null", "String"]);
+        assert_eq!(ty, "Text", "an Int-typed property would be wrong for the string rows");
+        assert!(
+            warnings.iter().any(|w| w.contains("mixed") && w.contains("v")),
+            "{warnings:?}"
+        );
+        let (ty, _) = observed_type_of(&["Boolean", "Int32"]);
+        assert_eq!(ty, "Text");
+    }
+
+    #[test]
+    fn int_and_double_observed_widen_to_float_without_a_mixed_warning() {
+        let (ty, warnings) = observed_type_of(&["Int32", "Double", "Int64"]);
+        assert_eq!(ty, "Float");
+        assert!(!warnings.iter().any(|w| w.contains("mixed")), "{warnings:?}");
+        assert_eq!(observed_type_of(&["Int32", "Null"]).0, "Int");
+        assert_eq!(observed_type_of(&["Null"]).0, "Text", "only nulls observed: no type claim");
+    }
+
+    #[test]
+    fn observed_types_follow_what_the_importer_stores() {
+        // Decimal128 imports as exact text, a BSON Timestamp as a {t,i} map
+        assert_eq!(observed_type_of(&["Decimal128"]).0, "Text");
+        assert_eq!(observed_type_of(&["Timestamp"]).0, "Text");
+        assert_eq!(observed_type_of(&["DateTime"]).0, "DateTime");
+        assert_eq!(observed_type_of(&["ObjectId"]).0, "Text");
+        assert_eq!(observed_type_of(&["Document"]).0, "Text");
+    }
+
     #[test]
     fn composite_foreign_key_warns() {
         let m = meta(
