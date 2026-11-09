@@ -195,6 +195,7 @@ function initApp() {
   loadUsers();
   // Init CodeMirror 6 on the query editor div.
   if (window.__initCodeMirror) window.__initCodeMirror();
+  wireDraft();
 }
 
 // Note: Ctrl+Enter query execution is handled inside CodeMirror's contentDOM listener
@@ -235,8 +236,10 @@ async function runQuery() {
   const tenant = document.getElementById('query-tenant').value;
   let url = '/api/aikoql?query=' + encodeURIComponent(query);
   if (tenant) url += '&tenant=' + encodeURIComponent(tenant);
+  const started = performance.now();
   try {
     const data = await api(url);
+    pushHistory(query, !data.error);
     if (data.error) {
       // S-8 (POC-4): an unknown type is fixable from the studio — point at
       // the discovery flow instead of leaving a dead end.
@@ -264,7 +267,7 @@ async function runQuery() {
       html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">'+esc(data.results.length)+' row'+esc(data.results.length!==1?'s':'')+'</div>';
       resDiv.innerHTML = html;
     } else { resDiv.innerHTML = '<div class="empty-state">Query returned 0 results.</div>'; }
-  } catch(e) { resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
+  } catch(e) { pushHistory(query, false); resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 window.runQuery = runQuery;
 async function explainQuery() {
@@ -323,16 +326,86 @@ async function streamQuery() {
     resDiv.innerHTML = html;
   } catch(e) { resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
-// Save query on Ctrl+S (CodeMirror auto-saves on change; this is for user feedback)
+// Workspace memory: what a person typed, saved and ran survives a reload. Browser
+// storage can be absent, blocked or full, so every access is guarded and a failed
+// save says so instead of pretending.
+const store = {
+  key(k) { return 'aikoql.studio.' + (currentUser || '') + '.' + k; },
+  get(k, d) { try { const v = localStorage.getItem(store.key(k)); return v === null ? d : JSON.parse(v); } catch (_) { return d; } },
+  set(k, v) { try { localStorage.setItem(store.key(k), JSON.stringify(v)); return true; } catch (_) { return false; } },
+};
+let draftTimer = null, draftWired = false;
+function persistDraft() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => store.set('draft', window.__cmGetValue()), 400);
+}
+function wireDraft() {
+  if (!draftWired) {
+    draftWired = true;
+    const ed = document.getElementById('query-editor');
+    ['keyup', 'input'].forEach(ev => ed.addEventListener(ev, persistDraft));
+    window.addEventListener('pagehide', () => store.set('draft', window.__cmGetValue()));
+  }
+  const d = store.get('draft', '');
+  if (typeof d === 'string' && d && !window.__cmGetValue()) window.__cmSetValue(d);
+  renderLibrary();
+}
+function firstLine(q) {
+  const l = String(q).split('\n').map(x => x.trim()).find(Boolean) || '';
+  return l.length > 90 ? l.slice(0, 87) + '…' : l;
+}
+function pushHistory(q, ok) {
+  const h = store.get('history', []).filter(x => x && x.q !== q);
+  h.unshift({q: q, ok: ok, at: Date.now()});
+  store.set('history', h.slice(0, 50));
+  renderLibrary();
+}
+function renderLibrary() {
+  const saved = store.get('saved', []), hist = store.get('history', []);
+  document.getElementById('query-saved').innerHTML = saved.length
+    ? saved.map((s, i) => '<div class="lib-item"><button class="lib-load" data-click="loadQuery" data-kind="saved" data-index="'+esc(i)+'" title="'+esc(s.q)+'"><b>'+esc(s.name)+'</b> <span class="mono">'+esc(firstLine(s.q))+'</span></button><button class="toast-x" data-click="deleteSaved" data-index="'+esc(i)+'" aria-label="Delete saved query '+esc(s.name)+'">×</button></div>').join('')
+    : '<div class="empty-state">Nothing saved yet — name a query above and press Save.</div>';
+  document.getElementById('query-history').innerHTML = hist.length
+    ? hist.map((h, i) => '<div class="lib-item"><button class="lib-load" data-click="loadQuery" data-kind="history" data-index="'+esc(i)+'" title="'+esc(h.q)+'"><span class="badge '+esc(h.ok ? 'badge-green' : 'badge-red')+'">'+esc(h.ok ? 'ok' : 'error')+'</span> <span class="mono">'+esc(firstLine(h.q))+'</span> <span class="lib-when">'+esc(fmtTime(h.at))+'</span></button></div>').join('')
+    : '<div class="empty-state">Queries you run appear here.</div>';
+}
+function saveQuery() {
+  const q = window.__cmGetValue().trim();
+  if (!q) { toast('error', 'Write a query first.'); return; }
+  const input = document.getElementById('query-save-name');
+  const name = input.value.trim().slice(0, 60);
+  if (!name) { toast('info', 'Give the query a name, then press Save.'); input.focus(); return; }
+  const saved = store.get('saved', []);
+  const at = saved.findIndex(s => s.name === name);
+  const entry = {name: name, q: q, at: Date.now()};
+  if (at >= 0) saved[at] = entry; else saved.unshift(entry);
+  if (!store.set('saved', saved.slice(0, 100))) { toast('error', 'Could not save in this browser (storage is blocked or full).'); return; }
+  input.value = '';
+  renderLibrary();
+  toast('success', (at >= 0 ? 'Updated “' : 'Saved “') + name + '”');
+}
+function loadQuery(el) {
+  const list = store.get(el.dataset.kind === 'saved' ? 'saved' : 'history', []);
+  const entry = list[Number(el.dataset.index)];
+  if (!entry) return;
+  window.__cmSetValue(entry.q);
+  persistDraft();
+}
+function deleteSaved(el) {
+  const saved = store.get('saved', []);
+  saved.splice(Number(el.dataset.index), 1);
+  if (!store.set('saved', saved)) { toast('error', 'Could not update saved queries in this browser.'); return; }
+  renderLibrary();
+}
+function clearHistory() { store.set('history', []); renderLibrary(); }
+// Ctrl/Cmd+S saves the query under the name in the box, or asks for the name.
 document.addEventListener('keydown', e => {
-  if (e.ctrlKey && e.key === 's' && activePanel === 'query') {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's' && activePanel === 'query') {
     e.preventDefault();
-    const q = window.__cmGetValue().trim();
-    if (!q) return;
-    document.getElementById('status-center').textContent = 'Query auto-saved (' + q.split('\n').length + ' lines)';
-    setTimeout(() => { document.getElementById('status-center').textContent = ''; }, 1500);
+    saveQuery();
   }
 });
+
 
 // ═══════════════════════════════════════════
 // Panel: Knowledge Graph
@@ -1785,6 +1858,10 @@ document.getElementById('ask-question').addEventListener('keydown', e => { if ((
 // ═══════════════════════════════════════════
 const ACTIONS = Object.assign(Object.create(null), {
   doLogin: el => doLogin(),
+  saveQuery: el => saveQuery(),
+  loadQuery: el => loadQuery(el),
+  deleteSaved: el => deleteSaved(el),
+  clearHistory: el => clearHistory(),
   dismissToast: el => el.parentElement.remove(),
   skipToContent: el => { const c = document.getElementById('panel-content'); c.setAttribute('tabindex', '-1'); c.focus(); },
   logout: el => logout(),

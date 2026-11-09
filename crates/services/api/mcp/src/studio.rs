@@ -171,6 +171,17 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .metric-big { font-size: 28px; font-weight: 700; color: var(--accent); }
 .metric-label { font-size: 11px; color: var(--muted); }
 
+/* ── Query library ── */
+#query-library summary { cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.lib-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.lib-row input { flex: 1; padding: 7px 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 5px; font-size: 13px; font-family: var(--font); }
+.lib-head { justify-content: space-between; margin-top: 14px; }
+.lib-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+.lib-item { display: flex; align-items: center; gap: 4px; }
+.lib-load { flex: 1; text-align: left; padding: 6px 8px; background: none; border: 1px solid transparent; border-radius: 5px; color: var(--text); font-size: 13px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font); }
+.lib-load:hover { background: rgba(108,199,240,0.08); border-color: var(--border); }
+.lib-when { color: var(--muted); font-size: 11px; margin-left: 8px; }
+
 /* ── Notifications ── */
 #toasts { position: fixed; right: 16px; bottom: 36px; z-index: 250; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); }
 .toast { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,0.4); }
@@ -303,6 +314,16 @@ tr:hover td { background: rgba(108,199,240,0.03); }
           </div>
         </div>
         <div id="query-results"></div>
+        <details class="card" id="query-library" open>
+          <summary>Saved &amp; recent queries</summary>
+          <div class="lib-row">
+            <input id="query-save-name" aria-label="Name for the saved query" placeholder="Name this query, then Save (Ctrl/Cmd+S)" maxlength="60" autocomplete="off">
+            <button class="btn btn-sec btn-sm" data-click="saveQuery">Save</button>
+          </div>
+          <div id="query-saved" class="lib-list"></div>
+          <div class="lib-row lib-head"><strong>Recent</strong><button class="btn btn-sec btn-sm" data-click="clearHistory">Clear</button></div>
+          <div id="query-history" class="lib-list"></div>
+        </details>
       </div>
 
       <!-- ── Knowledge Graph ── -->
@@ -1430,22 +1451,42 @@ mod tests {
     #[test]
     fn nothing_claims_to_save_what_it_does_not_store() {
         let page = page_for_tests();
-        assert!(!page.contains("auto-saved"), "the old Ctrl+S message claimed a save that stored nothing");
+        assert!(
+            !page.contains("auto-saved"),
+            "the old Ctrl+S message claimed a save that stored nothing"
+        );
         let store = js_fn("const store = ");
-        assert!(store.contains("localStorage") && store.contains("catch"), "storage is guarded: it can throw or be absent");
-        assert!(page.contains("'aikoql.studio.' + (currentUser"), "stored per signed-in user, not shared across people on one browser");
+        assert!(
+            store.contains("localStorage") && store.contains("catch"),
+            "storage is guarded: it can throw or be absent"
+        );
+        assert!(
+            page.contains("'aikoql.studio.' + (currentUser"),
+            "stored per signed-in user, not shared across people on one browser"
+        );
     }
 
     #[test]
     fn the_query_panel_has_a_saved_and_recent_library_reachable_through_the_allowlist() {
         let page = page_for_tests();
-        for id in ["id=\"query-library\"", "id=\"query-save-name\"", "id=\"query-saved\"", "id=\"query-history\""] {
+        for id in [
+            "id=\"query-library\"",
+            "id=\"query-save-name\"",
+            "id=\"query-saved\"",
+            "id=\"query-history\"",
+        ] {
             assert!(page.contains(id), "missing {id}");
         }
         for action in ["saveQuery", "loadQuery", "deleteSaved", "clearHistory"] {
-            assert!(page.contains(&format!("\n  {action}:")), "{action} not in ACTIONS");
+            assert!(
+                page.contains(&format!("\n  {action}:")),
+                "{action} not in ACTIONS"
+            );
         }
-        assert!(page.contains("aria-label=\"Name for the saved query\""), "the name input has a label, not only a placeholder");
+        assert!(
+            page.contains("aria-label=\"Name for the saved query\""),
+            "the name input has a label, not only a placeholder"
+        );
         // saving is a keyboard gesture on both platforms
         assert!(page.contains("(e.ctrlKey || e.metaKey) && e.key === 's'"));
     }
