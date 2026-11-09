@@ -215,7 +215,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
         Some(J::Array(a)) if a.len() <= 1_000 => a
             .iter()
             .map(|p| match p.as_array().map(Vec::as_slice) {
-                Some([J::String(x), J::String(y)]) => Ok(ClassMerge { a: x.clone(), b: y.clone() }),
+                Some([J::String(x), J::String(y)]) => Ok(ClassMerge { a: x.clone(), b: y.clone(), properties: Vec::new() }),
                 _ => Err(format!("{INVALID}merges must be a list of [\"source.container\", \"source.container\"] pairs")),
             })
             .collect::<Result<_, _>>()?,

@@ -328,6 +328,15 @@ fn draft_fuzz_always_valid() {
                         .cloned()
                         .unwrap_or_else(|| "nope.c".into())
                 },
+                // alignments name real, missing and colliding fields alike
+                properties: (0..r.below(3))
+                    .map(|_| {
+                        let pick = |r: &mut Rng| {
+                            ["id", "name", "email", "tier", "zz"][r.below(5)].to_string()
+                        };
+                        (pick(&mut r), pick(&mut r))
+                    })
+                    .collect(),
             })
             .collect();
         let d = definition_from_sources(&inputs, &merges);

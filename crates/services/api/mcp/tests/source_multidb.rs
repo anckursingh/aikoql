@@ -605,7 +605,12 @@ fn neo4j_and_clickhouse_discover_into_classes_relationships_and_types() {
         .unwrap()
         .iter()
         .find(|r| r["name"].as_str().unwrap().contains("md_works_at"))
-        .unwrap_or_else(|| panic!("no works_at relationship: {}", onto["properties"]["relationships"]));
+        .unwrap_or_else(|| {
+            panic!(
+                "no works_at relationship: {}",
+                onto["properties"]["relationships"]
+            )
+        });
     assert_eq!(
         (rel["domain"].clone(), rel["range"].clone()),
         ("MdPerson".into(), "MdCompany".into()),

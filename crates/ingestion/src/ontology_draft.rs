@@ -22,6 +22,10 @@ pub struct SourceInput<'a> {
 pub struct ClassMerge {
     pub a: String,
     pub b: String,
+    /// `(field of a, field of b)` pairs a human decided are the same property:
+    /// both map to the canonical name of a's field (`email` / `email_address`
+    /// -> `email`). Never inferred here; see `ontology_suggest` for proposals.
+    pub properties: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,6 +127,53 @@ impl DefinitionDraft {
     }
 }
 
+/// Fold field `fb` of `b` into the canonical property of field `fa` of `a`.
+/// Refused (with a warning, nothing changes) when a field is missing or when
+/// two fields of `b` would end up as one property: one column would overwrite
+/// the other on every object.
+fn align_property(
+    a: &Entry,
+    b: &Entry,
+    fa: &str,
+    fb: &str,
+    aligned: &mut BTreeMap<(String, String), String>,
+    warnings: &mut Vec<String>,
+) {
+    let skip = |why: &str, warnings: &mut Vec<String>| {
+        warnings.push(format!(
+            "alignment ignored: {}.{fa} / {}.{fb} - {why}",
+            a.key, b.key
+        ));
+    };
+    if !a.container.fields.iter().any(|f| f.name == fa) {
+        return skip(&format!("no such field {fa} in {}", a.key), warnings);
+    }
+    if !b.container.fields.iter().any(|f| f.name == fb) {
+        return skip(&format!("no such field {fb} in {}", b.key), warnings);
+    }
+    let canon = aligned
+        .get(&(a.key.clone(), fa.to_string()))
+        .cloned()
+        .unwrap_or_else(|| canonical_property(fa));
+    let effective = |f: &str| {
+        aligned
+            .get(&(b.key.clone(), f.to_string()))
+            .cloned()
+            .unwrap_or_else(|| canonical_property(f))
+    };
+    if b.container
+        .fields
+        .iter()
+        .any(|f| f.name != fb && effective(&f.name) == canon)
+    {
+        return skip(
+            &format!("another field of {} is already {canon}", b.key),
+            warnings,
+        );
+    }
+    aligned.insert((b.key.clone(), fb.to_string()), canon);
+}
+
 pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -> DefinitionDraft {
     let mut warnings: Vec<String> = Vec::new();
     let entries: Vec<Entry> = sources
@@ -148,6 +199,8 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
         i
     };
     let mut leader: BTreeMap<usize, usize> = BTreeMap::new();
+    // (entry key, physical field) -> the canonical property it was folded into
+    let mut aligned: BTreeMap<(String, String), String> = BTreeMap::new();
     for m in merges {
         let idx = |k: &str| entries.iter().position(|e| e.key == k);
         match (idx(&m.a), idx(&m.b)) {
@@ -156,6 +209,16 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
                 let lead = leader.get(&ra).copied().unwrap_or(a);
                 group_of[rb] = ra;
                 leader.insert(ra, lead);
+                for (fa, fb) in &m.properties {
+                    align_property(
+                        &entries[a],
+                        &entries[b],
+                        fa,
+                        fb,
+                        &mut aligned,
+                        &mut warnings,
+                    );
+                }
             }
             _ => warnings.push(format!(
                 "merge ignored: {} / {} not found among the discovered containers",
@@ -245,7 +308,10 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
         let gi = groups.iter().position(|(_, m)| m.contains(&i)).unwrap_or(0);
         let mut property_map = serde_json::Map::new();
         for f in &e.container.fields {
-            let canon = canonical_property(&f.name);
+            let canon = aligned
+                .get(&(e.key.clone(), f.name.clone()))
+                .cloned()
+                .unwrap_or_else(|| canonical_property(&f.name));
             let required = f.is_primary_key || !f.nullable;
             let p = props.entry(canon.clone()).or_insert(Prop {
                 types: BTreeSet::new(),
@@ -586,13 +652,27 @@ mod tests {
             meta(
                 "postgres",
                 "crm",
-                &[("customers", &[ID, ("email", "text", false, false, false), ("tier", "text", false, true, false)])],
+                &[(
+                    "customers",
+                    &[
+                        ID,
+                        ("email", "text", false, false, false),
+                        ("tier", "text", false, true, false),
+                    ],
+                )],
                 &[],
             ),
             meta(
                 "sqlite",
                 "shop",
-                &[("clients", &[ID, ("email_address", "text", false, false, false), ("tier", "integer", false, true, false)])],
+                &[(
+                    "clients",
+                    &[
+                        ID,
+                        ("email_address", "text", false, false, false),
+                        ("tier", "integer", false, true, false),
+                    ],
+                )],
                 &[],
             ),
         )
@@ -602,8 +682,16 @@ mod tests {
         let (a, b) = crm_and_shop();
         definition_from_sources(
             &[
-                SourceInput { name: "crm", kind: "postgres", meta: &a },
-                SourceInput { name: "shop", kind: "sqlite", meta: &b },
+                SourceInput {
+                    name: "crm",
+                    kind: "postgres",
+                    meta: &a,
+                },
+                SourceInput {
+                    name: "shop",
+                    kind: "sqlite",
+                    meta: &b,
+                },
             ],
             &[ClassMerge {
                 a: "crm.customers".into(),
@@ -626,19 +714,31 @@ mod tests {
             .map(|p| p.as_str().unwrap())
             .collect();
         assert!(class_props.contains(&"email"), "{class_props:?}");
-        assert!(!class_props.contains(&"email_address"), "folded into email: {class_props:?}");
+        assert!(
+            !class_props.contains(&"email_address"),
+            "folded into email: {class_props:?}"
+        );
         let maps = list(&d, "mappings");
         let of = |t: &str| maps.iter().find(|m| m["physical_type"] == t).unwrap();
         assert_eq!(of("customers")["property_map"]["email"], "email");
         assert_eq!(of("clients")["property_map"]["email_address"], "email");
-        assert!(!list(&d, "property_defs").iter().any(|p| p["name"] == "email_address"));
-        assert!(d.warnings.iter().all(|w| !w.contains("ignored")), "{:?}", d.warnings);
+        assert!(!list(&d, "property_defs")
+            .iter()
+            .any(|p| p["name"] == "email_address"));
+        assert!(
+            d.warnings.iter().all(|w| !w.contains("ignored")),
+            "{:?}",
+            d.warnings
+        );
     }
 
     #[test]
     fn aligning_properties_of_different_types_widens_with_the_existing_warning() {
         let d = merged(vec![("tier", "tier")]);
-        let tier = list(&d, "property_defs").iter().find(|p| p["name"] == "tier").unwrap();
+        let tier = list(&d, "property_defs")
+            .iter()
+            .find(|p| p["name"] == "tier")
+            .unwrap();
         assert_eq!(tier["type"], "Text");
     }
 
@@ -646,14 +746,20 @@ mod tests {
     fn an_alignment_naming_a_missing_field_is_ignored_with_a_warning() {
         let d = merged(vec![("email", "nope"), ("ghost", "email_address")]);
         assert_eq!(
-            d.warnings.iter().filter(|w| w.contains("alignment ignored")).count(),
+            d.warnings
+                .iter()
+                .filter(|w| w.contains("alignment ignored"))
+                .count(),
             2,
             "{:?}",
             d.warnings
         );
         // nothing was folded: both source properties survive
         let maps = list(&d, "mappings");
-        let shop = maps.iter().find(|m| m["physical_type"] == "clients").unwrap();
+        let shop = maps
+            .iter()
+            .find(|m| m["physical_type"] == "clients")
+            .unwrap();
         assert_eq!(shop["property_map"]["email_address"], "email_address");
     }
 
@@ -661,11 +767,21 @@ mod tests {
     fn two_fields_of_one_container_cannot_fold_into_one_property() {
         // folding both `email_address` and `tier` into `email` would make one source column overwrite another
         let d = merged(vec![("email", "email_address"), ("email", "tier")]);
-        assert!(d.warnings.iter().any(|w| w.contains("alignment ignored")), "{:?}", d.warnings);
+        assert!(
+            d.warnings.iter().any(|w| w.contains("alignment ignored")),
+            "{:?}",
+            d.warnings
+        );
         let maps = list(&d, "mappings");
-        let shop = maps.iter().find(|m| m["physical_type"] == "clients").unwrap();
+        let shop = maps
+            .iter()
+            .find(|m| m["physical_type"] == "clients")
+            .unwrap();
         assert_eq!(shop["property_map"]["email_address"], "email");
-        assert_eq!(shop["property_map"]["tier"], "tier", "the second fold was refused");
+        assert_eq!(
+            shop["property_map"]["tier"], "tier",
+            "the second fold was refused"
+        );
     }
 
     #[test]
