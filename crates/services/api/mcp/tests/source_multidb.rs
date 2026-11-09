@@ -1384,3 +1384,118 @@ fn clickhouse_tables_import_through_the_route() {
     capped.assert_no_secret_anywhere();
     exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
 }
+
+/// Relationships between multi-label nodes and self-loops survive discovery and
+/// import (found in review: discovery looked only at each node's first label,
+/// and the one-row-per-relationship filter dropped a node's loop to itself).
+#[test]
+fn neo4j_import_keeps_multilabel_and_self_loop_relationships() {
+    let Some(neo) = connectors::Live::neo4j() else {
+        return;
+    };
+    let run = |stmts: &[&str]| {
+        connectors::neo4j_exec(&neo.neo4j_uri, &neo.neo4j_user, &neo.neo4j_password, stmts)
+    };
+    let clean = || {
+        for label in ["MdMlPerson", "MdMlEmployee", "MdMlCompany", "MdMlCustomer"] {
+            run(&[&format!("MATCH (n:{label}) DETACH DELETE n")]);
+        }
+    };
+    clean();
+    run(&[
+        "CREATE (m:MdMlPerson:MdMlEmployee {name: 'Meg'}), (z:MdMlCompany:MdMlCustomer {name: 'Gamma'}), \
+          (m)-[:MD_ML_WORKS_AT {since: 2022}]->(z), (m)-[:MD_ML_PARENT_OF]->(m)",
+    ]);
+    let (user, pass) = (neo.neo4j_user.clone(), neo.neo4j_password.clone());
+    let host = neo.neo4j_uri.split_once("://").unwrap().1.to_string();
+    let l = Live::start(
+        "neoml",
+        "[[sources]]\nname = \"graph\"\nkind = \"neo4j\"\nurl_env = \"MD_NEO\"\n",
+        &[("MD_NEO", &format!("http://{user}:{pass}@{host}"))],
+        &[&pass],
+    );
+    l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "graph"}),
+    );
+    // the edge is between the SECOND labels of its nodes: selecting only those must find it
+    let i = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "graph", "containers": ["MdMlEmployee", "MdMlCustomer"]}),
+    );
+    assert_eq!(i["skipped"], serde_json::json!([]), "{i}");
+    let meg = query(&l, "MATCH MdMlEmployee RETURN *");
+    let meg = &meg["results"][0]["properties"];
+    let gamma = query(&l, "MATCH MdMlCustomer RETURN *");
+    let works = meg["rel:MD_ML_WORKS_AT"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the edge between second labels was lost: {meg}"));
+    assert_eq!(
+        (works[0]["since"].clone(), works[0]["target"].clone()),
+        (2022.into(), gamma["results"][0]["koid"].clone())
+    );
+    // a node's relationship to itself is kept, pointing at itself
+    let own = query(&l, "MATCH MdMlEmployee RETURN *")["results"][0]["koid"].clone();
+    let parent = meg["rel:MD_ML_PARENT_OF"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the self-loop was dropped: {meg}"));
+    assert_eq!(
+        (parent.len(), parent[0]["target"].clone()),
+        (1, own),
+        "a loop is one relationship, not two"
+    );
+    l.assert_no_secret_anywhere();
+    clean();
+}
+
+/// Sorting keys are server-rendered expressions; they must order the import
+/// whatever they contain (review claimed expression or odd-named keys break it).
+#[test]
+fn clickhouse_expression_and_oddly_named_sorting_keys_import() {
+    let Some(ch) = connectors::Live::clickhouse() else {
+        return;
+    };
+    let db = format!("md_ord_{}", std::process::id());
+    let exec = |stmts: &[String]| {
+        let refs: Vec<&str> = stmts.iter().map(String::as_str).collect();
+        connectors::clickhouse_exec(&ch.clickhouse_url, "default", &refs);
+    };
+    exec(&[
+        format!("DROP DATABASE IF EXISTS {db}"),
+        format!("CREATE DATABASE {db}"),
+        format!(
+            "CREATE TABLE {db}.odd (`we ird` UInt8, `a``b` String, at DateTime, `select` UInt8) ENGINE = MergeTree \
+             ORDER BY (toDate(at), `we ird`, lower(`a``b`), `select`)"
+        ),
+        format!("INSERT INTO {db}.odd VALUES (2, 'B', '2026-01-02 00:00:00', 1), (1, 'a', '2026-01-02 00:00:00', 2), (9, 'z', '2026-01-01 00:00:00', 3)"),
+    ]);
+    let l = Live::start(
+        "chodd",
+        &format!("[[sources]]\nname = \"olap\"\nkind = \"clickhouse\"\nurl_env = \"MD_CH\"\ndatabase = \"{db}\"\n"),
+        &[("MD_CH", &ch.clickhouse_url)],
+        &["aikoql-dev-only"],
+    );
+    l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "olap"}),
+    );
+    let i = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["odd"]}),
+    );
+    assert_eq!(
+        (i["imported"]["odd"].clone(), i["skipped"].clone()),
+        (3.into(), serde_json::json!([])),
+        "{i}"
+    );
+    let rows = query(&l, "MATCH odd RETURN *");
+    let mut weird: Vec<i64> = rows["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["properties"]["we ird"].as_i64().unwrap())
+        .collect();
+    weird.sort();
+    assert_eq!(weird, [1, 2, 9]);
+    exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
+}
