@@ -33,8 +33,9 @@ That foundation is worth keeping. The weaknesses are in *experience* and *struct
 ### B. Trust and honesty of feedback
 - **Ctrl+S says "Query auto-saved" but nothing is stored** (`localStorage` use: 0). A reload
   loses the query [`app.js` 285-293]. This is a false assurance.
-- **"Stream" is client-side chunking** of a fully-fetched result (`streamQuery`, its own
-  comment says so) presented as streaming.
+- **The chunked view is client-side paging.** The button is honestly labelled "Chunked" with an
+  explanatory tooltip, but the function is still called `streamQuery` and the whole result is fetched
+  first; real incremental delivery needs a server change (P1).
 - **No notification system.** Outcomes appear in ad-hoc places (`status-center`, per-panel
   `*-msg` divs, inline `error-text`); nothing announces success/failure consistently.
 - **Session expiry is handled only for GET.** `api()` redirects to sign-in on 401;

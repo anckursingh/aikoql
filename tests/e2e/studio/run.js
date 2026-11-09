@@ -461,6 +461,32 @@ async function main() {
     await page.fill('#login-user', 'admin'); await page.fill('#login-pass', PW);
     await page.click('[data-click="doLogin"]'); await page.waitForSelector('#login-overlay', { state: 'hidden', timeout: 10000 }).catch(() => {});
     ok('signing in again resumes the same panel', await page.isHidden('#login-overlay') && (await panel()) === 'query', await panel());
+    // ---- E2/E6: a draft survives a reload; named queries and history are real ----
+    const cm = () => page.evaluate(() => window.__cmGetValue());
+    await page.evaluate(() => window.__cmSetValue('')); await page.click('#query-editor .cm-content');
+    await page.keyboard.type('MATCH Company RETURN *'); await page.waitForTimeout(900);
+    await page.reload(); await page.waitForTimeout(1800);
+    ok('the query draft survives a reload', (await cm()) === 'MATCH Company RETURN *', await cm());
+    await page.fill('#query-save-name', 'all companies'); await page.click('[data-click="saveQuery"]'); await page.waitForTimeout(300);
+    ok('Save puts the query in the Saved list', /all companies/.test(await page.innerText('#query-saved')), await page.innerText('#query-saved'));
+    ok('saving is announced', /all companies/.test(await page.locator('#toasts [role=status]').last().innerText()));
+    await page.evaluate(() => window.__cmSetValue('MATCH Person RETURN *')); await page.click('[data-click="runQuery"]'); await page.waitForTimeout(900);
+    await page.evaluate(() => window.__cmSetValue('MATCH Company RETURN *')); await page.click('[data-click="runQuery"]'); await page.waitForTimeout(900);
+    const recent = await page.innerText('#query-history');
+    ok('Recent lists what ran, newest first', recent.indexOf('Company') !== -1 && recent.indexOf('Person') > recent.indexOf('Company'), recent);
+    await page.evaluate(() => window.__cmSetValue('')); await page.click('#query-saved [data-click="loadQuery"]'); await page.waitForTimeout(300);
+    ok('clicking a saved query loads it into the editor', (await cm()) === 'MATCH Company RETURN *', await cm());
+    await page.reload(); await page.waitForTimeout(1800);
+    ok('saved queries and history survive a reload', /all companies/.test(await page.innerText('#query-saved')) && /Person/.test(await page.innerText('#query-history')));
+    await page.evaluate(() => window.__cmSetValue('MATCH Person RETURN *')); await page.click('#query-editor .cm-content');
+    await page.keyboard.press('Control+s'); await page.waitForTimeout(300);
+    ok('Ctrl+S with no name asks for one instead of pretending to save', (await page.evaluate(() => document.activeElement && document.activeElement.id)) === 'query-save-name');
+    await page.click('#query-saved [data-click="deleteSaved"]'); await page.waitForTimeout(300);
+    ok('a saved query can be deleted', !/all companies/.test(await page.innerText('#query-saved')));
+    await page.evaluate(() => { Storage.prototype.setItem = function () { throw new Error('quota'); }; });
+    await page.fill('#query-save-name', 'blocked'); await page.click('[data-click="saveQuery"]'); await page.waitForTimeout(300);
+    ok('when the browser refuses storage the person is told, not lied to', /Could not save/.test(await page.locator('#toasts [role=alert]').last().innerText().catch(() => '')));
+    await page.reload(); await page.waitForTimeout(1500);
     // ---- a dead cookie falls back to the form; signing in must still work ---
     await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });

@@ -1425,6 +1425,31 @@ mod tests {
         assert!(page.contains("aria-label"), "the dismiss control is named");
     }
 
+    // ---- E2/E6: truthful persistence, saved queries and history ----
+
+    #[test]
+    fn nothing_claims_to_save_what_it_does_not_store() {
+        let page = page_for_tests();
+        assert!(!page.contains("auto-saved"), "the old Ctrl+S message claimed a save that stored nothing");
+        let store = js_fn("const store = ");
+        assert!(store.contains("localStorage") && store.contains("catch"), "storage is guarded: it can throw or be absent");
+        assert!(page.contains("'aikoql.studio.' + (currentUser"), "stored per signed-in user, not shared across people on one browser");
+    }
+
+    #[test]
+    fn the_query_panel_has_a_saved_and_recent_library_reachable_through_the_allowlist() {
+        let page = page_for_tests();
+        for id in ["id=\"query-library\"", "id=\"query-save-name\"", "id=\"query-saved\"", "id=\"query-history\""] {
+            assert!(page.contains(id), "missing {id}");
+        }
+        for action in ["saveQuery", "loadQuery", "deleteSaved", "clearHistory"] {
+            assert!(page.contains(&format!("\n  {action}:")), "{action} not in ACTIONS");
+        }
+        assert!(page.contains("aria-label=\"Name for the saved query\""), "the name input has a label, not only a placeholder");
+        // saving is a keyboard gesture on both platforms
+        assert!(page.contains("(e.ctrlKey || e.metaKey) && e.key === 's'"));
+    }
+
     #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
