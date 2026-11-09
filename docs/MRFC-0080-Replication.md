@@ -465,7 +465,7 @@ removed the index rebuild) → ~10–15 s, tunable through the TTL.
   kill it mid-write, skew its clock; prove no acked write is lost and
   never more than one writer per term. ✅ (see R5c below)
 
-### Risks to settle before R5a (status: clock drift designed out — see R5a; MinIO, Moto and Cloudflare R2 verified, AWS S3 still unverified — see "Real-S3 certs")
+### Risks to settle before R5a (status: clock drift designed out — see R5a; MinIO, Moto, Cloudflare R2 and AWS S3 verified — see "Real-S3 certs")
 
 - **Clock drift** is the safety-critical parameter: the self-fencing
   margin must cover the worst drift between the leader and the lease
@@ -519,9 +519,8 @@ hint recorded). RED: `r5a-lease-agent{,-e2e}`, `r5a-s3-lease`.
 
 R5a limits:
 - **S3 conditional writes: verified on MinIO, Moto and Cloudflare R2**
-  (real-S3 certs below); AWS S3 documents both conditions on PUT but has
-  not been run here, and other S3-compatible stores must each still be
-  checked.
+  (real-S3 certs below), and on AWS S3 itself (eu-north-1); other
+  S3-compatible stores must each still be checked.
 - ~~Replication is loopback-only~~ — R3c added TLS: HA nodes on
   different hosts use `--replicate-tls-cert/-key/-ca` and
   `--replicate-advertise`. (Not yet exercised across real hosts.)
@@ -680,7 +679,7 @@ restore picks the right one; the archive holds log release.
 `--until-ms` between the bursts holds only the first. RED: `r6-*`.
 
 R6 limits:
-- **Verified on MinIO, Moto and Cloudflare R2, not on AWS S3** (real-S3 certs below; the SigV4
+- **Verified on MinIO, Moto, Cloudflare R2 and AWS S3** (real-S3 certs below; the SigV4
   signer is checked against AWS's documented example).
 - Time granularity is one log batch: `--until-ms` restores what had
   been *uploaded* by then, not each write's commit time (frames carry no
@@ -782,7 +781,7 @@ Limits: each hop adds its own apply + catch-up delay; R1's acks release
 R1's log only (the leader's release still follows its direct standbys);
 `--replicate-sync-ms` counts direct standbys only.
 
-## Real-S3 certs (MinIO, Moto, Cloudflare R2) ✅
+## Real-S3 certs (MinIO, Moto, Cloudflare R2, AWS S3) ✅
 
 The S3 paths were verified against fakes only; the same contracts now
 run on a real S3-compatible server — `scripts/s3-it.sh` (a throwaway
@@ -812,7 +811,11 @@ tests (`s3.rs`), and the same certs run on AWS itself with
 AWS_SECRET_ACCESS_KEY=… AWS_REGION=… scripts/s3-it.sh` (no endpoint —
 virtual-hosted; the script refuses without explicit credentials, bucket
 and region; use a throwaway bucket and short-lived, bucket-scoped
-credentials — objects stay under `it-*`). **Not yet run on AWS.**
+credentials — objects stay under `it-*`). **Run on AWS** (eu-north-1, from
+a distant client): store, lease-CAS and archive legs pass; the failover +
+PITR leg passed twice once it used the production 10 s lease TTL (the 3 s
+loopback TTL gave a WAN conditional PUT only 1 s and the leader
+self-fenced — the safe outcome, but not what the leg certifies; `f8c021ae`).
 
 **Cloudflare R2:** all four certs green on 2026-11-09 against a real R2
 bucket (`AIKOQL_TEST_S3_ENDPOINT` = the account's `r2.cloudflarestorage.com`
