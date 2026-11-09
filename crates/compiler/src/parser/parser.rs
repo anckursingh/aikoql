@@ -91,6 +91,8 @@ fn eof_err(line: usize, col: usize) -> Diagnostic {
 pub struct Parser {
     lexer: Lexer,
     current: Token,
+    /// Source spelling of `current` when it is a word (see `Lexer::last_word`).
+    current_word: Option<String>,
     line: usize,
     col: usize,
 }
@@ -99,17 +101,20 @@ impl Parser {
     pub fn new(source: &str) -> Self {
         let mut lexer = Lexer::new(source);
         let current = lexer.next_token();
+        let current_word = lexer.last_word.take();
         let line = lexer.last_span.line;
         let col = lexer.last_span.col;
         Parser {
             lexer,
             current,
+            current_word,
             line,
             col,
         }
     }
     fn advance(&mut self) {
         self.current = self.lexer.next_token();
+        self.current_word = self.lexer.last_word.take();
         self.line = self.lexer.last_span.line;
         self.col = self.lexer.last_span.col;
     }
@@ -128,14 +133,17 @@ impl Parser {
         }
     }
 
+    /// A name: an identifier, or any keyword read as one with its spelling
+    /// kept — ontology classes come from table names, and `orders`/`groups`
+    /// are common ones. Clause keywords are only consumed where a name is
+    /// required, so `MATCH Order ORDER BY x` still parses.
     fn expect_ident(&mut self, desc: &str) -> Result<String, ParseError> {
-        match &self.current {
-            Token::Ident(s) => {
-                let v = s.clone();
+        match self.current_word.clone() {
+            Some(word) => {
                 self.advance();
-                Ok(v)
+                Ok(word)
             }
-            _ => Err(expected_err(desc, &self.current, self.line, self.col)),
+            None => Err(expected_err(desc, &self.current, self.line, self.col)),
         }
     }
     fn expect_string(&mut self) -> Result<String, ParseError> {
@@ -1072,7 +1080,9 @@ mod tests {
 
     #[test]
     fn a_keyword_is_a_valid_entity_name_with_its_spelling_kept() {
-        for name in ["Order", "Group", "Update", "Count", "Left", "Match", "Score", "Tables"] {
+        for name in [
+            "Order", "Group", "Update", "Count", "Left", "Match", "Score", "Tables",
+        ] {
             let m = parse_match(&format!("MATCH {name} RETURN *"));
             assert_eq!(m.entity, name, "{name}");
         }
@@ -1084,9 +1094,13 @@ mod tests {
 
     #[test]
     fn a_keyword_is_a_valid_property_in_where_and_order_by() {
-        let m = parse_match("MATCH Item WHERE group == \"a\" AND order > 2 ORDER BY order RETURN *");
+        let m =
+            parse_match("MATCH Item WHERE group == \"a\" AND order > 2 ORDER BY order RETURN *");
         assert_eq!(m.entity, "Item");
-        assert_eq!(m.order_by.as_ref().map(|o| o.keys[0].field.as_str()), Some("order"));
+        assert_eq!(
+            m.order_by.as_ref().map(|o| o.keys[0].field.as_str()),
+            Some("order")
+        );
     }
 
     #[test]
@@ -1110,7 +1124,9 @@ mod tests {
         // `MATCH` alone, or a clause keyword where nothing can follow, is an error — not a panic
         assert!(Parser::new("MATCH").parse_statement().is_err());
         assert!(Parser::new("MATCH Order WHERE").parse_statement().is_err());
-        assert!(Parser::new("MATCH Order ORDER BY").parse_statement().is_err());
+        assert!(Parser::new("MATCH Order ORDER BY")
+            .parse_statement()
+            .is_err());
     }
 
     // ---- v0.3 K2: temporal + epistemic clauses ----

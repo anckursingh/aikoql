@@ -95,6 +95,10 @@ pub struct Lexer {
     col: usize,
     /// Span of the most recently returned token.
     pub last_span: Span,
+    /// The source spelling when the most recent token was a word (identifier
+    /// or keyword), else `None`: lets the parser read a keyword as a name
+    /// (a table `orders` becomes the class `Order`) with its case intact.
+    pub last_word: Option<String>,
 }
 
 impl Lexer {
@@ -105,6 +109,7 @@ impl Lexer {
             line: 1,
             col: 1,
             last_span: Span { line: 1, col: 1 },
+            last_word: None,
         }
     }
 
@@ -163,6 +168,7 @@ impl Lexer {
                 break;
             }
         }
+        self.last_word = Some(s.clone());
         match s.to_uppercase().as_str() {
             "MATCH" => Token::Match,
             "WHERE" => Token::Where,
@@ -245,6 +251,7 @@ impl Lexer {
     pub fn next_token(&mut self) -> Token {
         self.skip_whitespace();
         self.last_span = self.span();
+        self.last_word = None;
         match self.advance() {
             None => Token::Eof,
             Some(c) if c.is_alphabetic() || c == '_' => self.read_word(c),
