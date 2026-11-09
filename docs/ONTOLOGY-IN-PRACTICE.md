@@ -149,6 +149,16 @@ Postgres, and Studio e2e steps (discover → publish → import → traverse), s
 makes it usable by a customer), E, F alongside. A and B first: history and the shared-device
 graph depend on them and they are the smallest changes.
 
+## 5b. Status
+
+- **Phase A — done (2026-11-09).** `identities` on the ontology route, key suggestions with evidence in
+  the preview, `MappingEntry.identity` in the published ontology, keyed import (in place, pruned,
+  ambiguous key refused). Proven live: `a_declared_key_gives_a_clickhouse_view_one_object_per_device_and_a_history`
+  and `a_declared_identity_key_makes_a_re_import_update_in_place_and_prunes_what_vanished`. Found on the
+  way: ClickHouse's "primary key" is only the sort prefix, so it is not an identity (fixed, tested).
+  Not yet in Studio: the key is declared through the API until Phase D.
+- Phases B, C, D, E, F, G: open, in the order above.
+
 ## 6. Decisions to confirm
 1. **Where identity lives:** a field of the ontology class (proposed) versus a separate mapping
    document. Class-level keeps one place for a customer to read.
