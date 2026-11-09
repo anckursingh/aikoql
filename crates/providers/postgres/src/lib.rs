@@ -309,15 +309,25 @@ impl PostgresConnector {
             .iter()
             .map(|c| {
                 let q = quote_ident(&c.name);
-                // pgvector UDTs have no driver-native FromSql — read the
-                // column ::text and let pg_cell_to_value parse the form.
-                if c.pg_type.starts_with("vector") {
-                    format!("{q}::text")
-                } else {
+                // Only types the driver decodes exactly are read natively;
+                // everything else (numeric, timestamps, uuid, json, arrays,
+                // enums, pgvector, ...) is read ::text and parsed by
+                // pg_cell_to_value — a failed native decode must never
+                // degrade a real value to NULL.
+                if is_native(&c.pg_type) {
                     q
+                } else {
+                    format!("{q}::text")
                 }
             })
             .collect();
+        // Pin the text forms: the same row imports identically whatever the
+        // server's or role's TimeZone / DateStyle / IntervalStyle defaults.
+        self.client
+            .batch_execute(
+                "SET TimeZone = 'UTC'; SET DateStyle = 'ISO, YMD'; SET IntervalStyle = 'postgres'",
+            )
+            .map_err(|e| format!("import {}: session settings: {}", schema.name, e))?;
         let query = format!(
             "SELECT {} FROM {} LIMIT {limit}",
             col_list.join(", "),
@@ -495,11 +505,70 @@ impl PostgresConnector {
 // Value mapping helpers
 // ---------------------------------------------------------------------------
 
+/// The bare type name: `format_type` adds typmods ("numeric(10,2)",
+/// "character varying(10)") that never change how a value is read.
+fn base_type(pg_type: &str) -> &str {
+    pg_type.split('(').next().unwrap_or(pg_type)
+}
+
+/// Types the driver decodes exactly into the Rust type `pg_cell_to_value`
+/// asks for. Array types (`integer[]`, `character varying(10)[]`) are never
+/// native, whatever their element.
+fn is_native(pg_type: &str) -> bool {
+    !pg_type.contains("[]")
+        && matches!(
+            base_type(pg_type),
+            "smallint"
+                | "int2"
+                | "integer"
+                | "int"
+                | "int4"
+                | "bigint"
+                | "int8"
+                | "double precision"
+                | "float8"
+                | "boolean"
+                | "bool"
+                | "text"
+                | "varchar"
+                | "character varying"
+                | "char"
+                | "character"
+                | "bpchar"
+                | "name"
+                | "bytea"
+        )
+}
+
+/// A float written as text, exactly: non-finite forms stay text.
+fn float_text(s: String) -> Value {
+    match s.parse::<f64>() {
+        Ok(f) if f.is_finite() => Value::Float(f),
+        _ => Value::Text(s),
+    }
+}
+
+/// `numeric` text -> Float while an f64 holds every digit (15 significant);
+/// beyond that the exact decimal stays Text rather than silently rounding.
+fn numeric_text(s: String) -> Value {
+    let significant = s
+        .chars()
+        .filter(char::is_ascii_digit)
+        .skip_while(|c| *c == '0')
+        .count();
+    if significant <= 15 {
+        float_text(s)
+    } else {
+        Value::Text(s)
+    }
+}
+
 /// Convert a PostgreSQL cell to an Aikoql Value. Each family reads as
 /// `Option<T>` so a NULL cell is recognized by the driver itself — the old
 /// try-get heuristic misread nullable non-NULL integers as NULL (item 4 red
-/// debug found FK values importing as Value::Null). Read failures per type
-/// also become Value::Null, as before.
+/// debug found FK values importing as Value::Null). Columns that are not
+/// `is_native` arrive as text (the import selects them `::text`) and are
+/// parsed here, so no decodable value ever becomes NULL by a type mismatch.
 fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str) -> Value {
     fn opt<T, F>(row: &postgres::Row, col_idx: usize, f: F) -> Value
     where
@@ -512,34 +581,21 @@ fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str) -> Value
             .map(f)
             .unwrap_or(Value::Null)
     }
-    // format_type adds typmods ("vector(3)", "numeric(10,2)") — match on the
-    // bare type name.
-    let base = pg_type.split('(').next().unwrap_or(pg_type);
-    match base {
-        // Integer family
-        "smallint" | "integer" | "int" | "int4" => opt(row, col_idx, |v: i32| Value::Int(v as i64)),
+    if !is_native(pg_type) {
+        return opt(row, col_idx, |s: String| match base_type(pg_type) {
+            "real" | "float4" => float_text(s),
+            "numeric" | "decimal" => numeric_text(s),
+            "vector" => parse_vector(s),
+            _ => Value::Text(s),
+        });
+    }
+    match base_type(pg_type) {
+        "smallint" | "int2" => opt(row, col_idx, |v: i16| Value::Int(v as i64)),
+        "integer" | "int" | "int4" => opt(row, col_idx, |v: i32| Value::Int(v as i64)),
         "bigint" | "int8" => opt(row, col_idx, Value::Int),
-        // Float family
-        "real" | "float4" => opt(row, col_idx, |v: f32| Value::Float(v as f64)),
-        "double precision" | "float8" | "numeric" | "decimal" => opt(row, col_idx, Value::Float),
-        // Boolean
+        "double precision" | "float8" => opt(row, col_idx, Value::Float),
         "boolean" | "bool" => opt(row, col_idx, Value::Bool),
-        // Text family
-        "text" | "varchar" | "character varying" | "char" | "character" | "name" | "uuid"
-        | "json" | "jsonb" => opt(row, col_idx, Value::Text),
-        // Binary
         "bytea" => opt(row, col_idx, Value::Bytes),
-        // Timestamps → ISO 8601 text
-        "timestamp"
-        | "timestamptz"
-        | "timestamp without time zone"
-        | "timestamp with time zone"
-        | "date"
-        | "time"
-        | "timetz" => opt(row, col_idx, Value::Text),
-        // pgvector (import_table selects the column ::text) → List of floats
-        "vector" => opt(row, col_idx, parse_vector),
-        // Everything else → text representation
         _ => opt(row, col_idx, Value::Text),
     }
 }
@@ -650,9 +706,52 @@ mod tests {
     }
 
     #[test]
-    fn pg_cell_text_to_value() {
-        // ponytail: unit-tested via integration test with real PG.
-        // Type mapping is verified by inspection.
+    fn only_exactly_decodable_types_are_read_natively() {
+        for t in [
+            "smallint",
+            "integer",
+            "bigint",
+            "double precision",
+            "boolean",
+            "text",
+            "character varying(10)",
+            "character(3)",
+            "bytea",
+        ] {
+            assert!(is_native(t), "{t}");
+        }
+        for t in [
+            "real",
+            "numeric(10,2)",
+            "timestamp with time zone",
+            "date",
+            "uuid",
+            "jsonb",
+            "integer[]",
+            "character varying(10)[]",
+            "interval",
+            "inet",
+            "vector(3)",
+            "mood",
+        ] {
+            assert!(!is_native(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn numeric_text_keeps_every_digit() {
+        assert_eq!(numeric_text("12345.67".into()), Value::Float(12345.67));
+        assert_eq!(numeric_text("0.0000123".into()), Value::Float(0.0000123));
+        assert_eq!(numeric_text("-9.50".into()), Value::Float(-9.5));
+        // 16+ significant digits would round in an f64: stay exact text
+        let big = "12345678901234567890.1234567890".to_string();
+        assert_eq!(numeric_text(big.clone()), Value::Text(big));
+        assert_eq!(numeric_text("NaN".into()), Value::Text("NaN".into()));
+        assert_eq!(
+            float_text("Infinity".into()),
+            Value::Text("Infinity".into())
+        );
+        assert_eq!(float_text("9.4".into()), Value::Float(9.4));
     }
 
     #[test]
