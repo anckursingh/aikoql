@@ -64,7 +64,7 @@ fn pascal(s: &str) -> String {
     class_name_for_container(&s.replace(['-', '.'], "_"))
 }
 
-fn canonical_property(name: &str) -> String {
+pub(crate) fn canonical_property(name: &str) -> String {
     let c = to_snake_case(name);
     if c.is_empty() {
         name.to_string()
@@ -89,7 +89,7 @@ fn observed_value_type(t: &str) -> &'static str {
 /// With a profile, every observed non-null type counts: one type is that type,
 /// Int + Float is Float, anything else is Text (the only type every observed
 /// value fits) and is reported as mixed. No profile: the declared type.
-fn field_value_type(f: &FieldInfo) -> (&'static str, Option<Vec<String>>) {
+pub(crate) fn field_value_type(f: &FieldInfo) -> (&'static str, Option<Vec<String>>) {
     // The observed types: the profile's when there is one, else the union
     // schema-only discovery keeps in the type string ("Int32|String").
     let from_type: Vec<String>;
