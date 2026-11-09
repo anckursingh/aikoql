@@ -406,12 +406,27 @@ impl Neo4jConnector {
         label: &str,
         tenant: Option<&str>,
     ) -> Result<(Vec<KnowledgeObject>, HashMap<String, KOID>), String> {
+        self.import_nodes_limited(label, tenant, u64::MAX)
+            .map(|(objects, ids, _)| (objects, ids))
+    }
+
+    /// At most `max_rows` nodes, in elementId order; the flag says the label had more.
+    pub fn import_nodes_limited(
+        &self,
+        label: &str,
+        tenant: Option<&str>,
+        max_rows: u64,
+    ) -> Result<(Vec<KnowledgeObject>, HashMap<String, KOID>, bool), String> {
+        let limit = max_rows.saturating_add(1).min(i64::MAX as u64);
         let stmt = format!(
-            "MATCH (n:`{}`) RETURN elementId(n), properties(n), labels(n)",
+            "MATCH (n:`{}`) RETURN elementId(n), properties(n), labels(n) \
+             ORDER BY elementId(n) LIMIT {limit}",
             quote_label(label)
         );
         let body = serde_json::json!({ "statements": [{"statement": stmt}] });
-        let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", self.base_url))
+        let resp = self
+            .agent
+            .post(&format!("{}/db/neo4j/tx/commit", self.base_url))
             .set("Authorization", &self.auth)
             .set("Content-Type", "application/json")
             .send_json(&body)
@@ -421,7 +436,7 @@ impl Neo4jConnector {
             return Err(format!("{}: {}", neo.errors[0].code, neo.errors[0].message));
         }
 
-        let mut objects = Vec::new();
+        let mut objects: Vec<KnowledgeObject> = Vec::new();
         let mut id_map: HashMap<String, KOID> = HashMap::new(); // elementId → KOID
 
         for result in &neo.results {
@@ -489,7 +504,14 @@ impl Neo4jConnector {
                 });
             }
         }
-        Ok((objects, id_map))
+        let truncated = objects.len() as u64 > max_rows;
+        if truncated {
+            // the extra row only proved there was more: it is not imported
+            objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
+            let keep: std::collections::HashSet<KOID> = objects.iter().map(|o| o.koid).collect();
+            id_map.retain(|_, k| keep.contains(k));
+        }
+        Ok((objects, id_map, truncated))
     }
 
     /// Import all relationships of a given type.
@@ -512,7 +534,9 @@ impl Neo4jConnector {
             quote_label(rel_type)
         );
         let body = serde_json::json!({ "statements": [{"statement": stmt}] });
-        let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", self.base_url))
+        let resp = self
+            .agent
+            .post(&format!("{}/db/neo4j/tx/commit", self.base_url))
             .set("Authorization", &self.auth)
             .set("Content-Type", "application/json")
             .send_json(&body)
@@ -836,7 +860,9 @@ mod tests {
                 let mut buf = [0u8; 4096];
                 let _ = c.read(&mut buf);
                 if n == 0 {
-                    let _ = c.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+                    let _ = c.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    );
                 } else {
                     held.push(c); // never answered
                 }
@@ -858,10 +884,16 @@ mod tests {
         let url = silent_after_connect();
         let c = Neo4jConnector::connect_with_timeout(&url, "u", "p", Some(400)).unwrap();
         let nodes = within(move || c.import_nodes("P", None).map(|_| ()));
-        assert!(matches!(nodes, Some(Err(_))), "import_nodes hung past its timeout: {nodes:?}");
+        assert!(
+            matches!(nodes, Some(Err(_))),
+            "import_nodes hung past its timeout: {nodes:?}"
+        );
         let url = silent_after_connect();
         let c = Neo4jConnector::connect_with_timeout(&url, "u", "p", Some(400)).unwrap();
         let rels = within(move || c.import_relationships("R", &HashMap::new()).map(|_| ()));
-        assert!(matches!(rels, Some(Err(_))), "import_relationships hung past its timeout: {rels:?}");
+        assert!(
+            matches!(rels, Some(Err(_))),
+            "import_relationships hung past its timeout: {rels:?}"
+        );
     }
 }
