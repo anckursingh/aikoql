@@ -131,7 +131,7 @@ fn merge(existing: Option<&J>, draft: &J) -> Merged {
         match maps.iter().find(|e| key(e) == key(&m)) {
             None => {
                 added_maps.push(m.clone());
-                maps.push(m);
+                maps.push(m.clone());
             }
             Some(e) if e["class"] != m["class"] => warnings.push(format!(
                 "{} {} is already mapped to {}; the discovered mapping to {} was skipped",
@@ -141,6 +141,36 @@ fn merge(existing: Option<&J>, draft: &J) -> Merged {
                 m["class"]
             )),
             Some(_) => {}
+        }
+        // the identity key is not an alias a human may have tuned by hand: a key the
+        // owner declares later fills a mapping that has none, and corrects one on a
+        // class discovery itself wrote; a key a human wrote on their own class stays
+        let want = m["identity"].clone();
+        if want.as_array().is_some_and(|a| !a.is_empty()) {
+            if let Some(i) = maps.iter().position(|e| {
+                e["source"] == m["source"]
+                    && e["physical_type"] == m["physical_type"]
+                    && e["class"] == m["class"]
+            }) {
+                if maps[i]["identity"] != want {
+                    let had = maps[i]["identity"]
+                        .as_array()
+                        .is_some_and(|a| !a.is_empty());
+                    let ours = classes
+                        .iter()
+                        .find(|c| c["name"] == maps[i]["class"])
+                        .is_some_and(|c| written_by_discovery(c, &maps));
+                    if !had || ours {
+                        maps[i]["identity"] = want;
+                    } else {
+                        warnings.push(format!(
+                            "{} {} already has an identity key written by hand; kept as is",
+                            m["source"].as_str().unwrap_or(""),
+                            m["physical_type"].as_str().unwrap_or("")
+                        ));
+                    }
+                }
+            }
         }
     }
     let untouched = classes
@@ -560,7 +590,8 @@ mod tests {
     // ---- an identity key declared AFTER the first publish (found on the case study) ----
 
     fn onto(class_desc: &str, identity: Option<Vec<&str>>) -> J {
-        let mut m = json!({"source": "clickhouse", "physical_type": "t", "class": "T", "property_map": {}});
+        let mut m =
+            json!({"source": "clickhouse", "physical_type": "t", "class": "T", "property_map": {}});
         if let Some(cols) = identity {
             m["identity"] = json!(cols);
         }
@@ -584,19 +615,31 @@ mod tests {
         let existing = onto("Discovered from s.t", None);
         let m = merge(Some(&existing), &draft_with(Some(vec!["visitor_id"])));
         assert_eq!(identity_of(&m), json!(["visitor_id"]), "{}", m.definition);
-        assert_ne!(m.definition, existing, "the publish must register as a change");
+        assert_ne!(
+            m.definition, existing,
+            "the publish must register as a change"
+        );
     }
 
     #[test]
     fn a_key_may_be_corrected_on_a_class_discovery_wrote_but_never_over_a_humans() {
         // discovery's own class: the new declaration replaces the old
         let ours = onto("Discovered from s.t", Some(vec!["a"]));
-        assert_eq!(identity_of(&merge(Some(&ours), &draft_with(Some(vec!["b"])))), json!(["b"]));
+        assert_eq!(
+            identity_of(&merge(Some(&ours), &draft_with(Some(vec!["b"])))),
+            json!(["b"])
+        );
         // a hand-written class keeps its key, and says so
         let theirs = onto("our own T", Some(vec!["a"]));
         let m = merge(Some(&theirs), &draft_with(Some(vec!["b"])));
         assert_eq!(identity_of(&m), json!(["a"]));
-        assert!(m.warnings.iter().any(|w| w.contains("identity") && w.contains("kept")), "{:?}", m.warnings);
+        assert!(
+            m.warnings
+                .iter()
+                .any(|w| w.contains("identity") && w.contains("kept")),
+            "{:?}",
+            m.warnings
+        );
         // a draft with no key never erases one
         let kept = merge(Some(&ours), &draft_with(None));
         assert_eq!(identity_of(&kept), json!(["a"]));

@@ -793,6 +793,62 @@ mod tests {
     }
 
     #[test]
+    fn declaring_a_key_after_the_first_publish_retires_the_twins_an_earlier_import_left() {
+        let (k, db) = (kernel(), tmp_db("latekey"));
+        make(&db, "CREATE TABLE activity (visitor TEXT, visits INTEGER); INSERT INTO activity VALUES ('a', 1), ('b', 2);");
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            // first publish and import: no key declared, content decides identity
+            let p = crate::sources::ontology::tool_sources_ontology(
+                &k,
+                &json!({"sources": ["crm"], "preview": true}),
+                "x",
+            )
+            .unwrap();
+            crate::sources::ontology::tool_sources_ontology(
+                &k,
+                &json!({"sources": ["crm"], "preview": false, "fingerprints": p["fingerprints"]}),
+                "x",
+            )
+            .unwrap();
+            import(&k, &["activity"]).unwrap();
+            make(&db, "UPDATE activity SET visits = 5 WHERE visitor = 'a';");
+            import(&k, &["activity"]).unwrap();
+            assert_eq!(
+                live(&k, "activity", None).len(),
+                3,
+                "the old way: a change makes a twin"
+            );
+            // the owner now declares the key and publishes again over the existing ontology
+            let p = crate::sources::ontology::tool_sources_ontology(
+                &k,
+                &json!({"sources": ["crm"], "preview": true, "identities": {"crm.activity": ["visitor"]}}),
+                "x",
+            )
+            .unwrap();
+            let r = crate::sources::ontology::tool_sources_ontology(
+                &k,
+                &json!({"sources": ["crm"], "preview": false, "fingerprints": p["fingerprints"],
+                        "identities": {"crm.activity": ["visitor"]}, "expected_version": p["active_version"]}),
+                "x",
+            )
+            .unwrap();
+            assert_eq!(r["saved"], true, "a later key is a change: {r}");
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(
+                r["pruned"]["activity"], 3,
+                "every content-keyed object is retired and replaced: {r}"
+            );
+            assert_eq!(
+                live(&k, "activity", None).len(),
+                2,
+                "one object per visitor"
+            );
+            assert_eq!(visits_of(&k, "a").map(|v| v.0), Some(5));
+        });
+    }
+
+    #[test]
     fn import_never_writes_to_the_source_file() {
         let (k, db) = (kernel(), items_db("imp7", 3));
         run(sqlite_source("crm", None), &db, || {
