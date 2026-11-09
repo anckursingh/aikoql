@@ -482,6 +482,61 @@ mod tests {
     }
 
     #[test]
+    fn bson_decimal_dates_timestamps_and_regex_are_readable_values() {
+        use mongodb::bson::{DateTime, Decimal128, Regex, Timestamp};
+        let dec: Decimal128 = "12345.6789".parse().unwrap();
+        assert_eq!(
+            bson_to_value(&Bson::Decimal128(dec)),
+            Value::Text("12345.6789".into())
+        );
+        let dt = DateTime::parse_rfc3339_str("2026-01-02T03:04:05Z").unwrap();
+        assert_eq!(
+            bson_to_value(&Bson::DateTime(dt)),
+            Value::Text("2026-01-02T03:04:05Z".into())
+        );
+        let ts = Bson::Timestamp(Timestamp { time: 1, increment: 2 });
+        assert_eq!(
+            bson_to_value(&ts),
+            Value::Map(BTreeMap::from([
+                ("t".to_string(), Value::Int(1)),
+                ("i".to_string(), Value::Int(2)),
+            ]))
+        );
+        let re = Bson::RegularExpression(Regex { pattern: "^a".into(), options: "i".into() });
+        assert_eq!(bson_to_value(&re), Value::Text("/^a/i".into()));
+        // nothing is ever rendered with the Rust Debug form
+        for b in [Bson::MinKey, Bson::MaxKey, Bson::Undefined, Bson::Symbol("s".into())] {
+            let v = bson_to_value(&b);
+            assert!(!format!("{v:?}").contains("Symbol("), "{b:?} -> {v:?}");
+        }
+    }
+
+    #[test]
+    fn the_source_id_is_kept_as_a_property() {
+        let (props, _) = document_to_ko(&doc! { "_id": 7_i32, "a": 1 }, "c");
+        assert_eq!(props.get("_id"), Some(&Value::Int(7)));
+        let oid = mongodb::bson::oid::ObjectId::new();
+        let (props, _) = document_to_ko(&doc! { "_id": oid, "a": 1 }, "c");
+        assert_eq!(props.get("_id"), Some(&Value::Text(oid.to_hex())));
+    }
+
+    #[test]
+    fn a_cursor_error_fails_the_import_instead_of_ending_it_quietly() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let items: Vec<Result<Document, String>> =
+            vec![Ok(doc! { "_id": 1 }), Err("cursor killed".into()), Ok(doc! { "_id": 2 })];
+        let err = rt
+            .block_on(drain_documents(futures_util::stream::iter(items), "c", u64::MAX))
+            .unwrap_err();
+        assert!(err.contains("cursor killed") && err.contains("c"), "{err}");
+        let ok: Vec<Result<Document, String>> = vec![Ok(doc! { "_id": 1 }), Ok(doc! { "_id": 2 })];
+        let (docs, truncated) = rt
+            .block_on(drain_documents(futures_util::stream::iter(ok), "c", 1))
+            .unwrap();
+        assert_eq!((docs.len(), truncated), (1, true), "the cap is reported, not an error");
+    }
+
+    #[test]
     fn deterministic_koid_consistent() {
         assert_eq!(
             deterministic_koid("c", &["x".into()]),
