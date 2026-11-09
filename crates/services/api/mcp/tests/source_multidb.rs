@@ -1499,3 +1499,152 @@ fn clickhouse_expression_and_oddly_named_sorting_keys_import() {
     assert_eq!(weird, [1, 2, 9]);
     exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
 }
+
+/// Case study (docs/ONTOLOGY-IN-PRACTICE.md, Phase A): a per-device aggregate VIEW in
+/// ClickHouse has no key of its own. The preview proposes `visitor_id` with its
+/// evidence, the owner declares it, and re-imports then keep ONE object per device
+/// with a version history — instead of a new object per change.
+#[test]
+fn a_declared_key_gives_a_clickhouse_view_one_object_per_device_and_a_history() {
+    let Some(ch) = connectors::Live::clickhouse() else {
+        return;
+    };
+    let db = format!("md_idk_{}", std::process::id());
+    let exec = |stmts: &[String]| {
+        let refs: Vec<&str> = stmts.iter().map(String::as_str).collect();
+        connectors::clickhouse_exec(&ch.clickhouse_url, "default", &refs);
+    };
+    exec(&[
+        format!("DROP DATABASE IF EXISTS {db}"),
+        format!("CREATE DATABASE {db}"),
+        format!("CREATE TABLE {db}.devices (visitor_id String, updated_at DateTime, risk Float32) ENGINE = ReplacingMergeTree(updated_at) ORDER BY visitor_id"),
+        format!("INSERT INTO {db}.devices SELECT concat('v', toString(number)), now(), 0.1 FROM numbers(20)"),
+        format!("CREATE TABLE {db}.visits (visitor_id String, ts DateTime, ip String) ENGINE = MergeTree ORDER BY (visitor_id, ts)"),
+        format!("INSERT INTO {db}.visits SELECT concat('v', toString(number % 20)), now() - number, '203.0.113.1' FROM numbers(200)"),
+        format!("CREATE VIEW {db}.device_activity AS SELECT visitor_id, count() AS visit_count, uniqExact(ip) AS ips FROM {db}.visits GROUP BY visitor_id"),
+    ]);
+    let l = Live::start(
+        "idkey",
+        &format!("[[sources]]\nname = \"olap\"\nkind = \"clickhouse\"\nurl_env = \"MD_CH\"\ndatabase = \"{db}\"\n"),
+        &[("MD_CH", &ch.clickhouse_url)],
+        &["aikoql-dev-only"],
+    );
+    l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "olap"}),
+    );
+    let p = l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["olap"], "preview": true}),
+    );
+    let sug = |c: &str| {
+        p["identities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["container"] == c)
+            .cloned()
+            .unwrap_or_else(|| panic!("no suggestion for {c}: {}", p["identities"]))
+    };
+    let devices = sug("olap.devices");
+    assert_eq!(
+        (devices["declared"].clone(), devices["columns"].clone()),
+        (true.into(), serde_json::json!(["visitor_id"])),
+        "{devices}"
+    );
+    let activity = sug("olap.device_activity");
+    assert_eq!(
+        (activity["declared"].clone(), activity["columns"].clone()),
+        (false.into(), serde_json::json!(["visitor_id"])),
+        "{activity}"
+    );
+    assert!(
+        activity["evidence"].to_string().contains("Device"),
+        "{activity}"
+    );
+    assert_eq!(
+        sug("olap.visits")["columns"],
+        serde_json::json!([]),
+        "a table of events gets no guessed key"
+    );
+
+    // the owner accepts the proposal; it is recorded in the published mapping
+    l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["olap"], "preview": false, "fingerprints": p["fingerprints"],
+                           "identities": {"olap.device_activity": ["visitor_id"]}}),
+    );
+    let onto = data(&l.call("GET", "/api/v1/ontology", serde_json::json!({})));
+    let mapping = |t: &str| {
+        onto["properties"]["mappings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["physical_type"] == t)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        mapping("device_activity")["identity"],
+        serde_json::json!(["visitor_id"])
+    );
+    assert_eq!(
+        mapping("devices")["identity"],
+        serde_json::json!(["visitor_id"]),
+        "a replacing key is recorded as the identity"
+    );
+
+    let first = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["device_activity", "devices"]}),
+    );
+    assert_eq!(
+        (
+            first["imported"]["device_activity"].clone(),
+            first["imported"]["devices"].clone()
+        ),
+        (20.into(), 20.into()),
+        "{first}"
+    );
+    // one more visit for one device, then the same import again
+    exec(&[format!(
+        "INSERT INTO {db}.visits VALUES ('v3', now(), '198.51.100.7')"
+    )]);
+    let again = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["device_activity"]}),
+    );
+    assert_eq!(
+        (
+            again["imported"]["device_activity"].clone(),
+            again["unchanged"]["device_activity"].clone()
+        ),
+        (1.into(), 19.into()),
+        "{again}"
+    );
+    assert_eq!(again["pruned"]["device_activity"], 0, "{again}");
+    let all = query(&l, "MATCH device_activity RETURN *");
+    assert_eq!(
+        all["results"].as_array().unwrap().len(),
+        20,
+        "one object per device, not 21: {all}"
+    );
+    let hist = query(
+        &l,
+        "MATCH device_activity WHERE visitor_id == \"v3\" HISTORICAL RETURN *",
+    );
+    let counts: Vec<i64> = hist["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["properties"]["visit_count"].as_i64().unwrap())
+        .collect();
+    assert_eq!(
+        counts.len(),
+        2,
+        "device v3 has a history of two versions: {hist}"
+    );
+    assert!(counts[1] > counts[0], "the aggregate grew: {counts:?}");
+    l.assert_no_secret_anywhere();
+    exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
+}

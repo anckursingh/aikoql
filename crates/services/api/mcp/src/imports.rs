@@ -112,7 +112,7 @@ impl<'k> ImportSink<'k> {
     /// contains (CON-001 delete reconcile). Callers must invoke this only on
     /// the all-success path — a partial run must not be mistaken for a full
     /// picture of the source (CON-007).
-    fn prune_missing(&self, type_name: &str, present: &HashSet<KOID>) -> KResult<usize> {
+    pub(crate) fn prune_missing(&self, type_name: &str, present: &HashSet<KOID>) -> KResult<usize> {
         let mut pruned = 0;
         for ko in self.kernel.scan_by_type(&self.subject, type_name)? {
             if !present.contains(&ko.koid) {

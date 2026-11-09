@@ -7,7 +7,8 @@ use super::{
 use crate::helpers::value_to_json;
 use crate::{json, Kernel, J};
 use aikoql_ingestion::{
-    definition_from_sources, suggest_merges, ClassMerge, ClassStatus, SourceInput,
+    definition_from_sources_keyed, suggest_identities, suggest_merges, ClassMerge, ClassStatus,
+    SourceInput,
 };
 use std::collections::BTreeMap;
 
@@ -257,6 +258,26 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
         }
         _ => return Err(format!("{INVALID}merges must be a list of merges")),
     };
+    // identity keys the owner declares: {"source.container": ["column", ...]}
+    let identities: BTreeMap<String, Vec<String>> = match o.get("identities") {
+        None | Some(J::Null) => BTreeMap::new(),
+        Some(J::Object(m)) if m.len() <= 1_000 => m
+            .iter()
+            .map(|(k, v)| match v.as_array() {
+                Some(cols)
+                    if k.len() <= 512
+                        && (1..=32).contains(&cols.len())
+                        && cols.iter().all(|c| c.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 256)) =>
+                {
+                    Ok((k.clone(), cols.iter().filter_map(|c| c.as_str().map(str::to_string)).collect()))
+                }
+                _ => Err(format!(
+                    "{INVALID}identities must map \"source.container\" to a list of 1-32 column names"
+                )),
+            })
+            .collect::<Result<_, _>>()?,
+        _ => return Err(format!("{INVALID}identities must be an object")),
+    };
     let given: BTreeMap<String, String> = match o.get("fingerprints") {
         None | Some(J::Null) => BTreeMap::new(),
         Some(J::Object(m)) => m
@@ -296,7 +317,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             meta: m,
         })
         .collect();
-    let draft = definition_from_sources(&inputs, &merges);
+    let draft = definition_from_sources_keyed(&inputs, &merges, &identities);
     if !draft.publishable() {
         return Err(format!("{NOTHING}: no containers were discovered"));
     }
@@ -350,7 +371,16 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             })
         })
         .collect();
+    // keys: what each source declares, and the best guess (with evidence) for the rest
+    let identity_suggestions: Vec<J> = suggest_identities(&inputs)
+        .into_iter()
+        .map(|s| {
+            json!({"container": s.container, "columns": s.columns, "confidence": s.confidence,
+                   "evidence": s.evidence, "declared": s.declared})
+        })
+        .collect();
     let summary = json!({
+        "identities": identity_suggestions,
         "classes": classes, "adds": merged.adds, "refreshed": merged.refreshed,
         "untouched": merged.untouched, "mappings": merged.mappings, "warnings": warnings,
         "fingerprints": fingerprints, "active_version": active_version, "base": base,

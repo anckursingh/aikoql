@@ -179,19 +179,23 @@ fn align_property(
 /// replacing / collapsing ClickHouse table, its sorting key (that engine keeps
 /// the latest row per sorting key, so the key IS the identity). A plain
 /// MergeTree sorting key is not unique and is never claimed. Empty: none.
-pub(crate) fn declared_identity(c: &ContainerInfo) -> Vec<String> {
+pub fn declared_identity(c: &ContainerInfo) -> Vec<String> {
     declared_identity_why(c).0
 }
 
 /// The declared key and the reason it counts as one ("" when there is none).
 pub(crate) fn declared_identity_why(c: &ContainerInfo) -> (Vec<String>, &'static str) {
+    // a ClickHouse container carries its engine: there the "primary key" is only the
+    // sort prefix and no constraint enforces uniqueness, so only a replacing /
+    // collapsing engine's sorting key is an identity
+    let enforces_uniqueness = !c.properties.contains_key("engine");
     let pk: Vec<String> = c
         .fields
         .iter()
         .filter(|f| f.is_primary_key)
         .map(|f| f.name.clone())
         .collect();
-    if !pk.is_empty() {
+    if enforces_uniqueness && !pk.is_empty() {
         return (pk, "primary key");
     }
     if let Some(g) = c.unique_groups.iter().find(|g| !g.is_empty()) {
@@ -1299,6 +1303,56 @@ mod tests {
         assert!(
             identity_of(&d, "visits").is_empty(),
             "a plain MergeTree sorting key is not unique: no claim"
+        );
+    }
+
+    #[test]
+    fn a_clickhouse_primary_key_is_a_sort_prefix_not_an_identity() {
+        // ClickHouse marks the sorting-key columns "primary key", but nothing enforces
+        // uniqueness: claiming it would collapse rows or refuse the import
+        let mut ch = meta(
+            "clickhouse",
+            "olap",
+            &[
+                (
+                    "visits",
+                    &[
+                        ("visitor_id", "String", true, false, false),
+                        ("ts", "DateTime", true, false, false),
+                        ("ip", "String", false, false, false),
+                    ],
+                ),
+                (
+                    "devices",
+                    &[
+                        ("visitor_id", "String", true, false, false),
+                        ("risk", "Float32", false, false, false),
+                    ],
+                ),
+            ],
+            &[],
+        );
+        ch.containers[0]
+            .properties
+            .insert("engine".into(), "MergeTree".into());
+        ch.containers[0]
+            .properties
+            .insert("sorting_key".into(), "visitor_id, ts".into());
+        ch.containers[1]
+            .properties
+            .insert("engine".into(), "ReplacingMergeTree".into());
+        ch.containers[1]
+            .properties
+            .insert("sorting_key".into(), "visitor_id".into());
+        let d = one("olap", "clickhouse", &ch);
+        assert!(
+            identity_of(&d, "visits").is_empty(),
+            "a MergeTree 'primary key' is not unique"
+        );
+        assert_eq!(
+            identity_of(&d, "devices"),
+            ["visitor_id"],
+            "a replacing table is keyed by its sorting key"
         );
     }
 

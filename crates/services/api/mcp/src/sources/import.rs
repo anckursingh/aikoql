@@ -122,6 +122,93 @@ fn fetch_neo4j(
     Ok(by_label)
 }
 
+/// The identity key the published ontology declares for each container of this
+/// source kind, where it differs from what the importer already derives (the
+/// source's own key): only those need their objects re-keyed. An empty map when
+/// no ontology is active or none declares a key.
+fn declared_keys(
+    k: &Kernel,
+    src: &super::SourceConfig,
+    snapshot: &aikoql_ingestion::ConnectorMetadata,
+) -> BTreeMap<String, Vec<String>> {
+    let Some((ko, _)) = crate::http::active_ontology_for(k, src.tenant.as_deref()) else {
+        return BTreeMap::new();
+    };
+    let Ok(def) = aikoql_kernel::OntologyDef::from_property_map(&ko.properties) else {
+        return BTreeMap::new();
+    };
+    def.mappings
+        .into_iter()
+        .filter(|m| m.source == src.kind.as_str() && !m.identity.is_empty())
+        .filter(|m| {
+            snapshot
+                .containers
+                .iter()
+                .find(|c| c.name == m.physical_type)
+                .is_some_and(|c| aikoql_ingestion::declared_identity(c) != m.identity)
+        })
+        .map(|m| (m.physical_type, m.identity))
+        .collect()
+}
+
+/// A stable text for a key value (what identifies the row, not how it prints).
+fn key_text(v: &Value) -> String {
+    match v {
+        Value::Text(s) => s.clone(),
+        Value::Int(n) => n.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Bool(b) => b.to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+/// 128 bits from two independent FNV-1a passes over (source, container, key values).
+fn identity_koid(source: &str, container: &str, parts: &[String]) -> KOID {
+    let text = format!("{source}\u{1f}{container}\u{1f}{}", parts.join("\u{1e}"));
+    let fnv = |seed: u64| {
+        text.bytes().fold(seed, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    };
+    let mut koid = [0u8; 16];
+    koid[..8].copy_from_slice(&fnv(0xcbf2_9ce4_8422_2325).to_be_bytes());
+    koid[8..].copy_from_slice(&fnv(0x8422_2325_cbf2_9ce4).to_be_bytes());
+    KOID(koid)
+}
+
+/// Give every object the identity its key columns say it has. A key that does not
+/// identify is refused whole - collapsing two rows into one object would lose data
+/// without a word - so the caller writes nothing for the container.
+fn rekey(
+    objects: &mut [KnowledgeObject],
+    source: &str,
+    container: &str,
+    cols: &[String],
+) -> Result<(), String> {
+    let mut seen: HashSet<KOID> = HashSet::new();
+    for ko in objects.iter_mut() {
+        let mut parts = Vec::with_capacity(cols.len());
+        for c in cols {
+            match ko.properties.get(c) {
+                None | Some(Value::Null) => {
+                    return Err(format!("a row has no value for the identity column {c}"))
+                }
+                Some(v) => parts.push(key_text(v)),
+            }
+        }
+        let koid = identity_koid(source, container, &parts);
+        if !seen.insert(koid) {
+            return Err(format!(
+                "the identity key ({}) is not unique: more than one row has {}",
+                cols.join(", "),
+                parts.join(", ")
+            ));
+        }
+        ko.koid = koid;
+    }
+    Ok(())
+}
+
 /// `POST /api/v1/sources/import {source, containers, tenant?}`.
 pub(crate) fn tool_sources_import(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let result = run(k, args);
@@ -193,6 +280,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             ));
         }
     }
+    let keys = declared_keys(k, &src, &snapshot);
     let conn = src.connection()?;
     let mut subject = Subject::new(importer);
     if let Some(t) = &src.tenant {
@@ -203,6 +291,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     let tag = format!("src:{}", src.name);
     let (mut imported, mut unchanged) = (BTreeMap::new(), BTreeMap::new());
     let (mut truncated, mut skipped) = (Vec::new(), Vec::new());
+    let mut pruned: BTreeMap<String, usize> = BTreeMap::new();
     let skip = |c: &str, why: String| json!({"container": c, "reason": why});
 
     // Objects are keyed by (container, primary key): never overwrite another source's.
@@ -273,13 +362,22 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
                 })
             }
         };
-        let (objects, cut) = match fetched {
+        let (mut objects, cut) = match fetched {
             Ok(v) => v,
             Err(e) => {
                 skipped.push(skip(c, scrub(&e, &conn)));
                 continue;
             }
         };
+        // an identity key the owner declared decides what "the same row" means
+        let keyed = keys.get(c.as_str());
+        if let Some(cols) = keyed {
+            if let Err(why) = rekey(&mut objects, &src.name, c, cols) {
+                skipped.push(skip(c, why));
+                continue;
+            }
+        }
+        let present: HashSet<KOID> = objects.iter().map(|o| o.koid).collect();
         let (mut wrote, mut same) = (0u64, 0u64);
         let mut failure = None;
         for mut ko in objects {
@@ -297,6 +395,26 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             skipped.push(skip(c, format!("failed after {} rows: {e}", wrote + same)));
             continue;
         }
+        // a complete import of a keyed container is the whole picture of the source:
+        // what is no longer there is retired (this also retires the content-keyed
+        // twins an earlier import left behind)
+        if keyed.is_some() && !cut {
+            match sink.prune_missing(c, &present) {
+                Ok(n) => {
+                    pruned.insert(c.clone(), n);
+                }
+                Err(e) => {
+                    skipped.push(skip(
+                        c,
+                        format!(
+                            "could not retire vanished rows: {}",
+                            scrub(&e.to_string(), &conn)
+                        ),
+                    ));
+                    continue;
+                }
+            }
+        }
         imported.insert(c.clone(), wrote);
         unchanged.insert(c.clone(), same);
         if cut {
@@ -305,7 +423,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     }
     Ok(json!({
         "run_id": run_id, "imported": imported, "unchanged": unchanged,
-        "truncated": truncated, "skipped": skipped,
+        "pruned": pruned, "truncated": truncated, "skipped": skipped,
     }))
 }
 
@@ -624,9 +742,20 @@ mod tests {
             // the source changes one row: the SAME object gets a second version
             make(&db, "UPDATE activity SET visits = 5 WHERE visitor = 'a';");
             let r = import(&k, &["activity"]).unwrap();
-            assert_eq!((r["imported"]["activity"].clone(), r["unchanged"]["activity"].clone()), (json!(1), json!(1)), "{r}");
+            assert_eq!(
+                (
+                    r["imported"]["activity"].clone(),
+                    r["unchanged"]["activity"].clone()
+                ),
+                (json!(1), json!(1)),
+                "{r}"
+            );
             assert_eq!(live(&k, "activity", None).len(), 2, "no duplicate object");
-            assert_eq!(visits_of(&k, "a"), Some((5, 2)), "version 2 of the same object");
+            assert_eq!(
+                visits_of(&k, "a"),
+                Some((5, 2)),
+                "version 2 of the same object"
+            );
 
             // a row that vanished from a complete import is retired, not left as a stale twin
             make(&db, "DELETE FROM activity WHERE visitor = 'b';");
@@ -639,13 +768,26 @@ mod tests {
             make(&db, "INSERT INTO activity VALUES ('a', 9);");
             let before = head(&k);
             let r = import(&k, &["activity"]).unwrap();
-            let why = r["skipped"][0]["reason"].as_str().unwrap_or_default().to_string();
+            let why = r["skipped"][0]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             assert!(why.contains("not unique") && why.contains("visitor"), "{r}");
-            assert_eq!(head(&k), before, "nothing was written for the refused container");
+            assert_eq!(
+                head(&k),
+                before,
+                "nothing was written for the refused container"
+            );
             // ...and so is a row with no value for the key
-            make(&db, "DELETE FROM activity WHERE visits = 9; INSERT INTO activity VALUES (NULL, 3);");
+            make(
+                &db,
+                "DELETE FROM activity WHERE visits = 9; INSERT INTO activity VALUES (NULL, 3);",
+            );
             let r = import(&k, &["activity"]).unwrap();
-            let why = r["skipped"][0]["reason"].as_str().unwrap_or_default().to_string();
+            let why = r["skipped"][0]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             assert!(why.contains("no value") && why.contains("visitor"), "{r}");
         });
     }
