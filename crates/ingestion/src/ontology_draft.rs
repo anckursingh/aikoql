@@ -74,6 +74,8 @@ fn canonical_property(name: &str) -> String {
 fn observed_value_type(t: &str) -> &'static str {
     match t {
         "Decimal128" | "Timestamp" => "Text",
+        // Neo4j's integer type name has no "int" in it
+        "Long" => "Int",
         other => connector_type_to_value_type(other),
     }
 }
@@ -84,15 +86,25 @@ fn observed_value_type(t: &str) -> &'static str {
 /// Int + Float is Float, anything else is Text (the only type every observed
 /// value fits) and is reported as mixed. No profile: the declared type.
 fn field_value_type(f: &FieldInfo) -> (&'static str, Option<Vec<String>>) {
-    let Some(profile) = &f.profile else {
-        return (connector_type_to_value_type(&f.data_type), None);
+    // The observed types: the profile's when there is one, else the union
+    // schema-only discovery keeps in the type string ("Int32|String").
+    let from_type: Vec<String>;
+    let all: &[String] = match &f.profile {
+        Some(p) => &p.types,
+        None => {
+            from_type = f.data_type.split('|').map(str::to_string).collect();
+            &from_type
+        }
     };
-    let observed: Vec<&String> = profile
-        .types
+    let observed: Vec<&String> = all
         .iter()
         .filter(|t| !t.eq_ignore_ascii_case("null"))
         .collect();
     if observed.is_empty() {
+        return (connector_type_to_value_type(&f.data_type), None);
+    }
+    // a declared SQL type is read as SQL; a single observed (schemaless) type by its BSON/graph name
+    if f.profile.is_none() && observed.len() == 1 && f.provenance != Provenance::Observed {
         return (connector_type_to_value_type(&f.data_type), None);
     }
     let kinds: BTreeSet<&'static str> = observed.iter().map(|t| observed_value_type(t)).collect();
@@ -808,12 +820,25 @@ mod tests {
             ("String|Long|Boolean", "Text"),
             ("Int32", "Int"),
         ] {
-            let m = meta("mongodb", "crm", &[("people", &[("v", declared, false, true, false)])], &[]);
-            let d = definition_from_sources(
-                &[SourceInput { name: "crm", kind: "mongodb", meta: &m }],
+            let m = meta(
+                "mongodb",
+                "crm",
+                &[("people", &[("v", declared, false, true, false)])],
                 &[],
             );
-            let ty = list(&d, "property_defs").iter().find(|p| p["name"] == "v").unwrap()["type"].clone();
+            let d = definition_from_sources(
+                &[SourceInput {
+                    name: "crm",
+                    kind: "mongodb",
+                    meta: &m,
+                }],
+                &[],
+            );
+            let ty = list(&d, "property_defs")
+                .iter()
+                .find(|p| p["name"] == "v")
+                .unwrap()["type"]
+                .clone();
             assert_eq!(ty, want, "{declared}");
         }
     }
