@@ -501,6 +501,99 @@ function deleteSaved(el) {
   renderLibrary();
 }
 function clearHistory() { store.set('history', []); renderLibrary(); }
+// ── Command palette (Ctrl/Cmd+K): jump anywhere, run anything, from the keyboard ──
+let paletteItems = [], paletteIdx = 0, lastFocus = null;
+// Subsequence match, scored: consecutive letters, word starts and a prefix rank higher; -1 = no match.
+function fuzzyScore(q, text) {
+  q = q.toLowerCase().replace(/\s+/g, '');
+  const t = text.toLowerCase();
+  if (!q) return 0;
+  let score = 0, ti = 0, prev = -2;
+  for (let qi = 0; qi < q.length; qi++) {
+    const idx = t.indexOf(q[qi], ti);
+    if (idx === -1) return -1;
+    score += 1;
+    if (idx === prev + 1) score += 3;
+    if (idx === 0 || /[\s_\-:./]/.test(t[idx - 1])) score += 4;
+    prev = idx; ti = idx + 1;
+  }
+  if (t.startsWith(q)) score += 10;
+  return score - (ti - q.length) * 0.05;
+}
+function paletteCommands() {
+  const cmds = [];
+  document.querySelectorAll('#sidebar nav button[data-panel]').forEach(b => {
+    cmds.push({label: 'Go to ' + b.querySelector('.lbl').textContent.trim(), hint: 'Panel', run: () => switchPanel(b.dataset.panel)});
+  });
+  const onQuery = fn => () => { switchPanel('query'); fn(); };
+  cmds.push({label: 'Run query', hint: 'Query', run: onQuery(runQuery)});
+  cmds.push({label: 'Explain query plan', hint: 'Query', run: onQuery(explainQuery)});
+  cmds.push({label: 'Save query', hint: 'Query', run: onQuery(saveQuery)});
+  if (lastResult) {
+    cmds.push({label: 'Copy results as CSV', hint: 'Results', run: () => copyResults({dataset: {kind: 'csv'}})});
+    cmds.push({label: 'Copy results as JSON', hint: 'Results', run: () => copyResults({dataset: {kind: 'json'}})});
+  }
+  cmds.push({label: 'Sign out', hint: 'Session', run: logout});
+  const load = q => () => { switchPanel('query'); window.__cmSetValue(q); persistDraft(); };
+  store.get('saved', []).forEach(s => cmds.push({label: 'Load saved: ' + s.name, hint: firstLine(s.q), run: load(s.q)}));
+  store.get('history', []).slice(0, 10).forEach(h => cmds.push({label: 'Recent: ' + firstLine(h.q), hint: h.ok ? 'ok' : 'error', run: load(h.q)}));
+  return cmds;
+}
+function renderPalette() {
+  const q = document.getElementById('palette-input').value;
+  paletteItems = paletteCommands().map(c => ({c: c, s: fuzzyScore(q, c.label)})).filter(x => x.s >= 0)
+    .map((x, i) => Object.assign(x, {i: i})).sort((a, b) => b.s - a.s || a.i - b.i);
+  paletteIdx = 0;
+  document.getElementById('palette-list').innerHTML = paletteItems.length
+    ? paletteItems.map((x, i) => '<li role="option" id="pal-'+esc(i)+'" aria-selected="'+esc(i === 0)+'" data-click="paletteRun" data-index="'+esc(i)+'"><span>'+esc(x.c.label)+'</span><span class="pal-hint">'+esc(x.c.hint || '')+'</span></li>').join('')
+    : '<li class="pal-empty" role="presentation">No matching commands</li>';
+  document.getElementById('palette-input').setAttribute('aria-activedescendant', paletteItems.length ? 'pal-0' : '');
+}
+function movePalette(to) {
+  if (!paletteItems.length) return;
+  paletteIdx = (to + paletteItems.length) % paletteItems.length;
+  document.querySelectorAll('#palette-list [role=option]').forEach((li, i) => li.setAttribute('aria-selected', i === paletteIdx ? 'true' : 'false'));
+  const li = document.getElementById('pal-' + paletteIdx);
+  document.getElementById('palette-input').setAttribute('aria-activedescendant', 'pal-' + paletteIdx);
+  if (li) li.scrollIntoView({block: 'nearest'});
+}
+function openPalette() {
+  if (!currentUser) return;
+  lastFocus = document.activeElement;
+  document.getElementById('palette-backdrop').hidden = false;
+  document.getElementById('palette').hidden = false;
+  const input = document.getElementById('palette-input');
+  input.value = '';
+  renderPalette();
+  input.focus();
+}
+function closePalette() {
+  document.getElementById('palette').hidden = true;
+  document.getElementById('palette-backdrop').hidden = true;
+  if (lastFocus && document.contains(lastFocus)) lastFocus.focus();
+}
+function runPaletteItem(i) {
+  const item = paletteItems[i];
+  if (!item) return;
+  closePalette();
+  item.c.run();
+}
+function paletteKey(e) {
+  if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(paletteIdx + 1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(paletteIdx - 1); }
+  else if (e.key === 'Enter') { e.preventDefault(); runPaletteItem(paletteIdx); }
+  else if (e.key === 'Tab') { e.preventDefault(); }   // the dialog is one control: focus stays in it
+}
+document.getElementById('palette-input').addEventListener('input', renderPalette);
+document.getElementById('palette-input').addEventListener('keydown', paletteKey);
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    if (!currentUser) return;
+    e.preventDefault();
+    if (document.getElementById('palette').hidden) openPalette(); else closePalette();
+  }
+}, true);
 // Ctrl/Cmd+S saves the query under the name in the box, or asks for the name.
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 's' && activePanel === 'query') {
@@ -1961,6 +2054,8 @@ document.getElementById('ask-question').addEventListener('keydown', e => { if ((
 // ═══════════════════════════════════════════
 const ACTIONS = Object.assign(Object.create(null), {
   doLogin: el => doLogin(),
+  closePalette: el => closePalette(),
+  paletteRun: el => runPaletteItem(Number(el.dataset.index)),
   sortResults: el => sortResults(el),
   copyResults: el => copyResults(el),
   downloadResults: el => downloadResults(el),

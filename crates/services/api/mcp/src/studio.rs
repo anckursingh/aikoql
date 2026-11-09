@@ -171,6 +171,19 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .metric-big { font-size: 28px; font-weight: 700; color: var(--accent); }
 .metric-label { font-size: 11px; color: var(--muted); }
 
+/* ── Command palette ── */
+#palette-backdrop { position: fixed; inset: 0; background: rgba(4,4,10,0.62); z-index: 280; }
+#palette-backdrop[hidden], #palette[hidden] { display: none; }
+#palette { position: fixed; top: 14vh; left: 50%; transform: translateX(-50%); width: min(620px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 24px 80px rgba(0,0,0,0.6); z-index: 290; overflow: hidden; }
+#palette-input { width: 100%; padding: 14px 16px; background: var(--bg); border: none; border-bottom: 1px solid var(--border); color: var(--text); font-size: 15px; font-family: var(--font); }
+#palette-input:focus-visible { outline: none; box-shadow: inset 0 -2px 0 var(--accent); }
+#palette-list { list-style: none; max-height: min(52vh, 420px); overflow-y: auto; padding: 6px; }
+#palette-list li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+#palette-list li[aria-selected="true"] { background: rgba(108,199,240,0.16); color: #fff; }
+#palette-list li:hover { background: rgba(108,199,240,0.09); }
+.pal-hint { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
+#palette-list li.pal-empty { cursor: default; color: var(--muted); justify-content: center; }
+
 /* ── Results ── */
 .res-bar { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
 .res-count { font-size: 12px; color: var(--muted); margin-top: 6px; }
@@ -223,6 +236,11 @@ td a:hover { text-decoration: underline; }
 <body>
 <button class="skip" data-click="skipToContent">Skip to content</button>
 <div id="toasts" role="region" aria-label="Notifications" aria-live="polite"></div>
+<div id="palette-backdrop" data-click="closePalette" hidden></div>
+<div id="palette" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
+  <input id="palette-input" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" aria-label="Type a command" placeholder="Type a command or search…  (↑ ↓ to move · Enter to run · Esc to close)" autocomplete="off" spellcheck="false">
+  <ul id="palette-list" role="listbox" aria-label="Commands"></ul>
+</div>
 
 <!-- ── Login ── -->
 <div id="login-overlay">
@@ -1556,19 +1574,40 @@ mod tests {
             assert!(page.contains(needle), "palette markup missing {needle}");
         }
         for action in ["closePalette", "paletteRun"] {
-            assert!(page.contains(&format!("\n  {action}:")), "{action} not in ACTIONS");
+            assert!(
+                page.contains(&format!("\n  {action}:")),
+                "{action} not in ACTIONS"
+            );
         }
-        assert!(page.contains("(e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k'"), "Ctrl/Cmd+K opens it");
+        assert!(
+            page.contains("(e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k'"),
+            "Ctrl/Cmd+K opens it"
+        );
         let keys = js_fn("function paletteKey(");
         for k in ["'Escape'", "'ArrowDown'", "'ArrowUp'", "'Enter'"] {
             assert!(keys.contains(k), "palette key {k} unhandled");
         }
-        assert!(keys.contains("lastFocus"), "closing returns focus to where it was");
-        // the backdrop is a SIBLING of the dialog: a click inside the dialog must not close it
-        let dialog = page.find("id=\"palette\"").unwrap();
-        let backdrop = page.find("id=\"palette-backdrop\"").unwrap();
+        let close = js_fn("function closePalette(");
+        assert!(
+            close.contains("lastFocus"),
+            "closing returns focus to where it was"
+        );
+        assert!(
+            keys.contains("closePalette()"),
+            "Escape closes through the one close path"
+        );
+        // the backdrop is a SIBLING that precedes the dialog: a click inside the
+        // dialog must not close it
+        let (backdrop, dialog) = (
+            page.find("id=\"palette-backdrop\"").unwrap(),
+            page.find("id=\"palette\"").unwrap(),
+        );
         assert!(backdrop < dialog, "backdrop precedes the dialog");
-        assert!(!page[backdrop..dialog].contains("</div>\n<div id=\"palette\"") || true);
+        let between = &page[backdrop..dialog];
+        assert!(
+            between.contains("</div>"),
+            "the backdrop element is closed before the dialog opens (not nested inside it)"
+        );
     }
 
     #[test]
