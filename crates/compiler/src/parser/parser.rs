@@ -1068,6 +1068,51 @@ mod tests {
         }
     }
 
+    // ---- keyword-named classes: a table `orders` becomes class `Order` ----
+
+    #[test]
+    fn a_keyword_is_a_valid_entity_name_with_its_spelling_kept() {
+        for name in ["Order", "Group", "Update", "Count", "Left", "Match", "Score", "Tables"] {
+            let m = parse_match(&format!("MATCH {name} RETURN *"));
+            assert_eq!(m.entity, name, "{name}");
+        }
+        // clause keywords still work after the entity
+        let m = parse_match("MATCH Order WHERE total > 5 ORDER BY total DESC LIMIT 3 RETURN *");
+        assert_eq!(m.entity, "Order");
+        assert!(m.order_by.is_some() && m.limit == Some(3));
+    }
+
+    #[test]
+    fn a_keyword_is_a_valid_property_in_where_and_order_by() {
+        let m = parse_match("MATCH Item WHERE group == \"a\" AND order > 2 ORDER BY order RETURN *");
+        assert_eq!(m.entity, "Item");
+        assert_eq!(m.order_by.as_ref().map(|o| o.keys[0].field.as_str()), Some("order"));
+    }
+
+    #[test]
+    fn a_keyword_is_a_valid_entity_in_create_update_delete_and_join() {
+        assert!(matches!(
+            Parser::new("CREATE Order total == 3").parse_statement().unwrap(),
+            Statement::Create(c) if c.entity == "Order"
+        ));
+        assert!(matches!(
+            Parser::new("UPDATE Group \"abc\" name == \"x\"").parse_statement().unwrap(),
+            Statement::Update(u) if u.entity == "Group"
+        ));
+        assert!(matches!(
+            Parser::new("DELETE Order \"abc\"").parse_statement().unwrap(),
+            Statement::Delete(d) if d.entity == "Order"
+        ));
+    }
+
+    #[test]
+    fn a_bare_clause_keyword_where_a_name_is_needed_still_fails_cleanly() {
+        // `MATCH` alone, or a clause keyword where nothing can follow, is an error — not a panic
+        assert!(Parser::new("MATCH").parse_statement().is_err());
+        assert!(Parser::new("MATCH Order WHERE").parse_statement().is_err());
+        assert!(Parser::new("MATCH Order ORDER BY").parse_statement().is_err());
+    }
+
     // ---- v0.3 K2: temporal + epistemic clauses ----
 
     fn parse_match(source: &str) -> MatchStatement {

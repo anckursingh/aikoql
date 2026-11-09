@@ -287,6 +287,9 @@ fn postgres_and_mongo_become_one_canonical_customer_class() {
     assert_eq!((by_type("customers"), by_type("clients")), (3, 4));
 
     // values the driver cannot decode natively survive (NUMERIC, TIMESTAMPTZ)
+    // the class generated from the table `orders` is `Order`, a keyword: it must be addressable
+    let class_orders = query(&l, "MATCH Order RETURN *");
+    assert_eq!(class_orders["results"].as_array().unwrap().len(), 2, "{class_orders}");
     let orders = query(&l, "MATCH orders RETURN *");
     let mut totals: Vec<f64> = orders["results"]
         .as_array()
