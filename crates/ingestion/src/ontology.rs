@@ -574,6 +574,29 @@ pub fn merge_proposals(proposals: &[OntologyProposal]) -> OntologyProposal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_snake_case_keeps_acronyms_and_screaming_snake_whole() {
+        for (input, want) in [
+            ("MD_WORKS_AT", "md_works_at"),
+            ("WORKS_AT", "works_at"),
+            ("customerId", "customer_id"),
+            ("createdAt", "created_at"),
+            ("userID", "user_id"),
+            ("HTTPServer", "http_server"),
+            ("parseURL", "parse_url"),
+            ("ID", "id"),
+            ("already_snake", "already_snake"),
+            ("two words", "two_words"),
+            ("a-b", "a_b"),
+            ("profile.city", "profile.city"),
+            ("Order2Items", "order2_items"),
+            ("__X__", "x"),
+            ("", ""),
+        ] {
+            assert_eq!(to_snake_case(input), want, "{input}");
+        }
+    }
     use crate::ir::{
         EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate, TemporalAssertion,
     };

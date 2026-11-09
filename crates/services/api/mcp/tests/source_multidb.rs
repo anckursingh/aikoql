@@ -492,3 +492,131 @@ fn mongo_bson_types_survive_import_and_mixed_fields_publish_as_text() {
         .expect("string _id kept");
     assert_eq!(other["properties"]["mixed"], "five");
 }
+
+/// Neo4j and ClickHouse sources through discover → preview → publish: classes
+/// per label/table, typed properties, relationship domain/range from the graph.
+#[test]
+fn neo4j_and_clickhouse_discover_into_classes_relationships_and_types() {
+    let (Some(neo), Some(ch)) = (connectors::Live::neo4j(), connectors::Live::clickhouse()) else {
+        return;
+    };
+    // Neo4j community has one database: namespaced labels, cleaned before and after
+    let clean = || {
+        connectors::neo4j_exec(
+            &neo.neo4j_uri,
+            &neo.neo4j_user,
+            &neo.neo4j_password,
+            &[
+                "MATCH (n:MdPerson) DETACH DELETE n",
+                "MATCH (n:MdCompany) DETACH DELETE n",
+            ],
+        )
+    };
+    clean();
+    connectors::neo4j_exec(
+        &neo.neo4j_uri,
+        &neo.neo4j_user,
+        &neo.neo4j_password,
+        &[
+            "CREATE (a:MdPerson {name: 'Ann', md_age: 30}), (b:MdPerson {name: 'Bob', md_nick: 'bobby'}), \
+              (c:MdCompany {name: 'Acme'}), (a)-[:MD_WORKS_AT {since: 2020}]->(c), (b)-[:MD_WORKS_AT]->(c)",
+        ],
+    );
+    let chdb = format!("md_{}", std::process::id());
+    connectors::clickhouse_exec(
+        &ch.clickhouse_url,
+        "default",
+        &[
+            &format!("DROP DATABASE IF EXISTS {chdb}"),
+            &format!("CREATE DATABASE {chdb}"),
+            &format!(
+                "CREATE TABLE {chdb}.events (id UInt64, user_id UInt64, kind LowCardinality(String), \
+                 at DateTime, note Nullable(String), score Float64) ENGINE = MergeTree \
+                 PARTITION BY toYYYYMM(at) ORDER BY (id)"
+            ),
+            &format!("CREATE TABLE {chdb}.users (id UInt64, email String) ENGINE = MergeTree ORDER BY id"),
+        ],
+    );
+    // the source URL carries the credentials, as an operator would configure it
+    let (host, user, pass) = {
+        let rest = neo.neo4j_uri.split_once("://").unwrap().1;
+        (
+            rest.to_string(),
+            neo.neo4j_user.clone(),
+            neo.neo4j_password.clone(),
+        )
+    };
+    let neo_url = format!("http://{user}:{pass}@{host}");
+    let l = Live::start(
+        "neoch",
+        &format!(
+            "[[sources]]\nname = \"graph\"\nkind = \"neo4j\"\nurl_env = \"MD_NEO\"\n\n\
+             [[sources]]\nname = \"olap\"\nkind = \"clickhouse\"\nurl_env = \"MD_CH\"\ndatabase = \"{chdb}\"\n"
+        ),
+        &[("MD_NEO", &neo_url), ("MD_CH", &ch.clickhouse_url)],
+        &[&pass],
+    );
+
+    let g = l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "graph"}),
+    );
+    assert!(g["containers"].as_u64().unwrap() >= 2, "{g}");
+    let o = l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "olap"}),
+    );
+    assert_eq!(o["containers"], 2, "{o}");
+
+    let p = l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["graph", "olap"], "preview": true}),
+    );
+    let classes = class_names(&p);
+    for want in ["MdPerson", "MdCompany", "Event", "User"] {
+        assert!(
+            classes.contains(&want.to_string()),
+            "{want} missing from {classes:?}"
+        );
+    }
+    l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["graph", "olap"], "preview": false, "fingerprints": p["fingerprints"]}),
+    );
+    let onto = data(&l.call("GET", "/api/v1/ontology", serde_json::json!({})));
+    let defs = onto["properties"]["property_defs"].as_array().unwrap();
+    let ty = |n: &str| {
+        defs.iter()
+            .find(|p| p["name"] == n)
+            .unwrap_or_else(|| panic!("no {n}: {onto}"))["type"]
+            .clone()
+    };
+    // sampled across nodes, not from one: Bob's `md_nick` and Ann's `md_age` are both found
+    assert_eq!(ty("md_nick"), "Text");
+    assert_eq!(ty("md_age"), "Int");
+    assert_eq!(ty("at"), "DateTime");
+    assert_eq!(ty("score"), "Float");
+    assert_eq!(ty("user_id"), "Int");
+    let note = defs.iter().find(|p| p["name"] == "note").unwrap();
+    assert_eq!(note["nullable"], true, "{note}");
+    // domain and range come from the actual graph pattern
+    let rel = onto["properties"]["relationships"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"].as_str().unwrap().contains("md_works_at"))
+        .unwrap_or_else(|| panic!("no works_at relationship: {}", onto["properties"]["relationships"]));
+    assert_eq!(
+        (rel["domain"].clone(), rel["range"].clone()),
+        ("MdPerson".into(), "MdCompany".into()),
+        "{rel}"
+    );
+
+    l.assert_no_secret_anywhere();
+    clean();
+    connectors::clickhouse_exec(
+        &ch.clickhouse_url,
+        "default",
+        &[&format!("DROP DATABASE IF EXISTS {chdb}")],
+    );
+}
