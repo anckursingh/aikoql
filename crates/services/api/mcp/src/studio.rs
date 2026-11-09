@@ -1982,6 +1982,34 @@ mod tests {
         );
     }
 
+    // ---- polish found by looking at screenshots ----
+
+    #[test]
+    fn the_navigation_scrolls_so_every_entry_is_reachable_on_a_short_window() {
+        let css = studio_css();
+        let at = css.find("#sidebar nav {").expect("the nav rule");
+        let rule = &css[at..at + css[at..].find('}').unwrap()];
+        assert!(rule.contains("overflow-y: auto") && rule.contains("min-height: 0"), "{rule}");
+    }
+
+    #[test]
+    fn a_destructive_palette_command_needs_more_than_a_letter() {
+        let page = page_for_tests();
+        assert!(page.contains("risky: true"), "Sign out is marked risky");
+        let render = js_fn("function renderPalette(");
+        assert!(render.contains("risky"), "the palette filters risky commands by query length");
+    }
+
+    #[test]
+    fn plain_form_controls_follow_the_theme_and_long_hints_do_not_collide() {
+        let css = studio_css();
+        assert!(css.contains("\nselect {") || css.contains("\nselect, "), "bare <select>s are styled by the theme");
+        assert!(css.contains(".query-editor-label { ") && css.contains("flex-wrap: wrap"), "the label row wraps");
+        let small = &css[css.find("@media (max-width: 799px)").unwrap()..];
+        assert!(small.contains(".query-editor-label span + span { display: none; }"), "the keyboard hint is hidden on touch screens");
+        assert!(small.contains(".header-spacer { flex-basis: 100%"), "the header breaks into a tidy second row");
+    }
+
     #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);

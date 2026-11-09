@@ -632,6 +632,25 @@ async function main() {
     await page.setViewportSize({ width: 1280, height: 720 }); await page.waitForTimeout(300);
     ok('on a desktop there is no toggle and the sidebar is open', await page.isHidden('#nav-toggle') && await page.isVisible('#sidebar'));
     await page.evaluate(() => { location.hash = '#/query'; });
+    // ---- polish from screenshots ----
+    await page.setViewportSize({ width: 1280, height: 560 }); await page.waitForTimeout(300);
+    const navScroll = await page.evaluate(() => { const n = document.querySelector('#sidebar nav'); n.scrollTop = n.scrollHeight; const last = [...n.querySelectorAll('button')].pop().getBoundingClientRect(), box = n.getBoundingClientRect(); return { overflowY: getComputedStyle(n).overflowY, scrolls: n.scrollHeight > n.clientHeight, lastInside: last.bottom <= box.bottom + 1 && last.top >= box.top }; });
+    ok('on a short window the navigation scrolls and its last entry is reachable', navScroll.overflowY === 'auto' && navScroll.scrolls && navScroll.lastInside, JSON.stringify(navScroll));
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.keyboard.press('Control+k'); await page.keyboard.type('o'); await page.waitForTimeout(200);
+    ok('one letter in the palette never offers Sign out first', !/Sign out/.test(await page.locator('#palette-list [role=option]').first().innerText()) && !/Sign out/.test(await page.innerText('#palette-list')));
+    await page.keyboard.press('Escape'); await page.keyboard.press('Control+k'); await page.keyboard.type('sign'); await page.waitForTimeout(200);
+    ok('...but typing "sign" finds it', /Sign out/.test(await page.locator('#palette-list [role=option]').first().innerText()));
+    await page.keyboard.press('Escape');
+    ok('bare selects follow the theme (a bordered, themed control)', (await css('#sources-tenant', 'borderTopWidth')) !== '0px' && lum(await css('#sources-tenant', 'backgroundColor')) < 0.05);
+    await page.setViewportSize({ width: 390, height: 844 }); await page.evaluate(() => { location.hash = '#/query'; }); await page.waitForTimeout(500);
+    const labelBoxes = await page.evaluate(() => [...document.querySelectorAll('.panel.active .query-editor-label span')].filter(e => e.offsetParent !== null).map(e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; }));
+    const overlap = labelBoxes.some((a, i) => labelBoxes.some((b, j) => i < j && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]));
+    ok('on a phone the editor label and its hint never overlap', !overlap, JSON.stringify(labelBoxes));
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.evaluate(() => { location.hash = '#/sources'; }); await page.waitForTimeout(1200);
+    ok('a one-table source says "1 container", not "1 containers"', !/\b1 containers\b/.test(await page.innerText('#sources-list')), (await page.innerText('#sources-list')).slice(0, 200));
+    await page.evaluate(() => { location.hash = '#/query'; }); await page.waitForTimeout(300);
     // ---- a dead cookie falls back to the form; signing in must still work ---
     await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });
