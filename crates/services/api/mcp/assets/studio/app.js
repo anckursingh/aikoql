@@ -621,7 +621,7 @@ function paletteCommands() {
     cmds.push({label: o.value ? 'Switch tenant: ' + o.value : 'Use each panel’s default tenant', hint: 'Tenant', run: () => { sel.value = o.value; setTenantContext(sel); }});
   });
   ['auto', 'light', 'dark'].forEach(m => cmds.push({label: 'Theme: ' + m, hint: 'Appearance', run: () => applyTheme(m)}));
-  cmds.push({label: 'Sign out', hint: 'Session', run: logout});
+  cmds.push({label: 'Sign out', hint: 'Session', risky: true, run: logout});
   const load = q => () => { switchPanel('query'); window.__cmSetValue(q); persistDraft(); };
   store.get('saved', []).forEach(s => cmds.push({label: 'Load saved: ' + s.name, hint: firstLine(s.q), run: load(s.q)}));
   store.get('history', []).slice(0, 10).forEach(h => cmds.push({label: 'Recent: ' + firstLine(h.q), hint: h.ok ? 'ok' : 'error', run: load(h.q)}));
@@ -629,7 +629,9 @@ function paletteCommands() {
 }
 function renderPalette() {
   const q = document.getElementById('palette-input').value;
-  paletteItems = paletteCommands().map(c => ({c: c, s: fuzzyScore(q, c.label)})).filter(x => x.s >= 0)
+  // a command that ends the session needs three typed characters (or an empty query, where it is listed last)
+  const typed = q.replace(/\s+/g, '').length;
+  paletteItems = paletteCommands().map(c => ({c: c, s: fuzzyScore(q, c.label)})).filter(x => x.s >= 0 && (!x.c.risky || typed === 0 || typed >= 3))
     .map((x, i) => Object.assign(x, {i: i})).sort((a, b) => b.s - a.s || a.i - b.i);
   paletteIdx = 0;
   document.getElementById('palette-list').innerHTML = paletteItems.length
@@ -1984,7 +1986,7 @@ function renderSourceCard(s) {
   return '<div class="card" style="margin-bottom:10px;">'
     + '<label style="float:right;font-size:11px;"><input type="checkbox" class="src-pick" data-name="'+esc(s.name)+'"> include in ontology</label>'
     + '<h4>'+esc(s.name)+' <span class="badge badge-cyan">'+esc(s.kind)+'</span> <span style="font-size:11px;color:var(--muted);">'+esc(s.tenant ? '@' + s.tenant : '')+'</span></h4>'
-    + '<div style="font-size:11px;color:var(--muted);margin:4px 0;">'+esc(last ? last.containers + ' containers' + (last.truncated ? ' (list truncated)' : '') + ' · schema ' + String(last.fingerprint).slice(0, 10) : 'not discovered yet')+'</div>'
+    + '<div style="font-size:11px;color:var(--muted);margin:4px 0;">'+esc(last ? last.containers + (last.containers === 1 ? ' container' : ' containers') + (last.truncated ? ' (list truncated)' : '') + ' · schema ' + String(last.fingerprint).slice(0, 10) : 'not discovered yet')+'</div>'
     + '<button class="btn btn-pri btn-sm" data-click="discoverSource" data-name="'+esc(s.name)+'">Discover</button>'
     + '<div style="margin:8px 0;font-size:11px;">'
     + names.map(n => '<label style="display:inline-block;margin-right:12px;"><input type="checkbox" class="imp-pick" data-source="'+esc(s.name)+'" data-name="'+esc(n)+'"> '+esc(n)+'</label>').join('')

@@ -117,6 +117,7 @@ pub const STUDIO_HTML: &str = r##"<!DOCTYPE html>
 }
 /* theme:end */
 * { margin: 0; padding: 0; box-sizing: border-box; }
+select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; font: 12px var(--font); }
 body { font-family: var(--font); background: var(--bg); color: var(--text); height: 100vh; display: flex; overflow: hidden; }
 
 /* ── Login ── */
@@ -138,7 +139,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); heig
 #sidebar .logo { font-size: 18px; margin-bottom: 6px; opacity: 0.9; flex-shrink: 0; }
 #sidebar .logo-text { display: none; font-size: 13px; font-weight: 700; color: var(--accent); white-space: nowrap; }
 #sidebar:hover .logo-text, #sidebar:has(:focus-visible) .logo-text { display: inline; margin-left: 10px; }
-#sidebar nav { flex: 1; display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 0 4px; }
+#sidebar nav { flex: 1; display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 0 4px; overflow-y: auto; min-height: 0; }
 #sidebar nav button { display: flex; align-items: center; width: 100%; padding: 10px 12px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; font-family: var(--font); border-radius: 6px; white-space: nowrap; text-align: left; transition: all 0.1s; }
 #sidebar nav button:hover { background: rgba(var(--accent-rgb),0.08); color: var(--text); }
 #sidebar nav button.active { background: rgba(var(--accent-rgb),0.14); color: var(--accent); }
@@ -213,7 +214,7 @@ tr:hover td { background: rgba(var(--accent-rgb),0.03); }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
 /* ── Query panel ── */
-.query-editor-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+.query-editor-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
 #query-editor { border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
 #query-editor:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb),0.12); }
 #query-editor .cm-editor { background: var(--code-bg); border-radius: 8px; }
@@ -348,6 +349,8 @@ td a:hover { text-decoration: underline; }
   #graph-area { height: calc(100dvh - 200px); min-height: 320px; }
   .graph-toolbar input { width: 150px; }
   #palette { top: 6vh; }
+  .query-editor-label span + span { display: none; }   /* the keyboard-shortcut hint means nothing on a touch screen */
+  .header-spacer { flex-basis: 100%; height: 0; }
   #toasts { left: 12px; right: 12px; max-width: none; }
 }
 </style>
@@ -1989,7 +1992,10 @@ mod tests {
         let css = studio_css();
         let at = css.find("#sidebar nav {").expect("the nav rule");
         let rule = &css[at..at + css[at..].find('}').unwrap()];
-        assert!(rule.contains("overflow-y: auto") && rule.contains("min-height: 0"), "{rule}");
+        assert!(
+            rule.contains("overflow-y: auto") && rule.contains("min-height: 0"),
+            "{rule}"
+        );
     }
 
     #[test]
@@ -1997,17 +2003,32 @@ mod tests {
         let page = page_for_tests();
         assert!(page.contains("risky: true"), "Sign out is marked risky");
         let render = js_fn("function renderPalette(");
-        assert!(render.contains("risky"), "the palette filters risky commands by query length");
+        assert!(
+            render.contains("risky"),
+            "the palette filters risky commands by query length"
+        );
     }
 
     #[test]
     fn plain_form_controls_follow_the_theme_and_long_hints_do_not_collide() {
         let css = studio_css();
-        assert!(css.contains("\nselect {") || css.contains("\nselect, "), "bare <select>s are styled by the theme");
-        assert!(css.contains(".query-editor-label { ") && css.contains("flex-wrap: wrap"), "the label row wraps");
+        assert!(
+            css.contains("\nselect {") || css.contains("\nselect, "),
+            "bare <select>s are styled by the theme"
+        );
+        assert!(
+            css.contains(".query-editor-label { ") && css.contains("flex-wrap: wrap"),
+            "the label row wraps"
+        );
         let small = &css[css.find("@media (max-width: 799px)").unwrap()..];
-        assert!(small.contains(".query-editor-label span + span { display: none; }"), "the keyboard hint is hidden on touch screens");
-        assert!(small.contains(".header-spacer { flex-basis: 100%"), "the header breaks into a tidy second row");
+        assert!(
+            small.contains(".query-editor-label span + span { display: none; }"),
+            "the keyboard hint is hidden on touch screens"
+        );
+        assert!(
+            small.contains(".header-spacer { flex-basis: 100%"),
+            "the header breaks into a tidy second row"
+        );
     }
 
     #[test]
