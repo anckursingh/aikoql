@@ -31,6 +31,22 @@ pub struct TableSchema {
     pub name: String,
     pub columns: Vec<ColumnInfo>,
     pub row_count: i64,
+    /// Column groups under a UNIQUE constraint or unique index (single and composite).
+    pub unique_groups: Vec<Vec<String>>,
+}
+
+/// A foreign key under construction: parent table and (seq, from, to) rows.
+type FkGroup = (String, Vec<(i64, String, Option<String>)>);
+
+/// One foreign key (composite keys keep every column pair, in order).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForeignKeyInfo {
+    /// SQLite names no constraints: `fk_<child>_<n>`.
+    pub constraint_name: String,
+    pub child_table: String,
+    pub child_columns: Vec<String>,
+    pub parent_table: String,
+    pub parent_columns: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -39,9 +55,59 @@ pub struct TableSchema {
 
 pub struct SqliteConnector {
     conn: Connection,
+    /// Dropped with the connector; that wakes and ends the deadline watchdog.
+    watchdog: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl SqliteConnector {
+    /// Stop this connector's own work `d` from now: a statement still running then
+    /// is interrupted. The caller's thread returns instead of spinning on, which a
+    /// waiter that merely gave up could never make it do.
+    pub fn with_deadline(mut self, d: std::time::Duration) -> Self {
+        let handle = self.conn.get_interrupt_handle();
+        let (done, rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            // dropping the connector drops `done`, which ends the wait early
+            if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(d) {
+                handle.interrupt();
+            }
+        });
+        self.watchdog = Some(done);
+        self
+    }
+
+    /// Open an existing database file strictly read-only: never creates the file,
+    /// never writes, and gives up on a lock after `busy_ms`.
+    pub fn open_read_only(path: &str, busy_ms: u64) -> Result<Self, String> {
+        use rusqlite::{ffi::ErrorCode, Error, OpenFlags};
+        let short = |e: Error| match e {
+            Error::SqliteFailure(f, _) => match f.code {
+                ErrorCode::NotADatabase => "not a SQLite database".to_string(),
+                ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => {
+                    "database is locked".to_string()
+                }
+                _ => "cannot open database (missing, unreadable or not a file)".to_string(),
+            },
+            _ => "cannot open database".to_string(),
+        };
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(short)?;
+        conn.busy_timeout(std::time::Duration::from_millis(busy_ms))
+            .map_err(short)?;
+        // force a read now, so a non-database file or a held lock fails here
+        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .map_err(short)?;
+        Ok(SqliteConnector {
+            conn,
+            watchdog: None,
+        })
+    }
+
     /// Open a SQLite database file. `:memory:` for an in-memory database.
     pub fn open(path: &str) -> Result<Self, String> {
         let conn = if path == ":memory:" {
@@ -53,7 +119,10 @@ impl SqliteConnector {
             )
         }
         .map_err(|e| format!("SQLite open failed: {}", e))?;
-        Ok(SqliteConnector { conn })
+        Ok(SqliteConnector {
+            conn,
+            watchdog: None,
+        })
     }
 
     // ------------------------------------------------------------------
@@ -76,8 +145,18 @@ impl SqliteConnector {
         Ok(tables)
     }
 
-    /// Introspect a table: columns, types, PK.
+    /// Introspect a table: columns, types, PK, exact row count.
     pub fn introspect_table(&self, table_name: &str) -> Result<TableSchema, String> {
+        self.introspect_table_with(table_name, true)
+    }
+
+    /// Like [`introspect_table`](Self::introspect_table); with `count = false` the
+    /// table is not scanned and `row_count` is `-1`.
+    pub fn introspect_table_with(
+        &self,
+        table_name: &str,
+        count: bool,
+    ) -> Result<TableSchema, String> {
         // PRAGMA table_info gives: cid, name, type, notnull, dflt_value, pk
         let mut stmt = self
             .conn
@@ -109,24 +188,159 @@ impl SqliteConnector {
             });
         }
 
-        // Row count.
-        let count: i64 = self
-            .conn
-            .query_row(
-                &format!(
-                    "SELECT COUNT(*) FROM \"{}\"",
-                    table_name.replace('"', "\"\"")
-                ),
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        // Row count (a full scan — skipped for schema-only discovery).
+        let count: i64 = if count {
+            self.conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM \"{}\"",
+                        table_name.replace('"', "\"\"")
+                    ),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0)
+        } else {
+            -1
+        };
 
         Ok(TableSchema {
             name: table_name.to_string(),
             columns,
             row_count: count,
+            unique_groups: self.unique_groups(table_name)?,
         })
+    }
+
+    /// Unique constraints and unique indexes (not the primary key), column order kept.
+    fn unique_groups(&self, table: &str) -> Result<Vec<Vec<String>>, String> {
+        let quoted = table.replace('"', "\"\"");
+        let mut idx = self
+            .conn
+            .prepare(&format!("PRAGMA index_list(\"{quoted}\")"))
+            .map_err(|e| format!("index_list {table}: {e}"))?;
+        // columns: seq, name, unique, origin, partial
+        let rows = idx
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(1)?,
+                    r.get::<_, bool>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| format!("index_list {table}: {e}"))?;
+        let mut groups = Vec::new();
+        for row in rows {
+            let (name, unique, origin) = row.map_err(|e| format!("index row: {e}"))?;
+            if !unique || origin == "pk" {
+                continue;
+            }
+            let mut info = self
+                .conn
+                .prepare(&format!(
+                    "PRAGMA index_info(\"{}\")",
+                    name.replace('"', "\"\"")
+                ))
+                .map_err(|e| format!("index_info {name}: {e}"))?;
+            let cols = info
+                .query_map([], |r| r.get::<_, Option<String>>(2))
+                .map_err(|e| format!("index_info {name}: {e}"))?;
+            let mut group = Vec::new();
+            for c in cols {
+                if let Some(c) = c.map_err(|e| format!("index col: {e}"))? {
+                    group.push(c);
+                }
+            }
+            if !group.is_empty() {
+                groups.push(group);
+            }
+        }
+        Ok(groups)
+    }
+
+    /// Primary-key columns of a table in key order.
+    fn primary_key_columns(&self, table: &str) -> Result<Vec<String>, String> {
+        let mut st = self
+            .conn
+            .prepare(&format!(
+                "PRAGMA table_info(\"{}\")",
+                table.replace('"', "\"\"")
+            ))
+            .map_err(|e| format!("table_info {table}: {e}"))?;
+        let rows = st
+            .query_map([], |r| Ok((r.get::<_, i64>(5)?, r.get::<_, String>(1)?)))
+            .map_err(|e| format!("table_info {table}: {e}"))?;
+        let mut pk: Vec<(i64, String)> = Vec::new();
+        for r in rows {
+            let (order, name) = r.map_err(|e| format!("pk row: {e}"))?;
+            if order > 0 {
+                pk.push((order, name));
+            }
+        }
+        pk.sort();
+        Ok(pk.into_iter().map(|(_, n)| n).collect())
+    }
+
+    /// Every foreign key of every user table.
+    pub fn introspect_foreign_keys(&self) -> Result<Vec<ForeignKeyInfo>, String> {
+        let mut out = Vec::new();
+        for table in self.list_tables()? {
+            let mut st = self
+                .conn
+                .prepare(&format!(
+                    "PRAGMA foreign_key_list(\"{}\")",
+                    table.replace('"', "\"\"")
+                ))
+                .map_err(|e| format!("foreign_key_list {table}: {e}"))?;
+            // columns: id, seq, table, from, to, on_update, on_delete, match
+            let rows = st
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                    ))
+                })
+                .map_err(|e| format!("foreign_key_list {table}: {e}"))?;
+            let mut by_id: std::collections::BTreeMap<i64, FkGroup> =
+                std::collections::BTreeMap::new();
+            for r in rows {
+                let (id, seq, parent, from, to) = r.map_err(|e| format!("fk row: {e}"))?;
+                by_id
+                    .entry(id)
+                    .or_insert_with(|| (parent, Vec::new()))
+                    .1
+                    .push((seq, from, to));
+            }
+            for (id, (parent, mut cols)) in by_id {
+                cols.sort();
+                // `REFERENCES parent` without columns means the parent's primary key
+                let implicit = if cols.iter().any(|(_, _, to)| to.is_none()) {
+                    self.primary_key_columns(&parent)?
+                } else {
+                    Vec::new()
+                };
+                let parent_columns = cols
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, _, to))| {
+                        to.clone()
+                            .or_else(|| implicit.get(i).cloned())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                out.push(ForeignKeyInfo {
+                    constraint_name: format!("fk_{table}_{id}"),
+                    child_table: table.clone(),
+                    child_columns: cols.into_iter().map(|(_, from, _)| from).collect(),
+                    parent_table: parent,
+                    parent_columns,
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// Introspect all user tables.
@@ -149,13 +363,26 @@ impl SqliteConnector {
         schema: &TableSchema,
         tenant: Option<&str>,
     ) -> Result<Vec<KnowledgeObject>, String> {
+        self.import_table_limited(schema, tenant, u64::MAX)
+            .map(|(objects, _)| objects)
+    }
+
+    /// At most `max_rows` rows; the flag says the table had more (memory stays
+    /// bounded: one extra row is read to know).
+    pub fn import_table_limited(
+        &self,
+        schema: &TableSchema,
+        tenant: Option<&str>,
+        max_rows: u64,
+    ) -> Result<(Vec<KnowledgeObject>, bool), String> {
+        let limit = max_rows.saturating_add(1).min(i64::MAX as u64);
         let col_names: Vec<String> = schema
             .columns
             .iter()
             .map(|c| format!("\"{}\"", c.name.replace('"', "\"\"")))
             .collect();
         let query = format!(
-            "SELECT {} FROM \"{}\"",
+            "SELECT {} FROM \"{}\" LIMIT {limit}",
             col_names.join(", "),
             schema.name.replace('"', "\"\"")
         );
@@ -234,7 +461,9 @@ impl SqliteConnector {
                 extensions: ExtensionMap::new(),
             });
         }
-        Ok(objects)
+        let truncated = objects.len() as u64 > max_rows;
+        objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
+        Ok((objects, truncated))
     }
 }
 
@@ -380,6 +609,54 @@ mod tests {
     }
 
     #[test]
+    fn foreign_keys_keep_every_column_of_a_composite_key() {
+        let conn = SqliteConnector::open(":memory:").unwrap();
+        conn.conn
+            .execute_batch(
+                "CREATE TABLE parent (a INTEGER, b INTEGER, PRIMARY KEY (a, b));
+                 CREATE TABLE solo (id INTEGER PRIMARY KEY);
+                 CREATE TABLE child (id INTEGER PRIMARY KEY, pa INTEGER, pb INTEGER, sid INTEGER,
+                   FOREIGN KEY (pa, pb) REFERENCES parent (a, b),
+                   FOREIGN KEY (sid) REFERENCES solo);",
+            )
+            .unwrap();
+        let fks = conn.introspect_foreign_keys().unwrap();
+        assert_eq!(fks.len(), 2, "{fks:?}");
+        let composite = fks.iter().find(|f| f.parent_table == "parent").unwrap();
+        assert_eq!(composite.child_table, "child");
+        assert_eq!(composite.child_columns, ["pa", "pb"]);
+        assert_eq!(composite.parent_columns, ["a", "b"]);
+        // `REFERENCES solo` names no column: it means the parent's primary key
+        let implicit = fks.iter().find(|f| f.parent_table == "solo").unwrap();
+        assert_eq!(implicit.child_columns, ["sid"]);
+        assert_eq!(implicit.parent_columns, ["id"]);
+        assert_ne!(composite.constraint_name, implicit.constraint_name);
+    }
+
+    #[test]
+    fn unique_groups_list_constraints_and_unique_indexes_but_not_the_pk() {
+        let conn = SqliteConnector::open(":memory:").unwrap();
+        conn.conn
+            .execute_batch(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY, code TEXT UNIQUE, x INTEGER, y INTEGER, z TEXT,
+                   UNIQUE (x, y));
+                 CREATE UNIQUE INDEX t_z ON t (z);
+                 CREATE INDEX t_plain ON t (code);",
+            )
+            .unwrap();
+        let mut groups = conn.introspect_table("t").unwrap().unique_groups;
+        groups.sort();
+        assert_eq!(
+            groups,
+            vec![
+                vec!["code".to_string()],
+                vec!["x".into(), "y".into()],
+                vec!["z".into()]
+            ]
+        );
+    }
+
+    #[test]
     fn import_rows_from_in_memory() {
         let conn = SqliteConnector::open(":memory:").unwrap();
         conn.conn
@@ -415,5 +692,188 @@ mod tests {
         let k1 = deterministic_koid("users", &["1".into()]);
         let k2 = deterministic_koid("users", &["1".into()]);
         assert_eq!(k1, k2);
+    }
+
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "aikoql-sqlite-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("db.sqlite")
+    }
+
+    #[test]
+    fn open_read_only_never_creates_a_missing_file() {
+        let p = tmp_path("missing");
+        assert!(SqliteConnector::open_read_only(p.to_str().unwrap(), 200).is_err());
+        assert!(!p.exists(), "read-only open must not create the file");
+    }
+
+    #[test]
+    fn open_read_only_rejects_a_file_that_is_not_a_database() {
+        let p = tmp_path("garbage");
+        std::fs::write(
+            &p,
+            b"this is definitely not a sqlite database, just text ".repeat(50),
+        )
+        .unwrap();
+        let r =
+            SqliteConnector::open_read_only(p.to_str().unwrap(), 200).and_then(|c| c.list_tables());
+        assert!(r.is_err(), "{r:?}");
+        let empty = tmp_path("empty");
+        std::fs::write(&empty, b"").unwrap();
+        // a zero-byte file is a valid empty database to SQLite: no tables, and no write
+        let tables = SqliteConnector::open_read_only(empty.to_str().unwrap(), 200)
+            .and_then(|c| c.list_tables());
+        assert!(tables.map(|t| t.is_empty()).unwrap_or(true));
+    }
+
+    #[test]
+    fn a_read_only_connection_cannot_write() {
+        let p = tmp_path("ro");
+        let rw = Connection::open(&p).unwrap();
+        rw.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t VALUES (1);")
+            .unwrap();
+        drop(rw);
+        let ro = SqliteConnector::open_read_only(p.to_str().unwrap(), 200).unwrap();
+        assert_eq!(ro.list_tables().unwrap(), ["t"]);
+        let w = ro.conn.execute_batch("INSERT INTO t VALUES (2)");
+        assert!(
+            w.is_err(),
+            "write on a read-only connection must fail: {w:?}"
+        );
+        assert!(ro.conn.execute_batch("CREATE TABLE u (x)").is_err());
+    }
+
+    #[test]
+    fn schema_only_introspection_does_not_scan_the_table() {
+        let c = SqliteConnector::open(":memory:").unwrap();
+        c.conn
+            .execute_batch(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t VALUES (1),(2),(3);",
+            )
+            .unwrap();
+        assert_eq!(c.introspect_table_with("t", false).unwrap().row_count, -1);
+        assert_eq!(c.introspect_table_with("t", true).unwrap().row_count, 3);
+    }
+
+    #[test]
+    fn a_runaway_statement_is_interrupted_at_the_deadline() {
+        let p = tmp_path("runaway");
+        Connection::open(&p)
+            .unwrap()
+            .execute_batch("CREATE TABLE t (id INTEGER);")
+            .unwrap();
+        let c = SqliteConnector::open_read_only(p.to_str().unwrap(), 300)
+            .unwrap()
+            .with_deadline(std::time::Duration::from_millis(300));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r = c.conn.query_row(
+                "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) FROM c",
+                [],
+                |r| r.get::<_, i64>(0),
+            );
+            let _ = tx.send(r.map_err(|e| e.to_string()));
+        });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(5));
+        let err = r
+            .expect("the statement was still running 5s after a 300ms deadline")
+            .unwrap_err();
+        assert!(err.contains("interrupt"), "{err}");
+    }
+
+    #[test]
+    fn a_connector_dropped_before_its_deadline_leaves_nothing_running() {
+        let p = tmp_path("dropped");
+        Connection::open(&p)
+            .unwrap()
+            .execute_batch("CREATE TABLE t (id INTEGER);")
+            .unwrap();
+        for _ in 0..50 {
+            let c = SqliteConnector::open_read_only(p.to_str().unwrap(), 300)
+                .unwrap()
+                .with_deadline(std::time::Duration::from_secs(3600));
+            assert!(c.list_tables().is_ok());
+        }
+    }
+
+    #[test]
+    fn a_locked_database_fails_within_the_busy_timeout() {
+        let p = tmp_path("locked");
+        let rw = Connection::open(&p).unwrap();
+        rw.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY);")
+            .unwrap();
+        rw.execute_batch("BEGIN EXCLUSIVE; INSERT INTO t VALUES (1);")
+            .unwrap(); // writer holds the lock
+        let started = std::time::Instant::now();
+        let r =
+            SqliteConnector::open_read_only(p.to_str().unwrap(), 300).and_then(|c| c.list_tables());
+        assert!(
+            r.is_err(),
+            "a reader must not read through an exclusive lock: {r:?}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        rw.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn hostile_table_and_column_names_introspect_without_injection() {
+        let c = SqliteConnector::open(":memory:").unwrap();
+        let long = "n".repeat(300);
+        c.conn
+            .execute_batch(&format!(
+                "CREATE TABLE victim (id INTEGER PRIMARY KEY);
+                 CREATE TABLE \"x\"\"; DROP TABLE victim; --\" (\"a b\" INTEGER PRIMARY KEY, \"it's\" TEXT);
+                 CREATE TABLE \"{long}\" (\"order\" INTEGER);
+                 CREATE TABLE \"ünï\u{202e}💥\" (c INTEGER);"
+            ))
+            .unwrap();
+        let all = c.introspect_all().unwrap();
+        assert_eq!(all.len(), 4);
+        assert!(all.iter().any(|t| t.name == "x\"; DROP TABLE victim; --"));
+        assert!(all.iter().any(|t| t.name == long));
+        c.introspect_foreign_keys().unwrap();
+        assert!(
+            c.list_tables().unwrap().contains(&"victim".to_string()),
+            "nothing was injected"
+        );
+    }
+
+    #[test]
+    fn import_table_limited_caps_rows_and_says_when_it_cut() {
+        let c = SqliteConnector::open(":memory:").unwrap();
+        c.conn
+            .execute_batch(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);
+                 INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e');",
+            )
+            .unwrap();
+        let schema = c.introspect_table("t").unwrap();
+        let (objs, cut) = c.import_table_limited(&schema, None, 3).unwrap();
+        assert_eq!((objs.len(), cut), (3, true));
+        let (objs, cut) = c.import_table_limited(&schema, None, 5).unwrap();
+        assert_eq!(
+            (objs.len(), cut),
+            (5, false),
+            "exactly the cap is not a cut"
+        );
+        let (objs, cut) = c.import_table_limited(&schema, None, 100).unwrap();
+        assert_eq!((objs.len(), cut), (5, false));
+        assert_eq!(
+            c.import_table(&schema, None).unwrap().len(),
+            5,
+            "the unlimited path is unchanged"
+        );
+        let (objs, cut) = c.import_table_limited(&schema, None, 0).unwrap();
+        assert_eq!((objs.len(), cut), (0, true));
     }
 }

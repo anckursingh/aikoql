@@ -311,7 +311,7 @@ fn parse_connector_schema_fact(statement: &str) -> Option<(String, String, bool)
 }
 
 /// Map a connector data type to an aikoql value type.
-fn connector_type_to_value_type(data_type: &str) -> &'static str {
+pub(crate) fn connector_type_to_value_type(data_type: &str) -> &'static str {
     let t = data_type.to_lowercase();
     if t.contains("date") || t.contains("time") || t.contains("timestamp") {
         "DateTime"
@@ -487,7 +487,7 @@ fn upsert_property(
 }
 
 /// Convert a CamelCase or space-separated name to snake_case.
-fn to_snake_case(name: &str) -> String {
+pub(crate) fn to_snake_case(name: &str) -> String {
     let mut out = String::new();
     for (i, ch) in name.chars().enumerate() {
         if ch == ' ' || ch == '-' {
@@ -649,9 +649,10 @@ mod tests {
         let ir = crate::connector_bridge::connector_metadata_to_ir(&meta);
         let proposal = discover_ontology_from_ir(&ir);
         assert!(
-            proposal.properties.iter().any(|p| {
-                p.name == "name" && p.value_type == "Text" && p.class_name == "postgresTable"
-            }),
+            proposal
+                .properties
+                .iter()
+                .any(|p| { p.name == "name" && p.value_type == "Text" && p.class_name == "User" }),
             "text column must propose a Text property: {:?}",
             proposal.properties
         );

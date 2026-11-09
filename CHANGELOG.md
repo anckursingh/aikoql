@@ -7,6 +7,29 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Data sources: schema discovery → canonical ontology
+- `[[sources]]` in `aikoql.toml` names external databases (PostgreSQL, MongoDB, Neo4j, SQLite, ClickHouse) by
+  an environment variable holding the connection string — never the string itself. Studio's **Data Sources**
+  panel discovers a source's schema (read-only, bounded), records it as versioned knowledge
+  (`aikoql:source`, `aikoql:source-table`, `aikoql:schema-run`), previews an ontology with **one class per
+  table**, lets a person merge classes and publish, and imports chosen tables (postgres/sqlite/mongodb,
+  row-capped, idempotent). Publishing merges into the manual ontology and never changes what a person wrote;
+  schema drift is reported, not applied. `MATCH <Class>` reads every mapped source and translates `WHERE`
+  property names through each mapping's `property_map`. New REST routes: `GET /api/v1/sources`,
+  `POST /api/v1/sources/{discover,ontology,import}` (all admin). See `docs/SOURCES.md`.
+- ClickHouse provider (`aikoql-clickhouse`): read-only, parameterised schema introspection over HTTP.
+- Provider introspection: composite foreign keys, unique groups and schema namespaces (Postgres), foreign
+  keys (SQLite), sampled field profiles (Mongo), schema procedures (Neo4j); capped imports.
+- Ontology discovery from connector metadata proposes one class per container instead of one per source kind.
+- Robustness: seeded fuzz and adversarial suites (`scripts/fuzz-sources.sh`).
+
+### Fixed
+- Neo4j connector: node labels and relationship types are escaped in Cypher (a label containing a backtick could
+  inject a second clause — proven by a live test that deleted another label's nodes).
+- REST: an unknown `/api/v1/*` path answered 500 instead of 404 (the default arm's "Not Found" did not match the
+  status mapping).
+- A source that accepts a connection and never answers can no longer hang a request: blocking driver calls run
+  behind a deadline.
 ### Tenant chat ("Ask")
 - `POST /api/v1/chat` and a Studio **Ask** panel answer questions from a tenant's knowledge with any
   OpenAI-compatible model endpoint (`[chat]` in `aikoql.toml`; unset = disabled, 503 / "No model
@@ -281,6 +304,7 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   `metadata.tenant` (tenant-less heads count under `default`) — a
   restart no longer empties the counters to re-learn as writes land.
   Before, `rebuild` existed but nothing wired it at startup.
+- **ClickHouse competitor column**: the benchmark harness gains a sixth engine — ClickHouse 24.8 over plain HTTP (stdlib urllib, no new deps; MergeTree `ORDER BY koid`, full-scan `cosineDistance`, app-side RRF) — the OLAP shape of device-identity providers. Point write/transactions/graph carry honest `no_analog`; the report re-stamps with all 22+ cells oracle-correct on macOS ARM.
 - **Error ergonomics (AG-05)**: every tool error now carries `hint` (what went wrong) and `next` (what to do) beside `code`/`message`/`retryable`/`suggestion`; the txn tools route through the shared envelope instead of a hardcoded INTERNAL. A hygiene gate drives every tool with empty args and asserts no isError result is a bare string.
 - **Procedural memory (AG-14)**: `record_experience` materializes a carried `lesson` as a first-class `aikoql:lesson` KO beside the experience and returns both (`lesson_koid` in the tool response); `match_experiences` ranks outcome-weighted — successful procedures first, failures last, unclassified between.
 - **Coordination primitives (AG-41)**: `claim_task` / `release_task` / `handoff_task` (kernel ops + MCP tools) — claims are a pipe-locked CAS with kernel-managed `claim_holder`/`claim_until` extensions, so a task is claimed exactly once and the loser gets CLAIM_CONFLICT; wall-clock leases expire on agent death, the holder re-claiming renews, and handoff transfers the claim and records an evidence-backed `aikoql:handoff` KO.
@@ -387,7 +411,6 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   session-scoped memories past a 24 h TTL whose salience dropped below
   0.5 — demotion is an epistemic Superseded, nothing is deleted and
   `forget` stays the only deletion path (AG-13c).
->>>>>>> e5b8f5a (docs: AG-13 status + changelog — salience/consolidation/decay done, recall@10 gate open)
 - **The agent-memory benchmark harnesses (AG-61)**: `longmemeval.py` runs
   LongMemEval-S retrieval through the product path (`memory_store` /
   `memory_search` over MCP stdio, per-question subjects, session-level

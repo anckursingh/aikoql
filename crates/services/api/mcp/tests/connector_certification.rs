@@ -1216,8 +1216,10 @@ fn ont001_live_discovery_merges_three_sources() {
                         is_primary_key: c.is_primary_key,
                         nullable: c.is_nullable,
                         is_unique: false,
+                        ..Default::default()
                     })
                     .collect(),
+                ..Default::default()
             })
             .collect();
         let references = fks
@@ -1236,6 +1238,7 @@ fn ont001_live_discovery_merges_three_sources() {
             containers,
             references,
             version: None,
+            ..Default::default()
         });
     }
 
@@ -1272,8 +1275,10 @@ fn ont001_live_discovery_merges_three_sources() {
                         data_type: "bson".into(),
                         nullable: true,
                         is_unique: false,
+                        ..Default::default()
                     })
                     .collect(),
+                ..Default::default()
             })
             .collect();
         metas.push(ConnectorMetadata {
@@ -1282,6 +1287,7 @@ fn ont001_live_discovery_merges_three_sources() {
             containers,
             references: vec![],
             version: None,
+            ..Default::default()
         });
     }
 
@@ -1323,10 +1329,12 @@ fn ont001_live_discovery_merges_three_sources() {
                         is_primary_key: false,
                         nullable: true,
                         is_unique: false,
+                        ..Default::default()
                     })
                     .collect(),
                 name: l,
                 row_count: conn.count_nodes(label).ok(),
+                ..Default::default()
             })
             .collect();
         let references: Vec<ReferenceInfo> = conn
@@ -1348,6 +1356,7 @@ fn ont001_live_discovery_merges_three_sources() {
             containers,
             references,
             version: None,
+            ..Default::default()
         });
     }
 
@@ -1362,19 +1371,22 @@ fn ont001_live_discovery_merges_three_sources() {
             .collect::<Vec<_>>(),
     );
 
-    // Classes: one per source container type — no per-table type explosion.
+    // Classes: one per container (never one per source kind).
     let class_names: Vec<&str> = merged.classes.iter().map(|c| c.name.as_str()).collect();
+    for want in ["OntParent", "OntChild", "CertOnt001People", "POnt001"] {
+        if metas.iter().any(|m| match m.connector_type.as_str() {
+            "postgres" => want.starts_with("Ont"),
+            "mongodb" => want == "CertOnt001People",
+            _ => want == "POnt001",
+        }) {
+            assert!(class_names.contains(&want), "classes: {class_names:?}");
+        }
+    }
     assert!(
-        class_names.contains(&"postgresTable"),
-        "classes: {class_names:?}"
-    );
-    assert!(
-        class_names.contains(&"mongodbCollection"),
-        "classes: {class_names:?}"
-    );
-    assert!(
-        class_names.contains(&"neo4jNodeLabel"),
-        "classes: {class_names:?}"
+        !class_names
+            .iter()
+            .any(|c| c.ends_with("Table") || c.ends_with("Collection") || c.ends_with("NodeLabel")),
+        "no per-kind collapse: {class_names:?}"
     );
     assert!(
         merged.classes.len() < 15,
@@ -1393,8 +1405,7 @@ fn ont001_live_discovery_merges_three_sources() {
     );
     assert!(
         merged.relationships.iter().any(|r| {
-            r.domain.as_deref() == Some("neo4jNodeLabel")
-                && r.name.replace('_', "") == "knowsont001"
+            r.domain.as_deref() == Some("POnt001") && r.name.replace('_', "") == "knowsont001"
         }),
         "graph rel must become a relationship proposal: {:?}",
         merged.relationships
@@ -1403,16 +1414,18 @@ fn ont001_live_discovery_merges_three_sources() {
     // Properties: schema facts must become typed proposals (RED today —
     // discover_ontology_from_ir yields none for connector-bridge facts).
     assert!(
-        merged.properties.iter().any(|p| {
-            p.name == "name" && p.class_name == "postgresTable" && p.value_type == "Text"
-        }),
+        merged
+            .properties
+            .iter()
+            .any(|p| { p.name == "name" && p.class_name == "OntParent" && p.value_type == "Text" }),
         "pg text column must propose a property: {:?}",
         merged.properties
     );
     assert!(
-        merged.properties.iter().any(|p| {
-            p.name == "age" && p.class_name == "postgresTable" && p.value_type == "Int"
-        }),
+        merged
+            .properties
+            .iter()
+            .any(|p| { p.name == "age" && p.class_name == "OntParent" && p.value_type == "Int" }),
         "pg int column must propose an Int property: {:?}",
         merged.properties
     );
@@ -1420,7 +1433,7 @@ fn ont001_live_discovery_merges_three_sources() {
         merged
             .properties
             .iter()
-            .any(|p| p.name == "id" && p.class_name == "postgresTable" && p.required),
+            .any(|p| p.name == "id" && p.class_name == "OntParent" && p.required),
         "pk column must propose a required property: {:?}",
         merged.properties
     );
@@ -1428,7 +1441,7 @@ fn ont001_live_discovery_merges_three_sources() {
         merged
             .properties
             .iter()
-            .any(|p| p.name == "note" && p.class_name == "postgresTable" && !p.required),
+            .any(|p| p.name == "note" && p.class_name == "OntChild" && !p.required),
         "nullable column must propose an optional property: {:?}",
         merged.properties
     );
@@ -1436,7 +1449,7 @@ fn ont001_live_discovery_merges_three_sources() {
         merged
             .properties
             .iter()
-            .any(|p| p.name == "name" && p.class_name == "mongodbCollection"),
+            .any(|p| p.name == "name" && p.class_name == "CertOnt001People"),
         "mongo field must propose a property: {:?}",
         merged.properties
     );
@@ -1444,7 +1457,7 @@ fn ont001_live_discovery_merges_three_sources() {
         merged
             .properties
             .iter()
-            .any(|p| p.name == "profile.city" && p.class_name == "mongodbCollection"),
+            .any(|p| p.name == "profile.city" && p.class_name == "CertOnt001People"),
         "nested mongo field must propose a dotted property: {:?}",
         merged.properties
     );
@@ -1452,7 +1465,7 @@ fn ont001_live_discovery_merges_three_sources() {
         merged
             .properties
             .iter()
-            .any(|p| p.name == "name" && p.class_name == "neo4jNodeLabel"),
+            .any(|p| p.name == "name" && p.class_name == "POnt001"),
         "neo4j label prop must propose a property: {:?}",
         merged.properties
     );
@@ -1728,4 +1741,288 @@ fn e2e004_multisource_query_single_coherent_result() {
         doc_hit,
         "no ingest-dir evidence in the coherent result: {types:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Source-schema discovery (provider hardening) — live cells, env-gated
+// ---------------------------------------------------------------------------
+
+#[test]
+fn src_pg_composite_fk_unique_groups_schema_and_hostile_names() {
+    let Some(live) = connectors::Live::pg() else {
+        return;
+    };
+    let dsn = connectors::pg_private_db(&live.dsn, "cert_src_pg");
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE parent (a INT, b INT, PRIMARY KEY (a, b))",
+            "CREATE TABLE child (id INT PRIMARY KEY, pa INT, pb INT, code TEXT UNIQUE, x INT, y INT,
+               UNIQUE (x, y), FOREIGN KEY (pa, pb) REFERENCES parent (a, b))",
+            "CREATE SCHEMA hr",
+            "CREATE TABLE hr.staff (id INT PRIMARY KEY)",
+            "CREATE TABLE \"we\"\"ird name\" (\"col umn\" INT PRIMARY KEY)",
+            "CREATE TABLE \"order\" (id INT PRIMARY KEY)",
+        ],
+    );
+    let mut conn = aikoql_postgres::PostgresConnector::connect(&dsn).expect("pg connect");
+    let fks = conn.introspect_foreign_keys().expect("fks");
+    let fk = fks
+        .iter()
+        .find(|f| f.child_table == "child")
+        .expect("child fk");
+    assert_eq!(fk.child_columns, ["pa", "pb"]);
+    assert_eq!(fk.parent_columns, ["a", "b"]);
+    assert_eq!(
+        (fk.child_column.as_str(), fk.parent_column.as_str()),
+        ("pa", "a")
+    );
+
+    let child = conn.introspect_table("child").expect("child");
+    let mut groups = child.unique_groups.clone();
+    groups.sort();
+    assert_eq!(
+        groups,
+        vec![vec!["code".to_string()], vec!["x".into(), "y".into()]]
+    );
+    assert_eq!(child.schema, "public");
+    assert_eq!(conn.introspect_table("staff").expect("staff").schema, "hr");
+
+    let all: Vec<String> = conn
+        .introspect_all()
+        .expect("all")
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert!(
+        all.contains(&"we\"ird name".to_string()) && all.contains(&"order".to_string()),
+        "{all:?}"
+    );
+}
+
+#[test]
+fn src_mongo_sampled_profile_reports_presence_and_types() {
+    let Some(live) = connectors::Live::mongo() else {
+        return;
+    };
+    let coll = "cert_src_mongo";
+    connectors::mongo_seed(
+        &live.mongo_uri,
+        &live.mongo_db,
+        coll,
+        vec![
+            mongodb::bson::doc! { "_id": 1, "age": 30, "name": "a" },
+            mongodb::bson::doc! { "_id": 2, "age": "old" },
+            mongodb::bson::doc! { "_id": 3, "name": "c", "age": mongodb::bson::Bson::Null },
+        ],
+    );
+    let conn =
+        aikoql_mongodb::MongoConnector::connect(&live.mongo_uri, &live.mongo_db).expect("mongo");
+    let stats = conn
+        .introspect_collection_sampled(coll, 100)
+        .expect("sampled");
+    let age = stats.iter().find(|s| s.name == "age").expect("age");
+    assert_eq!(age.types, ["Int32", "Null", "String"]);
+    assert_eq!(age.samples, 3);
+    assert!(
+        (stats
+            .iter()
+            .find(|s| s.name == "name")
+            .expect("name")
+            .presence_ratio()
+            - 2.0 / 3.0)
+            .abs()
+            < 1e-9
+    );
+}
+
+#[test]
+fn src_neo4j_label_schema_rel_patterns_and_no_label_injection() {
+    let Some(live) = connectors::Live::neo4j() else {
+        return;
+    };
+    let (uri, user, pass) = (&live.neo4j_uri, &live.neo4j_user, &live.neo4j_password);
+    connectors::neo4j_exec(
+        uri,
+        user,
+        pass,
+        &[
+            "MATCH (n:SrcPerson) DETACH DELETE n",
+            "MATCH (n:SrcVictim) DETACH DELETE n",
+            "CREATE (:SrcPerson {name:'a', age:30}), (:SrcPerson {name:'b', age:'old'}), (:SrcPerson {name:'c'})",
+            "MATCH (a:SrcPerson {name:'a'}), (b:SrcPerson {name:'b'}) CREATE (a)-[:SRC_KNOWS]->(b)",
+            "CREATE (:SrcVictim {keep:'me'})",
+        ],
+    );
+    let conn = aikoql_neo4j::Neo4jConnector::connect(uri, user, pass).expect("neo4j");
+    // a hostile label must not leave its identifier and run a second clause
+    let hostile =
+        "SrcPerson`) WITH n MATCH (v:SrcVictim) DETACH DELETE v WITH count(*) AS c MATCH (n:`SrcPerson";
+    let _ = conn.count_nodes(hostile);
+    let _ = conn.introspect_label_props(hostile);
+    let _ = conn.introspect_label_schema(hostile, 10);
+    assert_eq!(
+        conn.count_nodes("SrcVictim").expect("victim count"),
+        1,
+        "the injected DETACH DELETE must not have run"
+    );
+    let props = conn
+        .introspect_label_schema("SrcPerson", 100)
+        .expect("schema");
+    let get = |n: &str| {
+        props
+            .iter()
+            .find(|p| p.name == n)
+            .unwrap_or_else(|| panic!("no {n}: {props:?}"))
+    };
+    assert!(get("name").mandatory && !get("age").mandatory, "{props:?}");
+    assert!(get("age").types.len() == 2, "{props:?}");
+    let rels = conn.introspect_rel_patterns(50).expect("rels");
+    assert!(
+        rels.contains(&(
+            "SRC_KNOWS".to_string(),
+            "SrcPerson".to_string(),
+            "SrcPerson".to_string()
+        )),
+        "{rels:?}"
+    );
+}
+
+#[test]
+fn src_clickhouse_introspects_a_real_server_read_only() {
+    let Some(live) = connectors::Live::clickhouse() else {
+        return;
+    };
+    connectors::clickhouse_exec(
+        &live.clickhouse_url,
+        &live.clickhouse_db,
+        &[
+            "DROP TABLE IF EXISTS src_events",
+            "CREATE TABLE src_events (ts DateTime, user_id UInt64, note Nullable(String), kind LowCardinality(String)) \
+             ENGINE = MergeTree PARTITION BY toYYYYMM(ts) ORDER BY (toDate(ts), user_id)",
+            "INSERT INTO src_events VALUES (now(), 1, NULL, 'a'), (now(), 2, 'x', 'b')",
+            "DROP TABLE IF EXISTS `we\"ird tab`",
+            "CREATE TABLE `we\"ird tab` (`c o l` Int32) ENGINE = Log",
+        ],
+    );
+    let conn = aikoql_clickhouse::ClickHouseConnector::connect_with_timeout(
+        &live.clickhouse_url,
+        &live.clickhouse_db,
+        Some(15_000),
+    )
+    .expect("connect");
+    assert!(!conn.version().is_empty());
+    let tables = conn.introspect_all(500).expect("introspect");
+    let ev = tables
+        .iter()
+        .find(|t| t.name == "src_events")
+        .expect("src_events");
+    assert_eq!(ev.engine, "MergeTree");
+    assert_eq!(ev.sorting_key, ["toDate(ts)", "user_id"]);
+    assert_eq!(ev.partition_key, "toYYYYMM(ts)");
+    let col = |n: &str| {
+        ev.columns
+            .iter()
+            .find(|c| c.name == n)
+            .unwrap_or_else(|| panic!("no {n}"))
+    };
+    assert!(col("note").is_nullable && !col("note").is_low_cardinality);
+    assert!(col("kind").is_low_cardinality && col("kind").ch_type == "String");
+    assert_eq!(col("user_id").ch_type, "UInt64");
+    assert!(tables
+        .iter()
+        .any(|t| t.name == "we\"ird tab" && t.columns.iter().any(|c| c.name == "c o l")));
+    // the database name is a bound parameter: a hostile one finds nothing and breaks nothing
+    let hostile = aikoql_clickhouse::ClickHouseConnector::connect_with_timeout(
+        &live.clickhouse_url,
+        "analytics' OR 1=1 --",
+        Some(15_000),
+    )
+    .expect("connect");
+    assert!(hostile.introspect_all(10).expect("hostile db").is_empty());
+}
+
+#[test]
+fn src_pg_read_only_session_and_estimate_without_scanning() {
+    let Some(live) = connectors::Live::pg() else {
+        return;
+    };
+    let dsn = connectors::pg_private_db(&live.dsn, "cert_src_pg_ro");
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE ro_t (id INT PRIMARY KEY, v TEXT)",
+            "INSERT INTO ro_t SELECT g, 'x' FROM generate_series(1, 1000) g",
+            "ANALYZE ro_t",
+        ],
+    );
+    let mut conn =
+        aikoql_postgres::PostgresConnector::connect_with_timeout(&dsn, Some(10_000)).expect("pg");
+    assert!(
+        !conn.is_read_only().expect("show"),
+        "a fresh session is read-write"
+    );
+    conn.read_only_session().expect("set");
+    assert!(
+        conn.is_read_only().expect("show"),
+        "the session must now refuse writes"
+    );
+    let t = conn.introspect_table_with("ro_t", false).expect("light");
+    assert!(
+        (900..=1100).contains(&t.row_count_estimate),
+        "estimate {}",
+        t.row_count_estimate
+    );
+    assert_eq!(
+        conn.introspect_table_with("ro_t", true)
+            .expect("exact")
+            .row_count_estimate,
+        1000
+    );
+}
+
+#[test]
+fn src_pg_and_mongo_capped_imports_cut_at_the_cap_and_say_so() {
+    if let Some(live) = connectors::Live::pg() {
+        let dsn = connectors::pg_private_db(&live.dsn, "cert_src_cap");
+        connectors::pg_exec(
+            &dsn,
+            &[
+                "CREATE TABLE cap_t (id INT PRIMARY KEY, v TEXT)",
+                "INSERT INTO cap_t SELECT g, 'x' FROM generate_series(1, 5) g",
+            ],
+        );
+        let mut c = aikoql_postgres::PostgresConnector::connect(&dsn).expect("pg");
+        let schema = c.introspect_table("cap_t").expect("schema");
+        let (objs, cut) = c.import_table_limited(&schema, None, 3).expect("limited");
+        assert_eq!((objs.len(), cut), (3, true));
+        let (objs, cut) = c.import_table_limited(&schema, None, 5).expect("exact");
+        assert_eq!((objs.len(), cut), (5, false));
+    }
+    if let Some(live) = connectors::Live::mongo() {
+        let coll = "cert_src_cap";
+        connectors::mongo_seed(
+            &live.mongo_uri,
+            &live.mongo_db,
+            coll,
+            (1..=5)
+                .map(|i| mongodb::bson::doc! { "_id": i, "v": "x" })
+                .collect(),
+        );
+        let c = aikoql_mongodb::MongoConnector::connect(&live.mongo_uri, &live.mongo_db)
+            .expect("mongo");
+        let schema = aikoql_mongodb::CollectionSchema {
+            name: coll.into(),
+            document_count: 5,
+            properties: vec![],
+        };
+        let (objs, cut) = c
+            .import_collection_limited(&schema, None, 3)
+            .expect("limited");
+        assert_eq!((objs.len(), cut), (3, true));
+        let (objs, cut) = c
+            .import_collection_limited(&schema, None, 5)
+            .expect("exact");
+        assert_eq!((objs.len(), cut), (5, false));
+    }
 }

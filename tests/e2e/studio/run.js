@@ -14,7 +14,7 @@
 // nothing. So every delegated control is CLICKED and must react, the named
 // flows are checked end to end, and any CSP violation fails the run.
 'use strict';
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const net = require('net');
 const os = require('os');
@@ -104,11 +104,18 @@ async function main() {
   const BASE = `http://127.0.0.1:${port}`;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aikoql-studio-e2e-'));
   // max_pages = 2: the 4-slide deck below is read in two batches
+  // Source-discovery fixtures: three SQLite databases built with python's stdlib.
+  const mkdb = (file, sql) => execFileSync('python3', ['-c', 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.executescript(sys.argv[2]); c.commit(); c.close()', file, sql]);
+  const crmDb = path.join(dir, 'crm.sqlite'), shopDb = path.join(dir, 'shop.sqlite'), weirdDb = path.join(dir, 'weird.sqlite');
+  mkdb(crmDb, "CREATE TABLE customers (id INTEGER PRIMARY KEY, email TEXT NOT NULL); CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES customers(id), total REAL); INSERT INTO customers VALUES (1, 'a@x.test');");
+  mkdb(shopDb, "CREATE TABLE clients (id INTEGER PRIMARY KEY, email_address TEXT NOT NULL); INSERT INTO clients VALUES (7, 'b@y.test');");
+  mkdb(weirdDb, 'CREATE TABLE "<img src=x onerror=window.__pwned=1>" (id INTEGER PRIMARY KEY, "<b>col</b>" TEXT);');
+  const sourcesToml = ['crm', 'shop', 'weird'].map(n => `[[sources]]\nname = "${n}"\nkind = "sqlite"\nurl_env = "E2E_${n.toUpperCase()}_DB"\n`).join('\n');
   const chatState = { companyKoid: '' };
   const chatStub = await startChatStub(chatState);
-  fs.writeFileSync(path.join(dir, 'aikoql.toml'), `[ingestion]\nmax_pages = 2\n[chat]\nurl = "http://127.0.0.1:${chatStub.address().port}"\nmodel = "e2e-stub"\n`);
+  fs.writeFileSync(path.join(dir, 'aikoql.toml'), `[ingestion]\nmax_pages = 2\n[chat]\nurl = "http://127.0.0.1:${chatStub.address().port}"\nmodel = "e2e-stub"\n\n` + sourcesToml);
   const server = spawn(BIN, ['serve', '--config', path.join(dir, 'aikoql.toml'), '--metrics-addr', `127.0.0.1:${port}`, path.join(dir, 'db')], {
-    env: { ...process.env, AIKOQL_ADMIN_PASSWORD: PW }, stdio: ['ignore', 'ignore', 'pipe'],
+    env: { ...process.env, AIKOQL_ADMIN_PASSWORD: PW, E2E_CRM_DB: crmDb, E2E_SHOP_DB: shopDb, E2E_WEIRD_DB: weirdDb }, stdio: ['ignore', 'ignore', 'pipe'],
   });
   let serverLog = ''; server.stderr.on('data', d => { serverLog += d; });
   let browser;
@@ -233,6 +240,42 @@ async function main() {
     await page.selectOption('#ontology-tenant', ''); await page.waitForTimeout(700);
     ok('switching back to Global shows the global ontology', /e2e-ns/.test(await page.inputValue('#ontology-yaml-input')), await page.inputValue('#ontology-yaml-input'));
 
+    // ---- Data Sources: discover, preview, merge, publish, import, query ------
+    const tryClick = async sel => { await page.locator(sel).first().click({ timeout: 2000 }).catch(() => {}); await page.waitForTimeout(500); };
+    await tryClick('button[data-panel="sources"]');
+    await page.waitForTimeout(700);
+    const listText = await page.innerText('#sources-list').catch(() => '');
+    ok('Data Sources lists the configured sources', /crm/.test(listText) && /shop/.test(listText) && /weird/.test(listText), listText.slice(0, 200));
+    await tryClick('[data-click="discoverSource"][data-name="crm"]');
+    ok('Discover reports the container count', /2 containers/.test(await page.innerText('#sources-result').catch(() => '')), await page.innerText('#sources-result').catch(() => 'no panel'));
+    await tryClick('[data-click="discoverSource"][data-name="shop"]');
+    await tryClick('[data-click="discoverSource"][data-name="weird"]');
+    await page.locator('.src-pick[data-name="crm"]').check({ timeout: 2000 }).catch(() => {});
+    await page.locator('.src-pick[data-name="shop"]').check({ timeout: 2000 }).catch(() => {});
+    await tryClick('[data-click="previewSourceOntology"]');
+    const preview1 = await page.innerText('#sources-preview').catch(() => '');
+    ok('Preview proposes one class per table, as new', /Customer/.test(preview1) && /Order/.test(preview1) && /Client/.test(preview1) && /new/.test(preview1), preview1.slice(0, 200));
+    await page.locator('.cls-pick[data-class="Customer"]').check({ timeout: 2000 }).catch(() => {});
+    await page.locator('.cls-pick[data-class="Client"]').check({ timeout: 2000 }).catch(() => {});
+    await tryClick('[data-click="mergeSelectedClasses"]');
+    const preview2 = await page.innerText('#sources-preview').catch(() => '');
+    ok('Merging two classes leaves one class with both tables', /Customer/.test(preview2) && !/Client/.test(preview2.replace(/clients/g, '')), preview2.slice(0, 300));
+    await tryClick('[data-click="applySourceOntology"]');
+    ok('Publish saves the ontology', /Published/.test(await page.innerText('#sources-msg').catch(() => '')), await page.innerText('#sources-msg').catch(() => ''));
+    const onto = ((await (await fetch(BASE + '/api/v1/ontology', { headers: H })).json()).data || {}).properties || {};
+    const classNames = (onto.classes || []).map(c => c.name);
+    ok('the published ontology has Customer (not Client) mapped to both tables', classNames.includes('Customer') && !classNames.includes('Client') && (onto.mappings || []).filter(m => m.class === 'Customer').length === 2, JSON.stringify(classNames));
+    await page.locator('.imp-pick[data-source="crm"][data-name="customers"]').check({ timeout: 2000 }).catch(() => {});
+    await tryClick('[data-click="importSource"][data-name="crm"]');
+    await page.locator('.imp-pick[data-source="shop"][data-name="clients"]').check({ timeout: 2000 }).catch(() => {});
+    await tryClick('[data-click="importSource"][data-name="shop"]');
+    const matched = await (await fetch(BASE + '/api/aikoql?query=' + encodeURIComponent('MATCH Customer RETURN *'), { headers: H })).text();
+    ok('MATCH Customer returns the rows of both sources', (matched.match(/"koid"/g) || []).length >= 2, matched.slice(0, 200));
+    await tryClick('button[data-panel="sources"]');
+    ok('hostile table and column names are rendered inertly',
+      await page.evaluate(() => document.querySelectorAll('#panel-sources [onerror], #panel-sources img').length === 0 && !window.__pwned) && /<img src=x onerror/.test(await page.textContent('#sources-list').catch(() => '')));
+    ok('no CSP violation and no console error on the Data Sources panel',
+      (await page.evaluate(() => window.__csp)).length === 0 && consoleErrors.filter(e => !/Failed to load resource/.test(e)).length === 0, consoleErrors.join(' || '));
     // ---- Ask: a grounded answer, a refusal, a koid link, a hostile answer ---
     const askSubmit = async q => {
       await page.fill('#ask-question', q, { timeout: 1500 }).catch(() => {});

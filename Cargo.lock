@@ -103,6 +103,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aikoql-clickhouse"
+version = "0.4.0"
+dependencies = [
+ "serde_json",
+ "ureq 2.12.1",
+]
+
+[[package]]
 name = "aikoql-compiler"
 version = "0.4.0"
 dependencies = [
@@ -182,6 +190,7 @@ dependencies = [
 name = "aikoql-mcp"
 version = "0.4.0"
 dependencies = [
+ "aikoql-clickhouse",
  "aikoql-compiler",
  "aikoql-graph",
  "aikoql-ingestion",

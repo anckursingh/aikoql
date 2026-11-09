@@ -22,11 +22,103 @@ pub struct CollectionSchema {
     pub properties: Vec<String>,
 }
 
+/// What a sample of documents showed about one (dotted) field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldStats {
+    pub name: String,
+    /// Observed BSON type names, sorted (`Null` included when seen).
+    pub types: Vec<String>,
+    pub present: u64,
+    pub nulls: u64,
+    pub samples: u64,
+}
+
+impl FieldStats {
+    pub fn presence_ratio(&self) -> f64 {
+        if self.samples == 0 {
+            0.0
+        } else {
+            self.present as f64 / self.samples as f64
+        }
+    }
+    pub fn null_ratio(&self) -> f64 {
+        if self.present == 0 {
+            0.0
+        } else {
+            self.nulls as f64 / self.present as f64
+        }
+    }
+}
+
+/// Field statistics over a slice of documents (pure; no server needed).
+pub fn profile_from_docs(docs: &[Document]) -> Vec<FieldStats> {
+    use std::collections::{BTreeSet, HashSet};
+    /// Deeper nesting is reported as a plain `Document`, not descended into.
+    const MAX_DEPTH: usize = 64;
+    #[derive(Default)]
+    struct Acc {
+        types: BTreeSet<String>,
+        present: u64,
+        nulls: u64,
+    }
+    fn walk(
+        prefix: &str,
+        doc: &Document,
+        depth: usize,
+        acc: &mut BTreeMap<String, Acc>,
+        once: &mut HashSet<String>,
+    ) {
+        for (k, v) in doc.iter() {
+            let path = if prefix.is_empty() {
+                k.clone()
+            } else {
+                format!("{prefix}.{k}")
+            };
+            let a = acc.entry(path.clone()).or_default();
+            a.types.insert(bson_type_name(v));
+            if once.insert(path.clone()) {
+                a.present += 1;
+                if matches!(v, Bson::Null) {
+                    a.nulls += 1;
+                }
+            }
+            if let Bson::Document(sub) = v {
+                if depth < MAX_DEPTH {
+                    walk(&path, sub, depth + 1, acc, once);
+                }
+            }
+        }
+    }
+    let mut acc: BTreeMap<String, Acc> = BTreeMap::new();
+    for d in docs {
+        walk("", d, 0, &mut acc, &mut HashSet::new());
+    }
+    acc.into_iter()
+        .map(|(name, a)| FieldStats {
+            name,
+            types: a.types.into_iter().collect(),
+            present: a.present,
+            nulls: a.nulls,
+            samples: docs.len() as u64,
+        })
+        .collect()
+}
+
+fn bson_type_name(b: &Bson) -> String {
+    match b {
+        Bson::Document(_) => "Document".into(),
+        Bson::Null => "Null".into(),
+        other => format!("{:?}", other.element_type()),
+    }
+}
+
 pub struct MongoConnector {
     rt: Runtime,
     #[allow(dead_code)]
     client: Client, // held for lifetime; db borrows from it
     db: mongodb::Database,
+    /// Absolute time after which this connector abandons its own work.
+    deadline: Option<std::time::Instant>,
 }
 
 impl MongoConnector {
@@ -56,43 +148,96 @@ impl MongoConnector {
             let db = client.database(database);
             Ok::<_, String>((client, db))
         })?;
-        Ok(MongoConnector { rt, client, db })
+        Ok(MongoConnector {
+            rt,
+            client,
+            db,
+            deadline: None,
+        })
+    }
+
+    /// Give every operation of this connector until `d` from now; later ones fail
+    /// with "timed out" and the in-flight future is dropped, so the caller's thread
+    /// returns instead of waiting on an unresponsive server.
+    pub fn with_deadline(mut self, d: std::time::Duration) -> Self {
+        self.deadline = Some(std::time::Instant::now() + d);
+        self
+    }
+
+    fn block<T>(
+        &self,
+        fut: impl std::future::Future<Output = Result<T, String>>,
+    ) -> Result<T, String> {
+        let Some(deadline) = self.deadline else {
+            return self.rt.block_on(fut);
+        };
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        // the timer must be created inside the runtime, hence the async block
+        self.rt
+            .block_on(async { tokio::time::timeout(left, fut).await })
+            .unwrap_or_else(|_| Err("timed out".to_string()))
     }
 
     pub fn list_collections(&self) -> Result<Vec<String>, String> {
-        self.rt
-            .block_on(async { self.db.list_collection_names().await })
-            .map_err(|e| format!("list collections: {}", e))
+        self.block(async {
+            self.db
+                .list_collection_names()
+                .await
+                .map_err(|e| format!("list collections: {}", e))
+        })
     }
 
     pub fn introspect_collection(&self, name: &str) -> Result<CollectionSchema, String> {
-        self.rt
-            .block_on(async {
-                let coll = self.db.collection::<Document>(name);
-                let count = coll
-                    .count_documents(doc! {})
-                    .await
-                    .map_err(|e| format!("count {}: {}", name, e))?;
-                let mut props: Vec<String> = Vec::new();
-                let opts = mongodb::options::FindOptions::builder().limit(100).build();
-                let mut cursor = coll
-                    .find(doc! {})
-                    .with_options(opts)
-                    .await
-                    .map_err(|e| format!("sample {}: {}", name, e))?;
-                use futures_util::StreamExt;
-                while let Some(Ok(d)) = cursor.next().await {
-                    collect_keys("", &d, &mut props);
-                }
-                props.sort();
-                props.dedup();
-                Ok(CollectionSchema {
-                    name: name.to_string(),
-                    document_count: count,
-                    properties: props,
-                })
+        self.block(async {
+            let coll = self.db.collection::<Document>(name);
+            let count = coll
+                .count_documents(doc! {})
+                .await
+                .map_err(|e| format!("count {}: {}", name, e))?;
+            let mut props: Vec<String> = Vec::new();
+            let opts = mongodb::options::FindOptions::builder().limit(100).build();
+            let mut cursor = coll
+                .find(doc! {})
+                .with_options(opts)
+                .await
+                .map_err(|e| format!("sample {}: {}", name, e))?;
+            use futures_util::StreamExt;
+            while let Some(Ok(d)) = cursor.next().await {
+                collect_keys("", &d, &mut props);
+            }
+            props.sort();
+            props.dedup();
+            Ok(CollectionSchema {
+                name: name.to_string(),
+                document_count: count,
+                properties: props,
             })
-            .map_err(|e: String| e)
+        })
+        .map_err(|e: String| e)
+    }
+
+    /// Field statistics from a random `$sample` of up to `sample_limit` documents.
+    pub fn introspect_collection_sampled(
+        &self,
+        name: &str,
+        sample_limit: u32,
+    ) -> Result<Vec<FieldStats>, String> {
+        let docs: Vec<Document> = self.block(async {
+            use futures_util::StreamExt;
+            let coll = self.db.collection::<Document>(name);
+            let mut cursor = coll
+                .aggregate(vec![
+                    doc! { "$sample": { "size": sample_limit.clamp(1, 10_000) as i64 } },
+                ])
+                .await
+                .map_err(|e| format!("sample {name}: {e}"))?;
+            let mut out = Vec::new();
+            while let Some(d) = cursor.next().await {
+                out.push(d.map_err(|e| format!("sample {name}: {e}"))?);
+            }
+            Ok::<_, String>(out)
+        })?;
+        Ok(profile_from_docs(&docs))
     }
 
     pub fn introspect_all(&self) -> Result<Vec<CollectionSchema>, String> {
@@ -109,49 +254,63 @@ impl MongoConnector {
         schema: &CollectionSchema,
         tenant: Option<&str>,
     ) -> Result<Vec<KnowledgeObject>, String> {
-        self.rt
-            .block_on(async {
-                let coll = self.db.collection::<Document>(&schema.name);
-                let mut cursor = coll
-                    .find(doc! {})
-                    .await
-                    .map_err(|e| format!("import {}: {}", schema.name, e))?;
-                use futures_util::StreamExt;
-                let mut objects = Vec::new();
-                while let Some(Ok(doc)) = cursor.next().await {
-                    let (props, koid) = document_to_ko(&doc, &schema.name);
-                    objects.push(KnowledgeObject {
-                        koid,
-                        version: 0,
-                        commit_ts: 0,
-                        metadata: Metadata {
-                            type_name: schema.name.clone(),
-                            tenant: tenant.map(String::from),
-                            schema_version: 1,
-                            tags: vec!["imported".into(), "source:mongodb".into()],
-                        },
-                        properties: props,
-                        semantic: None,
-                        relationships: vec![],
-                        event_refs: vec![],
-                        security: SecurityDescriptor {
-                            // Must equal the runner subject "mongo-importer" —
-                            // a mismatch makes every commit ACCESS_DENIED and
-                            // the whole import a silent no-op (item 2 lesson).
-                            owner: "mongo-importer".into(),
-                            acl: vec![],
-                            classification: None,
-                        },
-                        lifecycle: Lifecycle {
-                            state: LifecycleState::Draft,
-                            origin: Origin::Human,
-                        },
-                        extensions: ExtensionMap::new(),
-                    });
-                }
-                Ok(objects)
-            })
-            .map_err(|e: String| e)
+        self.import_collection_limited(schema, tenant, u64::MAX)
+            .map(|(objects, _)| objects)
+    }
+
+    /// At most `max_rows` documents; the flag says the collection had more.
+    pub fn import_collection_limited(
+        &self,
+        schema: &CollectionSchema,
+        tenant: Option<&str>,
+        max_rows: u64,
+    ) -> Result<(Vec<KnowledgeObject>, bool), String> {
+        let limit = max_rows.saturating_add(1).min(i64::MAX as u64) as i64;
+        self.block(async {
+            let coll = self.db.collection::<Document>(&schema.name);
+            let mut cursor = coll
+                .find(doc! {})
+                .limit(limit)
+                .await
+                .map_err(|e| format!("import {}: {}", schema.name, e))?;
+            use futures_util::StreamExt;
+            let mut objects = Vec::new();
+            while let Some(Ok(doc)) = cursor.next().await {
+                let (props, koid) = document_to_ko(&doc, &schema.name);
+                objects.push(KnowledgeObject {
+                    koid,
+                    version: 0,
+                    commit_ts: 0,
+                    metadata: Metadata {
+                        type_name: schema.name.clone(),
+                        tenant: tenant.map(String::from),
+                        schema_version: 1,
+                        tags: vec!["imported".into(), "source:mongodb".into()],
+                    },
+                    properties: props,
+                    semantic: None,
+                    relationships: vec![],
+                    event_refs: vec![],
+                    security: SecurityDescriptor {
+                        // Must equal the runner subject "mongo-importer" —
+                        // a mismatch makes every commit ACCESS_DENIED and
+                        // the whole import a silent no-op (item 2 lesson).
+                        owner: "mongo-importer".into(),
+                        acl: vec![],
+                        classification: None,
+                    },
+                    lifecycle: Lifecycle {
+                        state: LifecycleState::Draft,
+                        origin: Origin::Human,
+                    },
+                    extensions: ExtensionMap::new(),
+                });
+            }
+            let truncated = objects.len() as u64 > max_rows;
+            objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
+            Ok((objects, truncated))
+        })
+        .map_err(|e: String| e)
     }
 }
 
@@ -253,6 +412,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_operation_that_never_returns_fails_at_the_deadline() {
+        let c = MongoConnector::connect_with_timeout("mongodb://127.0.0.1:1", "d", Some(500))
+            .unwrap()
+            .with_deadline(std::time::Duration::from_millis(300));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r: Result<(), String> = c.block(std::future::pending());
+            let _ = tx.send(r);
+        });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(5));
+        let err = r
+            .expect("still blocked 5s after a 300ms deadline")
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+    }
+
+    #[test]
+    fn a_connector_without_a_deadline_is_unbounded_by_it() {
+        let c =
+            MongoConnector::connect_with_timeout("mongodb://127.0.0.1:1", "d", Some(500)).unwrap();
+        let r: Result<u8, String> = c.block(async { Ok(7) });
+        assert_eq!(r, Ok(7));
+    }
+
+    #[test]
     fn bson_scalars_to_value() {
         assert_eq!(bson_to_value(&Bson::Int32(42)), Value::Int(42));
         assert_eq!(
@@ -312,5 +496,123 @@ mod tests {
         collect_keys("", &doc, &mut keys);
         assert!(keys.contains(&"name".into()));
         assert!(keys.contains(&"addr.city".into()));
+    }
+
+    #[test]
+    fn profile_reports_types_presence_and_nulls() {
+        let docs = vec![
+            doc! { "_id": 1, "age": 30, "name": "a", "addr": { "city": "X" } },
+            doc! { "_id": 2, "age": Bson::Null, "name": "b" },
+            doc! { "_id": 3, "age": "unknown", "addr": { "city": "Y" } },
+            doc! { "_id": 4 },
+        ];
+        let stats = profile_from_docs(&docs);
+        let get = |n: &str| {
+            stats
+                .iter()
+                .find(|s| s.name == n)
+                .unwrap_or_else(|| panic!("no {n}: {stats:?}"))
+        };
+        let age = get("age");
+        assert_eq!(age.types, ["Int32", "Null", "String"]);
+        assert_eq!((age.present, age.nulls, age.samples), (3, 1, 4));
+        assert!((age.presence_ratio() - 0.75).abs() < 1e-9);
+        assert!((age.null_ratio() - 1.0 / 3.0).abs() < 1e-9);
+        assert_eq!(get("name").types, ["String"]);
+        assert_eq!(get("addr.city").present, 2);
+        assert_eq!(get("addr").types, ["Document"]);
+        assert_eq!(get("_id").presence_ratio(), 1.0);
+        assert!(profile_from_docs(&[]).is_empty());
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+
+    fn fuzz_iters() -> u64 {
+        std::env::var("AIKOQL_FUZZ_ITERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2_000)
+    }
+
+    fn random_bson(r: &mut Rng, depth: u32) -> Bson {
+        match r.next() % if depth > 5 { 6 } else { 8 } {
+            0 => Bson::Null,
+            1 => Bson::Int32(r.next() as i32),
+            2 => Bson::Int64(r.next() as i64),
+            3 => Bson::Double(
+                *[f64::NAN, f64::INFINITY, -0.0, 1.5]
+                    .get((r.next() % 4) as usize)
+                    .unwrap_or(&0.0),
+            ),
+            4 => Bson::String(["", "a\u{0}b", "💥", "x.y"][(r.next() % 4) as usize].to_string()),
+            5 => Bson::Boolean(r.next().is_multiple_of(2)),
+            6 => Bson::Array(
+                (0..r.next() % 3)
+                    .map(|_| random_bson(r, depth + 1))
+                    .collect(),
+            ),
+            _ => Bson::Document(random_doc(r, depth + 1)),
+        }
+    }
+
+    fn random_doc(r: &mut Rng, depth: u32) -> Document {
+        let mut d = Document::new();
+        for _ in 0..r.next() % 5 {
+            let key = ["a", "b", "c", "x.y", "", "k$", "ü"][(r.next() % 7) as usize];
+            d.insert(key, random_bson(r, depth));
+        }
+        d
+    }
+
+    #[test]
+    fn profile_fuzz_keeps_its_invariants() {
+        for seed in 1..=fuzz_iters() {
+            let mut r = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let docs: Vec<Document> = (0..r.next() % 8).map(|_| random_doc(&mut r, 0)).collect();
+            let stats = profile_from_docs(&docs); // must not panic
+            for s in &stats {
+                assert_eq!(s.samples, docs.len() as u64, "seed {seed}");
+                assert!(
+                    s.present <= s.samples && s.nulls <= s.present,
+                    "seed {seed}: {s:?}"
+                );
+                assert!(
+                    (0.0..=1.0).contains(&s.presence_ratio())
+                        && (0.0..=1.0).contains(&s.null_ratio())
+                );
+                assert!(
+                    !s.types.is_empty() && s.types.windows(2).all(|w| w[0] < w[1]),
+                    "seed {seed}: {s:?}"
+                );
+            }
+            let mut names: Vec<&str> = stats.iter().map(|s| s.name.as_str()).collect();
+            let n = names.len();
+            names.sort();
+            names.dedup();
+            assert_eq!(n, names.len(), "seed {seed}: one entry per field");
+        }
+    }
+
+    #[test]
+    fn profile_survives_200_levels_of_nesting_and_bounds_the_keys() {
+        let mut inner = doc! { "leaf": 1 };
+        for _ in 0..200 {
+            inner = doc! { "n": inner };
+        }
+        let stats = profile_from_docs(&[inner]);
+        assert!(!stats.is_empty());
+        assert!(
+            stats.len() <= 66,
+            "depth is capped, got {} fields",
+            stats.len()
+        );
     }
 }

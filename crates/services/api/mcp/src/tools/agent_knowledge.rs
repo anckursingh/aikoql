@@ -228,6 +228,7 @@ pub(crate) fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> 
                                 is_primary_key: f["is_primary_key"].as_bool().unwrap_or(false),
                                 nullable: f["nullable"].as_bool().unwrap_or(true),
                                 is_unique: f["is_unique"].as_bool().unwrap_or(false),
+                                ..Default::default()
                             })
                             .collect()
                     })
@@ -237,6 +238,7 @@ pub(crate) fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> 
                     name,
                     fields,
                     row_count: t["row_count"].as_u64(),
+                    ..Default::default()
                 }
             })
             .collect();
@@ -278,6 +280,7 @@ pub(crate) fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> 
             containers,
             references,
             version: None,
+            ..Default::default()
         }
     } else {
         // ponytail: empty metadata for unknown schemas — agent should call
@@ -695,6 +698,12 @@ pub(crate) fn tool_save_ontology(k: &Kernel, args: &J) -> Result<J, String> {
     let props = crate::helpers::parse_properties(&json!({ "properties": def_json }))?;
     let def = aikoql_kernel::OntologyDef::from_property_map(&props)
         .map_err(|e| format!("invalid ontology: {e}"))?;
+    // the read-then-create below must be atomic: unserialised, two first saves each see
+    // "no manual ontology" and each create one, the later silently shadowing the earlier.
+    // A process-local lock is enough: storage holds an exclusive file lock on the data
+    // directory (a second writer process fails closed) and HA standbys are read-only.
+    static SAVE_ONTOLOGY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one_save_at_a_time = SAVE_ONTOLOGY.lock().unwrap_or_else(|e| e.into_inner());
     let existing = crate::http::active_ontology_for(k, tenant.as_deref())
         .filter(|(_, source)| *source == "manual");
     let metadata = Metadata {

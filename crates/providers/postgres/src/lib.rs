@@ -35,9 +35,13 @@ pub struct ColumnInfo {
 #[derive(Clone, Debug)]
 pub struct TableSchema {
     pub name: String,
+    /// Postgres schema (namespace) the table lives in.
+    pub schema: String,
     pub columns: Vec<ColumnInfo>,
     pub primary_keys: Vec<String>,
     pub row_count_estimate: i64,
+    /// Column groups under a UNIQUE constraint (single and composite), in key order.
+    pub unique_groups: Vec<Vec<String>>,
 }
 
 /// One foreign key as discovered from information_schema.
@@ -45,9 +49,13 @@ pub struct TableSchema {
 pub struct ForeignKeyInfo {
     pub constraint_name: String,
     pub child_table: String,
+    /// First column pair — kept for single-column callers.
     pub child_column: String,
     pub parent_table: String,
     pub parent_column: String,
+    /// Every column pair of the constraint, in key order.
+    pub child_columns: Vec<String>,
+    pub parent_columns: Vec<String>,
 }
 
 /// The import connector.
@@ -102,8 +110,35 @@ impl PostgresConnector {
         Ok(rows.iter().map(|r| r.get(0)).collect())
     }
 
-    /// Introspect a table: columns, types, primary keys.
+    /// Make this session read-only (`transaction_read_only = on`): the server
+    /// then refuses every write, whatever a later bug tries.
+    pub fn read_only_session(&mut self) -> Result<(), String> {
+        self.client
+            .batch_execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+            .map_err(|e| format!("read-only session: {e}"))
+    }
+
+    /// Whether the session is read-only (`SHOW transaction_read_only`).
+    pub fn is_read_only(&mut self) -> Result<bool, String> {
+        let row = self
+            .client
+            .query_one("SHOW transaction_read_only", &[])
+            .map_err(|e| format!("transaction_read_only: {e}"))?;
+        Ok(row.get::<_, String>(0) == "on")
+    }
+
+    /// Introspect a table: columns, types, primary keys, exact row count.
     pub fn introspect_table(&mut self, table_name: &str) -> Result<TableSchema, String> {
+        self.introspect_table_with(table_name, true)
+    }
+
+    /// With `exact_count = false` the row count is the planner's estimate
+    /// (`pg_class.reltuples`; `-1` if the table was never analyzed) — no scan.
+    pub fn introspect_table_with(
+        &mut self,
+        table_name: &str,
+        exact_count: bool,
+    ) -> Result<TableSchema, String> {
         // Discover columns. format_type adds the typmod so pgvector columns
         // report as "vector(3)" (dims) instead of the bare USER-DEFINED
         // data_type — and numeric/varchar keep their precision.
@@ -150,22 +185,71 @@ impl PostgresConnector {
             })
             .collect();
 
-        // Row count estimate.
-        let count: i64 = self
-            .client
-            .query_one(
-                &format!("SELECT COUNT(*) FROM {}", quote_ident(table_name)),
-                &[],
-            )
-            .map(|r| r.get(0))
-            .unwrap_or(-1);
+        // Row count: exact (a scan) or the planner's estimate (no scan).
+        let count: i64 = if exact_count {
+            self.client
+                .query_one(
+                    &format!("SELECT COUNT(*) FROM {}", quote_ident(table_name)),
+                    &[],
+                )
+                .map(|r| r.get(0))
+                .unwrap_or(-1)
+        } else {
+            self.client
+                .query_one(
+                    "SELECT reltuples::bigint FROM pg_class WHERE oid = to_regclass($1)",
+                    &[&quote_ident(table_name)],
+                )
+                .map(|r| r.get(0))
+                .unwrap_or(-1)
+        };
 
         Ok(TableSchema {
             name: table_name.to_string(),
             columns,
             primary_keys: pks,
             row_count_estimate: count,
+            schema: self.table_schema_name(table_name)?,
+            unique_groups: self.unique_groups(table_name)?,
         })
+    }
+
+    /// The (first) non-system schema holding a table of this name.
+    fn table_schema_name(&mut self, table: &str) -> Result<String, String> {
+        let rows = self
+            .client
+            .query(
+                "SELECT n.nspname::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relname = $1 AND c.relkind IN ('r', 'p')
+                   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                 ORDER BY (n.nspname = 'public') DESC, n.nspname LIMIT 1",
+                &[&table],
+            )
+            .map_err(|e| format!("schema of {table}: {e}"))?;
+        Ok(rows.first().map(|r| r.get(0)).unwrap_or_default())
+    }
+
+    /// UNIQUE constraints of a table: columns in key order.
+    fn unique_groups(&mut self, table: &str) -> Result<Vec<Vec<String>>, String> {
+        let rows = self
+            .client
+            .query(
+                "SELECT (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                           FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                           JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum)
+                 FROM pg_constraint con
+                 JOIN pg_class cl ON cl.oid = con.conrelid
+                 JOIN pg_namespace n ON n.oid = cl.relnamespace
+                 WHERE con.contype = 'u' AND cl.relname = $1
+                   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                 ORDER BY con.conname",
+                &[&table],
+            )
+            .map_err(|e| format!("unique constraints of {table}: {e}"))?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| r.get::<_, Option<Vec<String>>>(0))
+            .collect())
     }
 
     /// Introspect all user tables.
@@ -208,6 +292,18 @@ impl PostgresConnector {
         schema: &TableSchema,
         tenant: Option<&str>,
     ) -> Result<Vec<KnowledgeObject>, String> {
+        self.import_table_limited(schema, tenant, u64::MAX)
+            .map(|(objects, _)| objects)
+    }
+
+    /// At most `max_rows` rows; the flag says the table had more.
+    pub fn import_table_limited(
+        &mut self,
+        schema: &TableSchema,
+        tenant: Option<&str>,
+        max_rows: u64,
+    ) -> Result<(Vec<KnowledgeObject>, bool), String> {
+        let limit = max_rows.saturating_add(1).min(i64::MAX as u64);
         let col_list: Vec<String> = schema
             .columns
             .iter()
@@ -223,7 +319,7 @@ impl PostgresConnector {
             })
             .collect();
         let query = format!(
-            "SELECT {} FROM {}",
+            "SELECT {} FROM {} LIMIT {limit}",
             col_list.join(", "),
             quote_ident(&schema.name)
         );
@@ -275,42 +371,49 @@ impl PostgresConnector {
                 extensions: ExtensionMap::new(),
             });
         }
-        Ok(objects)
+        let truncated = objects.len() as u64 > max_rows;
+        objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
+        Ok((objects, truncated))
     }
 
-    /// List single-column foreign keys. ponytail: a composite FK (same
-    /// constraint_name twice) keeps only its first column pair — MVP schemas
-    /// are single-column.
+    /// Every foreign key with ALL its column pairs, in key order.
     pub fn introspect_foreign_keys(&mut self) -> Result<Vec<ForeignKeyInfo>, String> {
         let rows = self
             .client
             .query(
-                "SELECT tc.constraint_name, tc.table_name, kcu.column_name,
-                        ccu.table_name AS parent_table, ccu.column_name AS parent_column
-                 FROM information_schema.table_constraints tc
-                 JOIN information_schema.key_column_usage kcu
-                   ON tc.constraint_name = kcu.constraint_name
-                  AND tc.table_schema = kcu.table_schema
-                 JOIN information_schema.constraint_column_usage ccu
-                   ON ccu.constraint_name = tc.constraint_name
-                  AND ccu.table_schema = tc.table_schema
-                 WHERE tc.constraint_type = 'FOREIGN KEY'
-                   AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
-                 ORDER BY tc.table_name, tc.constraint_name",
+                "SELECT con.conname::text, cl.relname::text, pcl.relname::text,
+                        (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                           FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                           JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum),
+                        (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                           FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+                           JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum)
+                 FROM pg_constraint con
+                 JOIN pg_class cl ON cl.oid = con.conrelid
+                 JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+                 JOIN pg_class pcl ON pcl.oid = con.confrelid
+                 WHERE con.contype = 'f'
+                   AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
+                 ORDER BY cl.relname, con.conname",
                 &[],
             )
             .map_err(|e| format!("introspect foreign keys: {}", e))?;
         let mut seen = HashSet::new();
         let mut fks = Vec::new();
         for r in &rows {
+            let child_columns: Vec<String> = r.get::<_, Option<Vec<String>>>(3).unwrap_or_default();
+            let parent_columns: Vec<String> =
+                r.get::<_, Option<Vec<String>>>(4).unwrap_or_default();
             let fk = ForeignKeyInfo {
                 constraint_name: r.get(0),
                 child_table: r.get(1),
-                child_column: r.get(2),
-                parent_table: r.get(3),
-                parent_column: r.get(4),
+                child_column: child_columns.first().cloned().unwrap_or_default(),
+                parent_table: r.get(2),
+                parent_column: parent_columns.first().cloned().unwrap_or_default(),
+                child_columns,
+                parent_columns,
             };
-            if seen.insert(fk.constraint_name.clone()) {
+            if seen.insert((fk.child_table.clone(), fk.constraint_name.clone())) {
                 fks.push(fk);
             }
         }

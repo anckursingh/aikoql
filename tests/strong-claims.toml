@@ -83,13 +83,13 @@ evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 1460
+line = 1468
 text = "// TDD-COMP-001 (P4-M7): physical-type index — O(1) resolution"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 1465
+line = 1473
 text = "// The probe counter pins O(1) average: each lookup costs exactly ONE"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
