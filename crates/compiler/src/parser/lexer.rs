@@ -161,7 +161,15 @@ impl Lexer {
         while let Some(c) = self.peek() {
             // ':' joins ident segments — namespaced types like aikoql:document
             // (P3-M4 follow-up). It appears nowhere else in the grammar.
-            if c.is_alphanumeric() || c == '_' || c == ':' {
+            // '-' joins segments of a NAMESPACED name only (aikoql:source-table,
+            // the schema KO types): in plain words it stays an operator error.
+            let hyphen_in_namespace = c == '-'
+                && s.contains(':')
+                && self
+                    .chars
+                    .get(self.pos + 1)
+                    .is_some_and(|n| n.is_alphanumeric() || *n == '_');
+            if c.is_alphanumeric() || c == '_' || c == ':' || hyphen_in_namespace {
                 s.push(c);
                 self.advance();
             } else {
