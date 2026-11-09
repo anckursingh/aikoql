@@ -53,6 +53,37 @@ pub fn quote_label(label: &str) -> String {
     label.replace('`', "``")
 }
 
+/// A property index (or a constraint's backing index) on node labels.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SchemaIndex {
+    pub name: String,
+    /// RANGE, TEXT, POINT, VECTOR, FULLTEXT (the token LOOKUP index is not listed).
+    pub kind: String,
+    pub labels: Vec<String>,
+    pub properties: Vec<String>,
+    /// The index backs a uniqueness / node-key constraint.
+    pub unique: bool,
+}
+
+/// A node constraint: UNIQUENESS, NODE_KEY, NODE_PROPERTY_EXISTENCE, ...
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SchemaConstraint {
+    pub name: String,
+    pub kind: String,
+    pub labels: Vec<String>,
+    pub properties: Vec<String>,
+}
+
+fn strings(v: Option<&serde_json::Value>) -> Vec<String> {
+    v.and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// One property of a label: observed value types and whether every node has it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LabelProp {
@@ -286,6 +317,53 @@ impl Neo4jConnector {
                 Ok(label_props_from_sample(&maps))
             }
         }
+    }
+
+    /// Node property indexes (`SHOW INDEXES`), sorted by name. The token lookup
+    /// index (no properties) is skipped.
+    pub fn introspect_indexes(&self) -> Result<Vec<SchemaIndex>, String> {
+        let rows = self.cypher_rows(
+            "SHOW INDEXES YIELD name, type, entityType, labelsOrTypes, properties, owningConstraint \
+             WHERE entityType = 'NODE' AND type <> 'LOOKUP' \
+             RETURN name, type, labelsOrTypes, properties, owningConstraint IS NOT NULL",
+            serde_json::json!({}),
+        )?;
+        let mut out: Vec<SchemaIndex> = rows
+            .iter()
+            .filter_map(|r| {
+                Some(SchemaIndex {
+                    name: r.first()?.as_str()?.to_string(),
+                    kind: r.get(1)?.as_str()?.to_string(),
+                    labels: strings(r.get(2)),
+                    properties: strings(r.get(3)),
+                    unique: r.get(4)?.as_bool().unwrap_or(false),
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    /// Node constraints (`SHOW CONSTRAINTS`), sorted by name.
+    pub fn introspect_constraints(&self) -> Result<Vec<SchemaConstraint>, String> {
+        let rows = self.cypher_rows(
+            "SHOW CONSTRAINTS YIELD name, type, entityType, labelsOrTypes, properties \
+             WHERE entityType = 'NODE' RETURN name, type, labelsOrTypes, properties",
+            serde_json::json!({}),
+        )?;
+        let mut out: Vec<SchemaConstraint> = rows
+            .iter()
+            .filter_map(|r| {
+                Some(SchemaConstraint {
+                    name: r.first()?.as_str()?.to_string(),
+                    kind: r.get(1)?.as_str()?.to_string(),
+                    labels: strings(r.get(2)),
+                    properties: strings(r.get(3)),
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
     }
 
     /// Distinct (relationship type, from label, to label) patterns, at most `limit`.
