@@ -126,6 +126,9 @@ pub fn label_props_from_sample(rows: &[serde_json::Value]) -> Vec<LabelProp> {
         .collect()
 }
 
+/// Imported nodes, their elementId -> KOID map, and whether the label had more.
+pub type NodeImport = (Vec<KnowledgeObject>, HashMap<String, KOID>, bool);
+
 pub struct Neo4jConnector {
     base_url: String,
     auth: String, // "Basic <base64>"
@@ -416,7 +419,7 @@ impl Neo4jConnector {
         label: &str,
         tenant: Option<&str>,
         max_rows: u64,
-    ) -> Result<(Vec<KnowledgeObject>, HashMap<String, KOID>, bool), String> {
+    ) -> Result<NodeImport, String> {
         let limit = max_rows.saturating_add(1).min(i64::MAX as u64);
         let stmt = format!(
             "MATCH (n:`{}`) RETURN elementId(n), properties(n), labels(n) \
