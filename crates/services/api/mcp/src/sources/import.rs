@@ -1,14 +1,14 @@
 //! `POST /api/v1/sources/import`: copy chosen containers of a source into the
 //! knowledge base as objects typed by the physical container name.
 
-use super::introspect::{scrub, GATE};
+use super::introspect::{neo4j_connector, scrub, GATE};
 use super::{
     args_obj, audit, find_source, name_arg, store, tenant_arg, SourceKind, INVALID, NO_SCHEMA,
 };
 use crate::imports::{fresh_run_id, ImportSink};
 use crate::{json, Kernel, Subject, J};
-use aikoql_kernel::KnowledgeObject;
-use std::collections::{BTreeMap, HashSet};
+use aikoql_kernel::{KnowledgeObject, RelationshipRef, Value, KOID};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Rows of one container, capped; `true` = the container had more.
 type Fetched = (Vec<KnowledgeObject>, bool);
@@ -53,6 +53,66 @@ fn fetch(
             other.as_str()
         )),
     }
+}
+
+/// Nodes of the chosen labels, with the relationships between them, per label.
+///
+/// Relationships whose other end is outside the selection (or beyond the row
+/// cap) are left out: nothing may point at an object that was not imported.
+/// Properties of a relationship ride on its start node as `rel:<TYPE>` lists
+/// (RelationshipRef has no properties), each map tagged with the target KOID.
+fn fetch_neo4j(
+    conn: &str,
+    ms: u64,
+    labels: &[String],
+    rel_types: &[String],
+    tenant: Option<&str>,
+    cap: u64,
+) -> Result<BTreeMap<String, Fetched>, String> {
+    let c = neo4j_connector(conn, ms)?;
+    let mut sorted: Vec<&String> = labels.iter().collect();
+    sorted.sort();
+    let (mut ids, mut seen) = (HashMap::new(), HashSet::new());
+    let mut by_label: BTreeMap<String, Fetched> = BTreeMap::new();
+    for label in sorted {
+        let (objects, id_map, cut) = c.import_nodes_limited(label, tenant, cap)?;
+        for (elem, koid) in id_map {
+            ids.entry(elem).or_insert(koid);
+        }
+        // a node under two labels is one object: the first sorted label owns it
+        let kept = objects
+            .into_iter()
+            .filter(|o| seen.insert(o.koid))
+            .collect();
+        by_label.insert(label.clone(), (kept, cut));
+    }
+    let mut refs: HashMap<KOID, Vec<RelationshipRef>> = HashMap::new();
+    let mut props: HashMap<KOID, BTreeMap<String, Vec<Value>>> = HashMap::new();
+    let mut types: Vec<&String> = rel_types.iter().collect();
+    types.sort();
+    types.dedup();
+    for rt in types {
+        for (rel, src, tgt, rprops) in c.import_relationships(rt, &ids)? {
+            let mut m = rprops;
+            m.insert("target".to_string(), Value::Text(tgt.to_hex()));
+            refs.entry(src).or_default().push(rel);
+            props
+                .entry(src)
+                .or_default()
+                .entry(format!("rel:{rt}"))
+                .or_default()
+                .push(Value::Map(m));
+        }
+    }
+    for (objects, _) in by_label.values_mut() {
+        for ko in objects.iter_mut() {
+            ko.relationships = refs.remove(&ko.koid).unwrap_or_default();
+            for (key, list) in props.remove(&ko.koid).unwrap_or_default() {
+                ko.properties.insert(key, Value::List(list));
+            }
+        }
+    }
+    Ok(by_label)
 }
 
 /// `POST /api/v1/sources/import {source, containers, tenant?}`.
@@ -108,6 +168,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
         SourceKind::Sqlite => "sqlite-importer",
         SourceKind::Postgres => "pg-importer",
         SourceKind::Mongodb => "mongo-importer",
+        SourceKind::Neo4j => "neo4j-importer",
         other => {
             return Err(format!(
                 "{INVALID}import is not supported for {} sources; use the CLI import",
@@ -142,8 +203,9 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     let (mut truncated, mut skipped) = (Vec::new(), Vec::new());
     let skip = |c: &str, why: String| json!({"container": c, "reason": why});
 
+    // Objects are keyed by (container, primary key): never overwrite another source's.
+    let mut active: Vec<&String> = Vec::new();
     for c in &containers {
-        // Objects are keyed by (container, primary key): never overwrite another source's.
         let foreign = k
             .scan_by_type(&subject, c)
             .map_err(|e| e.to_string())?
@@ -157,31 +219,59 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
                 c,
                 "this type already holds objects from another source (or a CLI import); not overwritten".into(),
             ));
-            continue;
+        } else {
+            active.push(c);
         }
-        let (kind, conn_c, container, tenant_c) =
-            (src.kind, conn.clone(), c.clone(), src.tenant.clone());
-        let (database, ms, cap) = (
-            src.database.clone().unwrap_or_default(),
-            src.timeout_secs.saturating_mul(1000),
-            src.import_max_rows,
-        );
-        // an import may legitimately run long, but not forever: a generous deadline
-        let deadline =
-            std::time::Duration::from_millis(ms.saturating_mul(20).clamp(60_000, 600_000));
-        let (objects, cut) = match GATE.run(deadline, move || {
-            fetch(
-                kind,
-                &conn_c,
-                &database,
-                ms,
-                &container,
-                tenant_c.as_deref(),
-                cap,
-                // stop on our own just before the gate gives up, so the thread returns
-                deadline.saturating_sub(std::time::Duration::from_secs(1)),
-            )
-        }) {
+    }
+    let (database, ms, cap) = (
+        src.database.clone().unwrap_or_default(),
+        src.timeout_secs.saturating_mul(1000),
+        src.import_max_rows,
+    );
+    // an import may legitimately run long, but not forever: a generous deadline
+    let deadline = std::time::Duration::from_millis(ms.saturating_mul(20).clamp(60_000, 600_000));
+    // a graph is read as a whole: relationships need every selected label's nodes
+    let mut graph: Option<Result<BTreeMap<String, Fetched>, String>> = None;
+    if src.kind == SourceKind::Neo4j && !active.is_empty() {
+        let labels: Vec<String> = active.iter().map(|c| (*c).clone()).collect();
+        let selected: HashSet<&str> = labels.iter().map(String::as_str).collect();
+        let rel_types: Vec<String> = snapshot
+            .references
+            .iter()
+            .filter(|r| {
+                selected.contains(r.from_container.as_str())
+                    && selected.contains(r.to_container.as_str())
+            })
+            .filter_map(|r| r.name.clone())
+            .collect();
+        let (conn_g, tenant_g) = (conn.clone(), src.tenant.clone());
+        graph = Some(GATE.run(deadline, move || {
+            fetch_neo4j(&conn_g, ms, &labels, &rel_types, tenant_g.as_deref(), cap)
+        }));
+    }
+    for c in active {
+        let fetched = match (&mut graph, src.kind) {
+            (Some(Ok(by_label)), _) => Ok(by_label.remove(c).unwrap_or_default()),
+            (Some(Err(e)), _) => Err(e.clone()),
+            (None, kind) => {
+                let (conn_c, container, tenant_c) = (conn.clone(), c.clone(), src.tenant.clone());
+                let database = database.clone();
+                GATE.run(deadline, move || {
+                    fetch(
+                        kind,
+                        &conn_c,
+                        &database,
+                        ms,
+                        &container,
+                        tenant_c.as_deref(),
+                        cap,
+                        // stop on our own just before the gate gives up, so the thread returns
+                        deadline.saturating_sub(std::time::Duration::from_secs(1)),
+                    )
+                })
+            }
+        };
+        let (objects, cut) = match fetched {
             Ok(v) => v,
             Err(e) => {
                 skipped.push(skip(c, scrub(&e, &conn)));
@@ -485,20 +575,18 @@ mod tests {
     }
 
     #[test]
-    fn kinds_without_an_in_server_importer_are_refused_clearly() {
+    fn a_kind_without_an_in_server_importer_is_refused_clearly() {
         let k = kernel();
-        for kind in [SourceKind::Neo4j, SourceKind::Clickhouse] {
-            let mut s = sqlite_source("crm", None);
-            s.kind = kind;
-            s.database = Some("d".into());
-            with_test_sources(vec![s], vec![("crm".into(), "x".into())], || {
-                let e = import(&k, &["t"]).unwrap_err();
-                assert!(
-                    e.starts_with(INVALID) && e.contains("not supported") && e.contains("CLI"),
-                    "{e}"
-                );
-            });
-        }
+        let mut s = sqlite_source("crm", None);
+        s.kind = SourceKind::Clickhouse;
+        s.database = Some("d".into());
+        with_test_sources(vec![s], vec![("crm".into(), "x".into())], || {
+            let e = import(&k, &["t"]).unwrap_err();
+            assert!(
+                e.starts_with(INVALID) && e.contains("not supported") && e.contains("CLI"),
+                "{e}"
+            );
+        });
     }
 
     #[test]

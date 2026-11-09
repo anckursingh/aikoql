@@ -551,19 +551,25 @@ fn mongo_meta(
     Ok((containers, Vec::new(), truncated, None))
 }
 
-fn neo4j_meta(conn: &str, ms: u64, max: usize, sample: u32, mode: Mode) -> Result<Parts, String> {
+/// A Neo4j connector from `http(s)://user:password@host[:port]`, every request
+/// bounded by `ms`. The error never contains the password.
+pub(super) fn neo4j_connector(conn: &str, ms: u64) -> Result<aikoql_neo4j::Neo4jConnector, String> {
     let (_, rest) = conn.split_once("://").ok_or("invalid Neo4j URL")?;
     let scheme = &conn[..conn.len() - rest.len()];
     let (userinfo, host) = rest
         .rsplit_once('@')
         .ok_or("Neo4j URL needs user:password@host")?;
     let (user, pass) = userinfo.split_once(':').unwrap_or((userinfo, ""));
-    let c = aikoql_neo4j::Neo4jConnector::connect_with_timeout(
+    aikoql_neo4j::Neo4jConnector::connect_with_timeout(
         &format!("{scheme}{host}"),
         &percent_decode(user),
         &percent_decode(pass),
         Some(ms),
-    )?;
+    )
+}
+
+fn neo4j_meta(conn: &str, ms: u64, max: usize, sample: u32, mode: Mode) -> Result<Parts, String> {
+    let c = neo4j_connector(conn, ms)?;
     let (labels, truncated) = cap(c.list_labels()?, max);
     let included: HashSet<String> = labels.iter().cloned().collect();
     let mut containers = Vec::with_capacity(labels.len());
