@@ -1,10 +1,34 @@
 // Studio query editor: CodeMirror 6 with an AIKOQL language definition and
 // schema/ontology-aware completion. Bundled to editor.js (see
 // scripts/build-studio-assets.sh); served same-origin, never from a CDN.
+// Applied before first paint (this script blocks in <head>): a saved explicit theme
+// choice must not flash the other palette. Storage may be blocked, so it is guarded.
+try {
+  const saved = localStorage.getItem("aikoql.studio.theme");
+  if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
+} catch (_) { /* no storage: the system preference decides */ }
+
 import { EditorView, basicSetup } from "codemirror";
+import { Compartment } from "@codemirror/state";
 import { StreamLanguage } from "@codemirror/language";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { autocompletion } from "@codemirror/autocomplete";
+
+// Light mode keeps CodeMirror's default highlighting and takes its surface colours
+// from the same CSS tokens as the rest of Studio; dark mode is One Dark.
+const lightTheme = EditorView.theme({
+  "&": { color: "var(--text)", backgroundColor: "var(--code-bg)" },
+  ".cm-content": { caretColor: "var(--text)" },
+  ".cm-gutters": { backgroundColor: "var(--code-gutter)", color: "var(--muted)", borderRight: "1px solid var(--border)" },
+  ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "rgba(var(--accent-rgb), 0.08)" },
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": { backgroundColor: "rgba(var(--accent-rgb), 0.25)" },
+}, { dark: false });
+const themeSlot = new Compartment();
+function prefersDark() {
+  const t = document.documentElement.dataset.theme;
+  if (t) return t === "dark";
+  return !window.matchMedia("(prefers-color-scheme: light)").matches;
+}
 
 const KEYWORDS = [
   ["CREATE", "Create a Knowledge Object", 3], ["MATCH", "Query Knowledge Objects", 3],
@@ -91,21 +115,8 @@ window.__initCodeMirror = function () {
     extensions: [
       basicSetup,
       aikoql,
-      oneDark,
+      themeSlot.of(prefersDark() ? oneDark : lightTheme),
       autocompletion({ override: [completions] }),
-      EditorView.updateListener.of(update => {
-        if (update.docChanged) {
-          const q = update.state.doc.toString().trim();
-          try {
-            const hist = JSON.parse(localStorage.getItem("aikoql-query-history") || "[]");
-            if (q && !hist.includes(q)) {
-              hist.unshift(q);
-              if (hist.length > 50) hist.pop();
-              localStorage.setItem("aikoql-query-history", JSON.stringify(hist));
-            }
-          } catch (_) { /* storage unavailable: history is a convenience */ }
-        }
-      }),
     ],
     parent: el,
   });
@@ -113,6 +124,10 @@ window.__initCodeMirror = function () {
   window.__cmView.dom.addEventListener("keydown", e => {
     if (e.ctrlKey && e.key === "Enter") { e.preventDefault(); e.stopPropagation(); window.runQuery(); }
   }, true);
+};
+window.__cmSetTheme = function (dark) {
+  if (!window.__cmView) return;
+  window.__cmView.dispatch({ effects: themeSlot.reconfigure(dark ? oneDark : lightTheme) });
 };
 window.__cmSetValue = function (v) {
   if (!window.__cmView) return;

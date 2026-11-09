@@ -574,6 +574,37 @@ async function main() {
     await page.keyboard.press('Enter'); await page.waitForTimeout(500);
     ok('...and does', (await page.inputValue('#tenant-context')) === 't1');
     await page.selectOption('#tenant-context', ''); await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
+    // ---- P1: light and dark, by system preference or by choice ----
+    const lum = rgb => { const [r, g, b] = rgb.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    const css = (sel, prop) => page.evaluate(([s, p]) => getComputedStyle(document.querySelector(s))[p], [sel, prop]);
+    const themeAttr = () => page.evaluate(() => document.documentElement.dataset.theme || '');
+    await page.evaluate(() => localStorage.removeItem('aikoql.studio.theme')); await page.reload(); await page.waitForTimeout(1500);
+    await page.emulateMedia({ colorScheme: 'light' }); await page.waitForTimeout(200);
+    ok('with no choice a light system gets the light theme', (await themeAttr()) === '' && lum(await css('body', 'backgroundColor')) > 0.7, await css('body', 'backgroundColor'));
+    await page.emulateMedia({ colorScheme: 'dark' }); await page.waitForTimeout(200);
+    ok('...and a dark system gets the dark theme', lum(await css('body', 'backgroundColor')) < 0.05, await css('body', 'backgroundColor'));
+    await page.click('#theme-toggle'); await page.waitForTimeout(250);
+    ok('the toggle makes light explicit, beating a dark system', (await themeAttr()) === 'light' && lum(await css('body', 'backgroundColor')) > 0.7 && /Light/.test(await page.innerText('#theme-toggle')));
+    ok('the control announces its state', /Theme: light/.test(await page.getAttribute('#theme-toggle', 'aria-label')));
+    await page.reload(); await page.waitForTimeout(1500);
+    ok('the choice survives a reload (applied before first paint)', (await themeAttr()) === 'light' && lum(await css('body', 'backgroundColor')) > 0.7);
+    ok('light: secondary text is readable on the page and on cards (WCAG AA)', ratio(await css('#panel-title', 'color'), await css('#panel-header', 'backgroundColor')) >= 4.5 && ratio(await css('.panel.active .query-editor-label', 'color'), await css('.panel.active .card', 'backgroundColor')) >= 4.5, await css('.panel.active .query-editor-label', 'color') + ' on ' + await css('.panel.active .card', 'backgroundColor'));
+    ok('light: the editor follows the theme (light surface, readable text)', lum(await css('#query-editor .cm-editor', 'backgroundColor')) > 0.8 && ratio(await css('#query-editor .cm-content', 'color'), await css('#query-editor .cm-editor', 'backgroundColor')) >= 7, await css('#query-editor .cm-editor', 'backgroundColor'));
+    await page.click('button[data-panel="graph"]'); await page.waitForTimeout(1200);
+    ok('the graph draws in the light theme without errors', await page.isVisible('#graph-viz') && realErrors.length === 0, realErrors.slice(0, 2).join(' | '));
+    await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
+    await page.click('#theme-toggle'); await page.waitForTimeout(250);
+    ok('the next press makes dark explicit, beating a light system', (await themeAttr()) === 'dark' && lum(await css('body', 'backgroundColor')) < 0.05);
+    await page.emulateMedia({ colorScheme: 'light' }); await page.waitForTimeout(200);
+    ok('dark stays dark when the system is light', lum(await css('body', 'backgroundColor')) < 0.05);
+    ok('dark: the editor is dark again', lum(await css('#query-editor .cm-editor', 'backgroundColor')) < 0.05 && ratio(await css('#query-editor .cm-content', 'color'), await css('#query-editor .cm-editor', 'backgroundColor')) >= 7);
+    ok('dark: secondary text meets WCAG AA', ratio(await css('.panel.active .query-editor-label', 'color'), await css('.panel.active .card', 'backgroundColor')) >= 4.5);
+    await page.keyboard.press('Control+k'); await page.keyboard.type('theme: auto'); await page.waitForTimeout(200); await page.keyboard.press('Enter'); await page.waitForTimeout(300);
+    ok('the palette can set the theme, and auto follows the system again', (await themeAttr()) === '' && lum(await css('body', 'backgroundColor')) > 0.7 && /Auto/.test(await page.innerText('#theme-toggle')));
+    await page.emulateMedia({ colorScheme: 'dark' }); await page.waitForTimeout(200);
+    ok('auto tracks a system change live', lum(await css('body', 'backgroundColor')) < 0.05);
+    await page.emulateMedia({ colorScheme: null });
     // ---- a dead cookie falls back to the form; signing in must still work ---
     await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });

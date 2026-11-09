@@ -12,7 +12,40 @@ let graphRawData = null;
 const COLORS = ['#6cc7f0','#f070a0','#5cd89c','#f0a060','#b89ae0','#f0556a','#f0d060','#60d8b0','#f090c8','#98dc80'];
 let typeColors = {}, colorIdx = 0;
 
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function colorFor(type) { if(!typeColors[type]) typeColors[type]=COLORS[colorIdx++%COLORS.length]; return typeColors[type]; }
+
+// ═══════════════════════════════════════════
+// Theme: follow the system, or be told. Stored globally (it applies before sign-in).
+// ═══════════════════════════════════════════
+const THEME_KEY = 'aikoql.studio.theme';
+const THEME_LABELS = {auto: '◐ Auto', light: '☀ Light', dark: '☾ Dark'};
+function savedTheme() {
+  try { const t = localStorage.getItem(THEME_KEY); return t === 'light' || t === 'dark' ? t : 'auto'; } catch (_) { return 'auto'; }
+}
+function effectiveDark() {
+  const t = document.documentElement.dataset.theme;
+  if (t) return t === 'dark';
+  return !window.matchMedia('(prefers-color-scheme: light)').matches;
+}
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'auto') delete root.dataset.theme; else root.dataset.theme = mode;
+  try { if (mode === 'auto') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, mode); } catch (_) { /* choice lasts for this page only */ }
+  const btn = document.getElementById('theme-toggle');
+  if (btn) {
+    btn.textContent = THEME_LABELS[mode];
+    btn.setAttribute('aria-label', 'Theme: ' + (mode === 'auto' ? 'automatic, follows your system' : mode) + '. Activate to change.');
+  }
+  if (window.__cmSetTheme) window.__cmSetTheme(effectiveDark());
+  // the graph paints with colours read at creation: rebuild it in the new palette
+  if (graphNetwork) { graphNetwork.destroy(); graphNetwork = null; if (activePanel === 'graph') initGraph(); }
+}
+function cycleTheme() {
+  const order = ['auto', 'light', 'dark'];
+  applyTheme(order[(order.indexOf(savedTheme()) + 1) % order.length]);
+}
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (savedTheme() === 'auto') applyTheme('auto'); });
 
 // ═══════════════════════════════════════════
 // Auth
@@ -195,6 +228,8 @@ function initApp() {
   loadUsers();
   // Init CodeMirror 6 on the query editor div.
   if (window.__initCodeMirror) window.__initCodeMirror();
+  if (window.__cmSetTheme) window.__cmSetTheme(effectiveDark());
+  applyTheme(savedTheme());
   wireDraft();
 }
 
@@ -562,6 +597,7 @@ function paletteCommands() {
     const sel = document.getElementById('tenant-context');
     cmds.push({label: o.value ? 'Switch tenant: ' + o.value : 'Use each panel’s default tenant', hint: 'Tenant', run: () => { sel.value = o.value; setTenantContext(sel); }});
   });
+  ['auto', 'light', 'dark'].forEach(m => cmds.push({label: 'Theme: ' + m, hint: 'Appearance', run: () => applyTheme(m)}));
   cmds.push({label: 'Sign out', hint: 'Session', run: logout});
   const load = q => () => { switchPanel('query'); window.__cmSetValue(q); persistDraft(); };
   store.get('saved', []).forEach(s => cmds.push({label: 'Load saved: ' + s.name, hint: firstLine(s.q), run: load(s.q)}));
@@ -642,8 +678,8 @@ function initGraph() {
   const container = document.getElementById('graph-viz');
   graphNetwork = new vis.Network(container, {nodes:graphNodes, edges:graphEdges}, {
     physics: { solver:'forceAtlas2Based', forceAtlas2Based:{gravitationalConstant:-35,centralGravity:0.008,springLength:160,springConstant:0.03} },
-    edges: { arrows:{to:{enabled:true,scaleFactor:0.5}}, smooth:{type:'continuous',roundness:0.3}, font:{size:9,color:'#888',strokeWidth:0}, width:1.5 },
-    nodes: { shape:'dot', font:{size:11,color:'#d0d0d0',face:'sans-serif',strokeWidth:1,strokeColor:'#13131f'}, borderWidth:1.5, shadow:{enabled:true,size:6} },
+    edges: { arrows:{to:{enabled:true,scaleFactor:0.5}}, smooth:{type:'continuous',roundness:0.3}, font:{size:9,color:cssVar('--muted'),strokeWidth:0}, width:1.5 },
+    nodes: { shape:'dot', font:{size:11,color:cssVar('--text'),face:'sans-serif',strokeWidth:1,strokeColor:cssVar('--panel')}, borderWidth:1.5, shadow:{enabled:true,size:6} },
     interaction: { hover:true, navigationButtons:true, keyboard:true },
   });
   graphNetwork.on('click', p => { if(p.nodes.length>0) inspectNode(p.nodes[0]); });
@@ -686,7 +722,7 @@ async function loadGraph() {
       };
     });
     graphNodes.add(nodes);
-    const edges = (data.edges||[]).map(e => ({from:e.source,to:e.target,label:e.rel_type,arrows:'to',color:{color:'#3a3a5c',highlight:'#6cc7f0'},font:{size:9,color:'#5c5c78'},width:1.2}));
+    const edges = (data.edges||[]).map(e => ({from:e.source,to:e.target,label:e.rel_type,arrows:'to',color:{color:cssVar('--border-strong'),highlight:cssVar('--accent')},font:{size:9,color:cssVar('--muted')},width:1.2}));
     // S-2 (POC-4): supersede-with-retract (B3-3) leaves no SUPERSEDES edge —
     // derive virtual "retracts" edges: the superseded row's successor shares
     // tenant + case_id + kind and asserts valid_from == the predecessor's
@@ -701,7 +737,7 @@ async function loadGraph() {
         const pk=p.properties&&p.properties.kind, sk=s.properties&&s.properties.kind;
         if (pk===undefined||sk===undefined||JSON.stringify(pk)!==JSON.stringify(sk)) return;
         if (!s.extensions || s.extensions.valid_from!==p.extensions.valid_to_asserted) return;
-        edges.push({from:p.koid,to:s.koid,label:'retracts',arrows:'to',dashes:[4,3],color:{color:'#8a7a5c',highlight:'#c9a86a'},font:{size:9,color:'#8a7a5c'},width:1});
+        edges.push({from:p.koid,to:s.koid,label:'retracts',arrows:'to',dashes:[4,3],color:{color:cssVar('--orange'),highlight:cssVar('--yellow')},font:{size:9,color:cssVar('--orange')},width:1});
       });
     });
     graphEdges.add(edges);
@@ -2083,6 +2119,7 @@ document.getElementById('ask-question').addEventListener('keydown', e => { if ((
 // ═══════════════════════════════════════════
 const ACTIONS = Object.assign(Object.create(null), {
   doLogin: el => doLogin(),
+  cycleTheme: el => cycleTheme(),
   setTenantContext: el => setTenantContext(el),
   closePalette: el => closePalette(),
   paletteRun: el => runPaletteItem(Number(el.dataset.index)),
