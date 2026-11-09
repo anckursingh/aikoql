@@ -448,6 +448,19 @@ async function main() {
     await page.focus('button[data-panel="query"]');
     ok('keyboard focus is visible on a nav entry', (await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle)) !== 'none');
     await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
+    // ---- E3: toasts are announced; a write after the session died returns to sign-in ----
+    await page.evaluate(() => { toast('success', 'Saved the thing'); toast('error', 'It failed'); });
+    ok('a success toast is a polite status', (await page.locator('#toasts [role=status]').innerText()).includes('Saved the thing'));
+    ok('an error toast is an assertive alert', (await page.locator('#toasts [role=alert]').innerText()).includes('It failed'));
+    await page.click('#toasts [role=status] button'); await page.waitForTimeout(200);
+    ok('a toast can be dismissed with its named control', (await page.locator('#toasts [role=status]').count()) === 0 && (await page.getAttribute('#toasts [role=alert] button', 'aria-label')) !== null);
+    await page.context().clearCookies();
+    const expired = await page.evaluate(async () => { try { await apiPost('/api/v1/ontology', {}); return 'no error'; } catch (e) { return e.message; } });
+    ok('a POST after the session died reports session expiry', expired === 'session expired', expired);
+    ok('...and returns to the sign-in form with the reason', await page.isVisible('#login-overlay') && /Session expired/.test(await page.innerText('#login-error')), await page.innerText('#login-error'));
+    await page.fill('#login-user', 'admin'); await page.fill('#login-pass', PW);
+    await page.click('[data-click="doLogin"]'); await page.waitForSelector('#login-overlay', { state: 'hidden', timeout: 10000 }).catch(() => {});
+    ok('signing in again resumes the same panel', await page.isHidden('#login-overlay') && (await panel()) === 'query', await panel());
     // ---- a dead cookie falls back to the form; signing in must still work ---
     await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });

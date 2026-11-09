@@ -1349,6 +1349,41 @@ mod tests {
         );
     }
 
+    // ---- E3: one request helper; toasts (docs/STUDIO-ENHANCEMENTS.md) ----
+
+    fn js_fn(name: &str) -> String {
+        let page = page_for_tests();
+        let i = page.find(name).unwrap_or_else(|| panic!("no {name}"));
+        let rest = &page[i + name.len()..];
+        let end = rest.find("\nasync function ").min(rest.find("\nfunction ")).unwrap_or(rest.len());
+        rest[..end].to_string()
+    }
+
+    #[test]
+    fn every_http_verb_shares_one_request_helper_that_handles_session_expiry() {
+        let page = page_for_tests();
+        assert!(page.contains("async function request(method, url, body)"));
+        let request = js_fn("async function request(method, url, body)");
+        assert!(request.contains("res.status === 401") && request.contains("showLogin()"), "401 must return to sign-in for EVERY verb");
+        assert!(request.contains("X-Aikoql-Csrf") || request.contains("authHeaders("), "CSRF header on every request");
+        for (name, verb) in [("async function api(", "GET"), ("async function apiPost(", "POST"), ("async function apiPut(", "PUT")] {
+            let body = js_fn(name);
+            assert!(body.contains(&format!("request('{verb}'")), "{name} must delegate to request: {body}");
+            assert!(!body.contains("fetch("), "{name} must not duplicate the transport");
+        }
+    }
+
+    #[test]
+    fn notifications_are_a_polite_live_region_with_alerts_for_errors() {
+        let page = page_for_tests();
+        assert!(page.contains("id=\"toasts\"") && page.contains("aria-live=\"polite\""), "a live region");
+        let toast = js_fn("function toast(kind, text");
+        assert!(toast.contains("'alert'") && toast.contains("'status'"), "errors are alerts, the rest status");
+        assert!(toast.contains("textContent"), "toast text is set as text, never markup");
+        assert!(page.contains("\n  dismissToast:"), "dismiss goes through the allowlist");
+        assert!(page.contains("aria-label"), "the dismiss control is named");
+    }
+
     #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
