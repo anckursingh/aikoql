@@ -1187,6 +1187,30 @@ mod tests {
     }
 
     #[test]
+    fn merge_suggestions_are_listed_escaped_and_applied_through_the_allowlist() {
+        let page = page_for_tests();
+        let block = page
+            .find("function renderSourcesPreview")
+            .map(|i| &page[i..])
+            .expect("renderSourcesPreview");
+        let render = &block[..block.find("\nasync function previewSources").expect("end of render")];
+        assert!(render.contains("p.suggestions"), "the preview must render suggestions");
+        assert!(render.contains("applySuggestion"), "each suggestion offers an Apply");
+        // every value of a suggestion goes through esc()
+        for field in ["s.a", "s.b", "s.evidence", "pr.a_field", "pr.b_field", "s.confidence"] {
+            if let Some(i) = render.find(field) {
+                let before = &render[i.saturating_sub(12)..i];
+                assert!(before.contains("esc("), "{field} is concatenated unescaped: ...{before}");
+            }
+        }
+        assert!(page.contains("\n  applySuggestion:"), "applySuggestion is not in ACTIONS");
+        assert!(
+            page.contains("properties: (s.properties || [])"),
+            "applying sends the accepted property alignments"
+        );
+    }
+
+    #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
         // the client must not claim one.
