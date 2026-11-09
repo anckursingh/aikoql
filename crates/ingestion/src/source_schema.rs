@@ -87,12 +87,13 @@ impl ConnectorMetadata {
             // fingerprint it had before this metadata existed
             for i in &c.indexes {
                 lines.push(format!(
-                    "I|{}|{}|{}|{}|{}",
+                    "I|{}|{}|{}|{}|{}|{}",
                     c.name,
                     i.name,
                     i.columns.join(","),
                     i.unique,
-                    i.method.as_deref().unwrap_or("")
+                    i.method.as_deref().unwrap_or(""),
+                    i.predicate.as_deref().unwrap_or("")
                 ));
             }
             for k in &c.checks {
@@ -312,6 +313,7 @@ mod tests {
             columns: cols.iter().map(|c| c.to_string()).collect(),
             unique,
             method: Some("btree".into()),
+            predicate: None,
         }
     }
 

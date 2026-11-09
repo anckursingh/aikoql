@@ -68,6 +68,9 @@ pub struct IndexInfo {
     /// btree / hash / gin / range / text / vector, as the source names it.
     #[serde(default)]
     pub method: Option<String>,
+    /// A partial index's WHERE: it constrains / covers only the rows matching it.
+    #[serde(default)]
+    pub predicate: Option<String>,
 }
 
 /// A CHECK constraint.
@@ -297,13 +300,16 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
         let mut statements: Vec<String> = Vec::new();
         for i in &container.indexes {
             statements.push(format!(
-                "{entity_name} has {}index {} on ({}){}",
+                "{entity_name} has {}index {} on ({}){}{}",
                 if i.unique { "unique " } else { "" },
                 i.name,
                 i.columns.join(", "),
                 i.method
                     .as_ref()
-                    .map_or(String::new(), |m| format!(" [{m}]"))
+                    .map_or(String::new(), |m| format!(" [{m}]")),
+                i.predicate
+                    .as_ref()
+                    .map_or(String::new(), |p| format!(" where {p}"))
             ));
         }
         for k in &container.checks {
@@ -633,12 +639,14 @@ mod tests {
                         columns: vec!["customer_id".into()],
                         unique: false,
                         method: Some("btree".into()),
+                        predicate: None,
                     },
                     IndexInfo {
                         name: "orders_email_key".into(),
                         columns: vec!["email".into(), "tenant".into()],
                         unique: true,
                         method: None,
+                        predicate: Some("deleted_at IS NULL".into()),
                     },
                 ],
                 checks: vec![CheckInfo {
@@ -659,7 +667,7 @@ mod tests {
             "{facts:?}"
         );
         assert!(
-            has("analytics.orders has unique index orders_email_key on (email, tenant)"),
+            has("analytics.orders has unique index orders_email_key on (email, tenant) where deleted_at IS NULL"),
             "{facts:?}"
         );
         assert!(
