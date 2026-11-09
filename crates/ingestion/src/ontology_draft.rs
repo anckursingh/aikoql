@@ -1049,6 +1049,72 @@ mod tests {
     }
 
     #[test]
+    fn one_relationship_type_between_several_label_pairs_keeps_every_pair() {
+        // a Neo4j type linking Person->Company, Employee->Customer and Person->Customer
+        let mut m = meta(
+            "neo4j",
+            "g",
+            &[
+                ("Person", &[ID]),
+                ("Employee", &[ID]),
+                ("Company", &[ID]),
+                ("Customer", &[ID]),
+            ],
+            &[],
+        );
+        let pair = |from: &str, to: &str| crate::connector_bridge::ReferenceInfo {
+            from_container: from.into(),
+            from_fields: Vec::new(),
+            to_container: to.into(),
+            to_fields: Vec::new(),
+            name: Some("WORKS_AT".into()),
+        };
+        m.references = vec![
+            pair("Person", "Company"),
+            pair("Employee", "Customer"),
+            pair("Person", "Customer"),
+            pair("Person", "Company"), // the same pair again: one relationship
+        ];
+        let d = definition_from_sources(
+            &[SourceInput {
+                name: "g",
+                kind: "neo4j",
+                meta: &m,
+            }],
+            &[],
+        );
+        let mut got: Vec<(String, String)> = list(&d, "relationships")
+            .iter()
+            .map(|r| {
+                (
+                    r["domain"].as_str().unwrap().to_string(),
+                    r["range"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                ("Employee".to_string(), "Customer".to_string()),
+                ("Person".to_string(), "Company".to_string()),
+                ("Person".to_string(), "Customer".to_string()),
+            ],
+            "{:?}",
+            list(&d, "relationships")
+        );
+        let names: std::collections::BTreeSet<&str> = list(&d, "relationships")
+            .iter()
+            .map(|r| r["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names.len(),
+            3,
+            "every relationship has its own name: {names:?}"
+        );
+    }
+
+    #[test]
     fn composite_foreign_key_warns() {
         let m = meta(
             "postgres",
