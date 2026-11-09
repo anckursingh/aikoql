@@ -487,6 +487,38 @@ async function main() {
     await page.fill('#query-save-name', 'blocked'); await page.click('[data-click="saveQuery"]'); await page.waitForTimeout(300);
     ok('when the browser refuses storage the person is told, not lied to', /Could not save/.test(await page.locator('#toasts [role=alert]').last().innerText().catch(() => '')));
     await page.reload(); await page.waitForTimeout(1500);
+    // ---- E4: the results table is sortable, copyable, exportable and linked ----
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE });
+    await page.evaluate(() => window.__cmSetValue('MATCH Person RETURN *'));
+    await page.click('[data-click="runQuery"]'); await page.waitForTimeout(1200);
+    const rowCount = await page.locator('#query-results tbody tr').count();
+    ok('the footer states the row count and the elapsed time', /^\d+ rows? · \d+ ms$/.test((await page.innerText('#query-results .res-count')).trim()), await page.innerText('#query-results .res-count').catch(() => ''));
+    const col = async name => page.evaluate(n => {
+      const ths = [...document.querySelectorAll('#query-results thead th')];
+      const i = ths.findIndex(th => th.textContent.replace(/[▲▼]/g, '').trim() === n);
+      return [...document.querySelectorAll('#query-results tbody tr')].map(tr => tr.children[i].textContent);
+    }, name);
+    const before = await col('name');
+    await page.click('#query-results th button[data-click="sortResults"]:has-text("name")'); await page.waitForTimeout(200);
+    const asc = await col('name');
+    ok('clicking a header sorts ascending and announces it', JSON.stringify(asc) === JSON.stringify([...before].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) && (await page.getAttribute('#query-results th:has(button:has-text("name"))', 'aria-sort')) === 'ascending', JSON.stringify(asc));
+    await page.click('#query-results th button[data-click="sortResults"]:has-text("name")'); await page.waitForTimeout(200);
+    ok('clicking again sorts descending', JSON.stringify(await col('name')) === JSON.stringify([...asc].reverse()) && (await page.getAttribute('#query-results th:has(button:has-text("name"))', 'aria-sort')) === 'descending');
+    await page.click('[data-click="copyResults"][data-kind="json"]'); await page.waitForTimeout(300);
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    ok('Copy JSON puts every row on the clipboard, in the current order', Array.isArray(JSON.parse(clip)) && JSON.parse(clip).length === rowCount && JSON.parse(clip)[0].properties.name === (await col('name'))[0], clip.slice(0, 120));
+    ok('copying is announced', /Copied/.test(await page.locator('#toasts [role=status]').last().innerText()));
+    await page.click('[data-click="copyResults"][data-kind="csv"]'); await page.waitForTimeout(300);
+    const csv = await page.evaluate(() => navigator.clipboard.readText());
+    ok('Copy CSV has a header and one line per row', csv.split('\r\n').filter(Boolean).length === rowCount + 1 && /^koid,/.test(csv), csv.slice(0, 120));
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }).catch(() => null), page.click('[data-click="downloadResults"][data-kind="csv"]')]);
+    const dlText = dl ? fs.readFileSync(await dl.path(), 'utf8') : '';
+    ok('Download CSV saves a file with the same rows', !!dl && /\.csv$/.test(dl.suggestedFilename()) && dlText.split('\r\n').filter(Boolean).length === rowCount + 1, dl ? dl.suggestedFilename() : 'no download');
+    ok('CSV quoting is exact and a spreadsheet formula is defused', (await page.evaluate(() => resultsToCsv(['a', 'b'], [['=1+1', 'x,y'], ['"q"\nz', null], [-5, '@cmd']]))) === 'a,b\r\n\'=1+1,"x,y"\r\n"""q""\nz",\r\n-5,\'@cmd\r\n');
+    ok('a nested value shows as JSON, not [object Object]', (await page.evaluate(() => cellText({ a: [1, { b: 2 }] }))) === '{"a":[1,{"b":2}]}');
+    await page.click('#query-results a[data-click="openInInspector"]'); await page.waitForTimeout(600);
+    ok('a row links to its object in the Inspector', (await panel()) === 'inspector' && (await page.inputValue('#inspector-search-input')).length > 8, await panel());
+    await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
     // ---- a dead cookie falls back to the form; signing in must still work ---
     await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });

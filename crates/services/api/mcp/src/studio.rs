@@ -1491,6 +1491,25 @@ mod tests {
         assert!(page.contains("(e.ctrlKey || e.metaKey) && e.key === 's'"));
     }
 
+    // ---- E4: one results table that can be sorted, copied and exported ----
+
+    #[test]
+    fn query_results_use_one_shared_table_component() {
+        let page = page_for_tests();
+        for needle in ["function renderResults(", "function resultsToCsv(", "function cellText("] {
+            assert!(page.contains(needle), "missing {needle}");
+        }
+        for action in ["sortResults", "copyResults", "downloadResults"] {
+            assert!(page.contains(&format!("\n  {action}:")), "{action} not in ACTIONS");
+        }
+        let run = js_fn("async function runQuery()");
+        assert!(run.contains("renderResults("), "runQuery must use the shared component");
+        assert!(!run.contains("<table>"), "runQuery must not build its own table any more");
+        let component = js_fn("function renderResults(");
+        assert!(component.contains("aria-sort"), "sortable headers announce their state");
+        assert!(component.contains("data-click=\"openInInspector\""), "a row opens its object in the Inspector");
+    }
+
     #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
