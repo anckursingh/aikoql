@@ -625,3 +625,125 @@ fn neo4j_and_clickhouse_discover_into_classes_relationships_and_types() {
         &[&format!("DROP DATABASE IF EXISTS {chdb}")],
     );
 }
+
+/// The suggestion workflow end to end on real databases: preview proposes the
+/// merge and the property alignment, the reviewer applies it, and the canonical
+/// property answers across Postgres AND MongoDB.
+#[test]
+fn a_suggested_merge_with_aligned_properties_queries_across_both_databases() {
+    let (Some(pg), Some(mongo)) = (connectors::Live::pg(), connectors::Live::mongo()) else {
+        return;
+    };
+    let pid = std::process::id();
+    let dsn = connectors::pg_private_db(&pg.dsn, &format!("cert_multidb_sug_{pid}"));
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE customers (id INT PRIMARY KEY, email TEXT NOT NULL UNIQUE, tier TEXT)",
+            "CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT REFERENCES customers(id), total NUMERIC(10,2))",
+            "INSERT INTO customers VALUES (1,'ann@pg.test','gold'),(2,'bob@pg.test','silver')",
+            "INSERT INTO orders VALUES (10,1,9.50)",
+        ],
+    );
+    let mdb = format!("cert_multidb_sug_{pid}");
+    connectors::mongo_seed(
+        &mongo.mongo_uri,
+        &mdb,
+        "clients",
+        vec![
+            mongodb::bson::doc! {"email_address": "d@mongo.test", "tier": "bronze"},
+            mongodb::bson::doc! {"email_address": "e@mongo.test", "tier": "gold"},
+        ],
+    );
+    let l = Live::start(
+        "suggest",
+        &format!(
+            "[[sources]]\nname = \"pg\"\nkind = \"postgres\"\nurl_env = \"MD_PG\"\n\n[[sources]]\nname = \"mongo\"\nkind = \"mongodb\"\nurl_env = \"MD_MONGO\"\ndatabase = \"{mdb}\"\n"
+        ),
+        &[("MD_PG", &dsn), ("MD_MONGO", &mongo.mongo_uri)],
+        &["aikoql-dev-only"],
+    );
+    for s in ["pg", "mongo"] {
+        l.post("/api/v1/sources/discover", serde_json::json!({"source": s}));
+    }
+    let preview = l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["pg", "mongo"], "preview": true}),
+    );
+    let suggestions = preview["suggestions"]
+        .as_array()
+        .expect("preview carries suggestions");
+    assert_eq!(
+        suggestions.len(),
+        1,
+        "only customers~clients: {suggestions:?}"
+    );
+    let s = &suggestions[0];
+    assert_eq!(
+        (s["a"].as_str(), s["b"].as_str()),
+        (Some("pg.customers"), Some("mongo.clients"))
+    );
+    assert!(s["confidence"].as_f64().unwrap() >= 0.5, "{s}");
+    assert!(!s["evidence"].as_array().unwrap().is_empty(), "{s}");
+    let pair = &s["properties"][0];
+    assert_eq!(
+        (pair["a_field"].as_str(), pair["b_field"].as_str()),
+        (Some("email"), Some("email_address")),
+        "{s}"
+    );
+    // a suggestion is advice: nothing was merged
+    assert_eq!(class_names(&preview), ["Customer", "Order", "Client"]);
+
+    // the reviewer accepts it: the merge object form carries the alignment
+    let merges = serde_json::json!([{
+        "a": s["a"], "b": s["b"],
+        "properties": s["properties"].as_array().unwrap().iter()
+            .map(|p| serde_json::json!([p["a_field"], p["b_field"]])).collect::<Vec<_>>(),
+    }]);
+    let applied = l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["pg", "mongo"], "preview": true, "merges": merges}),
+    );
+    assert_eq!(class_names(&applied), ["Customer", "Order"]);
+    let clients_map = applied["mappings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["physical_type"] == "clients")
+        .unwrap();
+    assert_eq!(
+        clients_map["property_map"]["email_address"], "email",
+        "{clients_map}"
+    );
+    l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["pg", "mongo"], "preview": false, "merges": merges, "fingerprints": applied["fingerprints"]}),
+    );
+    l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "pg", "containers": ["customers", "orders"]}),
+    );
+    l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "mongo", "containers": ["clients"]}),
+    );
+
+    // the canonical property answers in BOTH databases
+    let pg_hit = query(&l, "MATCH Customer WHERE email == \"ann@pg.test\" RETURN *");
+    assert_eq!(pg_hit["results"].as_array().unwrap().len(), 1, "{pg_hit}");
+    let mongo_hit = query(
+        &l,
+        "MATCH Customer WHERE email == \"d@mongo.test\" RETURN *",
+    );
+    let rows = mongo_hit["results"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the mongo row must answer to the canonical `email`: {mongo_hit}"
+    );
+    assert_eq!(rows[0]["type_name"], "clients");
+    // and a shared canonical predicate spans both
+    let gold = query(&l, "MATCH Customer WHERE tier == \"gold\" RETURN *");
+    assert_eq!(gold["results"].as_array().unwrap().len(), 2, "{gold}");
+    l.assert_no_secret_anywhere();
+}
