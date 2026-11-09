@@ -106,6 +106,13 @@ That foundation is worth keeping. The weaknesses are in *experience* and *struct
 - Virtualised tables for > 5k rows; web-worker CSV export.
 - Visual-regression screenshots in the Chrome e2e.
 
+### Status (2026-11-09)
+P0 is **implemented and verified in real Chrome** (67 → 121 checks, all passing):
+E1 routable accessible navigation · E2/E6 persisted draft, saved queries, history (Ctrl/Cmd+S saves for
+real) · E3 one request helper + toasts · E4 sortable/copyable/exportable results with row→Inspector ·
+E5 command palette. Measured: muted-text contrast 2.9:1 → 5.5:1; nothing below 11px; every
+control reachable by keyboard. P1 and P2 are next, in the order above.
+
 ## 5. Non-goals
 No framework or bundler; no third-party CDN; no change to the auth/CSRF/CSP model; no new
 backend endpoints for P0.
