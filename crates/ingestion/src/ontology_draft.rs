@@ -799,6 +799,26 @@ mod tests {
     }
 
     #[test]
+    fn a_union_declared_type_without_a_profile_widens_too() {
+        // schema-only discovery keeps no profile: the union rides in the type string
+        for (declared, want) in [
+            ("Int32|String", "Text"),
+            ("Int32|Double", "Float"),
+            ("Long|Double", "Float"),
+            ("String|Long|Boolean", "Text"),
+            ("Int32", "Int"),
+        ] {
+            let m = meta("mongodb", "crm", &[("people", &[("v", declared, false, true, false)])], &[]);
+            let d = definition_from_sources(
+                &[SourceInput { name: "crm", kind: "mongodb", meta: &m }],
+                &[],
+            );
+            let ty = list(&d, "property_defs").iter().find(|p| p["name"] == "v").unwrap()["type"].clone();
+            assert_eq!(ty, want, "{declared}");
+        }
+    }
+
+    #[test]
     fn composite_foreign_key_warns() {
         let m = meta(
             "postgres",

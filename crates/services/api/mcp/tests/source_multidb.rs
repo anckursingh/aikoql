@@ -289,7 +289,22 @@ fn postgres_and_mongo_become_one_canonical_customer_class() {
     // values the driver cannot decode natively survive (NUMERIC, TIMESTAMPTZ)
     // the class generated from the table `orders` is `Order`, a keyword: it must be addressable
     let class_orders = query(&l, "MATCH Order RETURN *");
-    assert_eq!(class_orders["results"].as_array().unwrap().len(), 2, "{class_orders}");
+    assert_eq!(
+        class_orders["results"].as_array().unwrap().len(),
+        2,
+        "{class_orders}"
+    );
+    // predicates compare the stored values: Order.id stays numeric although Mongo's
+    // ObjectId `_id` widened the shared `id` property definition to Text
+    let big = query(&l, "MATCH Order WHERE id > 10 RETURN *");
+    assert_eq!(big["results"].as_array().unwrap().len(), 1, "{big}");
+    let pricey = query(&l, "MATCH Order WHERE total > 10 RETURN *");
+    assert_eq!(pricey["results"][0]["properties"]["id"], 11, "{pricey}");
+    let bob = query(&l, "MATCH Customer WHERE id == 2 RETURN *");
+    assert_eq!(
+        bob["results"][0]["properties"]["email"], "bob@pg.test",
+        "{bob}"
+    );
     let orders = query(&l, "MATCH orders RETURN *");
     let mut totals: Vec<f64> = orders["results"]
         .as_array()
@@ -388,4 +403,92 @@ fn postgres_import_keeps_every_common_column_type() {
             "NULL column {k} must stay null: {empty}"
         );
     }
+}
+
+/// MongoDB through the real routes: BSON types survive, `_id` stays readable,
+/// a field seen as Int and String is published as Text.
+#[test]
+fn mongo_bson_types_survive_import_and_mixed_fields_publish_as_text() {
+    use mongodb::bson::{doc, Bson, DateTime, Decimal128, Regex, Timestamp};
+    let Some(mongo) = connectors::Live::mongo() else {
+        return;
+    };
+    let mdb = format!("cert_multidb_bson_{}", std::process::id());
+    let dec: Decimal128 = "12345.6789".parse().unwrap();
+    connectors::mongo_seed(
+        &mongo.mongo_uri,
+        &mdb,
+        "zoo",
+        vec![
+            doc! {"_id": 1_i32, "s": "héllo ✓", "i32": 7_i32, "i64": 9007199254740993_i64, "dbl": 0.1,
+            "dec": dec, "dt": DateTime::parse_rfc3339_str("2026-01-02T03:04:05Z").unwrap(),
+            "b": true, "arr": [1_i32, "a", {"x": 1_i32}], "doc": {"a": {"b": 2_i32}},
+            "nul": Bson::Null, "ts": Timestamp { time: 1, increment: 2 },
+            "re": Regex { pattern: "^a".into(), options: "i".into() }, "mixed": 5_i32},
+            doc! {"_id": "str-id", "mixed": "five"},
+        ],
+    );
+    let l = Live::start(
+        "mongobson",
+        &format!("[[sources]]\nname = \"m\"\nkind = \"mongodb\"\nurl_env = \"MD_MONGO\"\ndatabase = \"{mdb}\"\n"),
+        &[("MD_MONGO", &mongo.mongo_uri)],
+        &[],
+    );
+    l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "m"}),
+    );
+    let p = l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["m"], "preview": true}),
+    );
+    assert!(
+        p["warnings"].to_string().contains("mixed observed types"),
+        "{p}"
+    );
+    l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["m"], "preview": false, "fingerprints": p["fingerprints"]}),
+    );
+    let onto = data(&l.call("GET", "/api/v1/ontology", serde_json::json!({})));
+    let ty = |name: &str| {
+        onto["properties"]["property_defs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("no property {name}: {onto}"))["type"]
+            .clone()
+    };
+    assert_eq!(ty("mixed"), "Text");
+    assert_eq!(ty("i32"), "Int");
+    assert_eq!(ty("dbl"), "Float");
+    assert_eq!(ty("dec"), "Text");
+    assert_eq!(ty("dt"), "DateTime");
+
+    let i = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "m", "containers": ["zoo"]}),
+    );
+    assert_eq!(i["imported"]["zoo"], 2, "{i}");
+    let q = query(&l, "MATCH Zoo RETURN *");
+    let rows = q["results"].as_array().unwrap();
+    let full = rows
+        .iter()
+        .find(|r| r["properties"]["_id"] == 1)
+        .expect("_id 1 kept");
+    let want = serde_json::json!({
+        "_id": 1, "s": "héllo ✓", "i32": 7, "i64": 9007199254740993_i64, "dbl": 0.1,
+        "dec": "12345.6789", "dt": "2026-01-02T03:04:05Z", "b": true,
+        "arr": [1, "a", {"x": 1}], "doc": {"a": {"b": 2}}, "nul": null,
+        "ts": {"t": 1, "i": 2}, "re": "/^a/i", "mixed": 5,
+    });
+    for (k, v) in want.as_object().unwrap() {
+        assert_eq!(&full["properties"][k], v, "field {k}: {full}");
+    }
+    let other = rows
+        .iter()
+        .find(|r| r["properties"]["_id"] == "str-id")
+        .expect("string _id kept");
+    assert_eq!(other["properties"]["mixed"], "five");
 }
