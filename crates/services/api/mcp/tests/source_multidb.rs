@@ -912,3 +912,94 @@ fn postgres_indexes_unique_indexes_and_checks_are_discovered_and_diffed() {
     );
     l.assert_no_secret_anywhere();
 }
+
+/// Neo4j uniqueness constraints and indexes become container metadata: a
+/// uniqueness constraint is a guarantee, a plain index is not.
+#[test]
+fn neo4j_constraints_and_indexes_are_discovered() {
+    let Some(neo) = connectors::Live::neo4j() else {
+        return;
+    };
+    let run = |stmts: &[&str]| {
+        connectors::neo4j_exec(&neo.neo4j_uri, &neo.neo4j_user, &neo.neo4j_password, stmts)
+    };
+    // Neo4j refuses schema and data statements in one transaction: one call each
+    let cleanup = || {
+        run(&["DROP CONSTRAINT md_acct_handle_unique IF EXISTS"]);
+        run(&["DROP INDEX md_acct_score IF EXISTS"]);
+        run(&["DROP INDEX md_acct_pair IF EXISTS"]);
+        run(&["MATCH (n:MdAcct) DETACH DELETE n"]);
+    };
+    cleanup();
+    run(&[
+        "CREATE (:MdAcct {handle: 'a', md_score: 1, md_city: 'x'}), (:MdAcct {handle: 'b', md_score: 2, md_city: 'y'})",
+    ]);
+    run(&["CREATE CONSTRAINT md_acct_handle_unique FOR (n:MdAcct) REQUIRE n.handle IS UNIQUE"]);
+    run(&["CREATE INDEX md_acct_score FOR (n:MdAcct) ON (n.md_score)"]);
+    run(&["CREATE INDEX md_acct_pair FOR (n:MdAcct) ON (n.md_city, n.md_score)"]);
+    let (user, pass) = (neo.neo4j_user.clone(), neo.neo4j_password.clone());
+    let host = neo.neo4j_uri.split_once("://").unwrap().1.to_string();
+    let l = Live::start(
+        "neoidx",
+        "[[sources]]\nname = \"graph\"\nkind = \"neo4j\"\nurl_env = \"MD_NEO\"\n",
+        &[("MD_NEO", &format!("http://{user}:{pass}@{host}"))],
+        &[&pass],
+    );
+    l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "graph"}),
+    );
+    let c = stored_container(&l, "graph", "MdAcct");
+    let idx = |name: &str| {
+        c["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["name"] == name)
+            .unwrap_or_else(|| panic!("no index {name}: {}", c["indexes"]))
+            .clone()
+    };
+    let score = idx("md_acct_score");
+    assert_eq!(
+        (
+            score["unique"].clone(),
+            score["columns"].clone(),
+            score["method"].clone()
+        ),
+        (
+            false.into(),
+            serde_json::json!(["md_score"]),
+            "range".into()
+        ),
+        "{score}"
+    );
+    assert_eq!(
+        idx("md_acct_pair")["columns"],
+        serde_json::json!(["md_city", "md_score"])
+    );
+    // the constraint's backing index is unique
+    assert_eq!(idx("md_acct_handle_unique")["unique"], true);
+    assert!(
+        c["unique_groups"].to_string().contains("[\"handle\"]"),
+        "{}",
+        c["unique_groups"]
+    );
+    let field = |n: &str| {
+        c["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == n)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(field("handle")["is_unique"], true);
+    assert_eq!(field("md_score")["is_unique"], false);
+    // the token lookup index every Neo4j database has is not a property index of this label
+    assert!(c["indexes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|i| i["name"] != "index_343aff4e" && !i["columns"].as_array().unwrap().is_empty()));
+    cleanup();
+}
