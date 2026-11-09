@@ -1113,3 +1113,116 @@ fn clickhouse_storage_views_and_lineage_are_discovered() {
     l.assert_no_secret_anywhere();
     exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
 }
+
+/// Neo4j nodes AND the relationships between the imported labels import through
+/// the production route: bounded, idempotent, relationships kept with their
+/// properties, anything pointing outside the selection left out.
+#[test]
+fn neo4j_nodes_and_relationships_import_through_the_route() {
+    let Some(neo) = connectors::Live::neo4j() else {
+        return;
+    };
+    let run = |stmts: &[&str]| {
+        connectors::neo4j_exec(&neo.neo4j_uri, &neo.neo4j_user, &neo.neo4j_password, stmts)
+    };
+    let clean = || {
+        for label in ["MdImpPerson", "MdImpCompany", "MdImpOther"] {
+            run(&[&format!("MATCH (n:{label}) DETACH DELETE n")]);
+        }
+    };
+    clean();
+    run(&[
+        "CREATE (a:MdImpPerson {name: 'Ann', md_imp_age: 30}), (b:MdImpPerson {name: 'Bob'}), (c:MdImpPerson {name: 'Cy'}), \
+          (x:MdImpCompany {name: 'Acme'}), (y:MdImpCompany {name: 'Beta'}), (o:MdImpOther {name: 'Elsewhere'}), \
+          (a)-[:MD_IMP_WORKS_AT {since: 2020}]->(x), (b)-[:MD_IMP_WORKS_AT {since: 2021}]->(x), (c)-[:MD_IMP_WORKS_AT]->(y), \
+          (a)-[:MD_IMP_KNOWS]->(o)",
+    ]);
+    let (user, pass) = (neo.neo4j_user.clone(), neo.neo4j_password.clone());
+    let host = neo.neo4j_uri.split_once("://").unwrap().1.to_string();
+    let url = format!("http://{user}:{pass}@{host}");
+    let toml = |cap: u32| {
+        format!("[[sources]]\nname = \"graph\"\nkind = \"neo4j\"\nurl_env = \"MD_NEO\"\nimport_max_rows = {cap}\n")
+    };
+    let l = Live::start("neoimp", &toml(10_000), &[("MD_NEO", &url)], &[&pass]);
+    l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "graph"}),
+    );
+    let i = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "graph", "containers": ["MdImpPerson", "MdImpCompany"]}),
+    );
+    assert_eq!(
+        (
+            i["imported"]["MdImpPerson"].clone(),
+            i["imported"]["MdImpCompany"].clone()
+        ),
+        (3.into(), 2.into()),
+        "{i}"
+    );
+    assert_eq!(i["truncated"], serde_json::json!([]));
+    assert_eq!(i["skipped"], serde_json::json!([]), "{i}");
+
+    let people = query(&l, "MATCH MdImpPerson RETURN *");
+    let rows = people["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "{people}");
+    let companies = query(&l, "MATCH MdImpCompany RETURN *");
+    let acme = companies["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["properties"]["name"] == "Acme")
+        .unwrap();
+    let ann = rows
+        .iter()
+        .find(|r| r["properties"]["name"] == "Ann")
+        .unwrap();
+    assert_eq!(
+        ann["properties"]["labels"],
+        serde_json::json!(["MdImpPerson"])
+    );
+    assert_eq!(ann["properties"]["md_imp_age"], 30);
+    let works = ann["properties"]["rel:MD_IMP_WORKS_AT"]
+        .as_array()
+        .expect("relationship kept on its start node");
+    assert_eq!(works.len(), 1, "{ann}");
+    assert_eq!(works[0]["since"], 2020);
+    assert_eq!(
+        works[0]["target"], acme["koid"],
+        "the relationship points at the imported company"
+    );
+    assert!(
+        ann["properties"].get("rel:MD_IMP_KNOWS").is_none(),
+        "a relationship to an unselected label is not imported: {ann}"
+    );
+
+    // idempotent: the same graph again writes nothing
+    let again = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "graph", "containers": ["MdImpPerson", "MdImpCompany"]}),
+    );
+    assert_eq!(
+        (
+            again["imported"]["MdImpPerson"].clone(),
+            again["unchanged"]["MdImpPerson"].clone()
+        ),
+        (0.into(), 3.into()),
+        "{again}"
+    );
+
+    // the row cap bounds a label and says so
+    let capped = Live::start("neoimpcap", &toml(2), &[("MD_NEO", &url)], &[&pass]);
+    capped.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "graph"}),
+    );
+    let c = capped.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "graph", "containers": ["MdImpPerson"]}),
+    );
+    assert_eq!(c["imported"]["MdImpPerson"], 2, "{c}");
+    assert_eq!(c["truncated"], serde_json::json!(["MdImpPerson"]));
+    l.assert_no_secret_anywhere();
+    capped.assert_no_secret_anywhere();
+    clean();
+}
