@@ -564,6 +564,7 @@ mod tests {
             &[ClassMerge {
                 a: "crm.customers".into(),
                 b: "shop.clients".into(),
+                properties: Vec::new(),
             }],
         );
         assert_eq!(names(&d), ["Customer"]);
@@ -580,6 +581,93 @@ mod tests {
         assert!(d.classes[0].sources.contains(&"shop.clients".to_string()));
     }
 
+    fn crm_and_shop() -> (ConnectorMetadata, ConnectorMetadata) {
+        (
+            meta(
+                "postgres",
+                "crm",
+                &[("customers", &[ID, ("email", "text", false, false, false), ("tier", "text", false, true, false)])],
+                &[],
+            ),
+            meta(
+                "sqlite",
+                "shop",
+                &[("clients", &[ID, ("email_address", "text", false, false, false), ("tier", "integer", false, true, false)])],
+                &[],
+            ),
+        )
+    }
+
+    fn merged(properties: Vec<(&str, &str)>) -> DefinitionDraft {
+        let (a, b) = crm_and_shop();
+        definition_from_sources(
+            &[
+                SourceInput { name: "crm", kind: "postgres", meta: &a },
+                SourceInput { name: "shop", kind: "sqlite", meta: &b },
+            ],
+            &[ClassMerge {
+                a: "crm.customers".into(),
+                b: "shop.clients".into(),
+                properties: properties
+                    .into_iter()
+                    .map(|(x, y)| (x.to_string(), y.to_string()))
+                    .collect(),
+            }],
+        )
+    }
+
+    #[test]
+    fn aligned_properties_become_one_canonical_property_in_both_mappings() {
+        let d = merged(vec![("email", "email_address")]);
+        let class_props: Vec<&str> = list(&d, "classes")[0]["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+            .collect();
+        assert!(class_props.contains(&"email"), "{class_props:?}");
+        assert!(!class_props.contains(&"email_address"), "folded into email: {class_props:?}");
+        let maps = list(&d, "mappings");
+        let of = |t: &str| maps.iter().find(|m| m["physical_type"] == t).unwrap();
+        assert_eq!(of("customers")["property_map"]["email"], "email");
+        assert_eq!(of("clients")["property_map"]["email_address"], "email");
+        assert!(!list(&d, "property_defs").iter().any(|p| p["name"] == "email_address"));
+        assert!(d.warnings.iter().all(|w| !w.contains("ignored")), "{:?}", d.warnings);
+    }
+
+    #[test]
+    fn aligning_properties_of_different_types_widens_with_the_existing_warning() {
+        let d = merged(vec![("tier", "tier")]);
+        let tier = list(&d, "property_defs").iter().find(|p| p["name"] == "tier").unwrap();
+        assert_eq!(tier["type"], "Text");
+    }
+
+    #[test]
+    fn an_alignment_naming_a_missing_field_is_ignored_with_a_warning() {
+        let d = merged(vec![("email", "nope"), ("ghost", "email_address")]);
+        assert_eq!(
+            d.warnings.iter().filter(|w| w.contains("alignment ignored")).count(),
+            2,
+            "{:?}",
+            d.warnings
+        );
+        // nothing was folded: both source properties survive
+        let maps = list(&d, "mappings");
+        let shop = maps.iter().find(|m| m["physical_type"] == "clients").unwrap();
+        assert_eq!(shop["property_map"]["email_address"], "email_address");
+    }
+
+    #[test]
+    fn two_fields_of_one_container_cannot_fold_into_one_property() {
+        // folding both `email_address` and `tier` into `email` would make one source column overwrite another
+        let d = merged(vec![("email", "email_address"), ("email", "tier")]);
+        assert!(d.warnings.iter().any(|w| w.contains("alignment ignored")), "{:?}", d.warnings);
+        let maps = list(&d, "mappings");
+        let shop = maps.iter().find(|m| m["physical_type"] == "clients").unwrap();
+        assert_eq!(shop["property_map"]["email_address"], "email");
+        assert_eq!(shop["property_map"]["tier"], "tier", "the second fold was refused");
+    }
+
     #[test]
     fn unknown_merge_reference_warns_and_is_ignored() {
         let a = meta("postgres", "crm", &[("customers", &[ID])], &[]);
@@ -592,6 +680,7 @@ mod tests {
             &[ClassMerge {
                 a: "crm.customers".into(),
                 b: "nope.nothing".into(),
+                properties: Vec::new(),
             }],
         );
         assert_eq!(names(&d), ["Customer"]);
