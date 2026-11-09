@@ -555,6 +555,24 @@ async function main() {
     ok('clicking outside closes it', await page.isHidden('#palette'));
     ok('fuzzy ranking: a prefix beats a scattered match, a miss is rejected', await page.evaluate(() => fuzzyScore('onto', 'Ontology') > fuzzyScore('onto', 'Go to Ontology panel...x') && fuzzyScore('onto', 'Ontology') > fuzzyScore('onty', 'Ontology') && fuzzyScore('zzz', 'Ontology') === -1 && fuzzyScore('', 'anything') === 0));
     await page.evaluate(() => { const o = Object.keys(localStorage).filter(k => k.includes('.saved')); o.forEach(k => localStorage.setItem(k, '[]')); });
+    // ---- P1: one working tenant, applied everywhere and remembered ----
+    const TENANT_IDS = ['query', 'ontology', 'sources', 'ask', 'graph'];
+    const tenantValues = () => page.evaluate(ids => ids.map(i => document.getElementById(i + '-tenant').value), TENANT_IDS);
+    await page.selectOption('#tenant-context', 't1'); await page.waitForTimeout(500);
+    ok('choosing a tenant in the header applies it to every panel', (await tenantValues()).every(v => v === 't1'), JSON.stringify(await tenantValues()));
+    const reqBeforeTenant = requests.length;
+    await page.evaluate(() => window.__cmSetValue('MATCH Company RETURN *')); await page.click('[data-click="runQuery"]'); await page.waitForTimeout(900);
+    ok('queries run in the working tenant', requests.slice(reqBeforeTenant).some(u => /api\/aikoql\?.*tenant=t1/.test(u)), requests.slice(reqBeforeTenant).join(' '));
+    await page.reload(); await page.waitForTimeout(1800);
+    ok('the working tenant survives a reload', (await page.inputValue('#tenant-context')) === 't1' && (await tenantValues()).every(v => v === 't1'), JSON.stringify(await tenantValues()));
+    await page.click('button[data-panel="ontology"]'); await page.waitForTimeout(400);
+    await page.selectOption('#ontology-tenant', ''); await page.waitForTimeout(500);
+    ok('changing a panel selector keeps the header and the other panels in step', (await page.inputValue('#tenant-context')) === '' && (await tenantValues()).every(v => v === ''), JSON.stringify(await tenantValues()));
+    await page.keyboard.press('Control+k'); await page.keyboard.type('tenant t1'); await page.waitForTimeout(200);
+    ok('the palette can switch tenant', /Switch tenant: t1/.test(await page.locator('#palette-list [role=option]').first().innerText().catch(() => '')));
+    await page.keyboard.press('Enter'); await page.waitForTimeout(500);
+    ok('...and does', (await page.inputValue('#tenant-context')) === 't1');
+    await page.selectOption('#tenant-context', ''); await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
     // ---- a dead cookie falls back to the form; signing in must still work ---
     await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });

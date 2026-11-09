@@ -1610,6 +1610,23 @@ mod tests {
         );
     }
 
+    // ---- P1: one working tenant ----
+
+    #[test]
+    fn one_header_selector_sets_the_tenant_of_every_panel() {
+        let page = page_for_tests();
+        assert!(page.contains("id=\"tenant-context\""), "the header tenant selector");
+        assert!(page.contains("aria-label=\"Working tenant"), "it has an accessible name");
+        assert!(page.contains("\n  setTenantContext:"), "reachable through the allowlist");
+        let apply = js_fn("function applyTenantContext(");
+        for id in ["query-tenant", "ontology-tenant", "sources-tenant", "ask-tenant", "graph-tenant"] {
+            assert!(page.contains(&format!("id=\"{id}\"")), "{id} still exists");
+            assert!(page.contains(&format!("'{id}'")), "{id} is driven by the context");
+        }
+        assert!(apply.contains("tenant-context"), "the header selector mirrors the context");
+        assert!(page.contains("store.set('tenant'"), "the choice is remembered");
+    }
+
     #[test]
     fn save_ontology_does_not_assert_an_identity() {
         // The server derives the subject from the bearer token (with_principal);
