@@ -200,6 +200,27 @@ function initApp() {
 
 // Note: Ctrl+Enter query execution is handled inside CodeMirror's contentDOM listener
 // (see window.__initCodeMirror). Ctrl+S save feedback is below.
+// One working tenant for the whole console. The header sets every panel's selector; a
+// panel can still be pointed elsewhere, and that stays LOCAL to the panel: a view filter
+// (the graph's tenant) must never silently change where another panel's writes land.
+const TENANT_SELECTS = ['query-tenant', 'ontology-tenant', 'sources-tenant', 'ask-tenant', 'graph-tenant'];
+let tenantContext = '';
+function applyTenantContext() {
+  TENANT_SELECTS.forEach(id => {
+    const sel = document.getElementById(id);
+    if (sel && sel.value !== tenantContext) sel.value = tenantContext;
+  });
+  const g = document.getElementById('tenant-context');
+  if (g && g.value !== tenantContext) g.value = tenantContext;
+}
+function setTenantContext(el) {
+  tenantContext = el.value;
+  store.set('tenant', tenantContext);
+  applyTenantContext();
+  // the panel on screen re-reads its data under the new tenant
+  const sel = document.getElementById(activePanel + '-tenant');
+  if (sel) sel.dispatchEvent(new Event('change', {bubbles: true}));
+}
 function loadTenants() {
   api('/api/schema').then(d => {
     if (!d.schema) return;
@@ -221,7 +242,11 @@ function loadTenants() {
     const at = document.getElementById('ask-tenant'), askCur = at.value;
     at.innerHTML = '<option value="">All tenants</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
     at.value = askCur;
+    const gctx = document.getElementById('tenant-context');
+    gctx.innerHTML = '<option value="">Each panel’s default</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
+    tenantContext = store.get('tenant', '');
     document.getElementById('graph-tenant').innerHTML = '<option value="">All tenants</option>' + [...tenants].map(t => '<option>'+esc(t)+'</option>').join('');
+    applyTenantContext();
   }).catch(() => {});
 }
 
@@ -533,6 +558,10 @@ function paletteCommands() {
     cmds.push({label: 'Copy results as CSV', hint: 'Results', run: () => copyResults({dataset: {kind: 'csv'}})});
     cmds.push({label: 'Copy results as JSON', hint: 'Results', run: () => copyResults({dataset: {kind: 'json'}})});
   }
+  document.querySelectorAll('#tenant-context option').forEach(o => {
+    const sel = document.getElementById('tenant-context');
+    cmds.push({label: o.value ? 'Switch tenant: ' + o.value : 'Use each panel’s default tenant', hint: 'Tenant', run: () => { sel.value = o.value; setTenantContext(sel); }});
+  });
   cmds.push({label: 'Sign out', hint: 'Session', run: logout});
   const load = q => () => { switchPanel('query'); window.__cmSetValue(q); persistDraft(); };
   store.get('saved', []).forEach(s => cmds.push({label: 'Load saved: ' + s.name, hint: firstLine(s.q), run: load(s.q)}));
@@ -2054,6 +2083,7 @@ document.getElementById('ask-question').addEventListener('keydown', e => { if ((
 // ═══════════════════════════════════════════
 const ACTIONS = Object.assign(Object.create(null), {
   doLogin: el => doLogin(),
+  setTenantContext: el => setTenantContext(el),
   closePalette: el => closePalette(),
   paletteRun: el => runPaletteItem(Number(el.dataset.index)),
   sortResults: el => sortResults(el),

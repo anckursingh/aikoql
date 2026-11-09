@@ -171,6 +171,11 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .metric-big { font-size: 28px; font-weight: 700; color: var(--accent); }
 .metric-label { font-size: 11px; color: var(--muted); }
 
+/* ── Tenant context ── */
+.header-spacer { flex: 1; }
+.tenant-ctx { font-size: 12px; color: var(--muted); }
+#tenant-context { padding: 5px 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 5px; font-size: 12px; font-family: var(--font); max-width: 200px; }
+
 /* ── Command palette ── */
 #palette-backdrop { position: fixed; inset: 0; background: rgba(4,4,10,0.62); z-index: 280; }
 #palette-backdrop[hidden], #palette[hidden] { display: none; }
@@ -321,6 +326,9 @@ td a:hover { text-decoration: underline; }
     <div id="panel-header">
       <h2 id="panel-title">Query Editor</h2>
       <span class="breadcrumb" id="panel-breadcrumb"></span>
+      <span class="header-spacer"></span>
+      <label class="tenant-ctx" for="tenant-context">Tenant</label>
+      <select id="tenant-context" data-change="setTenantContext" aria-label="Working tenant — applies to every panel"><option value="">Each panel’s default</option></select>
     </div>
     <div id="panel-content">
 
@@ -1615,16 +1623,46 @@ mod tests {
     #[test]
     fn one_header_selector_sets_the_tenant_of_every_panel() {
         let page = page_for_tests();
-        assert!(page.contains("id=\"tenant-context\""), "the header tenant selector");
-        assert!(page.contains("aria-label=\"Working tenant"), "it has an accessible name");
-        assert!(page.contains("\n  setTenantContext:"), "reachable through the allowlist");
+        assert!(
+            page.contains("id=\"tenant-context\""),
+            "the header tenant selector"
+        );
+        assert!(
+            page.contains("aria-label=\"Working tenant"),
+            "it has an accessible name"
+        );
+        assert!(
+            page.contains("\n  setTenantContext:"),
+            "reachable through the allowlist"
+        );
         let apply = js_fn("function applyTenantContext(");
-        for id in ["query-tenant", "ontology-tenant", "sources-tenant", "ask-tenant", "graph-tenant"] {
+        for id in [
+            "query-tenant",
+            "ontology-tenant",
+            "sources-tenant",
+            "ask-tenant",
+            "graph-tenant",
+        ] {
             assert!(page.contains(&format!("id=\"{id}\"")), "{id} still exists");
-            assert!(page.contains(&format!("'{id}'")), "{id} is driven by the context");
+            assert!(
+                page.contains(&format!("'{id}'")),
+                "{id} is driven by the context"
+            );
         }
-        assert!(apply.contains("tenant-context"), "the header selector mirrors the context");
-        assert!(page.contains("store.set('tenant'"), "the choice is remembered");
+        assert!(
+            apply.contains("tenant-context"),
+            "the header selector mirrors the context"
+        );
+        assert!(
+            page.contains("store.set('tenant'"),
+            "the choice is remembered"
+        );
+        // one-way: a panel's own selector must never rewrite the working tenant (a view
+        // filter silently re-pointing another panel's writes)
+        assert!(
+            !page.contains("TENANT_SELECTS.includes(e.target.id)"),
+            "panel selectors must not feed back into the working tenant"
+        );
     }
 
     #[test]

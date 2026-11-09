@@ -567,7 +567,8 @@ async function main() {
     ok('the working tenant survives a reload', (await page.inputValue('#tenant-context')) === 't1' && (await tenantValues()).every(v => v === 't1'), JSON.stringify(await tenantValues()));
     await page.click('button[data-panel="ontology"]'); await page.waitForTimeout(400);
     await page.selectOption('#ontology-tenant', ''); await page.waitForTimeout(500);
-    ok('changing a panel selector keeps the header and the other panels in step', (await page.inputValue('#tenant-context')) === '' && (await tenantValues()).every(v => v === ''), JSON.stringify(await tenantValues()));
+    ok('a panel override stays local: the header and the other panels do not move', (await page.inputValue('#tenant-context')) === 't1' && (await page.inputValue('#query-tenant')) === 't1' && (await page.inputValue('#sources-tenant')) === 't1', await page.inputValue('#tenant-context'));
+    await page.selectOption('#tenant-context', ''); await page.waitForTimeout(300);
     await page.keyboard.press('Control+k'); await page.keyboard.type('tenant t1'); await page.waitForTimeout(200);
     ok('the palette can switch tenant', /Switch tenant: t1/.test(await page.locator('#palette-list [role=option]').first().innerText().catch(() => '')));
     await page.keyboard.press('Enter'); await page.waitForTimeout(500);
