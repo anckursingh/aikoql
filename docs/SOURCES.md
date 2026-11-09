@@ -64,8 +64,18 @@ Per source, as ordinary knowledge objects in the source's tenant (queryable, ver
 | type | one per | holds |
 |---|---|---|
 | `aikoql:source` | source | name, kind, schema fingerprint, container count, references |
-| `aikoql:source-table` | container | fields (type, nullability, keys, provenance), unique groups, schema namespace |
+| `aikoql:source-table` | container | fields (type, nullability, keys, provenance), unique groups, schema namespace, **indexes**, **CHECK constraints**, view kind, storage properties |
 | `aikoql:schema-run` | change | fingerprint, previous fingerprint, the diff |
+
+What each kind reports beyond columns and keys (all part of the schema fingerprint and the diff):
+
+| kind | indexes | constraints | other |
+|---|---|---|---|
+| postgres | every secondary index, with method, uniqueness, key columns or expressions, and a partial index's predicate | CHECK constraints (named); a full unique index on plain columns counts as a uniqueness guarantee, an expression or partial one is recorded but never claimed | schema namespace |
+| neo4j | property indexes (range, text, point, vector, fulltext) | uniqueness and node-key (unique groups), existence and node-key (mandatory properties) — best effort: older servers or a role without `SHOW` privileges report none | |
+| clickhouse | data-skipping indexes | — | engine, sorting / primary / partition key, views and materialized views with their defining query and `derived_from` lineage to the tables they read; a materialized view's hidden `.inner*` storage table is not a container |
+| mongodb | — | — | observed field types as a union (`Int32|String`), presence and null ratios in `sample` mode |
+| sqlite | unique indexes only | — | |
 
 Re-running discovery with an unchanged schema writes **nothing**. A changed schema updates the affected
 table objects in place (new version), tombstones removed containers (history kept) and adds a run with the
@@ -84,7 +94,16 @@ Declared types (SQL, ClickHouse) and observed types (Mongo, Neo4j) are marked di
   relationships from references, and a mapping from each physical container to its class.
 - **No automatic cross-source merging.** The same class name in two sources stays two classes
   (`CrmCustomer`, `ShopCustomer`, flagged *possible duplicate*). A person merges concepts explicitly with
-  `merges: [["crm.customers", "shop.clients"]]` → one class, two mappings.
+  `merges: [["crm.customers", "shop.clients"]]` → one class, two mappings. A merge can also align
+  properties: `merges: [{"a": "crm.customers", "b": "shop.clients", "properties": [["email", "email_address"]]}]`
+  folds `email_address` into the canonical `email`, so the canonical property answers in both databases.
+  A fold that would make two columns of one container collide is refused with a warning.
+- **Suggestions, never decisions.** A preview lists `suggestions`: pairs of containers from *different* sources
+  that look like one concept (equal or synonym class names such as customer/client, aligned fields, key
+  roles, value types), each with a `confidence`, the `evidence` behind it and the property matches that
+  would need an alignment. A shared `id` alone is never evidence. Nothing is applied until a person sends
+  it back as a merge (Studio: **Apply this merge**). Union types observed in a Mongo field (`Int32|String`)
+  publish as `Text`, `Int|Double` as `Float`, with a warning.
 - **Preview writes nothing.** It returns the classes, what would be added / refreshed / left untouched,
   warnings (type conflicts, name clashes, composite foreign keys, observed-only fields) and the schema
   `fingerprints` it was computed from.
@@ -108,8 +127,20 @@ one canonical name the lexicographically first wins). **Result rows keep each so
 `POST /api/v1/sources/import {source, containers}` copies chosen, already-discovered tables as objects typed by
 the **physical** container name, tagged `src:<source>`.
 
-- Supported for `postgres`, `sqlite`, `mongodb`. **Neo4j and ClickHouse answer 400** — import them with the
-  CLI (`aikoql-mcp import …`); ClickHouse is discovery-only.
+- Supported for every kind. Values keep their exact form: Postgres `numeric`, timestamps, `uuid`, `json`, arrays
+  and enums are read as text and parsed (a decimal past 15 significant digits stays exact text, never a rounded
+  float; timestamps are UTC, `ISO` style); MongoDB keeps `_id` as a property and writes Decimal128 and dates
+  as text; ClickHouse reads each cell by its declared type (UInt64 and 128-bit integers, decimals and `nan` as
+  exact text).
+- **Neo4j** is read as a graph: the nodes of the chosen labels (capped, in `elementId` order) and the
+  relationships whose *both* ends were imported; a relationship's properties ride on its start node as
+  `rel:<TYPE>` lists tagged with the target's KOID. A node with several labels is one object.
+- **ClickHouse** is one `SELECT … ORDER BY <sorting key> LIMIT cap+1`, so the rows are a single consistent
+  snapshot as of the query's start, streamed with row, per-row and total-size bounds. `ReplacingMergeTree` and
+  `CollapsingMergeTree` tables are read `FINAL` (rows are their latest versions) and keyed by their sorting key;
+  any other table's rows are identified by content (a 128-bit hash), so an updated row is a *new* object and
+  identical rows collapse. A reply that is cut short or unparseable is an error, never a smaller table. Views
+  import too; for a very large table raise `import_max_rows` knowingly.
 - Idempotent: identical rows write nothing; a changed row updates in place.
 - **Capped and synchronous.** Default 10 000 rows per container; the response says which containers were cut
   (`truncated`). Commits are per row (~270 rows/s on the v2 engine), so raise `import_max_rows` knowingly.
@@ -146,6 +177,12 @@ mid-import then resume; a silent source; and route fuzz.
 
 - Result rows are not renamed to canonical property names (see Querying).
 - MongoDB and Neo4j schemas are samples: a field absent from the sample is not reported.
+- The shared `id` property definition widens to `Text` when any source's key is not an integer (a Mongo
+  ObjectId `_id`); queries still compare the stored values, so `WHERE id > 10` works on integer ids.
+- Merge suggestions need a class-name signal or two shared exact field names to be considered, so two
+  containers that only resemble each other through contained field names (and nothing else) are not offered.
+- Imports of a Mongo collection whose `_id` is the string `"1"` in one document and the integer `1` in another
+  collide on one KOID (the id's text is the identity).
 - Postgres composite foreign keys become one relationship (with a warning); `FieldProfile` ratios for
   Neo4j are not available (the schema procedure reports types and "mandatory" only).
 - Imports are synchronous and per-row committed; see Importing.

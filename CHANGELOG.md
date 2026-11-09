@@ -23,7 +23,29 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 - Ontology discovery from connector metadata proposes one class per container instead of one per source kind.
 - Robustness: seeded fuzz and adversarial suites (`scripts/fuzz-sources.sh`).
 
+### Data sources: fidelity, suggestions and import for every kind
+- **Neo4j and ClickHouse import** through `POST /api/v1/sources/import` (bounded, idempotent; Neo4j with the
+  relationships between the selected labels, ClickHouse as one consistent streamed snapshot, replacing engines
+  read `FINAL`).
+- **Merge suggestions** in the ontology preview (confidence, evidence, property matches — advice only) and
+  **property alignment** in a merge, so a canonical property such as `email` answers across Postgres and MongoDB.
+  Studio lists them with **Apply this merge**.
+- **Richer schema**: Postgres indexes (unique, partial, expression) and CHECK constraints; Neo4j indexes and
+  uniqueness / node-key / existence constraints; ClickHouse engine, keys, skipping indexes, views and lineage.
+  All are in the schema fingerprint and the diff; existing schemas keep their fingerprint.
+- The schema KOs (`aikoql:source-table`, …) are now queryable: a hyphen is allowed inside a namespaced type name.
+
 ### Fixed
+- Postgres import returned `NULL` for `numeric`, timestamps, `uuid`, `json`, arrays, enums, `inet` and `smallint`
+  (the driver could not decode them into the requested type and the failure was swallowed): every non-native
+  column is now read as text and parsed; the session pins time zone and date style.
+- `MATCH Order` (and `Group`, `Update`, … — a table `orders` becomes the class `Order`) was a syntax error: a
+  keyword is now accepted as an entity or property name where a name is required.
+- MongoDB import ended silently at the first cursor error and reported a partial copy as complete; Decimal128
+  was stored as its Rust debug form; `_id` was only inside the KOID hash.
+- Mixed observed types (`Int32|String`) were typed from the first token; SCREAMING_SNAKE relationship types were
+  named `m_d__w_o_r_k_s__a_t`; a ClickHouse materialized view's `.inner_id.<uuid>` table became a class.
+- Neo4j import requests ignored the connector timeout and hung on a silent server.
 - Neo4j connector: node labels and relationship types are escaped in Cypher (a label containing a backtick could
   inject a second clause — proven by a live test that deleted another label's nodes).
 - REST: an unknown `/api/v1/*` path answered 500 instead of 404 (the default arm's "Not Found" did not match the

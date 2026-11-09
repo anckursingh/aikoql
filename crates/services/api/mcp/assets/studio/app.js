@@ -1585,7 +1585,10 @@ function describeDiff(d) {
   const parts = [];
   if ((d.added_containers || []).length) parts.push('added ' + d.added_containers.join(', '));
   if ((d.removed_containers || []).length) parts.push('removed ' + d.removed_containers.join(', '));
-  (d.changed || []).forEach(c => parts.push(c.name + ': +' + (c.added_fields || []).length + ' -' + (c.removed_fields || []).length + ' fields, ' + (c.type_changes || []).length + ' retyped'));
+  (d.changed || []).forEach(c => parts.push(c.name + ': +' + (c.added_fields || []).length + ' -' + (c.removed_fields || []).length + ' fields, ' + (c.type_changes || []).length + ' retyped'
+    + ((c.added_indexes || []).length + (c.removed_indexes || []).length + (c.redefined_indexes || []).length ? ', indexes +' + (c.added_indexes || []).length + ' -' + (c.removed_indexes || []).length + ' ~' + (c.redefined_indexes || []).length : '')
+    + ((c.added_checks || []).length + (c.removed_checks || []).length + (c.redefined_checks || []).length ? ', checks +' + (c.added_checks || []).length + ' -' + (c.removed_checks || []).length + ' ~' + (c.redefined_checks || []).length : '')
+    + ((c.property_changes || []).length ? ', ' + c.property_changes.length + ' storage setting(s) changed' : '')));
   return parts.join('; ');
 }
 function renderSourceCard(s) {
