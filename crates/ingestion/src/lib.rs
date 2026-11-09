@@ -266,8 +266,9 @@ pub use reconcile::{
 
 mod connector_bridge;
 pub use connector_bridge::{
-    class_name_for_container, connector_metadata_to_ir, discover_connector_schema,
-    ConnectorMetadata, ContainerInfo, FieldInfo, FieldProfile, Provenance, ReferenceInfo,
+    class_name_for_container, connector_metadata_to_ir, discover_connector_schema, CheckInfo,
+    ConnectorMetadata, ContainerInfo, FieldInfo, FieldProfile, IndexInfo, Provenance,
+    ReferenceInfo,
 };
 
 mod ontology_draft;

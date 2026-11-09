@@ -261,6 +261,7 @@ fn map_postgres(t: &aikoql_postgres::TableSchema) -> ContainerInfo {
         row_count: u64::try_from(t.row_count_estimate).ok(),
         schema: (!t.schema.is_empty()).then(|| t.schema.clone()),
         unique_groups: t.unique_groups.clone(),
+        ..Default::default()
     }
 }
 
@@ -375,6 +376,7 @@ fn sqlite_meta(path: &str, ms: u64, max: usize, own: std::time::Duration) -> Res
             row_count: None,
             schema: None,
             unique_groups: t.unique_groups,
+            ..Default::default()
         });
     }
     let references = c
