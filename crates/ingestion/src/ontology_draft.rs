@@ -174,7 +174,57 @@ fn align_property(
     aligned.insert((b.key.clone(), fb.to_string()), canon);
 }
 
+/// The key a source itself declares for a container's rows, in column order:
+/// its primary key; failing that its first unique group; failing that, for a
+/// replacing / collapsing ClickHouse table, its sorting key (that engine keeps
+/// the latest row per sorting key, so the key IS the identity). A plain
+/// MergeTree sorting key is not unique and is never claimed. Empty: none.
+pub(crate) fn declared_identity(c: &ContainerInfo) -> Vec<String> {
+    let pk: Vec<String> = c
+        .fields
+        .iter()
+        .filter(|f| f.is_primary_key)
+        .map(|f| f.name.clone())
+        .collect();
+    if !pk.is_empty() {
+        return pk;
+    }
+    if let Some(g) = c.unique_groups.iter().find(|g| !g.is_empty()) {
+        return g.clone();
+    }
+    let engine = c.properties.get("engine").map_or("", String::as_str);
+    if engine.contains("Replacing") || engine.contains("Collapsing") {
+        let cols: Vec<String> = c
+            .properties
+            .get("sorting_key")
+            .map(|k| {
+                k.split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        // an expression key (toDate(ts)) is not a column: no claim
+        if !cols.is_empty() && cols.iter().all(|k| c.fields.iter().any(|f| &f.name == k)) {
+            return cols;
+        }
+    }
+    Vec::new()
+}
+
 pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -> DefinitionDraft {
+    definition_from_sources_keyed(sources, merges, &BTreeMap::new())
+}
+
+/// Like [`definition_from_sources`], with identity keys the owner declared:
+/// `"<source>.<container>"` -> physical columns. A declared key must name
+/// existing columns (else it is refused whole, with a warning, and the source's
+/// own key stays); it replaces the derived key.
+pub fn definition_from_sources_keyed(
+    sources: &[SourceInput],
+    merges: &[ClassMerge],
+    identities: &BTreeMap<String, Vec<String>>,
+) -> DefinitionDraft {
     let mut warnings: Vec<String> = Vec::new();
     let entries: Vec<Entry> = sources
         .iter()
@@ -342,13 +392,32 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
                     (e.kind.to_string(), e.container.name.clone()),
                     e.source.to_string(),
                 );
-                mappings.push(json!({
+                let mut mapping = json!({
                     "source": e.kind,
                     "physical_type": e.container.name,
                     "class": class_of_entry(i),
                     "property_map": property_map,
-                }));
+                });
+                let declared = identities.get(&e.key).filter(|cols| {
+                    let missing = cols.iter().find(|c| !e.container.fields.iter().any(|f| &&f.name == c));
+                    if let Some(c) = missing {
+                        warnings.push(format!("identity ignored: {} has no column {c}", e.key));
+                    }
+                    missing.is_none() && !cols.is_empty()
+                });
+                let identity = declared.cloned().unwrap_or_else(|| declared_identity(e.container));
+                if !identity.is_empty() {
+                    mapping["identity"] = json!(identity);
+                }
+                mappings.push(mapping);
             }
+        }
+    }
+    for key in identities.keys() {
+        if !entries.iter().any(|e| &e.key == key) {
+            warnings.push(format!(
+                "identity ignored: {key} is not a discovered container"
+            ));
         }
     }
     for s in sources {
@@ -1125,6 +1194,187 @@ mod tests {
             3,
             "every relationship has its own name: {names:?}"
         );
+    }
+
+    // ---- identity keys (docs/ONTOLOGY-IN-PRACTICE.md, Phase A) ----
+
+    fn identity_of(d: &DefinitionDraft, physical: &str) -> Vec<String> {
+        list(d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == physical)
+            .and_then(|m| m["identity"].as_array())
+            .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    fn one(name: &str, kind: &str, m: &ConnectorMetadata) -> DefinitionDraft {
+        definition_from_sources(
+            &[SourceInput {
+                name,
+                kind,
+                meta: m,
+            }],
+            &[],
+        )
+    }
+
+    #[test]
+    fn the_key_a_source_declares_becomes_the_mapping_identity() {
+        // primary key (composite keeps column order), then a unique group, then a replacing engine's sorting key
+        let mut m = meta(
+            "postgres",
+            "crm",
+            &[
+                (
+                    "orders",
+                    &[
+                        ("tenant", "text", true, false, true),
+                        ("id", "integer", true, false, true),
+                        ("note", "text", false, true, false),
+                    ],
+                ),
+                (
+                    "people",
+                    &[
+                        ("email", "text", false, false, false),
+                        ("name", "text", false, true, false),
+                    ],
+                ),
+            ],
+            &[],
+        );
+        m.containers[1].unique_groups = vec![vec!["email".into()]];
+        let d = one("crm", "postgres", &m);
+        assert_eq!(identity_of(&d, "orders"), ["tenant", "id"]);
+        assert_eq!(
+            identity_of(&d, "people"),
+            ["email"],
+            "a unique group is a key when there is no primary key"
+        );
+
+        let mut ch = meta(
+            "clickhouse",
+            "olap",
+            &[
+                (
+                    "devices",
+                    &[
+                        ("visitor_id", "String", false, false, false),
+                        ("risk", "Float32", false, false, false),
+                    ],
+                ),
+                (
+                    "visits",
+                    &[
+                        ("visitor_id", "String", false, false, false),
+                        ("ts", "DateTime", false, false, false),
+                    ],
+                ),
+            ],
+            &[],
+        );
+        ch.containers[0]
+            .properties
+            .insert("engine".into(), "ReplacingMergeTree".into());
+        ch.containers[0]
+            .properties
+            .insert("sorting_key".into(), "visitor_id".into());
+        ch.containers[1]
+            .properties
+            .insert("engine".into(), "MergeTree".into());
+        ch.containers[1]
+            .properties
+            .insert("sorting_key".into(), "visitor_id, ts".into());
+        let d = one("olap", "clickhouse", &ch);
+        assert_eq!(
+            identity_of(&d, "devices"),
+            ["visitor_id"],
+            "a replacing engine's sorting key IS its identity"
+        );
+        assert!(
+            identity_of(&d, "visits").is_empty(),
+            "a plain MergeTree sorting key is not unique: no claim"
+        );
+    }
+
+    #[test]
+    fn a_declared_identity_wins_is_validated_and_an_empty_one_writes_nothing() {
+        let m = meta(
+            "clickhouse",
+            "olap",
+            &[(
+                "device_activity",
+                &[
+                    ("visitor_id", "String", false, false, false),
+                    ("visit_count", "UInt64", false, false, false),
+                ],
+            )],
+            &[],
+        );
+        // nothing declared and nothing derivable: no identity key at all
+        let none = one("olap", "clickhouse", &m);
+        assert!(identity_of(&none, "device_activity").is_empty());
+        assert!(
+            list(&none, "mappings")[0].get("identity").is_none(),
+            "no empty list is written"
+        );
+        // the owner declares it
+        let ids: std::collections::BTreeMap<String, Vec<String>> = [(
+            "olap.device_activity".to_string(),
+            vec!["visitor_id".to_string()],
+        )]
+        .into();
+        let d = definition_from_sources_keyed(
+            &[SourceInput {
+                name: "olap",
+                kind: "clickhouse",
+                meta: &m,
+            }],
+            &[],
+            &ids,
+        );
+        assert_eq!(identity_of(&d, "device_activity"), ["visitor_id"]);
+        // a column that does not exist is ignored with a warning, never silently half-applied
+        let bad: std::collections::BTreeMap<String, Vec<String>> = [(
+            "olap.device_activity".to_string(),
+            vec!["visitor_id".to_string(), "nope".to_string()],
+        )]
+        .into();
+        let d = definition_from_sources_keyed(
+            &[SourceInput {
+                name: "olap",
+                kind: "clickhouse",
+                meta: &m,
+            }],
+            &[],
+            &bad,
+        );
+        assert!(
+            identity_of(&d, "device_activity").is_empty(),
+            "a key with a missing column is refused whole"
+        );
+        assert!(
+            d.warnings
+                .iter()
+                .any(|w| w.contains("identity ignored") && w.contains("nope")),
+            "{:?}",
+            d.warnings
+        );
+        // an unknown container is a warning too
+        let unk: std::collections::BTreeMap<String, Vec<String>> =
+            [("olap.ghost".to_string(), vec!["x".to_string()])].into();
+        assert!(definition_from_sources_keyed(
+            &[SourceInput {
+                name: "olap",
+                kind: "clickhouse",
+                meta: &m
+            }],
+            &[],
+            &unk
+        )
+        .warnings
+        .iter()
+        .any(|w| w.contains("ghost")));
     }
 
     #[test]
