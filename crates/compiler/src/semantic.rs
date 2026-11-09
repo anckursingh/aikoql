@@ -346,6 +346,7 @@ mod tests {
                 physical_type: format!("emp_{i}"),
                 class: "C".into(),
                 property_map: std::collections::BTreeMap::new(),
+                identity: Vec::new(),
             })
             .collect();
         let ont = OntologyRegistry::new(OntologyDef {

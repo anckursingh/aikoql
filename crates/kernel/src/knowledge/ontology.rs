@@ -102,6 +102,12 @@ pub struct MappingEntry {
     /// Physical property name → canonical ontology property name.
     /// Keys not listed here are passed through unchanged.
     pub property_map: BTreeMap<String, String>,
+    /// Physical columns that identify one row of the source (its key), in order.
+    /// Declared by the owner or proposed from the source's own keys; an import
+    /// derives an object's identity from these values, so a re-imported row
+    /// updates in place instead of becoming a new object. Empty: the source's
+    /// own primary key (or, failing that, the row content) decides.
+    pub identity: Vec<String>,
 }
 
 /// A complete ontology definition — the typed in-memory representation of an
@@ -218,6 +224,12 @@ impl OntologyDef {
                 pm_map.insert(k.clone(), Value::Text(v.clone()));
             }
             mm.insert("property_map".into(), Value::Map(pm_map));
+            if !me.identity.is_empty() {
+                mm.insert(
+                    "identity".into(),
+                    Value::List(me.identity.iter().cloned().map(Value::Text).collect()),
+                );
+            }
             map_list.push(Value::Map(mm));
         }
         m.insert("mappings".into(), Value::List(map_list));
@@ -338,11 +350,22 @@ impl OntologyDef {
                             }
                         }
                     }
+                    let identity = match map_get(mm, "identity") {
+                        Some(Value::List(cols)) => cols
+                            .iter()
+                            .filter_map(|c| match c {
+                                Value::Text(t) => Some(t.clone()),
+                                _ => None,
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     mappings.push(MappingEntry {
                         source,
                         physical_type,
                         class,
                         property_map,
+                        identity,
                     });
                 }
             }
@@ -774,6 +797,7 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
             physical_type: type_name.clone(),
             class: type_name.clone(),
             property_map: BTreeMap::new(),
+            identity: Vec::new(),
         });
     }
 
@@ -932,12 +956,14 @@ mod tests {
                 physical_type: "employees".into(),
                 class: "Employee".into(),
                 property_map: property_map.clone(),
+                identity: Vec::new(),
             },
             MappingEntry {
                 source: "mongodb".into(),
                 physical_type: "employee".into(),
                 class: "Employee".into(),
                 property_map: property_map.clone(),
+                identity: Vec::new(),
             },
         ];
 
@@ -1488,6 +1514,7 @@ mod tests {
                 physical_type: format!("emp_{i}"),
                 class: "C".into(),
                 property_map: BTreeMap::new(),
+                identity: Vec::new(),
             })
             .collect();
         let r = OntologyRegistry::new(OntologyDef {
@@ -1546,12 +1573,14 @@ mod tests {
                     physical_type: "dup".into(),
                     class: "C".into(),
                     property_map: BTreeMap::new(),
+                    identity: Vec::new(),
                 },
                 MappingEntry {
                     source: "mongo".into(),
                     physical_type: "dup".into(),
                     class: "C".into(),
                     property_map: BTreeMap::new(),
+                    identity: Vec::new(),
                 },
             ],
         })
@@ -1921,6 +1950,46 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_identity_key_round_trips_and_old_ontologies_still_load() {
+        let mut def = sample_ontology();
+        assert!(!def.mappings.is_empty(), "the sample has a mapping");
+        def.mappings[0].identity = vec!["visitor_id".into(), "tenant".into()];
+        let props = def.to_property_map();
+        let back = OntologyDef::from_property_map(&props).unwrap();
+        assert_eq!(
+            back.mappings[0].identity,
+            ["visitor_id", "tenant"],
+            "order is kept"
+        );
+        assert_eq!(back, def, "nothing else moved");
+        // a mapping with no declared key writes no `identity` at all: stored ontologies are unchanged
+        let mut plain = sample_ontology();
+        plain.mappings[0].identity = Vec::new();
+        let props = plain.to_property_map();
+        if let Some(Value::List(ml)) = props.get("mappings") {
+            for m in ml {
+                if let Value::Map(mm) = m {
+                    assert!(!mm.contains_key("identity"), "no empty identity written");
+                }
+            }
+        }
+        // ...and an ontology saved before this field existed parses with an empty key
+        assert!(OntologyDef::from_property_map(&props).unwrap().mappings[0]
+            .identity
+            .is_empty());
+        // a junk identity (not a list of text) is ignored, not an error
+        let mut junk = def.to_property_map();
+        if let Some(Value::List(ml)) = junk.get_mut("mappings") {
+            if let Value::Map(mm) = &mut ml[0] {
+                mm.insert("identity".into(), Value::Int(7));
+            }
+        }
+        assert!(OntologyDef::from_property_map(&junk).unwrap().mappings[0]
+            .identity
+            .is_empty());
+    }
+
+    #[test]
     fn edge_property_def_without_type_defaults_to_text() {
         let def = sample_ontology();
         let mut props = def.to_property_map();
@@ -1961,6 +2030,7 @@ mod tests {
                 physical_type: "emp".into(),
                 class: "E".into(),
                 property_map: BTreeMap::new(),
+                identity: Vec::new(),
             }],
         })
         .unwrap();

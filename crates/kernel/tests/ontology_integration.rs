@@ -132,18 +132,21 @@ fn enterprise_ontology() -> OntologyRegistry {
             physical_type: "employees".into(),
             class: "Employee".into(),
             property_map: pg_map,
+            identity: Vec::new(),
         },
         MappingEntry {
             source: "mongodb".into(),
             physical_type: "employee".into(),
             class: "Employee".into(),
             property_map: mongo_map,
+            identity: Vec::new(),
         },
         MappingEntry {
             source: "postgres".into(),
             physical_type: "departments".into(),
             class: "Department".into(),
             property_map: std::collections::BTreeMap::new(),
+            identity: Vec::new(),
         },
     ];
 
