@@ -40,8 +40,35 @@ pub struct TableSchema {
     pub columns: Vec<ColumnInfo>,
     pub primary_keys: Vec<String>,
     pub row_count_estimate: i64,
-    /// Column groups under a UNIQUE constraint (single and composite), in key order.
+    /// Column groups the table guarantees unique (UNIQUE constraints and full,
+    /// plain-column unique indexes; single and composite), in key order.
     pub unique_groups: Vec<Vec<String>>,
+    /// Every secondary index except the primary key's.
+    pub indexes: Vec<IndexDef>,
+    /// CHECK constraints.
+    pub checks: Vec<CheckDef>,
+}
+
+/// One index. `columns` are the key columns in order; an expression key is
+/// its expression text (`lower(email)`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndexDef {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    /// btree, hash, gin, gist, brin, ...
+    pub method: String,
+    /// A partial index's WHERE.
+    pub predicate: Option<String>,
+    /// Every key is a plain column (no expression).
+    pub plain: bool,
+}
+
+/// One CHECK constraint: its name and the condition (without `CHECK`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckDef {
+    pub name: String,
+    pub expression: String,
 }
 
 /// One foreign key as discovered from information_schema.
@@ -204,13 +231,27 @@ impl PostgresConnector {
                 .unwrap_or(-1)
         };
 
+        let indexes = self.indexes(table_name)?;
+        let mut unique_groups = self.unique_groups(table_name)?;
+        // a unique index is a guarantee too (CREATE UNIQUE INDEX makes no
+        // constraint) - but only a full one on plain columns
+        for i in indexes
+            .iter()
+            .filter(|i| i.unique && i.plain && i.predicate.is_none())
+        {
+            if !unique_groups.contains(&i.columns) {
+                unique_groups.push(i.columns.clone());
+            }
+        }
         Ok(TableSchema {
             name: table_name.to_string(),
             columns,
             primary_keys: pks,
             row_count_estimate: count,
             schema: self.table_schema_name(table_name)?,
-            unique_groups: self.unique_groups(table_name)?,
+            unique_groups,
+            indexes,
+            checks: self.checks(table_name)?,
         })
     }
 
@@ -249,6 +290,59 @@ impl PostgresConnector {
         Ok(rows
             .iter()
             .filter_map(|r| r.get::<_, Option<Vec<String>>>(0))
+            .collect())
+    }
+
+    /// Valid secondary indexes (not the primary key's), by name.
+    fn indexes(&mut self, table: &str) -> Result<Vec<IndexDef>, String> {
+        let rows = self
+            .client
+            .query(
+                "SELECT i.relname::text, am.amname::text, ix.indisunique,
+                        pg_get_expr(ix.indpred, ix.indrelid),
+                        ARRAY(SELECT pg_get_indexdef(ix.indexrelid, k, true)
+                                FROM generate_series(1, ix.indnkeyatts::int) AS k ORDER BY k),
+                        NOT EXISTS (SELECT 1 FROM generate_series(1, ix.indnkeyatts::int) AS k
+                                     WHERE ix.indkey[k - 1] = 0)
+                 FROM pg_index ix
+                 JOIN pg_class i ON i.oid = ix.indexrelid
+                 JOIN pg_am am ON am.oid = i.relam
+                 WHERE ix.indrelid = to_regclass($1) AND NOT ix.indisprimary AND ix.indisvalid
+                 ORDER BY i.relname",
+                &[&quote_ident(table)],
+            )
+            .map_err(|e| format!("indexes of {table}: {e}"))?;
+        Ok(rows
+            .iter()
+            .map(|r| IndexDef {
+                name: r.get(0),
+                method: r.get(1),
+                unique: r.get(2),
+                predicate: r.get::<_, Option<String>>(3),
+                columns: r.get(4),
+                plain: r.get(5),
+            })
+            .collect())
+    }
+
+    /// CHECK constraints of a table, by name.
+    fn checks(&mut self, table: &str) -> Result<Vec<CheckDef>, String> {
+        let rows = self
+            .client
+            .query(
+                "SELECT con.conname::text, pg_get_constraintdef(con.oid, true)
+                 FROM pg_constraint con
+                 WHERE con.conrelid = to_regclass($1) AND con.contype = 'c'
+                 ORDER BY con.conname",
+                &[&quote_ident(table)],
+            )
+            .map_err(|e| format!("check constraints of {table}: {e}"))?;
+        Ok(rows
+            .iter()
+            .map(|r| CheckDef {
+                name: r.get(0),
+                expression: check_condition(&r.get::<_, String>(1)),
+            })
             .collect())
     }
 
@@ -640,6 +734,22 @@ fn deterministic_koid(table_name: &str, pk_parts: &[String]) -> KOID {
     KOID(koid)
 }
 
+/// `CHECK ((a > 0))` -> `a > 0`: the keyword and one wrapping pair of parentheses go.
+fn check_condition(def: &str) -> String {
+    let body = def.trim().strip_prefix("CHECK").unwrap_or(def).trim();
+    let wrapped = body.starts_with('(')
+        && body.ends_with(')')
+        && body[1..body.len() - 1].chars().try_fold(0i32, |depth, c| {
+            let d = depth + i32::from(c == '(') - i32::from(c == ')');
+            (d >= 0).then_some(d)
+        }) == Some(0);
+    if wrapped {
+        body[1..body.len() - 1].trim().to_string()
+    } else {
+        body.to_string()
+    }
+}
+
 fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
@@ -697,6 +807,22 @@ mod tests {
         let k1 = deterministic_koid("users", &["1".into()]);
         let k2 = deterministic_koid("users", &["2".into()]);
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn check_condition_strips_the_keyword_and_one_wrapping_pair() {
+        for (def, want) in [
+            (
+                "CHECK ((balance >= (0)::numeric))",
+                "(balance >= (0)::numeric)",
+            ),
+            ("CHECK (balance >= 0)", "balance >= 0"),
+            ("CHECK ((a > 0) AND (b < 5))", "(a > 0) AND (b < 5)"),
+            ("CHECK (a > 0) NOT VALID", "(a > 0) NOT VALID"),
+            ("CHECK ()", ""),
+        ] {
+            assert_eq!(check_condition(def), want, "{def}");
+        }
     }
 
     #[test]

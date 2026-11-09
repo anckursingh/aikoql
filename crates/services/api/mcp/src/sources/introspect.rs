@@ -261,6 +261,25 @@ fn map_postgres(t: &aikoql_postgres::TableSchema) -> ContainerInfo {
         row_count: u64::try_from(t.row_count_estimate).ok(),
         schema: (!t.schema.is_empty()).then(|| t.schema.clone()),
         unique_groups: t.unique_groups.clone(),
+        indexes: t
+            .indexes
+            .iter()
+            .map(|i| aikoql_ingestion::IndexInfo {
+                name: i.name.clone(),
+                columns: i.columns.clone(),
+                unique: i.unique,
+                method: Some(i.method.clone()),
+                predicate: i.predicate.clone(),
+            })
+            .collect(),
+        checks: t
+            .checks
+            .iter()
+            .map(|k| aikoql_ingestion::CheckInfo {
+                name: k.name.clone(),
+                expression: k.expression.clone(),
+            })
+            .collect(),
         ..Default::default()
     }
 }
@@ -927,8 +946,37 @@ mod tests {
             primary_keys: vec!["id".into()],
             row_count_estimate: -1,
             unique_groups: vec![vec!["code".into()], vec!["x".into(), "id".into()]],
+            indexes: vec![aikoql_postgres::IndexDef {
+                name: "child_code_part".into(),
+                columns: vec!["code".into()],
+                unique: true,
+                method: "btree".into(),
+                predicate: Some("(code IS NOT NULL)".into()),
+                plain: true,
+            }],
+            checks: vec![aikoql_postgres::CheckDef {
+                name: "x_pos".into(),
+                expression: "x > 0".into(),
+            }],
         };
         let c = map_postgres(&t);
+        assert_eq!(
+            c.indexes,
+            [aikoql_ingestion::IndexInfo {
+                name: "child_code_part".into(),
+                columns: vec!["code".into()],
+                unique: true,
+                method: Some("btree".into()),
+                predicate: Some("(code IS NOT NULL)".into()),
+            }]
+        );
+        assert_eq!(
+            c.checks,
+            [aikoql_ingestion::CheckInfo {
+                name: "x_pos".into(),
+                expression: "x > 0".into()
+            }]
+        );
         assert_eq!(c.schema.as_deref(), Some("hr"));
         assert_eq!(
             c.row_count, None,
