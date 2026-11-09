@@ -823,4 +823,45 @@ mod tests {
             }
         }
     }
+
+    /// A server that answers the connect probe, then goes silent.
+    fn silent_after_connect() -> String {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for (n, conn) in l.incoming().enumerate() {
+                let Ok(mut c) = conn else { break };
+                let mut buf = [0u8; 4096];
+                let _ = c.read(&mut buf);
+                if n == 0 {
+                    let _ = c.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+                } else {
+                    held.push(c); // never answered
+                }
+            }
+        });
+        url
+    }
+
+    fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5)).ok()
+    }
+
+    #[test]
+    fn a_silent_server_ends_every_import_request_at_the_timeout() {
+        let url = silent_after_connect();
+        let c = Neo4jConnector::connect_with_timeout(&url, "u", "p", Some(400)).unwrap();
+        let nodes = within(move || c.import_nodes("P", None).map(|_| ()));
+        assert!(matches!(nodes, Some(Err(_))), "import_nodes hung past its timeout: {nodes:?}");
+        let url = silent_after_connect();
+        let c = Neo4jConnector::connect_with_timeout(&url, "u", "p", Some(400)).unwrap();
+        let rels = within(move || c.import_relationships("R", &HashMap::new()).map(|_| ()));
+        assert!(matches!(rels, Some(Err(_))), "import_relationships hung past its timeout: {rels:?}");
+    }
 }
