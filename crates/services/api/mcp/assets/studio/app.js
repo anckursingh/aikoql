@@ -248,24 +248,7 @@ async function runQuery() {
     }
     if (data.created) { resDiv.innerHTML = '<div class="card"><span class="badge badge-green">Created</span> '+esc(data.created)+' v'+esc(data.version)+'</div>'; return; }
     if (data.results && data.results.length > 0) {
-      const keys = new Set();
-      data.results.forEach(r => { Object.keys(r).forEach(k => { if (k !== 'properties') keys.add(k); }); if (r.properties) Object.keys(r.properties).forEach(k => keys.add(k)); });
-      let html = '<div class="card"><table><thead><tr>';
-      [...keys].forEach(k => html += '<th>'+esc(k)+'</th>');
-      html += '</tr></thead><tbody>';
-      data.results.forEach(row => {
-        html += '<tr>';
-        [...keys].forEach(k => {
-          let v = row[k];
-          if (v === undefined && row.properties) v = row.properties[k];
-          const sv = v !== undefined && v !== null ? String(v) : '';
-          html += '<td title="'+esc(sv)+'">'+esc(sv.substring(0,80))+'</td>';
-        });
-        html += '</tr>';
-      });
-      html += '</tbody></table></div>';
-      html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">'+esc(data.results.length)+' row'+esc(data.results.length!==1?'s':'')+'</div>';
-      resDiv.innerHTML = html;
+      renderResults(resDiv, data.results, Math.round(performance.now() - started));
     } else { resDiv.innerHTML = '<div class="empty-state">Query returned 0 results.</div>'; }
   } catch(e) { pushHistory(query, false); resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
@@ -285,6 +268,138 @@ async function explainQuery() {
     html += '</tbody></table></div>';
     resDiv.innerHTML = html;
   } catch(e) { resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
+}
+// ── Results table: ONE component for every query result ──────────────────
+// Sortable, copyable as JSON/CSV, downloadable, each row linked to its object.
+// Display is capped (copy/download carry every row).
+let lastResult = null;
+const RESULT_DISPLAY_CAP = 1000;
+function cellText(v) {
+  if (v === null || v === undefined) return '';
+  return typeof v === 'object' ? JSON.stringify(v) : String(v);
+}
+function resultColumns(results) {
+  const keys = new Set();
+  results.forEach(r => {
+    Object.keys(r).forEach(k => { if (k !== 'properties') keys.add(k); });
+    if (r.properties) Object.keys(r.properties).forEach(k => keys.add(k));
+  });
+  return [...keys];
+}
+function resultMatrix(results, cols) {
+  return results.map(r => cols.map(k => {
+    let v = r[k];
+    if (v === undefined && r.properties) v = r.properties[k];
+    return v === undefined ? null : v;
+  }));
+}
+// Numbers by value, everything else by text with numeric-aware collation; empty cells last.
+function compareCells(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return cellText(a).localeCompare(cellText(b), undefined, {numeric: true});
+}
+function sortedOrder(rows, sort) {
+  const order = rows.map((_, i) => i);
+  if (!sort) return order;
+  return order.sort((x, y) => {
+    const a = rows[x][sort.col], b = rows[y][sort.col];
+    const an = a === null || a === '', bn = b === null || b === '';
+    if (an || bn) return an === bn ? x - y : (an ? 1 : -1);   // empties stay last in both directions
+    const c = compareCells(a, b);
+    return c !== 0 ? (sort.desc ? -c : c) : x - y;
+  });
+}
+function csvCell(v) {
+  let t = cellText(v);
+  // a text cell that a spreadsheet would run as a formula is defused with a leading quote
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
+  return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+}
+function resultsToCsv(cols, rows) {
+  return [cols].concat(rows).map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}
+function tableHtml(cols, rows, order, sort, sortable) {
+  let html = '<table><thead><tr>';
+  cols.forEach((k, i) => {
+    if (!sortable) { html += '<th>'+esc(k)+'</th>'; return; }
+    const dir = sort && sort.col === i ? (sort.desc ? 'descending' : 'ascending') : 'none';
+    const arrow = dir === 'none' ? '' : (dir === 'ascending' ? ' ▲' : ' ▼');
+    html += '<th aria-sort="'+esc(dir)+'"><button class="th-btn" data-click="sortResults" data-col="'+esc(i)+'" data-colname="'+esc(k)+'">'+esc(k)+'<span aria-hidden="true">'+esc(arrow)+'</span></button></th>';
+  });
+  html += '</tr></thead><tbody>';
+  order.slice(0, RESULT_DISPLAY_CAP).forEach(ri => {
+    html += '<tr>';
+    cols.forEach((k, ci) => {
+      const v = rows[ri][ci], t = cellText(v);
+      if (k === 'koid' && t) {
+        html += '<td class="mono"><a href="#" data-koid="'+esc(t)+'" data-click="openInInspector" title="Open '+esc(t)+' in the Inspector" style="color:var(--accent);">'+esc(t.substring(0, 16))+'…</a></td>';
+      } else {
+        html += '<td title="'+esc(t)+'">'+esc(t.length > 80 ? t.substring(0, 80) + '…' : t)+'</td>';
+      }
+    });
+    html += '</tr>';
+  });
+  return html + '</tbody></table>';
+}
+function resultsHtml() {
+  const r = lastResult, order = sortedOrder(r.rows, r.sort);
+  const n = r.rows.length;
+  const html = tableHtml(r.cols, r.rows, order, r.sort, true);
+  let h = '<div class="res-bar">'
+    + '<button class="btn btn-sec btn-sm" data-click="copyResults" data-kind="json">Copy JSON</button>'
+    + '<button class="btn btn-sec btn-sm" data-click="copyResults" data-kind="csv">Copy CSV</button>'
+    + '<button class="btn btn-sec btn-sm" data-click="downloadResults" data-kind="csv">Download CSV</button>'
+    + '<button class="btn btn-sec btn-sm" data-click="downloadResults" data-kind="json">Download JSON</button></div>';
+  h += '<div class="card" style="padding:0;overflow-x:auto;">' + html + '</div>';
+  h += '<div class="res-count">'+esc(n)+' row'+esc(n !== 1 ? 's' : '')+' · '+esc(r.ms)+' ms</div>';
+  if (n > RESULT_DISPLAY_CAP) h += '<div class="res-note">Showing the first '+esc(RESULT_DISPLAY_CAP)+' of '+esc(n)+' rows — copy or download to get all of them.</div>';
+  return h;
+}
+function renderResults(box, results, ms) {
+  const cols = resultColumns(results);
+  lastResult = {cols: cols, rows: resultMatrix(results, cols), raw: results, sort: null, ms: ms};
+  box.innerHTML = resultsHtml();
+}
+function sortResults(el) {
+  if (!lastResult) return;
+  const col = Number(el.dataset.col), s = lastResult.sort;
+  lastResult.sort = !s || s.col !== col ? {col: col, desc: false} : {col: col, desc: !s.desc};
+  document.getElementById('query-results').innerHTML = resultsHtml();
+  const again = document.querySelector('#query-results th button[data-col="' + col + '"]');
+  if (again) again.focus();
+}
+function exportPayload(kind) {
+  const r = lastResult, order = sortedOrder(r.rows, r.sort);
+  return kind === 'csv'
+    ? {text: resultsToCsv(r.cols, order.map(i => r.rows[i])), mime: 'text/csv;charset=utf-8', ext: 'csv', what: 'CSV'}
+    : {text: JSON.stringify(order.map(i => r.raw[i]), null, 2), mime: 'application/json', ext: 'json', what: 'JSON'};
+}
+async function copyResults(el) {
+  if (!lastResult) return;
+  const p = exportPayload(el.dataset.kind);
+  try {
+    await navigator.clipboard.writeText(p.text);
+  } catch (_) {
+    const ta = document.createElement('textarea');
+    ta.value = p.text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.append(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (__) { ok = false; }
+    ta.remove();
+    if (!ok) { toast('error', 'Could not copy — use Download instead.'); return; }
+  }
+  toast('success', 'Copied ' + lastResult.rows.length + ' row' + (lastResult.rows.length !== 1 ? 's' : '') + ' as ' + p.what + '.');
+}
+function downloadResults(el) {
+  if (!lastResult) return;
+  const p = exportPayload(el.dataset.kind);
+  const url = URL.createObjectURL(new Blob([p.text], {type: p.mime}));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'aikoql-results-' + new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '') + '.' + p.ext;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('success', 'Downloaded ' + a.download + '.');
 }
 async function streamQuery() {
   const query = window.__cmGetValue().trim();
@@ -306,21 +421,9 @@ async function streamQuery() {
     }
     let html = '';
     chunks.forEach((chunk, ci) => {
-      html += '<div class="card" style="border-left: 2px solid var(--accent);"><h3>Chunk '+esc(ci+1)+'/'+esc(chunks.length)+' ('+esc(chunk.length)+' rows)</h3>';
-      const keys = new Set();
-      chunk.forEach(r => { Object.keys(r).forEach(k => { if (k !== 'properties') keys.add(k); }); if (r.properties) Object.keys(r.properties).forEach(k => keys.add(k)); });
-      html += '<table><thead><tr>';
-      [...keys].forEach(k => html += '<th>'+esc(k)+'</th>');
-      html += '</tr></thead><tbody>';
-      chunk.forEach(row => {
-        html += '<tr>';
-        [...keys].forEach(k => {
-          let v = row[k]; if (v === undefined && row.properties) v = row.properties[k];
-          html += '<td>'+esc(v !== undefined && v !== null ? String(v).substring(0,60) : '')+'</td>';
-        });
-        html += '</tr>';
-      });
-      html += '</tbody></table></div>';
+      const cols = resultColumns(chunk);
+      const h = tableHtml(cols, resultMatrix(chunk, cols), chunk.map((_, i) => i), null, false);
+      html += '<div class="card" style="border-left: 2px solid var(--accent);"><h3>Chunk '+esc(ci+1)+'/'+esc(chunks.length)+' ('+esc(chunk.length)+' rows)</h3>' + h + '</div>';
     });
     html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">'+esc(all.length)+' total rows in '+esc(chunks.length)+' chunk'+esc(chunks.length!==1?'s':'')+'</div>';
     resDiv.innerHTML = html;
@@ -1858,6 +1961,9 @@ document.getElementById('ask-question').addEventListener('keydown', e => { if ((
 // ═══════════════════════════════════════════
 const ACTIONS = Object.assign(Object.create(null), {
   doLogin: el => doLogin(),
+  sortResults: el => sortResults(el),
+  copyResults: el => copyResults(el),
+  downloadResults: el => downloadResults(el),
   saveQuery: el => saveQuery(),
   loadQuery: el => loadQuery(el),
   deleteSaved: el => deleteSaved(el),

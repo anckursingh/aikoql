@@ -43,7 +43,10 @@ try { ({ chromium } = require('playwright-core')); } catch (_) {
 }
 
 const results = [];
-const ok = (name, cond, detail) => results.push([cond ? 'PASS' : 'FAIL', name, cond ? '' : String(detail === undefined ? '' : detail)]);
+const ok = (name, cond, detail) => {
+  results.push([cond ? 'PASS' : 'FAIL', name, cond ? '' : String(detail === undefined ? '' : detail)]);
+  if (process.env.E2E_TRACE) console.error((cond ? 'PASS' : 'FAIL') + ' - ' + name); // live, for finding a stuck step
+};
 const freePort = () => new Promise((res, rej) => {
   const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); s.on('error', rej);
 });
@@ -314,7 +317,8 @@ async function main() {
       (await page.evaluate(() => window.__csp)).length === 0 && consoleErrors.filter(e => !/Failed to load resource/.test(e)).length === 0, consoleErrors.join(' || '));
 
     // ---- sweep: every delegated control, in every panel, must REACT -------
-    const SKIP = new Set(['logout', 'adminRestoreBackup', 'signInSso', 'downloadAuditExport']);
+    // downloads stall page.click (a file save is not a DOM change); downloadResults has its own explicit check
+    const SKIP = new Set(['logout', 'adminRestoreBackup', 'signInSso', 'downloadAuditExport', 'downloadResults']);
     const panels = await page.$$eval('#sidebar nav button[data-panel]', b => b.map(x => x.dataset.panel));
     const reactions = [], unclickable = [];
     for (const name of panels) {
@@ -498,12 +502,12 @@ async function main() {
       const i = ths.findIndex(th => th.textContent.replace(/[▲▼]/g, '').trim() === n);
       return [...document.querySelectorAll('#query-results tbody tr')].map(tr => tr.children[i].textContent);
     }, name);
-    const before = await col('name');
-    await page.click('#query-results th button[data-click="sortResults"]:has-text("name")'); await page.waitForTimeout(200);
+    const nameBefore = await col('name');
+    await page.click('#query-results th button[data-colname="name"]'); await page.waitForTimeout(200);
     const asc = await col('name');
-    ok('clicking a header sorts ascending and announces it', JSON.stringify(asc) === JSON.stringify([...before].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) && (await page.getAttribute('#query-results th:has(button:has-text("name"))', 'aria-sort')) === 'ascending', JSON.stringify(asc));
-    await page.click('#query-results th button[data-click="sortResults"]:has-text("name")'); await page.waitForTimeout(200);
-    ok('clicking again sorts descending', JSON.stringify(await col('name')) === JSON.stringify([...asc].reverse()) && (await page.getAttribute('#query-results th:has(button:has-text("name"))', 'aria-sort')) === 'descending');
+    ok('clicking a header sorts ascending and announces it', JSON.stringify(asc) === JSON.stringify([...nameBefore].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) && (await page.getAttribute('#query-results th:has(button[data-colname="name"])', 'aria-sort')) === 'ascending', JSON.stringify(asc));
+    await page.click('#query-results th button[data-colname="name"]'); await page.waitForTimeout(200);
+    ok('clicking again sorts descending', JSON.stringify(await col('name')) === JSON.stringify([...asc].reverse()) && (await page.getAttribute('#query-results th:has(button[data-colname="name"])', 'aria-sort')) === 'descending');
     await page.click('[data-click="copyResults"][data-kind="json"]'); await page.waitForTimeout(300);
     const clip = await page.evaluate(() => navigator.clipboard.readText());
     ok('Copy JSON puts every row on the clipboard, in the current order', Array.isArray(JSON.parse(clip)) && JSON.parse(clip).length === rowCount && JSON.parse(clip)[0].properties.name === (await col('name'))[0], clip.slice(0, 120));

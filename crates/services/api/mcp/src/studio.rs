@@ -171,6 +171,16 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .metric-big { font-size: 28px; font-weight: 700; color: var(--accent); }
 .metric-label { font-size: 11px; color: var(--muted); }
 
+/* ── Results ── */
+.res-bar { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.res-count { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.res-note { font-size: 12px; color: var(--orange); margin-top: 4px; }
+.th-btn { all: unset; cursor: pointer; display: inline-flex; gap: 4px; align-items: center; color: inherit; font: inherit; font-weight: 600; }
+.th-btn:hover { text-decoration: underline; }
+th[aria-sort="ascending"], th[aria-sort="descending"] { background: rgba(108,199,240,0.14); }
+td a { text-decoration: none; }
+td a:hover { text-decoration: underline; }
+
 /* ── Query library ── */
 #query-library summary { cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
 .lib-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
@@ -1496,18 +1506,37 @@ mod tests {
     #[test]
     fn query_results_use_one_shared_table_component() {
         let page = page_for_tests();
-        for needle in ["function renderResults(", "function resultsToCsv(", "function cellText("] {
+        for needle in [
+            "function renderResults(",
+            "function resultsToCsv(",
+            "function cellText(",
+        ] {
             assert!(page.contains(needle), "missing {needle}");
         }
         for action in ["sortResults", "copyResults", "downloadResults"] {
-            assert!(page.contains(&format!("\n  {action}:")), "{action} not in ACTIONS");
+            assert!(
+                page.contains(&format!("\n  {action}:")),
+                "{action} not in ACTIONS"
+            );
         }
         let run = js_fn("async function runQuery()");
-        assert!(run.contains("renderResults("), "runQuery must use the shared component");
-        assert!(!run.contains("<table>"), "runQuery must not build its own table any more");
-        let component = js_fn("function renderResults(");
-        assert!(component.contains("aria-sort"), "sortable headers announce their state");
-        assert!(component.contains("data-click=\"openInInspector\""), "a row opens its object in the Inspector");
+        assert!(
+            run.contains("renderResults("),
+            "runQuery must use the shared component"
+        );
+        assert!(
+            !run.contains("<table>"),
+            "runQuery must not build its own table any more"
+        );
+        let table = js_fn("function tableHtml(");
+        assert!(
+            table.contains("aria-sort"),
+            "sortable headers announce their state"
+        );
+        assert!(
+            table.contains("data-click=\"openInInspector\""),
+            "a row opens its object in the Inspector"
+        );
     }
 
     #[test]
