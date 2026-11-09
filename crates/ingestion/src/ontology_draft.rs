@@ -69,14 +69,38 @@ fn canonical_property(name: &str) -> String {
     }
 }
 
-/// aikoql value type of a field: the observed non-null type when there is a
-/// profile, else the declared type.
-fn field_value_type(f: &FieldInfo) -> &'static str {
-    let observed = f
-        .profile
-        .as_ref()
-        .and_then(|p| p.types.iter().find(|t| !t.eq_ignore_ascii_case("null")));
-    connector_type_to_value_type(observed.unwrap_or(&f.data_type))
+/// Value type of one observed BSON type name, matching what the importer
+/// stores (Decimal128 as exact text, a Timestamp as a {t,i} map).
+fn observed_value_type(t: &str) -> &'static str {
+    match t {
+        "Decimal128" | "Timestamp" => "Text",
+        other => connector_type_to_value_type(other),
+    }
+}
+
+/// aikoql value type of a field, and the observed types that disagreed.
+///
+/// With a profile, every observed non-null type counts: one type is that type,
+/// Int + Float is Float, anything else is Text (the only type every observed
+/// value fits) and is reported as mixed. No profile: the declared type.
+fn field_value_type(f: &FieldInfo) -> (&'static str, Option<Vec<String>>) {
+    let Some(profile) = &f.profile else {
+        return (connector_type_to_value_type(&f.data_type), None);
+    };
+    let observed: Vec<&String> = profile
+        .types
+        .iter()
+        .filter(|t| !t.eq_ignore_ascii_case("null"))
+        .collect();
+    if observed.is_empty() {
+        return (connector_type_to_value_type(&f.data_type), None);
+    }
+    let kinds: BTreeSet<&'static str> = observed.iter().map(|t| observed_value_type(t)).collect();
+    match kinds.iter().copied().collect::<Vec<_>>()[..] {
+        [one] => (one, None),
+        ["Float", "Int"] => ("Float", None),
+        _ => ("Text", Some(observed.into_iter().cloned().collect())),
+    }
 }
 
 impl DefinitionDraft {
@@ -215,7 +239,17 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
                 types: BTreeSet::new(),
                 required_everywhere: true,
             });
-            p.types.insert(field_value_type(f));
+            let (value_type, mixed) = field_value_type(f);
+            if let Some(types) = mixed {
+                warnings.push(format!(
+                    "{}.{}.{}: mixed observed types ({}); widened to Text",
+                    e.source,
+                    e.container.name,
+                    f.name,
+                    types.join(", ")
+                ));
+            }
+            p.types.insert(value_type);
             p.required_everywhere &= required;
             class_props[gi].insert(canon.clone());
             property_map.insert(f.name.clone(), json!(canon));
@@ -704,7 +738,11 @@ mod tests {
             samples: 10,
         });
         let d = definition_from_sources(
-            &[SourceInput { name: "crm", kind: "mongodb", meta: &m }],
+            &[SourceInput {
+                name: "crm",
+                kind: "mongodb",
+                meta: &m,
+            }],
             &[],
         );
         let ty = list(&d, "property_defs")
@@ -720,9 +758,14 @@ mod tests {
     #[test]
     fn mixed_observed_types_widen_to_text_with_a_warning() {
         let (ty, warnings) = observed_type_of(&["Int32", "Null", "String"]);
-        assert_eq!(ty, "Text", "an Int-typed property would be wrong for the string rows");
+        assert_eq!(
+            ty, "Text",
+            "an Int-typed property would be wrong for the string rows"
+        );
         assert!(
-            warnings.iter().any(|w| w.contains("mixed") && w.contains("v")),
+            warnings
+                .iter()
+                .any(|w| w.contains("mixed") && w.contains("v")),
             "{warnings:?}"
         );
         let (ty, _) = observed_type_of(&["Boolean", "Int32"]);
@@ -733,9 +776,16 @@ mod tests {
     fn int_and_double_observed_widen_to_float_without_a_mixed_warning() {
         let (ty, warnings) = observed_type_of(&["Int32", "Double", "Int64"]);
         assert_eq!(ty, "Float");
-        assert!(!warnings.iter().any(|w| w.contains("mixed")), "{warnings:?}");
+        assert!(
+            !warnings.iter().any(|w| w.contains("mixed")),
+            "{warnings:?}"
+        );
         assert_eq!(observed_type_of(&["Int32", "Null"]).0, "Int");
-        assert_eq!(observed_type_of(&["Null"]).0, "Text", "only nulls observed: no type claim");
+        assert_eq!(
+            observed_type_of(&["Null"]).0,
+            "Text",
+            "only nulls observed: no type claim"
+        );
     }
 
     #[test]
