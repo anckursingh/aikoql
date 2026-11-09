@@ -377,8 +377,8 @@ impl Neo4jConnector {
         let rows = self.cypher_rows(
             &format!(
                 "MATCH (a)-[r]->(b) \
-                 WITH DISTINCT type(r) AS t, head(labels(a)) AS la, head(labels(b)) AS lb \
-                 WHERE la IS NOT NULL AND lb IS NOT NULL RETURN t, la, lb LIMIT {}",
+                 UNWIND labels(a) AS la UNWIND labels(b) AS lb \
+                 WITH DISTINCT type(r) AS t, la, lb RETURN t, la, lb LIMIT {}",
                 limit.clamp(1, 10_000)
             ),
             serde_json::json!({}),
@@ -530,10 +530,11 @@ impl Neo4jConnector {
         // in MATCH does NOT, the endpoints come back in elementId order and
         // inverted rels would land on the wrong KO. The undirected match
         // returns each relationship in BOTH orientations, so the WHERE keeps
-        // exactly one row per rel; ORDER BY makes the order deterministic so
+        // exactly one row per rel (`<=`: a node's loop to itself has equal
+        // ends and must not be filtered out); ORDER BY makes the order deterministic so
         // re-imports are byte-identical.
         let stmt = format!(
-            "MATCH (a)-[r:`{}`]-(b) WHERE elementId(a) < elementId(b) RETURN elementId(startNode(r)), elementId(endNode(r)), type(r), properties(r) ORDER BY elementId(startNode(r)), elementId(endNode(r))",
+            "MATCH (a)-[r:`{}`]-(b) WHERE elementId(a) <= elementId(b) RETURN elementId(startNode(r)), elementId(endNode(r)), type(r), properties(r) ORDER BY elementId(startNode(r)), elementId(endNode(r))",
             quote_label(rel_type)
         );
         let body = serde_json::json!({ "statements": [{"statement": stmt}] });

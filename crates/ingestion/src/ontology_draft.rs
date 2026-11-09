@@ -404,18 +404,31 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
                 ));
             }
             let (domain, range) = (class_for(&r.from_container), class_for(&r.to_container));
-            let mut name = to_snake_case(&base_name);
-            if let Some(existing) = rels.get(&name) {
-                if existing["domain"] != json!(domain) || existing["range"] != json!(range) {
-                    name = format!("{name}_{}", s.name);
-                } else {
-                    continue;
+            // the first free name for this (domain, range): the type's own name,
+            // then `<name>_<source>`, then `<name>_<source>_2`, ...; the same pair
+            // under any of them is already recorded
+            let base = to_snake_case(&base_name);
+            let mut n = 0;
+            let name = loop {
+                let candidate = match n {
+                    0 => base.clone(),
+                    1 => format!("{base}_{}", s.name),
+                    k => format!("{base}_{}_{k}", s.name),
+                };
+                match rels.get(&candidate) {
+                    None => break Some(candidate),
+                    Some(e) if e["domain"] == json!(domain) && e["range"] == json!(range) => {
+                        break None
+                    }
+                    Some(_) => n += 1,
                 }
+            };
+            if let Some(name) = name {
+                rels.insert(
+                    name.clone(),
+                    json!({"name": name, "domain": domain, "range": range}),
+                );
             }
-            rels.insert(
-                name.clone(),
-                json!({"name": name, "domain": domain, "range": range}),
-            );
         }
     }
 
