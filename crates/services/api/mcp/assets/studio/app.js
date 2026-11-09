@@ -119,14 +119,31 @@ function fmtTime(ms) {
 // ═══════════════════════════════════════════
 // Navigation
 // ═══════════════════════════════════════════
-function switchPanel(name) {
+// Routing: a panel is a place with an address (#/ontology). Refresh, Back/Forward
+// and a pasted link all land on the same panel. Only #/<panel> hashes are ours:
+// the SSO hand-off carries its credentials in the hash and must be left alone.
+function panelFromHash() {
+  const m = /^#\/([a-z-]+)/.exec(location.hash);
+  return m && document.getElementById('panel-' + m[1]) ? m[1] : null;
+}
+window.addEventListener('hashchange', () => {
+  const p = panelFromHash();
+  if (p && p !== activePanel) switchPanel(p, true);
+});
+function switchPanel(name, fromRoute) {
   activePanel = name;
-  document.querySelectorAll('#sidebar nav button').forEach(b => b.classList.toggle('active', b.dataset.panel === name));
+  if (!fromRoute && location.hash !== '#/' + name) history.pushState(null, '', '#/' + name);
+  document.querySelectorAll('#sidebar nav button').forEach(b => {
+    const on = b.dataset.panel === name;
+    b.classList.toggle('active', on);
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panel = document.getElementById('panel-' + name);
   if (panel) panel.classList.add('active');
   const titles = { query:'Query Editor', graph:'Knowledge Graph', explorer:'Knowledge Explorer', schema:'Schema Explorer', ontology:'Ontology', inspector:'KO Inspector', admin:'Administration', timeline:'Timeline', provenance:'Provenance', debugger:'Program Debugger', benchmarks:'Benchmark Center', profiler:'Query Profiler', providers:'Provider Manager', documents:'Document Explorer', ask:'Ask', sources:'Data Sources' };
   document.getElementById('panel-title').textContent = titles[name] || name;
+  document.title = (titles[name] || name) + ' · Aikoql Studio';
   document.getElementById('panel-breadcrumb').textContent = '';
   if (name === 'graph') initGraph();
   if (name === 'explorer') loadExplorerTree();
@@ -160,6 +177,10 @@ setInterval(updateStatus, 15000);
 // Init
 // ═══════════════════════════════════════════
 function initApp() {
+  // land where the address says (or where the person was), and make the address true
+  const first = panelFromHash() || 'query';
+  if (location.hash !== '#/' + first && !/^#[a-z]+=/.test(location.hash)) history.replaceState(null, '', '#/' + first);
+  switchPanel(first, true);
   updateStatus();
   loadTenants();
   loadUsers();
@@ -1755,6 +1776,7 @@ document.getElementById('ask-question').addEventListener('keydown', e => { if ((
 // ═══════════════════════════════════════════
 const ACTIONS = Object.assign(Object.create(null), {
   doLogin: el => doLogin(),
+  skipToContent: el => { const c = document.getElementById('panel-content'); c.setAttribute('tabindex', '-1'); c.focus(); },
   logout: el => logout(),
   runQuery: el => runQuery(),
   explainQuery: el => explainQuery(),

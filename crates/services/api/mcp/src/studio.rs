@@ -22,7 +22,7 @@ pub const STUDIO_HTML: &str = r##"<!DOCTYPE html>
   --panel: #13131f;
   --border: #252538;
   --text: #c8c8d4;
-  --muted: #5c5c78;
+  --muted: #8a8aa8;
   --accent: #6cc7f0;
   --green: #5cd89c;
   --red: #f0556a;
@@ -50,20 +50,22 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); heig
 /* ── Layout ── */
 #app { display: none; height: 100vh; width: 100vw; }
 #sidebar { width: 52px; min-width: 52px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding-top: 10px; z-index: 10; overflow: hidden; }
-#sidebar:hover { width: 190px; }
+#sidebar:hover, #sidebar:has(:focus-visible) { width: 200px; }
 #sidebar .logo { font-size: 18px; margin-bottom: 6px; opacity: 0.9; flex-shrink: 0; }
 #sidebar .logo-text { display: none; font-size: 13px; font-weight: 700; color: var(--accent); white-space: nowrap; }
-#sidebar:hover .logo-text { display: inline; margin-left: 10px; }
+#sidebar:hover .logo-text, #sidebar:has(:focus-visible) .logo-text { display: inline; margin-left: 10px; }
 #sidebar nav { flex: 1; display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 0 4px; }
 #sidebar nav button { display: flex; align-items: center; width: 100%; padding: 10px 12px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; font-family: var(--font); border-radius: 6px; white-space: nowrap; text-align: left; transition: all 0.1s; }
 #sidebar nav button:hover { background: rgba(108,199,240,0.08); color: var(--text); }
 #sidebar nav button.active { background: rgba(108,199,240,0.14); color: var(--accent); }
 #sidebar nav button .ico { font-size: 16px; width: 24px; text-align: center; flex-shrink: 0; }
 #sidebar nav button .lbl { margin-left: 10px; opacity: 0; transition: opacity 0.12s; }
-#sidebar:hover nav button .lbl { opacity: 1; }
+#sidebar:hover nav button .lbl, #sidebar:has(:focus-visible) nav button .lbl { opacity: 1; }
+#sidebar .nav-group { display: none; font-size: 11px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--muted); padding: 10px 12px 2px; white-space: nowrap; }
+#sidebar:hover .nav-group, #sidebar:has(:focus-visible) .nav-group { display: block; }
 #sidebar .user-area { padding: 10px 0; border-top: 1px solid var(--border); width: 100%; text-align: center; flex-shrink: 0; }
-#sidebar .user-badge { font-size: 10px; color: var(--muted); cursor: pointer; white-space: nowrap; }
-#sidebar:hover .user-badge { font-size: 11px; }
+#sidebar .user-badge { font-size: 11px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+#sidebar:hover .user-badge, #sidebar:has(:focus-visible) .user-badge { font-size: 12px; }
 
 /* ── Main ── */
 #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -71,7 +73,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); heig
 #panel-header h2 { font-size: 13px; font-weight: 600; color: var(--accent); letter-spacing: -0.3px; }
 #panel-header .breadcrumb { font-size: 11px; color: var(--muted); }
 #panel-content { flex: 1; overflow-y: auto; padding: 16px 20px; }
-#statusbar { padding: 4px 16px; border-top: 1px solid var(--border); font-size: 10px; color: var(--muted); display: flex; justify-content: space-between; background: var(--panel); min-height: 22px; }
+#statusbar { padding: 4px 16px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; background: var(--panel); min-height: 22px; }
 #statusbar span { display: flex; align-items: center; gap: 4px; }
 #statusbar .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 #statusbar .dot.ok { background: var(--green); }
@@ -90,8 +92,8 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); heig
 .btn-sec { background: #2a2a3c; color: var(--text); }
 .btn-sec:hover { background: #35354c; }
 .btn-danger { background: var(--red); color: #fff; }
-.btn-sm { padding: 4px 10px; font-size: 10px; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .badge-cyan { background: rgba(108,199,240,0.15); color: var(--accent); }
 .badge-purple { background: rgba(184,154,224,0.15); color: var(--purple); }
 .badge-green { background: rgba(92,216,156,0.15); color: var(--green); }
@@ -122,12 +124,12 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .graph-toolbar input, .graph-toolbar select { padding: 5px 8px; background: rgba(19,19,31,0.95); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 11px; font-family: var(--font); }
 .graph-toolbar input { width: 240px; }
 .graph-toolbar input:focus, .graph-toolbar select:focus { outline: none; border-color: var(--accent); }
-.legend-box { position: absolute; bottom: 8px; left: 8px; background: rgba(19,19,31,0.94); padding: 6px 10px; border-radius: 5px; font-size: 10px; max-height: 280px; overflow-y: auto; z-index: 5; }
+.legend-box { position: absolute; bottom: 8px; left: 8px; background: rgba(19,19,31,0.94); padding: 6px 10px; border-radius: 5px; font-size: 11px; max-height: 280px; overflow-y: auto; z-index: 5; }
 .legend-item { display: flex; align-items: center; margin: 2px 0; gap: 5px; }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
 /* ── Query panel ── */
-.query-editor-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+.query-editor-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
 #query-editor { border: 1px solid #3a3a52; border-radius: 8px; overflow: hidden; }
 #query-editor:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(108,199,240,0.12); }
 #query-editor .cm-editor { background: #0d0d1a; border-radius: 8px; }
@@ -145,8 +147,8 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .explorer-tree .tree-item:hover { background: rgba(108,199,240,0.05); }
 .explorer-tree .tree-item.selected { background: rgba(108,199,240,0.1); border-left-color: var(--accent); color: var(--accent); }
 .explorer-tree .tree-item.type-node { font-weight: 600; padding-left: 12px; font-size: 12px; }
-.explorer-tree .tree-item .count { margin-left: auto; color: var(--muted); font-size: 10px; }
-.explorer-tree .tree-header { padding: 6px 12px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.explorer-tree .tree-item .count { margin-left: auto; color: var(--muted); font-size: 11px; }
+.explorer-tree .tree-header { padding: 6px 12px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
 .explorer-tree .filter-bar { padding: 6px 8px; }
 .explorer-tree .filter-bar input { width: 100%; padding: 5px 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 11px; font-family: var(--font); }
 .explorer-tree .filter-bar input:focus { outline: none; border-color: var(--accent); }
@@ -168,9 +170,28 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .admin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
 .metric-big { font-size: 28px; font-weight: 700; color: var(--accent); }
 .metric-label { font-size: 11px; color: var(--muted); }
+
+/* ── Accessibility & orientation ── */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.skip { position: fixed; top: -48px; left: 8px; z-index: 300; padding: 8px 14px; background: var(--accent); color: #0a0a12; border: none; border-radius: 0 0 6px 6px; font-weight: 600; font-size: 12px; cursor: pointer; }
+.skip:focus { top: 0; }
+#panel-title:focus { outline: none; }
+/* wide screens: the rail is always a labelled sidebar, never icons you must hover to decode */
+@media (min-width: 1100px) {
+  #sidebar { width: 200px; min-width: 200px; align-items: stretch; }
+  #sidebar .logo { padding-left: 14px; }
+  #sidebar .logo-text, #sidebar .nav-group { display: inline-block; margin-left: 10px; }
+  #sidebar .nav-group { display: block; margin-left: 0; }
+  #sidebar nav button .lbl { opacity: 1; }
+  #sidebar .user-badge { font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
 </style>
 </head>
 <body>
+<button class="skip" data-click="skipToContent">Skip to content</button>
 
 <!-- ── Login ── -->
 <div id="login-overlay">
@@ -190,7 +211,8 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 <div id="app">
   <div id="sidebar">
     <div class="logo">🧠<span class="logo-text">aikoql</span></div>
-    <nav>
+    <nav aria-label="Main" role="navigation">
+      <div class="nav-group" role="presentation">Work</div>
       <button class="active" data-panel="query" title="Query Editor">
         <span class="ico">⌨</span><span class="lbl">Query Editor</span>
       </button>
@@ -209,15 +231,26 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <button data-panel="ontology" title="Ontology">
         <span class="ico">🦉</span><span class="lbl">Ontology</span>
       </button>
-      <button data-panel="admin" title="Administration">
-        <span class="ico">⚙</span><span class="lbl">Admin</span>
+      <button data-panel="sources" title="Data Sources — discover external schemas">
+        <span class="ico">🗄️</span><span class="lbl">Data Sources</span>
       </button>
+      <button data-panel="documents" title="Document Explorer">
+        <span class="ico">📄</span><span class="lbl">Documents</span>
+      </button>
+      <button data-panel="ask" title="Ask — grounded answers from your knowledge">
+        <span class="ico">💬</span><span class="lbl">Ask</span>
+      </button>
+      <div class="nav-group" role="presentation">Govern</div>
       <button data-panel="timeline" title="Timeline — MVCC time travel">
         <span class="ico">⏳</span><span class="lbl">Timeline</span>
       </button>
       <button data-panel="provenance" title="Provenance — cryptographic audit chain">
         <span class="ico">🔗</span><span class="lbl">Provenance</span>
       </button>
+      <button data-panel="admin" title="Administration">
+        <span class="ico">⚙</span><span class="lbl">Admin</span>
+      </button>
+      <div class="nav-group" role="presentation">Tune</div>
       <button data-panel="debugger" title="Program Debugger">
         <span class="ico">🐛</span><span class="lbl">Debugger</span>
       </button>
@@ -229,14 +262,6 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       </button>
       <button data-panel="providers" title="Provider Manager">
         <span class="ico">🔌</span><span class="lbl">Providers</span>
-      </button>
-      <button data-panel="documents" title="Document Explorer">
-        <span class="ico">📄</span><span class="lbl">Documents</span>
-      </button>
-      <button data-panel="sources" title="Data Sources — discover external schemas">
-        <span class="ico">🗄️</span><span class="lbl">Data Sources</span>
-      <button data-panel="ask" title="Ask — grounded answers from your knowledge">
-        <span class="ico">💬</span><span class="lbl">Ask</span>
       </button>
     </nav>
     <div class="user-area">
@@ -1232,14 +1257,22 @@ mod tests {
 
     fn css_color(name: &str) -> (f64, f64, f64) {
         let page = page_for_tests();
-        let i = page.find(&format!("{name}: #")).unwrap_or_else(|| panic!("no {name}"));
+        let i = page
+            .find(&format!("{name}: #"))
+            .unwrap_or_else(|| panic!("no {name}"));
         let hex = &page[i + name.len() + 3..i + name.len() + 9];
         let c = |k: usize| f64::from(u8::from_str_radix(&hex[k..k + 2], 16).unwrap()) / 255.0;
         (c(0), c(2), c(4))
     }
 
     fn luminance((r, g, b): (f64, f64, f64)) -> f64 {
-        let f = |c: f64| if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+        let f = |c: f64| {
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
         0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
     }
 
@@ -1261,15 +1294,27 @@ mod tests {
     #[test]
     fn navigation_is_a_labelled_landmark_whose_buttons_are_all_closed_and_named() {
         let page = page_for_tests();
-        assert!(page.contains("<nav aria-label=\"Main\""), "the rail must be a named navigation landmark");
+        assert!(
+            page.contains("<nav aria-label=\"Main\""),
+            "the rail must be a named navigation landmark"
+        );
         let start = page.find("<nav").unwrap();
         let nav = &page[start..start + page[start..].find("</nav>").unwrap()];
-        let (open, close) = (nav.matches("<button").count(), nav.matches("</button>").count());
-        assert_eq!(open, close, "an unclosed <button> in the navigation (the Data Sources entry was one)");
+        let (open, close) = (
+            nav.matches("<button").count(),
+            nav.matches("</button>").count(),
+        );
+        assert_eq!(
+            open, close,
+            "an unclosed <button> in the navigation (the Data Sources entry was one)"
+        );
         assert!(open >= 16, "{open} nav buttons");
         for b in nav.split("<button").skip(1) {
             assert!(b.contains("data-panel=\""), "{b}");
-            assert!(b.contains("class=\"lbl\""), "every entry has a visible text label, not only an icon: {b}");
+            assert!(
+                b.contains("class=\"lbl\""),
+                "every entry has a visible text label, not only an icon: {b}"
+            );
         }
     }
 
@@ -1277,9 +1322,18 @@ mod tests {
     fn the_page_is_keyboard_and_motion_friendly() {
         let page = page_for_tests();
         assert!(page.contains(":focus-visible"), "a visible focus ring");
-        assert!(page.contains("prefers-reduced-motion"), "reduced motion is honoured");
-        assert!(page.contains("data-click=\"skipToContent\""), "a skip-to-content control");
-        assert!(page.contains("#sidebar:focus-within"), "labels appear on keyboard focus, not only on hover");
+        assert!(
+            page.contains("prefers-reduced-motion"),
+            "reduced motion is honoured"
+        );
+        assert!(
+            page.contains("data-click=\"skipToContent\""),
+            "a skip-to-content control"
+        );
+        assert!(
+            page.contains("#sidebar:has(:focus-visible)"),
+            "labels appear on keyboard focus, not only on hover"
+        );
     }
 
     #[test]
@@ -1289,7 +1343,10 @@ mod tests {
             assert!(page.contains(needle), "router piece missing: {needle}");
         }
         // an SSO hand-off puts #token=... in the hash: the router must leave it alone
-        assert!(page.contains("^#\\/") || page.contains("startsWith('#/')"), "the router must only claim #/panel hashes");
+        assert!(
+            page.contains("^#\\/") || page.contains("startsWith('#/')"),
+            "the router must only claim #/panel hashes"
+        );
     }
 
     #[test]

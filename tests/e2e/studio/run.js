@@ -193,8 +193,8 @@ async function main() {
     await page.click('#explorer-tree-content .tree-item.type-node[data-type="Person"]'); await page.waitForTimeout(900);
     ok('tree item click loads the type', await page.evaluate(() => /Person/.test(document.getElementById('explorer-detail').innerText)));
     await page.click('#explorer-detail a[data-click="openInInspector"]'); await page.waitForTimeout(600);
-    ok('KOID link opens the Inspector with that KOID (and does not navigate)',
-      await page.evaluate(() => document.getElementById('panel-inspector').classList.contains('active') && document.getElementById('inspector-search-input').value.length > 8 && !location.hash));
+    ok('KOID link opens the Inspector with that KOID (at the panel address, no page navigation)',
+      await page.evaluate(() => document.getElementById('panel-inspector').classList.contains('active') && document.getElementById('inspector-search-input').value.length > 8 && location.hash === '#/inspector'));
 
     // ---- inspector: input search, suggestion click -------------------------
     await page.fill('#inspector-search-input', 'Person'); await page.waitForTimeout(900);
@@ -417,6 +417,37 @@ async function main() {
     // ---- a reload resumes the session from the cookie ----------------------
     await page.reload(); await page.waitForTimeout(1500);
     ok('reload resumes the signed-in session', await page.isHidden('#login-overlay') && /admin/.test(await page.innerText('#user-badge')), await page.innerText('#login-error').catch(() => ''));
+    // ---- E1: panels have addresses; navigation is labelled and keyboard-reachable ----
+    const hash = () => page.evaluate(() => location.hash);
+    const panel = () => page.evaluate(() => activePanel);
+    await page.click('button[data-panel="ontology"]'); await page.waitForTimeout(500);
+    ok('navigating writes the address (#/ontology)', (await hash()) === '#/ontology', await hash());
+    ok('the current destination is announced (aria-current, exactly one)', (await page.getAttribute('button[data-panel="ontology"]', 'aria-current')) === 'page' && (await page.locator('#sidebar nav [aria-current]').count()) === 1);
+    ok('the page title names the panel', /Ontology/.test(await page.title()), await page.title());
+    await page.reload(); await page.waitForTimeout(1500);
+    ok('reload lands on the same panel', (await panel()) === 'ontology' && await page.isVisible('#panel-ontology') && (await hash()) === '#/ontology', await panel() + ' ' + await hash());
+    await page.click('button[data-panel="sources"]'); await page.waitForTimeout(400);
+    await page.goBack(); await page.waitForTimeout(600);
+    ok('Back returns to the previous panel', (await panel()) === 'ontology' && (await hash()) === '#/ontology', await panel());
+    await page.goForward(); await page.waitForTimeout(600);
+    ok('Forward returns to the next panel', (await panel()) === 'sources', await panel());
+    await page.evaluate(() => { location.hash = '#/inspector'; }); await page.waitForTimeout(500);
+    ok('a pasted #/panel link opens that panel', (await panel()) === 'inspector' && await page.isVisible('#panel-inspector'));
+    await page.evaluate(() => { location.hash = '#/no-such-panel'; }); await page.waitForTimeout(400);
+    ok('an unknown address is ignored, not an error', (await panel()) === 'inspector' && await page.isVisible('#panel-inspector'));
+    ok('every nav entry has a text label and is a focusable button', await page.evaluate(() => [...document.querySelectorAll('#sidebar nav button')].every(b => b.querySelector('.lbl').textContent.trim() !== '' && b.tabIndex === 0)));
+    ok('nav entries are grouped under headings', (await page.locator('#sidebar .nav-group').count()) >= 3);
+    ok('labels are visible without hovering on a wide screen', (await page.evaluate(() => getComputedStyle(document.querySelector('#sidebar nav button .lbl')).opacity)) === '1');
+    await page.setViewportSize({ width: 800, height: 700 }); await page.mouse.move(700, 400); await page.waitForTimeout(300);
+    ok('on a narrow screen the rail is icons at rest', (await page.evaluate(() => getComputedStyle(document.querySelector('#sidebar nav button .lbl')).opacity)) === '0');
+    await page.focus('.skip'); await page.keyboard.press('Tab'); await page.waitForTimeout(300); // a real key press: focus-visible
+    ok('...and its labels appear on keyboard focus, not only on hover', (await page.evaluate(() => getComputedStyle(document.querySelector('#sidebar nav button .lbl')).opacity)) === '1');
+    await page.setViewportSize({ width: 1280, height: 720 }); await page.waitForTimeout(200);
+    await page.focus('.skip'); await page.keyboard.press('Enter'); await page.waitForTimeout(200);
+    ok('the skip link moves focus to the content', (await page.evaluate(() => document.activeElement && document.activeElement.id)) === 'panel-content');
+    await page.focus('button[data-panel="query"]');
+    ok('keyboard focus is visible on a nav entry', (await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle)) !== 'none');
+    await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
     // ---- a dead cookie falls back to the form; signing in must still work ---
     await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });
