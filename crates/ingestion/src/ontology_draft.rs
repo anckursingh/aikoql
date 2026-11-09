@@ -180,6 +180,11 @@ fn align_property(
 /// the latest row per sorting key, so the key IS the identity). A plain
 /// MergeTree sorting key is not unique and is never claimed. Empty: none.
 pub(crate) fn declared_identity(c: &ContainerInfo) -> Vec<String> {
+    declared_identity_why(c).0
+}
+
+/// The declared key and the reason it counts as one ("" when there is none).
+pub(crate) fn declared_identity_why(c: &ContainerInfo) -> (Vec<String>, &'static str) {
     let pk: Vec<String> = c
         .fields
         .iter()
@@ -187,10 +192,10 @@ pub(crate) fn declared_identity(c: &ContainerInfo) -> Vec<String> {
         .map(|f| f.name.clone())
         .collect();
     if !pk.is_empty() {
-        return pk;
+        return (pk, "primary key");
     }
     if let Some(g) = c.unique_groups.iter().find(|g| !g.is_empty()) {
-        return g.clone();
+        return (g.clone(), "unique constraint");
     }
     let engine = c.properties.get("engine").map_or("", String::as_str);
     if engine.contains("Replacing") || engine.contains("Collapsing") {
@@ -206,10 +211,10 @@ pub(crate) fn declared_identity(c: &ContainerInfo) -> Vec<String> {
             .unwrap_or_default();
         // an expression key (toDate(ts)) is not a column: no claim
         if !cols.is_empty() && cols.iter().all(|k| c.fields.iter().any(|f| &f.name == k)) {
-            return cols;
+            return (cols, "replacing engine sorting key");
         }
     }
-    Vec::new()
+    (Vec::new(), "")
 }
 
 pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -> DefinitionDraft {
