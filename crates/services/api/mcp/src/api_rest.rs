@@ -1706,8 +1706,8 @@ mod tests {
             "the sidebar must not animate its width under the cursor"
         );
         assert!(
-            html.contains("#sidebar:hover { width: 190px; }"),
-            "the hover expansion itself stays (icons → labels)"
+            html.contains("#sidebar:hover, #sidebar:has(:focus-visible) { width: 200px; }"),
+            "the expansion itself stays (icons → labels), on hover and on keyboard focus"
         );
     }
 
