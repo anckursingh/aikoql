@@ -335,6 +335,93 @@ pub fn suggest_identities(sources: &[SourceInput]) -> Vec<IdentitySuggestion> {
     out
 }
 
+/// A proposed link: a column that references another container's key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkSuggestion {
+    pub name: String,
+    /// `"<source>.<container>.<column>"`.
+    pub from: String,
+    pub to: String,
+    pub confidence: f32,
+    pub evidence: Vec<String>,
+}
+
+/// Columns that look like references to another container's key, from the keys
+/// the sources declare plus any the owner declares (`"source.container"` ->
+/// columns). A column matches when it has the key's own name, or is named
+/// `<thing>_id` for the container whose class is `<Thing>`. A container's own key
+/// is never linked to itself.
+pub fn suggest_links(
+    sources: &[SourceInput],
+    identities: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Vec<LinkSuggestion> {
+    // (container key "src.container", class, class snake, key column)
+    let mut targets: Vec<(String, String, String, String)> = Vec::new();
+    for s in sources {
+        for c in &s.meta.containers {
+            let key = format!("{}.{}", s.name, c.name);
+            let cols = identities
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| declared_identity_why(c).0);
+            if let [one] = &cols[..] {
+                let class = class_name_for_container(&c.name);
+                targets.push((key, canonical_property(&class), class, one.clone()));
+            }
+        }
+    }
+    let mut out: Vec<LinkSuggestion> = Vec::new();
+    for s in sources {
+        for c in &s.meta.containers {
+            let from_key = format!("{}.{}", s.name, c.name);
+            let mut used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for f in &c.fields {
+                let hit = targets
+                    .iter()
+                    .find(|(k, _, _, col)| k != &from_key && col == &f.name)
+                    .map(|t| (t, format!("{} is the key of {} ({})", f.name, t.2, t.0)))
+                    .or_else(|| {
+                        targets
+                            .iter()
+                            .find(|(k, snake, _, _)| {
+                                k != &from_key && f.name == format!("{snake}_id")
+                            })
+                            .map(|t| {
+                                (
+                                    t,
+                                    format!(
+                                        "{} names the key of {} ({}.{})",
+                                        f.name, t.2, t.0, t.3
+                                    ),
+                                )
+                            })
+                    });
+                let Some(((to_key, snake, _, to_col), why)) = hit else {
+                    continue;
+                };
+                let mut name = format!("for_{snake}");
+                if !used.insert(name.clone()) {
+                    name = format!("for_{snake}_{}", f.name);
+                    used.insert(name.clone());
+                }
+                out.push(LinkSuggestion {
+                    name,
+                    from: format!("{from_key}.{}", f.name),
+                    to: format!("{to_key}.{to_col}"),
+                    confidence: 0.7,
+                    evidence: vec![why],
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        b.confidence
+            .total_cmp(&a.confidence)
+            .then(a.from.cmp(&b.from))
+    });
+    out
+}
+
 /// Containers of different sources that look like one concept, best first.
 ///
 /// shortcut: candidate pairs come from equal/synonym class names or from two or
@@ -518,6 +605,146 @@ mod tests {
         .into_iter()
         .map(|s| (s.container.clone(), s))
         .collect()
+    }
+
+    // ---- link suggestions ----
+
+    fn case_study() -> (ConnectorMetadata, ConnectorMetadata) {
+        let mut ch = meta(
+            "clickhouse",
+            "olap",
+            &[
+                (
+                    "devices",
+                    &[
+                        ("visitor_id", "String", false, false, false),
+                        ("risk", "Float32", false, false, false),
+                    ],
+                ),
+                (
+                    "device_accounts",
+                    &[
+                        ("visitor_id", "String", false, false, false),
+                        ("account_id", "String", false, false, false),
+                        ("visits", "UInt64", false, false, false),
+                    ],
+                ),
+                (
+                    "visits",
+                    &[
+                        ("request_id", "String", false, false, false),
+                        ("visitor_id", "String", false, false, false),
+                        ("account_id", "String", false, false, false),
+                    ],
+                ),
+            ],
+        );
+        ch.containers[0]
+            .properties
+            .insert("engine".into(), "ReplacingMergeTree".into());
+        ch.containers[0]
+            .properties
+            .insert("sorting_key".into(), "visitor_id".into());
+        let pg = meta(
+            "postgres",
+            "crm",
+            &[(
+                "accounts",
+                &[
+                    ("id", "text", true, false, true),
+                    ("email", "text", false, false, false),
+                ],
+            )],
+        );
+        (ch, pg)
+    }
+
+    fn link_sug(ch: &ConnectorMetadata, pg: &ConnectorMetadata) -> Vec<LinkSuggestion> {
+        suggest_links(
+            &[
+                SourceInput {
+                    name: "olap",
+                    kind: "clickhouse",
+                    meta: ch,
+                },
+                SourceInput {
+                    name: "crm",
+                    kind: "postgres",
+                    meta: pg,
+                },
+            ],
+            &std::collections::BTreeMap::new(),
+        )
+    }
+
+    #[test]
+    fn links_are_suggested_from_keys_across_sources_with_evidence() {
+        let (ch, pg) = case_study();
+        let s = link_sug(&ch, &pg);
+        let by = |from: &str| {
+            s.iter()
+                .find(|l| l.from == from)
+                .unwrap_or_else(|| panic!("no link from {from}: {s:?}"))
+        };
+        // the same name as another container's key
+        let dev = by("olap.device_accounts.visitor_id");
+        assert_eq!(
+            (dev.to.as_str(), dev.name.as_str()),
+            ("olap.devices.visitor_id", "for_device")
+        );
+        assert!(
+            dev.confidence >= 0.7 && dev.evidence.iter().any(|e| e.contains("key of Device")),
+            "{dev:?}"
+        );
+        // <thing>_id names another container's single-column key, in ANOTHER SOURCE
+        let acct = by("olap.device_accounts.account_id");
+        assert_eq!(
+            (acct.to.as_str(), acct.name.as_str()),
+            ("crm.accounts.id", "for_account")
+        );
+        assert!(
+            acct.evidence.iter().any(|e| e.contains("Account")),
+            "{acct:?}"
+        );
+        // the raw telemetry gets them too (a customer may import it elsewhere)
+        assert_eq!(by("olap.visits.visitor_id").to, "olap.devices.visitor_id");
+    }
+
+    #[test]
+    fn a_containers_own_key_is_never_linked_to_itself_and_columns_nobody_keys_are_left_alone() {
+        let (ch, pg) = case_study();
+        let s = link_sug(&ch, &pg);
+        assert!(s.iter().all(|l| l.from.rsplit_once('.').map(|x| x.0) != l.to.rsplit_once('.').map(|x| x.0)), "{s:?}");
+        assert!(
+            s.iter().all(|l| !l.from.ends_with(".risk")
+                && !l.from.ends_with(".visits")
+                && !l.from.ends_with(".request_id")),
+            "{s:?}"
+        );
+        // the owner can also make a container's column a target by declaring its key
+        let ids: std::collections::BTreeMap<String, Vec<String>> =
+            [("olap.visits".to_string(), vec!["request_id".to_string()])].into();
+        let with = suggest_links(
+            &[
+                SourceInput {
+                    name: "olap",
+                    kind: "clickhouse",
+                    meta: &ch,
+                },
+                SourceInput {
+                    name: "crm",
+                    kind: "postgres",
+                    meta: &pg,
+                },
+            ],
+            &ids,
+        );
+        assert!(with
+            .iter()
+            .all(|l| l.to != "olap.visits.request_id" || l.from != "olap.visits.request_id"));
+        // deterministic and ordered best-first
+        assert_eq!(link_sug(&ch, &pg), link_sug(&ch, &pg));
+        assert!(s.windows(2).all(|w| w[0].confidence >= w[1].confidence));
     }
 
     #[test]

@@ -1564,7 +1564,7 @@ mod tests {
                 "needs a name",
             ),
         ] {
-            let d = with_links(&[l.clone()]);
+            let d = with_links(std::slice::from_ref(&l));
             assert!(
                 d.warnings
                     .iter()

@@ -279,7 +279,8 @@ pub use ontology_draft::{
 };
 mod ontology_suggest;
 pub use ontology_suggest::{
-    suggest_identities, suggest_merges, IdentitySuggestion, MergeSuggestion, PropertyMatch,
+    suggest_identities, suggest_links, suggest_merges, IdentitySuggestion, LinkSuggestion,
+    MergeSuggestion, PropertyMatch,
 };
 mod source_schema;
 pub use source_schema::{diff_metadata, ContainerDiff, SchemaDiff};
