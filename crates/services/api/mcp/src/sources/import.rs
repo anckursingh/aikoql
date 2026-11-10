@@ -7,7 +7,7 @@ use super::{
 };
 use crate::imports::{fresh_run_id, ImportSink};
 use crate::{json, Kernel, Subject, J};
-use aikoql_kernel::{KnowledgeObject, RelationshipRef, Value, KOID};
+use aikoql_kernel::{Direction, KnowledgeObject, LinkDef, RelationshipRef, Value, KOID};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Rows of one container, capped; `true` = the container had more.
@@ -131,15 +131,9 @@ fn declared_keys(
     src: &super::SourceConfig,
     snapshot: &aikoql_ingestion::ConnectorMetadata,
 ) -> BTreeMap<String, Vec<String>> {
-    let Some((ko, _)) = crate::http::active_ontology_for(k, src.tenant.as_deref()) else {
-        return BTreeMap::new();
-    };
-    let Ok(def) = aikoql_kernel::OntologyDef::from_property_map(&ko.properties) else {
-        return BTreeMap::new();
-    };
-    def.mappings
+    active_mappings(k, src)
         .into_iter()
-        .filter(|m| m.source == src.kind.as_str() && !m.identity.is_empty())
+        .filter(|m| !m.identity.is_empty())
         .filter(|m| {
             snapshot
                 .containers
@@ -149,6 +143,83 @@ fn declared_keys(
         })
         .map(|m| (m.physical_type, m.identity))
         .collect()
+}
+
+/// The mappings of the active ontology that belong to this source's kind.
+fn active_mappings(k: &Kernel, src: &super::SourceConfig) -> Vec<aikoql_kernel::MappingEntry> {
+    let Some((ko, _)) = crate::http::active_ontology_for(k, src.tenant.as_deref()) else {
+        return Vec::new();
+    };
+    let Ok(def) = aikoql_kernel::OntologyDef::from_property_map(&ko.properties) else {
+        return Vec::new();
+    };
+    def.mappings
+        .into_iter()
+        .filter(|m| m.source == src.kind.as_str())
+        .collect()
+}
+
+/// Target rows by the text of their key column: `value -> every live row with it`.
+type TargetIndex = std::collections::HashMap<String, Vec<KOID>>;
+
+fn target_index(k: &Kernel, tenant: Option<&str>, d: &LinkDef) -> TargetIndex {
+    // the importer's own subject may not see another source's objects: read as the system
+    let subject = crate::Subject::with_roles("system", &["admin"]);
+    let subject = match tenant {
+        Some(t) => subject.in_tenant(t),
+        None => subject,
+    };
+    let mut index = TargetIndex::new();
+    for ko in k.scan_by_type(&subject, &d.target_type).unwrap_or_default() {
+        if ko.metadata.tenant.as_deref() != tenant {
+            continue;
+        }
+        if let Some(v) = ko
+            .properties
+            .get(&d.target_column)
+            .filter(|v| !matches!(v, Value::Null))
+        {
+            index.entry(key_text(v)).or_default().push(ko.koid);
+        }
+    }
+    index
+}
+
+/// Give each object a relationship `d.name` to the one target row whose key equals its
+/// column. A reference to no row (dangling), to a NULL (no_value) or to a value more
+/// than one row has (ambiguous) gets no edge: an edge is never guessed. Edges are
+/// rebuilt from the fresh row each import, so a changed reference moves its edge.
+fn link_objects(objects: &mut [KnowledgeObject], d: &LinkDef, index: &TargetIndex) -> J {
+    let (mut linked, mut dangling, mut ambiguous, mut no_value) = (0u64, 0u64, 0u64, 0u64);
+    for ko in objects.iter_mut() {
+        let Some(v) = ko
+            .properties
+            .get(&d.column)
+            .filter(|v| !matches!(v, Value::Null))
+        else {
+            no_value += 1;
+            continue;
+        };
+        match index.get(&key_text(v)).map(Vec::as_slice) {
+            None | Some([]) => dangling += 1,
+            Some([target]) => {
+                let already = ko
+                    .relationships
+                    .iter()
+                    .any(|r| r.rel_type == d.name && r.target == *target);
+                if !already {
+                    ko.relationships.push(RelationshipRef {
+                        rel_type: d.name.clone(),
+                        target: *target,
+                        direction: Direction::Outbound,
+                    });
+                }
+                linked += 1;
+            }
+            Some(_) => ambiguous += 1,
+        }
+    }
+    json!({"linked": linked, "dangling": dangling, "ambiguous": ambiguous, "no_value": no_value})
 }
 
 /// A stable text for a key value (what identifies the row, not how it prints).
@@ -281,6 +352,13 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
         }
     }
     let keys = declared_keys(k, &src, &snapshot);
+    let mut links: BTreeMap<String, Vec<LinkDef>> = BTreeMap::new();
+    for m in active_mappings(k, &src) {
+        if !m.links.is_empty() {
+            links.insert(m.physical_type, m.links);
+        }
+    }
+    let mut link_report: BTreeMap<String, BTreeMap<String, J>> = BTreeMap::new();
     let conn = src.connection()?;
     let mut subject = Subject::new(importer);
     if let Some(t) = &src.tenant {
@@ -377,6 +455,16 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
                 continue;
             }
         }
+        // relationships the ontology declares by column values
+        if let Some(defs) = links.get(c.as_str()) {
+            for d in defs {
+                let index = target_index(k, src.tenant.as_deref(), d);
+                link_report
+                    .entry(c.clone())
+                    .or_default()
+                    .insert(d.name.clone(), link_objects(&mut objects, d, &index));
+            }
+        }
         let present: HashSet<KOID> = objects.iter().map(|o| o.koid).collect();
         let (mut wrote, mut same) = (0u64, 0u64);
         let mut failure = None;
@@ -423,7 +511,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     }
     Ok(json!({
         "run_id": run_id, "imported": imported, "unchanged": unchanged,
-        "pruned": pruned, "truncated": truncated, "skipped": skipped,
+        "pruned": pruned, "links": link_report, "truncated": truncated, "skipped": skipped,
     }))
 }
 
@@ -859,14 +947,22 @@ mod tests {
         apply["fingerprints"] = p["fingerprints"].clone();
         let r = crate::sources::ontology::tool_sources_ontology(k, &apply, "x").unwrap();
         assert_eq!(r["saved"], true, "{r}");
-        assert!(r["warnings"].to_string().find("link ignored").is_none(), "{r}");
+        assert!(
+            r["warnings"].to_string().find("link ignored").is_none(),
+            "{r}"
+        );
     }
 
     fn edges_of(k: &Kernel, order_id: i64) -> Vec<(String, aikoql_kernel::KOID)> {
         live(k, "orders", None)
             .into_iter()
             .find(|ko| ko.properties.get("id") == Some(&Value::Int(order_id)))
-            .map(|ko| ko.relationships.iter().map(|r| (r.rel_type.clone(), r.target)).collect())
+            .map(|ko| {
+                ko.relationships
+                    .iter()
+                    .map(|r| (r.rel_type.clone(), r.target))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -888,17 +984,41 @@ mod tests {
             import(&k, &["customers"]).unwrap();
             let r = import(&k, &["orders"]).unwrap();
             let stats = &r["links"]["orders"]["placed_by"];
-            assert_eq!((stats["linked"].clone(), stats["dangling"].clone(), stats["no_value"].clone()), (json!(2), json!(1), json!(1)), "{r}");
-            let ann = live(&k, "customers", None).into_iter().find(|c| c.properties.get("id") == Some(&Value::Text("c1".into()))).unwrap();
-            assert_eq!(edges_of(&k, 1), vec![("placed_by".to_string(), ann.koid)], "order 1 points at Ann");
-            assert!(edges_of(&k, 3).is_empty(), "a reference to a row that does not exist is not an edge");
-            assert!(edges_of(&k, 4).is_empty(), "a NULL reference is not an edge");
+            assert_eq!(
+                (
+                    stats["linked"].clone(),
+                    stats["dangling"].clone(),
+                    stats["no_value"].clone()
+                ),
+                (json!(2), json!(1), json!(1)),
+                "{r}"
+            );
+            let ann = live(&k, "customers", None)
+                .into_iter()
+                .find(|c| c.properties.get("id") == Some(&Value::Text("c1".into())))
+                .unwrap();
+            assert_eq!(
+                edges_of(&k, 1),
+                vec![("placed_by".to_string(), ann.koid)],
+                "order 1 points at Ann"
+            );
+            assert!(
+                edges_of(&k, 3).is_empty(),
+                "a reference to a row that does not exist is not an edge"
+            );
+            assert!(
+                edges_of(&k, 4).is_empty(),
+                "a NULL reference is not an edge"
+            );
 
             // the missing customer arrives later: re-importing the orders links the dangling one
             make(&db, "INSERT INTO customers VALUES ('nobody', 'Late');");
             import(&k, &["customers"]).unwrap();
             let r = import(&k, &["orders"]).unwrap();
-            assert_eq!(r["imported"]["orders"], 1, "only the order that gained an edge changed: {r}");
+            assert_eq!(
+                r["imported"]["orders"], 1,
+                "only the order that gained an edge changed: {r}"
+            );
             assert_eq!(edges_of(&k, 3).len(), 1);
             assert_eq!(edges_of(&k, 1).len(), 1, "the others keep theirs");
         });
@@ -927,8 +1047,15 @@ mod tests {
             import(&k, &["customers"]).unwrap();
             let r = import(&k, &["orders"]).unwrap();
             let stats = &r["links"]["orders"]["placed_by"];
-            assert_eq!((stats["linked"].clone(), stats["ambiguous"].clone()), (json!(1), json!(1)), "{r}");
-            assert!(edges_of(&k, 1).is_empty(), "code X names two customers: no edge");
+            assert_eq!(
+                (stats["linked"].clone(), stats["ambiguous"].clone()),
+                (json!(1), json!(1)),
+                "{r}"
+            );
+            assert!(
+                edges_of(&k, 1).is_empty(),
+                "code X names two customers: no edge"
+            );
             assert_eq!(edges_of(&k, 2).len(), 1);
         });
     }

@@ -7,8 +7,8 @@ use super::{
 use crate::helpers::value_to_json;
 use crate::{json, Kernel, J};
 use aikoql_ingestion::{
-    definition_from_sources_keyed, suggest_identities, suggest_merges, ClassMerge, ClassStatus,
-    SourceInput,
+    definition_from_sources_with, suggest_identities, suggest_links, suggest_merges, ClassMerge,
+    ClassStatus, LinkSpec, SourceInput,
 };
 use std::collections::BTreeMap;
 
@@ -172,6 +172,45 @@ fn merge(existing: Option<&J>, draft: &J) -> Merged {
                 }
             }
         }
+        // links: a name not yet on the mapping is added; the same name pointing elsewhere
+        // is corrected on a class discovery wrote and kept (with a warning) on a human's;
+        // a draft that says nothing about links never removes any
+        if let Some(wanted) = m["links"].as_array().filter(|a| !a.is_empty()) {
+            if let Some(i) = maps.iter().position(|e| {
+                e["source"] == m["source"]
+                    && e["physical_type"] == m["physical_type"]
+                    && e["class"] == m["class"]
+            }) {
+                let ours = classes
+                    .iter()
+                    .find(|c| c["name"] == maps[i]["class"])
+                    .is_some_and(|c| written_by_discovery(c, &maps));
+                let mut have = maps[i]["links"].as_array().cloned().unwrap_or_default();
+                let mut changed = false;
+                for l in wanted {
+                    match have.iter().position(|e| e["name"] == l["name"]) {
+                        None => {
+                            have.push(l.clone());
+                            changed = true;
+                        }
+                        Some(j) if have[j] == *l => {}
+                        Some(j) if ours => {
+                            have[j] = l.clone();
+                            changed = true;
+                        }
+                        Some(_) => warnings.push(format!(
+                            "{} {}: link {} already points elsewhere and was written by hand; kept as is",
+                            m["source"].as_str().unwrap_or(""),
+                            m["physical_type"].as_str().unwrap_or(""),
+                            l["name"].as_str().unwrap_or("")
+                        )),
+                    }
+                }
+                if changed {
+                    maps[i]["links"] = J::Array(have);
+                }
+            }
+        }
     }
     let untouched = classes
         .iter()
@@ -308,6 +347,23 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             .collect::<Result<_, _>>()?,
         _ => return Err(format!("{INVALID}identities must be an object")),
     };
+    // links the owner declares: [{"name", "from": "source.container.column", "to": "..."}]
+    let links: Vec<LinkSpec> = match o.get("relationships") {
+        None | Some(J::Null) => Vec::new(),
+        Some(J::Array(a)) if a.len() <= 200 => a
+            .iter()
+            .map(|r| {
+                let bad = || format!("{INVALID}relationships must be objects {{name, from, to}} of source.container.column references");
+                let o = r.as_object().ok_or_else(bad)?;
+                if o.keys().any(|k| !matches!(k.as_str(), "name" | "from" | "to")) {
+                    return Err(bad());
+                }
+                let text = |k: &str| o.get(k).and_then(J::as_str).filter(|s| s.len() <= 512).map(str::to_string);
+                Ok(LinkSpec { name: text("name").ok_or_else(bad)?, from: text("from").ok_or_else(bad)?, to: text("to").ok_or_else(bad)? })
+            })
+            .collect::<Result<_, String>>()?,
+        _ => return Err(format!("{INVALID}relationships must be a list of at most 200")),
+    };
     let given: BTreeMap<String, String> = match o.get("fingerprints") {
         None | Some(J::Null) => BTreeMap::new(),
         Some(J::Object(m)) => m
@@ -347,7 +403,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             meta: m,
         })
         .collect();
-    let draft = definition_from_sources_keyed(&inputs, &merges, &identities);
+    let draft = definition_from_sources_with(&inputs, &merges, &identities, &links);
     if !draft.publishable() {
         return Err(format!("{NOTHING}: no containers were discovered"));
     }
@@ -409,7 +465,14 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
                    "evidence": s.evidence, "declared": s.declared})
         })
         .collect();
+    // links: proposed from the keys; one already declared is not offered again
+    let link_suggestions: Vec<J> = suggest_links(&inputs, &identities)
+        .into_iter()
+        .filter(|s| !links.iter().any(|l| l.from == s.from && l.name == s.name))
+        .map(|s| json!({"name": s.name, "from": s.from, "to": s.to, "confidence": s.confidence, "evidence": s.evidence}))
+        .collect();
     let summary = json!({
+        "links": link_suggestions,
         "identities": identity_suggestions,
         "classes": classes, "adds": merged.adds, "refreshed": merged.refreshed,
         "untouched": merged.untouched, "mappings": merged.mappings, "warnings": warnings,
@@ -622,30 +685,68 @@ mod tests {
     }
 
     fn links_of(m: &Merged) -> Vec<J> {
-        m.definition["mappings"][0]["links"].as_array().cloned().unwrap_or_default()
+        m.definition["mappings"][0]["links"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
     }
 
     #[test]
     fn links_declared_later_are_added_and_a_humans_are_kept() {
         // added to a mapping that had none, and alongside existing ones
         let plain = onto("Discovered from s.t", None);
-        let m = merge(Some(&plain), &with_links(draft_with(None), vec![lk("for_account", "account_id")]));
+        let m = merge(
+            Some(&plain),
+            &with_links(draft_with(None), vec![lk("for_account", "account_id")]),
+        );
         assert_eq!(links_of(&m), vec![lk("for_account", "account_id")]);
-        let have = with_links(onto("Discovered from s.t", None), vec![lk("for_account", "account_id")]);
-        let m = merge(Some(&have), &with_links(draft_with(None), vec![lk("for_owner", "owner_id")]));
-        assert_eq!(links_of(&m).len(), 2, "a new link name is added, the old one stays");
+        let have = with_links(
+            onto("Discovered from s.t", None),
+            vec![lk("for_account", "account_id")],
+        );
+        let m = merge(
+            Some(&have),
+            &with_links(draft_with(None), vec![lk("for_owner", "owner_id")]),
+        );
+        assert_eq!(
+            links_of(&m).len(),
+            2,
+            "a new link name is added, the old one stays"
+        );
         // a draft that says nothing about links never removes any
-        assert_eq!(links_of(&merge(Some(&have), &draft_with(None))), vec![lk("for_account", "account_id")]);
+        assert_eq!(
+            links_of(&merge(Some(&have), &draft_with(None))),
+            vec![lk("for_account", "account_id")]
+        );
         // the same link again is not a change
-        let same = merge(Some(&have), &with_links(draft_with(None), vec![lk("for_account", "account_id")]));
+        let same = merge(
+            Some(&have),
+            &with_links(draft_with(None), vec![lk("for_account", "account_id")]),
+        );
         assert_eq!(same.definition, have);
         // the same name pointing elsewhere: corrected on discovery's class, kept (with a warning) on a human's
-        let ours = merge(Some(&have), &with_links(draft_with(None), vec![lk("for_account", "acct")]));
+        let ours = merge(
+            Some(&have),
+            &with_links(draft_with(None), vec![lk("for_account", "acct")]),
+        );
         assert_eq!(links_of(&ours), vec![lk("for_account", "acct")]);
-        let theirs_base = with_links(onto("our own T", None), vec![lk("for_account", "account_id")]);
-        let theirs = merge(Some(&theirs_base), &with_links(draft_with(None), vec![lk("for_account", "acct")]));
+        let theirs_base = with_links(
+            onto("our own T", None),
+            vec![lk("for_account", "account_id")],
+        );
+        let theirs = merge(
+            Some(&theirs_base),
+            &with_links(draft_with(None), vec![lk("for_account", "acct")]),
+        );
         assert_eq!(links_of(&theirs), vec![lk("for_account", "account_id")]);
-        assert!(theirs.warnings.iter().any(|w| w.contains("link") && w.contains("kept")), "{:?}", theirs.warnings);
+        assert!(
+            theirs
+                .warnings
+                .iter()
+                .any(|w| w.contains("link") && w.contains("kept")),
+            "{:?}",
+            theirs.warnings
+        );
     }
 
     #[test]
