@@ -181,7 +181,10 @@ graph depend on them and they are the smallest changes.
   merges. Resolution is its own call, not part of import, so it cannot depend on import order. The
   existing `contradict` / `resolve_conflict_by_authority` kernel tools model epistemic claims and
   origin-derived authority and are not idempotent, so they are not reused for record-level
-  disagreement. Not yet: Studio review of contradictions (Phase D), a per-property authority list.
+  disagreement. Found by the review of this phase: the kernel never revives a tombstoned id, so a source row that was
+  retired by an import and later came back (same key) was written but stayed invisible. Returning objects
+  now take the next generation of their id (`live_koid`), for imports and for resolution objects alike.
+  Not yet: Studio review of contradictions (Phase D), a per-property authority list.
 - Phases D, E, F, G: open, in the order above.
 
 ## 6. Decisions to confirm

@@ -10,7 +10,7 @@
 //! sources disagree about, with the rule that decides). Ids are deterministic, so a
 //! repeat run changes nothing and the order the sources were imported in is irrelevant.
 
-use super::import::{identity_koid, key_text};
+use super::import::{identity_koid, key_text, live_koid};
 use super::{args_obj, audit, tenant_arg, INVALID};
 use crate::imports::{fresh_run_id, ImportSink};
 use crate::{
@@ -39,6 +39,15 @@ struct Claim {
     key: String,
     /// canonical property -> asserted value (nulls omitted)
     values: BTreeMap<String, Value>,
+}
+
+/// The `g`th generation of a derived object's id (0 = the first; later ones only after a tombstone).
+fn gen_koid(ty: &str, scope: &str, parts: &[String], g: u32) -> KOID {
+    let mut p = parts.to_vec();
+    if g > 0 {
+        p.push(format!("generation {g}"));
+    }
+    identity_koid(ty, scope, &p)
 }
 
 /// `POST /api/v1/sources/resolve {class, tenant?}`.
@@ -206,7 +215,9 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     let (mut present, mut written) = ([HashSet::new(), HashSet::new(), HashSet::new()], 0u64);
     let (mut open, mut resolved) = (0u64, 0u64);
     for (key, group) in &by_key {
-        let canonical = identity_koid(T_CANONICAL, &class, std::slice::from_ref(key));
+        let canonical = live_koid(k, |g| {
+            gen_koid(T_CANONICAL, &class, std::slice::from_ref(key), g)
+        });
         // per canonical property, who says what
         let mut said: BTreeMap<&str, Vec<(&Claim, &Value)>> = BTreeMap::new();
         for c in group {
@@ -228,7 +239,14 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             if distinct.len() < 2 {
                 continue;
             }
-            let koid = identity_koid(T_CONTRADICTION, &class, &[key.clone(), (*prop).to_string()]);
+            let koid = live_koid(k, |g| {
+                gen_koid(
+                    T_CONTRADICTION,
+                    &class,
+                    &[key.clone(), (*prop).to_string()],
+                    g,
+                )
+            });
             let rule = match winner {
                 Some((c, _)) => format!(
                     "authority rank: {} (rank {best}) outranks the other sources",
@@ -298,7 +316,9 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             .map_err(|e| e.to_string())?,
         );
         for c in group {
-            let koid = identity_koid(T_CLAIM, &c.label, &[class.clone(), key.clone()]);
+            let koid = live_koid(k, |g| {
+                gen_koid(T_CLAIM, &c.label, &[class.clone(), key.clone()], g)
+            });
             let props = BTreeMap::from([
                 ("class".to_string(), text(&class)),
                 ("key".to_string(), text(key)),
@@ -618,6 +638,19 @@ mod tests {
                 "the sources agree now: {r}"
             );
             assert_eq!(r["pruned"]["contradictions"], 1, "{r}");
+            // and it comes back when they disagree again (same deterministic id, once tombstoned)
+            make(
+                &db,
+                "UPDATE account_risk SET decision = 'block' WHERE account_id = 'acct_77';",
+            );
+            import(&k, &["account_risk"], None);
+            let r = resolve(&k, None);
+            assert_eq!(
+                live(&k, "aikoql:contradiction", None).len(),
+                1,
+                "the disagreement is back: {r}"
+            );
+            assert_eq!(r["contradictions"]["resolved"], 1, "{r}");
         });
     }
 

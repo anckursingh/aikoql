@@ -247,6 +247,37 @@ pub(super) fn identity_koid(source: &str, container: &str, parts: &[String]) -> 
     KOID(koid)
 }
 
+/// The first id of `id_of(0), id_of(1), ...` that is not a tombstone. The kernel never
+/// revives a tombstoned id (a write to it stays deleted), so a row that was retired and
+/// then comes back takes the next generation of its id: still deterministic for a given
+/// history, and what an earlier version said stays under the old id.
+pub(super) fn live_koid(k: &Kernel, id_of: impl Fn(u32) -> KOID) -> KOID {
+    let reader = crate::KnowledgeContext::from(Subject::with_roles("system", &["admin"]));
+    let dead = |id: &KOID| {
+        k.get(reader.clone(), id)
+            .is_ok_and(|h| h.lifecycle.state == crate::LifecycleState::Deleted)
+    };
+    // 1000 generations is far past any real history: a loop bound, not a limit anyone meets
+    (0..1000)
+        .map(&id_of)
+        .find(|id| !dead(id))
+        .unwrap_or_else(|| id_of(1000))
+}
+
+/// Objects that were retired and now return get a fresh generation of their id.
+fn revive_koids(k: &Kernel, objects: &mut [KnowledgeObject]) {
+    for ko in objects {
+        let base = ko.koid;
+        ko.koid = live_koid(k, |g| {
+            if g == 0 {
+                base
+            } else {
+                identity_koid("revived", &base.to_hex(), &[g.to_string()])
+            }
+        });
+    }
+}
+
 /// Give every object the identity its key columns say it has. A key that does not
 /// identify is refused whole - collapsing two rows into one object would lose data
 /// without a word - so the caller writes nothing for the container.
@@ -465,6 +496,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
                     .insert(d.name.clone(), link_objects(&mut objects, d, &index));
             }
         }
+        revive_koids(k, &mut objects);
         let present: HashSet<KOID> = objects.iter().map(|o| o.koid).collect();
         let (mut wrote, mut same) = (0u64, 0u64);
         let mut failure = None;
@@ -1057,6 +1089,38 @@ mod tests {
                 "code X names two customers: no edge"
             );
             assert_eq!(edges_of(&k, 2).len(), 1);
+        });
+    }
+
+    #[test]
+    fn a_row_deleted_at_the_source_and_later_inserted_again_is_visible_again() {
+        let (k, db) = (kernel(), tmp_db("revive"));
+        make(
+            &db,
+            "CREATE TABLE activity (visitor TEXT, visits INTEGER);
+             INSERT INTO activity VALUES ('a', 1), ('b', 2);",
+        );
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            publish_with_identity(&k, "crm.activity", &["visitor"]);
+            import(&k, &["activity"]).unwrap();
+            make(&db, "DELETE FROM activity WHERE visitor = 'b';");
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(r["pruned"]["activity"], 1, "{r}");
+            assert_eq!(live(&k, "activity", None).len(), 1);
+            // 'b' returns: its id was tombstoned, and the kernel never revives a tombstone
+            make(&db, "INSERT INTO activity VALUES ('b', 9);");
+            import(&k, &["activity"]).unwrap();
+            assert_eq!(
+                visits_of(&k, "b").map(|v| v.0),
+                Some(9),
+                "the returning row must be visible"
+            );
+            assert_eq!(live(&k, "activity", None).len(), 2);
+            // and a quiet re-import changes nothing
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(r["imported"]["activity"], 0, "{r}");
+            assert_eq!(live(&k, "activity", None).len(), 2);
         });
     }
 
