@@ -712,6 +712,61 @@ pub(crate) fn tool_document_status(k: &Kernel, args: &J, db_path: &str) -> Resul
     Ok(out)
 }
 
+/// Extract (or merge the stored batches of) a document and run the D1-D9 compiler over it.
+/// Shared by Compile (a preview) and the commit that stores the knowledge. The third value is the
+/// batch records of a batched document: any `failed` batch means pages are missing.
+pub(crate) fn compile_document_pipeline(
+    db_path: &str,
+    sha256: &str,
+    mime_type: &str,
+    artifact_path: &str,
+    batches_total: i64,
+) -> Result<
+    (
+        aikoql_ingestion::DocumentModel,
+        aikoql_ingestion::CompilationResult,
+        Option<Vec<J>>,
+    ),
+    String,
+> {
+    let asset_dir = format!("{}.assets", artifact_path);
+    let policy = ingest_policy();
+    // A batched document compiles from its stored batch results.
+    let batches =
+        (batches_total > 0).then(|| read_batches(&format!("{db_path}.artifacts"), sha256));
+    let doc = match &batches {
+        Some(batches) => {
+            let mut docs = Vec::new();
+            for b in batches.iter().filter(|b| b["status"] != "failed") {
+                let (first, last) = (b["first_page"].as_u64(), b["last_page"].as_u64());
+                let file = batch_path(
+                    &format!("{db_path}.artifacts"),
+                    sha256,
+                    first.unwrap_or(0),
+                    last.unwrap_or(0),
+                );
+                let bytes = std::fs::read(&file)
+                    .map_err(|e| format!("batch result {file} unreadable: {e}"))?;
+                docs.push(
+                    serde_json::from_slice(&bytes)
+                        .map_err(|e| format!("batch result {file}: {e}"))?,
+                );
+            }
+            aikoql_ingestion::merge_batches(docs)
+        }
+        None => aikoql_ingestion::extract_document_with_policy(
+            artifact_path,
+            mime_type,
+            Some(&asset_dir),
+            &policy,
+        )
+        .map_err(|e| format!("extract for compile: {}", e))?,
+    };
+    let cr =
+        aikoql_ingestion::compile_document_mock_with_policy(&doc, &[], Some(&asset_dir), &policy);
+    Ok((doc, cr, batches))
+}
+
 /// Items kept per list in a compile result unless the caller asks for another `limit`.
 const COMPILE_LIST_DEFAULT: usize = 500;
 
@@ -919,44 +974,8 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
             "total_candidates": ir.total_candidates()
         })
     } else {
-        let asset_dir = format!("{}.assets", artifact_path);
-        let policy = ingest_policy();
-        // A batched document compiles from its stored batch results.
-        let batches = (total > 0).then(|| read_batches(&format!("{db_path}.artifacts"), &sha256));
-        let doc = match &batches {
-            Some(batches) => {
-                let mut docs = Vec::new();
-                for b in batches.iter().filter(|b| b["status"] != "failed") {
-                    let (first, last) = (b["first_page"].as_u64(), b["last_page"].as_u64());
-                    let file = batch_path(
-                        &format!("{db_path}.artifacts"),
-                        &sha256,
-                        first.unwrap_or(0),
-                        last.unwrap_or(0),
-                    );
-                    let bytes = std::fs::read(&file)
-                        .map_err(|e| format!("batch result {file} unreadable: {e}"))?;
-                    docs.push(
-                        serde_json::from_slice(&bytes)
-                            .map_err(|e| format!("batch result {file}: {e}"))?,
-                    );
-                }
-                aikoql_ingestion::merge_batches(docs)
-            }
-            None => aikoql_ingestion::extract_document_with_policy(
-                &artifact_path,
-                &mime_type,
-                Some(&asset_dir),
-                &policy,
-            )
-            .map_err(|e| format!("extract for compile: {}", e))?,
-        };
-        let cr = aikoql_ingestion::compile_document_mock_with_policy(
-            &doc,
-            &[],
-            Some(&asset_dir),
-            &policy,
-        );
+        let (doc, cr, batches) =
+            compile_document_pipeline(db_path, &sha256, &mime_type, &artifact_path, total)?;
         let mut v = serde_json::to_value(&cr).map_err(|e| format!("serialize: {}", e))?;
         // lets a client say why a compile came back empty (e.g. no OCR tool)
         v["extraction_status"] = json!(doc.ocr_stats.as_ref().map_or("extracted", |s| s.status()));

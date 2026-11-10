@@ -6,6 +6,7 @@ pub(crate) mod agent_knowledge;
 pub(crate) mod constraints;
 pub(crate) mod coordination;
 pub(crate) mod deployment;
+pub(crate) mod doc_graph;
 pub(crate) mod evaluation;
 pub(crate) mod facts;
 pub(crate) mod ingestion;
