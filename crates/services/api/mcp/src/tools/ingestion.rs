@@ -734,11 +734,9 @@ fn compile_limit(args: &J) -> Result<usize, String> {
 /// records exactly what was cut, so nothing is dropped silently. The compiler's own counts
 /// (`commit_plan.stats`, `total_chars`, ...) are not touched.
 fn bound_compile_result(result: &mut J, limit: usize) {
+    // every list directly under these roots (the document, Markdown and Rust compilers differ)
+    const ROOTS: &[&str] = &["ir", "markdown_ir", "code_ir"];
     const LISTS: &[&[&str]] = &[
-        &["ir", "entities"],
-        &["ir", "relations"],
-        &["ir", "facts"],
-        &["ir", "events"],
         &["commit_plan", "actions"],
         &["embedded_chunks"],
         &["fragments"],
@@ -751,8 +749,21 @@ fn bound_compile_result(result: &mut J, limit: usize) {
         &["resolution", "unmatched"],
         &["secret_findings"],
     ];
+    let mut paths: Vec<Vec<String>> = LISTS
+        .iter()
+        .map(|p| p.iter().map(|s| s.to_string()).collect())
+        .collect();
+    for root in ROOTS {
+        if let Some(obj) = result.get(*root).and_then(J::as_object) {
+            for (k, v) in obj {
+                if v.is_array() {
+                    paths.push(vec![root.to_string(), k.clone()]);
+                }
+            }
+        }
+    }
     let mut cut = serde_json::Map::new();
-    for path in LISTS {
+    for path in &paths {
         let pointer = format!("/{}", path.join("/"));
         if let Some(list) = result.pointer_mut(&pointer).and_then(J::as_array_mut) {
             if list.len() > limit {
@@ -963,6 +974,27 @@ mod compile_bound_tests {
         // counts the compiler computed are not touched
         assert_eq!(r["commit_plan"]["stats"]["total_actions"], 1200);
         assert_eq!(r["total_chars"], 7);
+    }
+
+    #[test]
+    fn markdown_and_rust_compile_results_are_bounded_too() {
+        for root in ["markdown_ir", "code_ir"] {
+            let list = |k: &str| (0..900).map(|i| json!({k: i})).collect::<Vec<_>>();
+            let mut r = json!({root: {"entities": list("e"), "facts": list("f"), "relations": list("r"), "extra": list("x")},
+                               "method": "m", "entities": 900});
+            bound_compile_result(&mut r, 500);
+            for k in ["entities", "facts", "relations", "extra"] {
+                assert_eq!(r[root][k].as_array().unwrap().len(), 500, "{root}.{k}");
+            }
+            assert_eq!(
+                r["truncated"][format!("{root}.entities")],
+                json!({"shown": 500, "total": 900})
+            );
+            assert_eq!(
+                r["entities"], 900,
+                "the compiler's own count is not touched"
+            );
+        }
     }
 
     #[test]

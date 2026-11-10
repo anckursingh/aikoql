@@ -464,7 +464,26 @@ fn rasterize_with(
         return Err("pdftoppm exited with error".into());
     }
 
-    Ok(expected_png)
+    if std::path::Path::new(&expected_png).exists() {
+        return Ok(expected_png);
+    }
+    // A pdftoppm without -singlefile pads the page number to the width of the page count;
+    // take the one image it wrote for this page rather than guessing the padding.
+    let stem = format!("page-{page_num}-");
+    let found: Vec<std::path::PathBuf> = std::fs::read_dir(output_dir)
+        .map_err(|e| format!("pdftoppm output dir: {e}"))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(&stem) && n.ends_with(".png"))
+        })
+        .collect();
+    match found.as_slice() {
+        [one] => Ok(one.to_string_lossy().into_owned()),
+        [] => Err(format!("pdftoppm wrote no image for page {page_num}")),
+        _ => Err(format!("pdftoppm wrote several images for page {page_num}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -783,6 +802,31 @@ mod tests {
         );
         let back: OcrStats = serde_json::from_str(&serde_json::to_string(&stats).unwrap()).unwrap();
         assert_eq!(back.failures, stats.failures);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pdftoppm_that_ignores_singlefile_is_still_found() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ocr-nosingle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("pdftoppm");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nfor a in \"$@\"; do last=$a; done\n: > \"$last-0007.png\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cli = TesseractCli {
+            pdftoppm_path: Some(fake.to_str().unwrap().into()),
+            ..TesseractCli::new()
+        };
+        let png = rasterize_with(&cli, "doc.pdf", 7, dir.to_str().unwrap()).unwrap();
+        assert!(
+            png.ends_with("page-7-0007.png") && std::path::Path::new(&png).exists(),
+            "{png}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // -- Threshold tests --

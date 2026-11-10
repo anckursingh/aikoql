@@ -127,7 +127,8 @@ pub(crate) struct LogFile(std::sync::Arc<std::sync::Mutex<LogInner>>);
 
 struct LogInner {
     path: std::path::PathBuf,
-    file: std::fs::File,
+    // None only while rotating: Windows cannot rename a file this process still holds open
+    file: Option<std::fs::File>,
     size: u64,
     max: u64,
     keep: usize,
@@ -147,7 +148,7 @@ impl LogFile {
         Ok(LogFile(std::sync::Arc::new(std::sync::Mutex::new(
             LogInner {
                 path: path.to_path_buf(),
-                file,
+                file: Some(file),
                 size,
                 max,
                 keep,
@@ -162,8 +163,10 @@ impl LogFile {
         if g.size > 0 && g.size + bytes.len() as u64 > g.max {
             g.rotate();
         }
-        if g.file.write_all(bytes).is_ok() {
-            g.size += bytes.len() as u64;
+        if let Some(f) = g.file.as_mut() {
+            if f.write_all(bytes).is_ok() {
+                g.size += bytes.len() as u64;
+            }
         }
     }
 }
@@ -172,6 +175,7 @@ impl LogInner {
     /// `log` -> `log.1` -> ... -> `log.<keep>` (the oldest is dropped), then a fresh `log`.
     fn rotate(&mut self) {
         let name = |n: usize| std::path::PathBuf::from(format!("{}.{n}", self.path.display()));
+        self.file = None; // close it before renaming it
         let _ = std::fs::remove_file(name(self.keep));
         for n in (1..self.keep).rev() {
             let _ = std::fs::rename(name(n), name(n + 1));
@@ -182,7 +186,7 @@ impl LogInner {
             .append(true)
             .open(&self.path)
         {
-            self.file = f;
+            self.file = Some(f);
             self.size = 0;
         }
     }
