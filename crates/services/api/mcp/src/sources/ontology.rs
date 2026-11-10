@@ -7,8 +7,8 @@ use super::{
 use crate::helpers::value_to_json;
 use crate::{json, Kernel, J};
 use aikoql_ingestion::{
-    definition_from_sources_with, suggest_identities, suggest_links, suggest_merges, ClassMerge,
-    ClassStatus, LinkSpec, SourceInput,
+    definition_from_sources_all, suggest_identities, suggest_links, suggest_merges, AssertSpec,
+    ClassMerge, ClassStatus, LinkSpec, SourceInput,
 };
 use std::collections::BTreeMap;
 
@@ -172,43 +172,48 @@ fn merge(existing: Option<&J>, draft: &J) -> Merged {
                 }
             }
         }
-        // links: a name not yet on the mapping is added; the same name pointing elsewhere
-        // is corrected on a class discovery wrote and kept (with a warning) on a human's;
-        // a draft that says nothing about links never removes any
-        if let Some(wanted) = m["links"].as_array().filter(|a| !a.is_empty()) {
-            if let Some(i) = maps.iter().position(|e| {
+        // links (by name) and assertions (by class): one not yet on the mapping is added; the
+        // same one pointing elsewhere is corrected on a class discovery wrote and kept (with
+        // a warning) on a human's; a draft that says nothing about them never removes any
+        for (field, id) in [("links", "name"), ("asserts", "class")] {
+            let Some(wanted) = m[field].as_array().filter(|a| !a.is_empty()) else {
+                continue;
+            };
+            let Some(i) = maps.iter().position(|e| {
                 e["source"] == m["source"]
                     && e["physical_type"] == m["physical_type"]
                     && e["class"] == m["class"]
-            }) {
-                let ours = classes
-                    .iter()
-                    .find(|c| c["name"] == maps[i]["class"])
-                    .is_some_and(|c| written_by_discovery(c, &maps));
-                let mut have = maps[i]["links"].as_array().cloned().unwrap_or_default();
-                let mut changed = false;
-                for l in wanted {
-                    match have.iter().position(|e| e["name"] == l["name"]) {
-                        None => {
-                            have.push(l.clone());
-                            changed = true;
-                        }
-                        Some(j) if have[j] == *l => {}
-                        Some(j) if ours => {
-                            have[j] = l.clone();
-                            changed = true;
-                        }
-                        Some(_) => warnings.push(format!(
-                            "{} {}: link {} already points elsewhere and was written by hand; kept as is",
-                            m["source"].as_str().unwrap_or(""),
-                            m["physical_type"].as_str().unwrap_or(""),
-                            l["name"].as_str().unwrap_or("")
-                        )),
+            }) else {
+                continue;
+            };
+            let ours = classes
+                .iter()
+                .find(|c| c["name"] == maps[i]["class"])
+                .is_some_and(|c| written_by_discovery(c, &maps));
+            let mut have = maps[i][field].as_array().cloned().unwrap_or_default();
+            let mut changed = false;
+            for l in wanted {
+                match have.iter().position(|e| e[id] == l[id]) {
+                    None => {
+                        have.push(l.clone());
+                        changed = true;
                     }
+                    Some(j) if have[j] == *l => {}
+                    Some(j) if ours => {
+                        have[j] = l.clone();
+                        changed = true;
+                    }
+                    Some(_) => warnings.push(format!(
+                        "{} {}: {} {} already points elsewhere and was written by hand; kept as is",
+                        m["source"].as_str().unwrap_or(""),
+                        m["physical_type"].as_str().unwrap_or(""),
+                        &field[..field.len() - 1],
+                        l[id].as_str().unwrap_or("")
+                    )),
                 }
-                if changed {
-                    maps[i]["links"] = J::Array(have);
-                }
+            }
+            if changed {
+                maps[i][field] = J::Array(have);
             }
         }
     }
@@ -364,6 +369,58 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             .collect::<Result<_, String>>()?,
         _ => return Err(format!("{INVALID}relationships must be a list of at most 200")),
     };
+    // assertions: [{"from": "source.container.column", "class", "properties": {physical: canonical}, "rank"?}]
+    let asserts: Vec<AssertSpec> = match o.get("assertions") {
+        None | Some(J::Null) => Vec::new(),
+        Some(J::Array(a)) if a.len() <= 100 => a
+            .iter()
+            .map(|r| {
+                let bad = || {
+                    format!(
+                        "{INVALID}assertions must be objects {{from, class, properties, rank?}}"
+                    )
+                };
+                let o = r.as_object().ok_or_else(bad)?;
+                if o.keys()
+                    .any(|k| !matches!(k.as_str(), "from" | "class" | "properties" | "rank"))
+                {
+                    return Err(bad());
+                }
+                let text = |k: &str| {
+                    o.get(k)
+                        .and_then(J::as_str)
+                        .filter(|s| s.len() <= 512)
+                        .map(str::to_string)
+                };
+                let properties = match o.get("properties") {
+                    Some(J::Object(p)) if p.len() <= 64 => p
+                        .iter()
+                        .map(|(k, v)| {
+                            v.as_str()
+                                .filter(|s| s.len() <= 128)
+                                .map(|v| (k.clone(), v.to_string()))
+                                .ok_or_else(bad)
+                        })
+                        .collect::<Result<_, _>>()?,
+                    _ => return Err(bad()),
+                };
+                let rank = match o.get("rank") {
+                    None => aikoql_kernel::AssertDef::DEFAULT_RANK,
+                    Some(v) => v
+                        .as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(bad)?,
+                };
+                Ok(AssertSpec {
+                    from: text("from").ok_or_else(bad)?,
+                    class: text("class").ok_or_else(bad)?,
+                    properties,
+                    rank,
+                })
+            })
+            .collect::<Result<_, String>>()?,
+        _ => return Err(format!("{INVALID}assertions must be a list of at most 100")),
+    };
     let given: BTreeMap<String, String> = match o.get("fingerprints") {
         None | Some(J::Null) => BTreeMap::new(),
         Some(J::Object(m)) => m
@@ -403,7 +460,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             meta: m,
         })
         .collect();
-    let draft = definition_from_sources_with(&inputs, &merges, &identities, &links);
+    let draft = definition_from_sources_all(&inputs, &merges, &identities, &links, &asserts);
     if !draft.publishable() {
         return Err(format!("{NOTHING}: no containers were discovered"));
     }
@@ -744,6 +801,73 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|w| w.contains("link") && w.contains("kept")),
+            "{:?}",
+            theirs.warnings
+        );
+    }
+
+    fn asrt(class: &str, col: &str, rank: u64) -> J {
+        json!({"class": class, "key_column": col, "properties": {"status": "status"}, "rank": rank})
+    }
+
+    fn asserts_of(m: &Merged) -> Vec<J> {
+        m.definition["mappings"][0]["asserts"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn assertions_declared_later_are_added_and_a_humans_are_kept() {
+        let with = |mut o: J, a: Vec<J>| {
+            o["mappings"][0]["asserts"] = J::Array(a);
+            o
+        };
+        let m = merge(
+            Some(&onto("Discovered from s.t", None)),
+            &with(draft_with(None), vec![asrt("Account", "id", 10)]),
+        );
+        assert_eq!(asserts_of(&m), vec![asrt("Account", "id", 10)]);
+        let have = with(
+            onto("Discovered from s.t", None),
+            vec![asrt("Account", "id", 10)],
+        );
+        // another class is added alongside
+        let m = merge(
+            Some(&have),
+            &with(draft_with(None), vec![asrt("Person", "id", 10)]),
+        );
+        assert_eq!(asserts_of(&m).len(), 2);
+        // silence removes nothing; the same assertion again is no change
+        assert_eq!(
+            asserts_of(&merge(Some(&have), &draft_with(None))),
+            vec![asrt("Account", "id", 10)]
+        );
+        assert_eq!(
+            merge(
+                Some(&have),
+                &with(draft_with(None), vec![asrt("Account", "id", 10)])
+            )
+            .definition,
+            have
+        );
+        // a new rank: corrected on discovery's class, kept (with a warning) on a human's
+        let ours = merge(
+            Some(&have),
+            &with(draft_with(None), vec![asrt("Account", "id", 5)]),
+        );
+        assert_eq!(asserts_of(&ours), vec![asrt("Account", "id", 5)]);
+        let human = with(onto("our own T", None), vec![asrt("Account", "id", 10)]);
+        let theirs = merge(
+            Some(&human),
+            &with(draft_with(None), vec![asrt("Account", "id", 5)]),
+        );
+        assert_eq!(asserts_of(&theirs), vec![asrt("Account", "id", 10)]);
+        assert!(
+            theirs
+                .warnings
+                .iter()
+                .any(|w| w.contains("assert") && w.contains("kept")),
             "{:?}",
             theirs.warnings
         );
