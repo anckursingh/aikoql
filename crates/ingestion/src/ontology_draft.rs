@@ -260,6 +260,29 @@ pub fn definition_from_sources_with(
     identities: &BTreeMap<String, Vec<String>>,
     links: &[LinkSpec],
 ) -> DefinitionDraft {
+    definition_from_sources_all(sources, merges, identities, links, &[])
+}
+
+/// "Rows of `from`'s container assert these canonical properties of the `class`
+/// entity whose key is in `from`'s column" (`from` is `source.container.column`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssertSpec {
+    pub from: String,
+    pub class: String,
+    /// Physical column -> canonical property.
+    pub properties: BTreeMap<String, String>,
+    /// Source authority: the lowest rank wins a disagreement.
+    pub rank: u32,
+}
+
+/// The full draft: classes, mappings, identity keys, declared links and assertions.
+pub fn definition_from_sources_all(
+    sources: &[SourceInput],
+    merges: &[ClassMerge],
+    identities: &BTreeMap<String, Vec<String>>,
+    links: &[LinkSpec],
+    asserts: &[AssertSpec],
+) -> DefinitionDraft {
     let mut warnings: Vec<String> = Vec::new();
     let entries: Vec<Entry> = sources
         .iter()
@@ -614,6 +637,83 @@ pub fn definition_from_sources_with(
                 "link {}: a relationship of that name already connects other classes; the link is kept, the class relationship is not changed",
                 l.name
             )),
+        }
+    }
+
+    // Declared assertions: validated whole, or ignored with the reason.
+    for a in asserts {
+        let ignore = |why: String, warnings: &mut Vec<String>| {
+            warnings.push(format!("assertion ignored: {why}"))
+        };
+        if a.class.trim().is_empty() {
+            ignore("an assertion needs a class".into(), &mut warnings);
+            continue;
+        }
+        let Some((key, key_col)) = split_ref(&a.from) else {
+            ignore(
+                format!(
+                    "{}: reference must look like source.container.column",
+                    a.class
+                ),
+                &mut warnings,
+            );
+            continue;
+        };
+        let Some(ei) = entries.iter().position(|e| e.key == key) else {
+            ignore(
+                format!("{}: {key} is not a discovered container", a.class),
+                &mut warnings,
+            );
+            continue;
+        };
+        if a.properties.is_empty()
+            || a.properties.len() > 64
+            || a.properties
+                .iter()
+                .any(|(p, c)| p.is_empty() || c.trim().is_empty())
+        {
+            ignore(
+                format!(
+                    "{}: {key} asserts no properties (or an unnamed one)",
+                    a.class
+                ),
+                &mut warnings,
+            );
+            continue;
+        }
+        let has = |col: &str| entries[ei].container.fields.iter().any(|f| f.name == col);
+        if let Some(col) = std::iter::once(key_col)
+            .chain(a.properties.keys().map(String::as_str))
+            .find(|c| !has(c))
+        {
+            ignore(
+                format!("{}: {key} has no column {col}", a.class),
+                &mut warnings,
+            );
+            continue;
+        }
+        let e = &entries[ei];
+        let Some(m) = mappings
+            .iter_mut()
+            .find(|m| m["source"] == e.kind && m["physical_type"] == e.container.name.as_str())
+        else {
+            ignore(format!("{}: {key} is not mapped", a.class), &mut warnings);
+            continue;
+        };
+        if m["asserts"]
+            .as_array()
+            .is_some_and(|v| v.iter().any(|x| x["class"] == a.class.as_str()))
+        {
+            ignore(
+                format!("{}: already asserted by {key}", a.class),
+                &mut warnings,
+            );
+            continue;
+        }
+        let entry = json!({"class": a.class, "key_column": key_col, "properties": a.properties, "rank": a.rank});
+        match m["asserts"].as_array_mut() {
+            Some(v) => v.push(entry),
+            None => m["asserts"] = json!([entry]),
         }
     }
 
@@ -1534,6 +1634,152 @@ mod tests {
             .find(|m| m["physical_type"] == "accounts")
             .unwrap();
         assert!(plain.get("links").is_none());
+    }
+
+    // ---- assertions (Phase C) ----
+
+    fn assertion(from: &str, class: &str, props: &[(&str, &str)], rank: u32) -> AssertSpec {
+        AssertSpec {
+            from: from.into(),
+            class: class.into(),
+            properties: props
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            rank,
+        }
+    }
+
+    fn with_asserts(asserts: &[AssertSpec]) -> DefinitionDraft {
+        let (a, b) = two_sources();
+        definition_from_sources_all(
+            &[
+                SourceInput {
+                    name: "olap",
+                    kind: "clickhouse",
+                    meta: &a,
+                },
+                SourceInput {
+                    name: "crm",
+                    kind: "postgres",
+                    meta: &b,
+                },
+            ],
+            &[],
+            &BTreeMap::new(),
+            &[],
+            asserts,
+        )
+    }
+
+    #[test]
+    fn an_assertion_lands_on_the_mapping_of_the_container_it_names() {
+        let d = with_asserts(&[
+            assertion("crm.accounts.id", "Account", &[("email", "email")], 10),
+            assertion(
+                "olap.device_accounts.account_id",
+                "Account",
+                &[("visitor_id", "last_device")],
+                20,
+            ),
+        ]);
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "accounts")
+            .unwrap();
+        let a = &m["asserts"][0];
+        assert_eq!(
+            (
+                a["class"].as_str(),
+                a["key_column"].as_str(),
+                a["rank"].as_u64()
+            ),
+            (Some("Account"), Some("id"), Some(10)),
+            "{a}"
+        );
+        assert_eq!(a["properties"]["email"], "email");
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "device_accounts")
+            .unwrap();
+        assert_eq!(m["asserts"][0]["rank"], 20);
+        assert!(
+            d.warnings.iter().all(|w| !w.contains("assertion ignored")),
+            "{:?}",
+            d.warnings
+        );
+        // untouched containers write nothing
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "devices")
+            .unwrap();
+        assert!(m.get("asserts").is_none());
+    }
+
+    #[test]
+    fn an_assertion_that_cannot_be_honoured_is_ignored_with_a_reason() {
+        for (a, why) in [
+            (
+                assertion("crm.accounts.nope", "Account", &[("email", "email")], 1),
+                "no column nope",
+            ),
+            (
+                assertion("crm.accounts.id", "Account", &[("nope", "email")], 1),
+                "no column nope",
+            ),
+            (
+                assertion("crm.ghost.id", "Account", &[("email", "email")], 1),
+                "not a discovered container",
+            ),
+            (
+                assertion("no-dots", "Account", &[("email", "email")], 1),
+                "source.container.column",
+            ),
+            (
+                assertion("crm.accounts.id", "", &[("email", "email")], 1),
+                "needs a class",
+            ),
+            (
+                assertion("crm.accounts.id", "Account", &[], 1),
+                "asserts no properties",
+            ),
+            (
+                assertion("crm.accounts.id", "Account", &[("email", "")], 1),
+                "asserts no properties",
+            ),
+        ] {
+            let d = with_asserts(std::slice::from_ref(&a));
+            assert!(
+                d.warnings
+                    .iter()
+                    .any(|w| w.contains("assertion ignored") && w.contains(why)),
+                "{a:?}: {:?}",
+                d.warnings
+            );
+            assert!(
+                list(&d, "mappings")
+                    .iter()
+                    .all(|m| m.get("asserts").is_none()),
+                "{a:?}"
+            );
+        }
+        // one class twice on one container: the second is refused
+        let d = with_asserts(&[
+            assertion("crm.accounts.id", "Account", &[("email", "email")], 1),
+            assertion("crm.accounts.id", "Account", &[("email", "mail")], 2),
+        ]);
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "accounts")
+            .unwrap();
+        assert_eq!(m["asserts"].as_array().unwrap().len(), 1);
+        assert!(
+            d.warnings
+                .iter()
+                .any(|w| w.contains("assertion ignored") && w.contains("already")),
+            "{:?}",
+            d.warnings
+        );
     }
 
     #[test]
