@@ -122,6 +122,27 @@ one canonical name the lexicographically first wins). **Result rows keep each so
 — there is no projection operator to rename them. Edit a mapping's `property_map` in the Ontology panel to map
 `email_address` to `email`.
 
+## Identity keys and links
+
+The ontology says which rows are *the same row* and which rows *relate*, independent of the source's own
+keys (ClickHouse has none, and a view has no key at all). Both are declared on the ontology route and
+recorded in the published mapping.
+
+- **Identity key.** `identities: {"source.container": ["column", ...]}`. The preview proposes keys in
+  `identities` with evidence: what the source declares (primary key, unique constraint, a replacing
+  ClickHouse table's sorting key; a plain MergeTree "primary key" is only a sort prefix and is never
+  claimed) and, for the rest, `<thing>_id`, `id`, or the key of the thing a per-thing container is about.
+  An import then derives each object's identity from the key: a re-imported row **updates in place and
+  builds a history** (even for a view), rows that vanished from a complete import are retired (this also
+  retires the twins an earlier content-keyed import left), and a key that is **not unique** or has **no
+  value** is refused for that container, writing nothing, rather than silently collapsing rows.
+- **Links.** `relationships: [{"name": "for_account", "from": "olap.device_accounts.account_id",
+  "to": "crm.accounts.id"}]`. The preview proposes them in `links` (a column with another container's key
+  name, or `<thing>_id`). An import gives each row a relationship `name` to the **one** target row whose
+  key equals its column, across sources; the response reports `linked`, `dangling`, `ambiguous` and
+  `no_value` per link, and no edge is ever guessed. Import the target container first (or re-import the
+  referring one afterwards: only rows that gained an edge change). `TRAVERSE for_account` walks them.
+
 ## Importing
 
 `POST /api/v1/sources/import {source, containers}` copies chosen, already-discovered tables as objects typed by

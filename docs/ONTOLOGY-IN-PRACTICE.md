@@ -157,7 +157,16 @@ graph depend on them and they are the smallest changes.
   and `a_declared_identity_key_makes_a_re_import_update_in_place_and_prunes_what_vanished`. Found on the
   way: ClickHouse's "primary key" is only the sort prefix, so it is not an identity (fixed, tested).
   Not yet in Studio: the key is declared through the API until Phase D.
-- Phases B, C, D, E, F, G: open, in the order above.
+- **Phase B — done (2026-11-10).** `relationships [{name, from, to}]` on the ontology route
+  (`source.container.column` references, across sources), link suggestions from keys in the preview,
+  `MappingEntry.links` in the published ontology, and an import that gives each row a relationship to the
+  one target row whose key equals its column. Dangling, NULL and ambiguous references get no edge and are
+  reported. Proven live: `accounts_sharing_a_device_are_a_traversal_across_clickhouse_and_postgres`
+  (`TRAVERSE for_account` from device v7 reaches its five accounts; `for_device` from account a1 reaches
+  v1 and v7). Found on the way: a later publish ignored every existing mapping (fixed for keys and links);
+  **traversal and `SIMILAR TO` results carry only `koid`/`rel_type`/`depth`, not properties** (Phase E).
+  Not yet: `JOIN` resolving ontology classes, a Studio editor for links (Phase D).
+- Phases C, D, E, F, G: open, in the order above.
 
 ## 6. Decisions to confirm
 1. **Where identity lives:** a field of the ontology class (proposed) versus a separate mapping

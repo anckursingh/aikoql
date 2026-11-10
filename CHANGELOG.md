@@ -23,6 +23,15 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 - Ontology discovery from connector metadata proposes one class per container instead of one per source kind.
 - Robustness: seeded fuzz and adversarial suites (`scripts/fuzz-sources.sh`).
 
+### Ontology in practice: identity keys and links (docs/ONTOLOGY-IN-PRACTICE.md)
+- **Identity keys** (`identities` on `POST /api/v1/sources/ontology`, proposed in the preview with evidence):
+  a re-imported row updates in place and builds a version history even for a view; vanished rows are
+  retired; an ambiguous or missing key is refused instead of collapsing rows.
+- **Links** (`relationships`): "this column references that container's key", across sources, materialized
+  as relationships at import and walked with `TRAVERSE`; unresolved references are reported, never guessed.
+- A later publish now carries a key or link declared after the first publish (it silently ignored them).
+- ClickHouse's "primary key" is a sort prefix, not an identity.
+
 ### Studio: a keyboard-first, accessible, routable console (docs/STUDIO-ENHANCEMENTS.md)
 - **Navigation:** panels have addresses (`#/ontology`) — refresh, Back/Forward and pasted links work; grouped,
   always-labelled navigation (labels appear on keyboard focus on narrow screens), a skip link, a visible focus
