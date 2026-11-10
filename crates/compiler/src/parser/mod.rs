@@ -760,6 +760,7 @@ mod tests {
                     class: "Employee".into(),
                     property_map: std::collections::BTreeMap::new(),
                     identity: Vec::new(),
+                    links: Vec::new(),
                 },
                 MappingEntry {
                     source: "mongo".into(),
@@ -767,6 +768,7 @@ mod tests {
                     class: "Employee".into(),
                     property_map: std::collections::BTreeMap::new(),
                     identity: Vec::new(),
+                    links: Vec::new(),
                 },
             ],
         })
@@ -989,6 +991,7 @@ mod tests {
                     .map(|(a, b)| (a.to_string(), b.to_string()))
                     .collect(),
                 identity: Vec::new(),
+                links: Vec::new(),
             })
             .collect();
         OntologyRegistry::new(OntologyDef {

@@ -108,6 +108,26 @@ pub struct MappingEntry {
     /// updates in place instead of becoming a new object. Empty: the source's
     /// own primary key (or, failing that, the row content) decides.
     pub identity: Vec<String>,
+    /// Relationships this container's rows have to rows of another container,
+    /// declared by column values rather than by a source foreign key.
+    pub links: Vec<LinkDef>,
+}
+
+/// "`column` of this container references `target_column` of `target_type`":
+/// at import each row gets a relationship named `name` to the target row whose
+/// `target_column` equals its `column` (Phase B of docs/ONTOLOGY-IN-PRACTICE.md).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkDef {
+    /// The relationship type (what a TRAVERSE names).
+    pub name: String,
+    /// Physical column of this container holding the reference.
+    pub column: String,
+    /// Source kind of the target container (`"postgres"`, `"clickhouse"`, ...).
+    pub target_source: String,
+    /// Physical type name of the target container.
+    pub target_type: String,
+    /// Physical column of the target holding the referenced value (its key).
+    pub target_column: String,
 }
 
 /// A complete ontology definition — the typed in-memory representation of an
@@ -229,6 +249,26 @@ impl OntologyDef {
                     "identity".into(),
                     Value::List(me.identity.iter().cloned().map(Value::Text).collect()),
                 );
+            }
+            if !me.links.is_empty() {
+                let list = me
+                    .links
+                    .iter()
+                    .map(|l| {
+                        let mut lm = BTreeMap::new();
+                        for (k, v) in [
+                            ("name", &l.name),
+                            ("column", &l.column),
+                            ("target_source", &l.target_source),
+                            ("target_type", &l.target_type),
+                            ("target_column", &l.target_column),
+                        ] {
+                            lm.insert(k.to_string(), Value::Text(v.clone()));
+                        }
+                        Value::Map(lm)
+                    })
+                    .collect();
+                mm.insert("links".into(), Value::List(list));
             }
             map_list.push(Value::Map(mm));
         }
@@ -360,12 +400,31 @@ impl OntologyDef {
                             .collect(),
                         _ => Vec::new(),
                     };
+                    // a link with any field missing is dropped whole, never half-applied
+                    let links = match map_get(mm, "links") {
+                        Some(Value::List(items)) => items
+                            .iter()
+                            .filter_map(|it| {
+                                let Value::Map(lm) = it else { return None };
+                                let get = |k: &str| map_get_str(lm, k).map(str::to_string);
+                                Some(LinkDef {
+                                    name: get("name")?,
+                                    column: get("column")?,
+                                    target_source: get("target_source")?,
+                                    target_type: get("target_type")?,
+                                    target_column: get("target_column")?,
+                                })
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     mappings.push(MappingEntry {
                         source,
                         physical_type,
                         class,
                         property_map,
                         identity,
+                        links,
                     });
                 }
             }
@@ -798,6 +857,7 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
             class: type_name.clone(),
             property_map: BTreeMap::new(),
             identity: Vec::new(),
+            links: Vec::new(),
         });
     }
 
@@ -957,6 +1017,7 @@ mod tests {
                 class: "Employee".into(),
                 property_map: property_map.clone(),
                 identity: Vec::new(),
+                links: Vec::new(),
             },
             MappingEntry {
                 source: "mongodb".into(),
@@ -964,6 +1025,7 @@ mod tests {
                 class: "Employee".into(),
                 property_map: property_map.clone(),
                 identity: Vec::new(),
+                links: Vec::new(),
             },
         ];
 
@@ -1515,6 +1577,7 @@ mod tests {
                 class: "C".into(),
                 property_map: BTreeMap::new(),
                 identity: Vec::new(),
+                links: Vec::new(),
             })
             .collect();
         let r = OntologyRegistry::new(OntologyDef {
@@ -1574,6 +1637,7 @@ mod tests {
                     class: "C".into(),
                     property_map: BTreeMap::new(),
                     identity: Vec::new(),
+                    links: Vec::new(),
                 },
                 MappingEntry {
                     source: "mongo".into(),
@@ -1581,6 +1645,7 @@ mod tests {
                     class: "C".into(),
                     property_map: BTreeMap::new(),
                     identity: Vec::new(),
+                    links: Vec::new(),
                 },
             ],
         })
@@ -1990,6 +2055,51 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_link_round_trips_and_old_ontologies_still_load() {
+        let mut def = sample_ontology();
+        def.mappings[0].links = vec![LinkDef {
+            name: "for_account".into(),
+            column: "account_id".into(),
+            target_source: "postgres".into(),
+            target_type: "accounts".into(),
+            target_column: "id".into(),
+        }];
+        let back = OntologyDef::from_property_map(&def.to_property_map()).unwrap();
+        assert_eq!(back.mappings[0].links, def.mappings[0].links);
+        assert_eq!(back, def, "nothing else moved");
+        // none declared: nothing written, so stored ontologies are unchanged
+        let mut plain = sample_ontology();
+        plain.mappings[0].links = Vec::new();
+        let props = plain.to_property_map();
+        if let Some(Value::List(ml)) = props.get("mappings") {
+            for m in ml {
+                if let Value::Map(mm) = m {
+                    assert!(!mm.contains_key("links"));
+                }
+            }
+        }
+        assert!(OntologyDef::from_property_map(&props).unwrap().mappings[0]
+            .links
+            .is_empty());
+        // a half-written link (a field missing) is dropped, never half-applied
+        let mut junk = def.to_property_map();
+        if let Some(Value::List(ml)) = junk.get_mut("mappings") {
+            if let Value::Map(mm) = &mut ml[0] {
+                mm.insert(
+                    "links".into(),
+                    Value::List(vec![
+                        Value::Map([("name".to_string(), Value::Text("x".into()))].into()),
+                        Value::Int(3),
+                    ]),
+                );
+            }
+        }
+        assert!(OntologyDef::from_property_map(&junk).unwrap().mappings[0]
+            .links
+            .is_empty());
+    }
+
+    #[test]
     fn edge_property_def_without_type_defaults_to_text() {
         let def = sample_ontology();
         let mut props = def.to_property_map();
@@ -2031,6 +2141,7 @@ mod tests {
                 class: "E".into(),
                 property_map: BTreeMap::new(),
                 identity: Vec::new(),
+                links: Vec::new(),
             }],
         })
         .unwrap();
