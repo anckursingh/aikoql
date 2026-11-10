@@ -193,7 +193,12 @@ graph depend on them and they are the smallest changes.
   published. The Ontology panel shows each class with the keys of its sources, a mapping table with Key /
   Links / Authority columns, a **Reconcile sources** card (Resolve a class, see entities, claims, who
   disagrees, who wins, near matches left unmerged, Inspect a contradiction), and the raw definition editor
-  as a collapsed *Advanced* section. Real-Chrome e2e: 169/169. Not yet: editing a class (name, parent,
+  as a collapsed *Advanced* section. The preview reports what is already published (`published`), so a published key, link or authority shows
+  as published with no Remove (published items change under Ontology → Advanced), pending ones can be removed,
+  and a declaration the server refuses is not left listed as declared. Declarations are sent only for the
+  sources being previewed. Reviews of this slice found and fixed: object ids that ignored the tenant (the same
+  table imported into two tenants collided), a blank rank read as the highest authority, and a form wiped by
+  a re-preview. Real-Chrome e2e: 175/175. Not yet: editing a class (name, parent,
   properties) or a property map by hand, schema history (`AS_OF` over `aikoql:source-table`), the
   schema / sample / ingest mode choice, and the parked empty-source guidance.
 - Phases E, F, G: open, in the order above.

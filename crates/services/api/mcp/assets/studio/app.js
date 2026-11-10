@@ -1141,7 +1141,8 @@ async function loadOntologyPanel(fill) {
 // The classes some mapping asserts properties of: the ones that can be reconciled.
 function fillReconcileClasses(mappings) {
   const sel = document.getElementById('reconcile-class');
-  const names = [...new Set(mappings.flatMap(m => (m.asserts || []).map(a => a.class)))];
+  const list = Array.isArray(mappings) ? mappings : [];
+  const names = [...new Set(list.flatMap(m => (m && Array.isArray(m.asserts) ? m.asserts : []).map(a => a && a.class).filter(Boolean)))];
   sel.innerHTML = names.length ? names.map(n => '<option value="'+esc(n)+'">'+esc(n)+'</option>').join('') : '<option value="">(no authority declared yet)</option>';
   document.getElementById('reconcile-run').disabled = !names.length;
 }
@@ -1151,11 +1152,12 @@ async function resolveClass() {
   const out = document.getElementById('reconcile-result');
   if (!cls) { out.innerHTML = '<div class="empty-state">Declare authority first: Data Sources → Preview → Authority.</div>'; return; }
   const tenant = document.getElementById('ontology-tenant').value;
+  if (/["\\]/.test(cls)) { out.innerHTML = '<div class="error-text">Class names with quotes or backslashes cannot be reconciled from Studio.</div>'; return; }
   out.innerHTML = '<div class="loading">Resolving...</div>';
   try {
     const body = tenant ? {class: cls, tenant: tenant} : {class: cls};
     const r = (await apiPost('/api/v1/sources/resolve', body)).data;
-    let url = '/api/aikoql?query=' + encodeURIComponent('MATCH aikoql:contradiction WHERE class == "' + cls.replace(/[\\"]/g, '') + '" RETURN *');
+    let url = '/api/aikoql?query=' + encodeURIComponent('MATCH aikoql:contradiction WHERE class == "' + cls + '" RETURN *');
     if (tenant) url += '&tenant=' + encodeURIComponent(tenant);
     const found = await api(url);
     const list = found.results || [];
@@ -2028,11 +2030,17 @@ const sourcesState = { merges: [], names: [], fingerprints: null, activeVersion:
   identities: {}, links: [], assertions: [] };
 // What the owner has accepted in the preview: keys, links and assertions ride along with
 // every preview and publish, so the draft the reviewer sees is the draft that is saved.
-function declaredBody() {
+// Only declarations about the sources being previewed are sent: a leftover about another source
+// (or a published one) would be rejected or, worse, written into a draft it does not belong to.
+function declaredBody(names) {
+  const mine = ref => names.some(n => ref.startsWith(n + '.'));
   const b = {};
-  if (Object.keys(sourcesState.identities).length) b.identities = sourcesState.identities;
-  if (sourcesState.links.length) b.relationships = sourcesState.links;
-  if (sourcesState.assertions.length) b.assertions = sourcesState.assertions;
+  const ids = Object.fromEntries(Object.entries(sourcesState.identities).filter(([c]) => mine(c)));
+  const links = sourcesState.links.filter(l => mine(l.from) && mine(l.to));
+  const asserts = sourcesState.assertions.filter(a => mine(a.from));
+  if (Object.keys(ids).length) b.identities = ids;
+  if (links.length) b.relationships = links;
+  if (asserts.length) b.assertions = asserts;
   return b;
 }
 function pct(x) { return Math.round(Number(x) * 100) + '%'; }
@@ -2091,15 +2099,19 @@ function renderDeclared(p) {
   let h = '<h4 style="margin-top:14px;">Keys — which rows are the same row</h4>'
     + '<div style="font-size:11px;color:var(--muted);">A key makes a re-imported row update in place and keep a history. A key that is not unique or has gaps is refused at import, never guessed.</div>';
   const ids = p.identities || [];
+  const pub = p.published || {identities: {}, links: [], assertions: []};
   if (ids.length) {
     h += '<table style="font-size:12px;margin-top:6px;"><thead><tr><th>Container</th><th>Key</th><th>Confidence</th><th>Why</th><th></th></tr></thead><tbody>';
     ids.forEach(s => {
-      const on = (st.identities[s.container] || []).join(',') === (s.columns || []).join(',');
+      const on = JSON.stringify(st.identities[s.container] || []) === JSON.stringify(s.columns || []);
       h += '<tr><td class="mono" style="font-size:10px;">'+esc(s.container)+'</td><td class="mono">'+esc((s.columns || []).join(', '))+'</td>'
         + '<td><span class="badge badge-cyan">'+esc(pct(s.confidence))+'</span>';
       if (s.declared) h += ' <span class="badge badge-green">declared by the source</span>';
       h += '</td><td style="font-size:10px;color:var(--muted);">'+esc((s.evidence || []).join('; '))+'</td>'
-        + '<td><button class="btn btn-sec btn-sm" data-click="toggleIdentity" data-container="'+esc(s.container)+'" data-columns="'+esc((s.columns || []).join(','))+'">'+esc(on ? 'Remove' : 'Use as key')+'</button></td></tr>';
+        + '<td>';
+      if (s.published) h += '<span class="badge badge-green">published</span>';
+      else h += '<button class="btn btn-sec btn-sm" data-click="toggleIdentity" data-container="'+esc(s.container)+'" data-columns="'+esc(JSON.stringify(s.columns || []))+'">'+esc(on ? 'Remove' : 'Use as key')+'</button>';
+      h += '</td></tr>';
     });
     h += '</tbody></table>';
   } else {
@@ -2107,17 +2119,24 @@ function renderDeclared(p) {
   }
   h += '<h4 style="margin-top:14px;">Links — which rows relate</h4>'
     + '<div style="font-size:11px;color:var(--muted);">An accepted link becomes a relationship between the rows at import (walk it with TRAVERSE). A reference to no row, or to several, gets no edge.</div>';
+  pub.links.forEach(l => {
+    h += '<div style="font-size:12px;margin-top:4px;"><span class="badge badge-green">published</span> <b>'+esc(l.name)+'</b> <span class="mono" style="font-size:10px;">'+esc(l.from)+' → '+esc(l.to)+'</span></div>';
+  });
   st.links.forEach((l, i) => {
-    h += '<div style="font-size:12px;margin-top:4px;"><span class="badge badge-green">accepted</span> <b>'+esc(l.name)+'</b> <span class="mono" style="font-size:10px;">'+esc(l.from)+' → '+esc(l.to)+'</span> <button class="btn btn-sec btn-sm" data-click="removeLink" data-index="'+esc(i)+'">Remove</button></div>';
+    h += '<div style="font-size:12px;margin-top:4px;"><span class="badge badge-orange">pending</span> <b>'+esc(l.name)+'</b> <span class="mono" style="font-size:10px;">'+esc(l.from)+' → '+esc(l.to)+'</span> <button class="btn btn-sec btn-sm" data-click="removeLink" data-index="'+esc(i)+'">Remove</button></div>';
   });
   (p.links || []).forEach((l, i) => {
     h += '<div style="font-size:12px;margin-top:4px;"><b>'+esc(l.name)+'</b> <span class="mono" style="font-size:10px;">'+esc(l.from)+' → '+esc(l.to)+'</span> <span class="badge badge-cyan">'+esc(pct(l.confidence))+'</span> <span style="font-size:10px;color:var(--muted);">'+esc((l.evidence || []).join('; '))+'</span> <button class="btn btn-sec btn-sm" data-click="acceptLink" data-index="'+esc(i)+'">Accept</button></div>';
   });
-  if (!st.links.length && !(p.links || []).length) h += '<div style="font-size:11px;margin-top:6px;">No link could be proposed.</div>';
+  if (!st.links.length && !pub.links.length && !(p.links || []).length) h += '<div style="font-size:11px;margin-top:6px;">No link could be proposed.</div>';
   h += '<h4 style="margin-top:14px;">Authority — who is believed when sources disagree</h4>'
     + '<div style="font-size:11px;color:var(--muted);">Rows of a container become claims about one thing (for example an Account) named by its key column. The <b>lowest rank wins</b>; equal ranks leave the disagreement open.</div>';
+  pub.assertions.forEach(a => {
+    h += '<div style="font-size:12px;margin-top:4px;"><span class="badge badge-green">published</span> <span class="mono" style="font-size:10px;">'+esc(a.from)+'</span> asserts <b>'+esc(a.class)+'</b> '+esc(Object.entries(a.properties || {}).map(([k, v]) => k + ' → ' + v).join(', '))+' <span class="badge badge-purple">rank '+esc(a.rank)+'</span></div>';
+  });
+  if (pub.assertions.length || pub.links.length || Object.keys(pub.identities).length) h += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Published items cannot be removed here; change or remove them under Ontology → Advanced.</div>';
   st.assertions.forEach((a, i) => {
-    h += '<div style="font-size:12px;margin-top:4px;"><span class="badge badge-green">declared</span> <span class="mono" style="font-size:10px;">'+esc(a.from)+'</span> asserts <b>'+esc(a.class)+'</b> '+esc(Object.entries(a.properties).map(([k, v]) => k + ' → ' + v).join(', '))+' <span class="badge badge-purple">rank '+esc(a.rank)+'</span> <button class="btn btn-sec btn-sm" data-click="removeAssertion" data-index="'+esc(i)+'">Remove</button></div>';
+    h += '<div style="font-size:12px;margin-top:4px;"><span class="badge badge-orange">pending</span> <span class="mono" style="font-size:10px;">'+esc(a.from)+'</span> asserts <b>'+esc(a.class)+'</b> '+esc(Object.entries(a.properties).map(([k, v]) => k + ' → ' + v).join(', '))+' <span class="badge badge-purple">rank '+esc(a.rank)+'</span> <button class="btn btn-sec btn-sm" data-click="removeAssertion" data-index="'+esc(i)+'">Remove</button></div>';
   });
   h += '<div style="margin-top:6px;font-size:11px;">'
     + '<input id="as-from" placeholder="source.container.keycolumn" aria-label="Key column of the claim" size="30"> '
@@ -2128,8 +2147,8 @@ function renderDeclared(p) {
   return h;
 }
 function toggleIdentity(el) {
-  const c = el.dataset.container, cols = el.dataset.columns.split(',');
-  if ((sourcesState.identities[c] || []).join(',') === cols.join(',')) delete sourcesState.identities[c];
+  const c = el.dataset.container, cols = JSON.parse(el.dataset.columns);
+  if (JSON.stringify(sourcesState.identities[c] || []) === JSON.stringify(cols)) delete sourcesState.identities[c];
   else sourcesState.identities[c] = cols;
   return previewSources();
 }
@@ -2147,13 +2166,18 @@ function addAssertion() {
     const [a, b] = part.split('=').map(x => (x || '').trim());
     if (a && b) props[a] = b;
   }
-  const rank = Number(v('as-rank'));
+  const rank = v('as-rank') === '' ? NaN : Number(v('as-rank'));
   if (!v('as-from') || !v('as-class') || !Object.keys(props).length || !Number.isInteger(rank) || rank < 0) {
     sourcesMsg('An assertion needs a key column (source.container.column), a class, at least one column=property pair, and a whole-number rank.');
     return;
   }
   sourcesState.assertions.push({from: v('as-from'), class: v('as-class'), properties: props, rank: rank});
-  return previewSources();
+  return previewSources().then(() => {
+    // the server ignores what it cannot honour: do not keep showing it as declared
+    const why = ((sourcesState.lastPreview || {}).warnings || []).find(w => /assertion ignored/.test(w));
+    if (why) sourcesState.assertions.pop();
+    if (why) return previewSources().then(() => { sourcesMsg(why); });
+  });
 }
 function removeAssertion(index) { sourcesState.assertions.splice(index, 1); return previewSources(); }
 function renderSourcesPreview(p) {
@@ -2180,10 +2204,15 @@ async function previewSources() {
   const names = [...document.querySelectorAll('.src-pick:checked')].map(e => e.dataset.name);
   if (!names.length) { sourcesMsg('Check at least one source first.'); return; }
   const out = document.getElementById('sources-preview');
+  // a re-preview redraws the section: keep what the owner was in the middle of typing or picking
+  const typed = Object.fromEntries(['as-from', 'as-class', 'as-props', 'as-rank'].map(id => [id, (document.getElementById(id) || {}).value]));
+  const picked = [...document.querySelectorAll('.cls-pick:checked')].map(e => e.dataset.class);
   try {
-    const p = (await apiPost('/api/v1/sources/ontology', sourcesBody(Object.assign({sources: names, merges: sourcesState.merges, preview: true}, declaredBody())))).data;
+    const p = (await apiPost('/api/v1/sources/ontology', sourcesBody(Object.assign({sources: names, merges: sourcesState.merges, preview: true}, declaredBody(names))))).data;
     Object.assign(sourcesState, {names: names, fingerprints: p.fingerprints, activeVersion: p.active_version, suggestions: p.suggestions || [], lastPreview: p});
     out.innerHTML = renderSourcesPreview(p);
+    Object.entries(typed).forEach(([id, v]) => { const e = document.getElementById(id); if (e && v !== undefined && v !== '' && id !== 'as-rank') e.value = v; });
+    document.querySelectorAll('.cls-pick').forEach(e => { if (picked.includes(e.dataset.class)) e.checked = true; });
     sourcesMsg('Preview ready — nothing has been written.');
   } catch (e) {
     out.innerHTML = '';
@@ -2204,13 +2233,15 @@ function applySuggestion(index) {
 }
 async function applySourceOntology() {
   if (!sourcesState.fingerprints) { sourcesMsg('Preview first.'); return; }
-  const body = sourcesBody(Object.assign({sources: sourcesState.names, merges: sourcesState.merges, preview: false, fingerprints: sourcesState.fingerprints}, declaredBody()));
+  const body = sourcesBody(Object.assign({sources: sourcesState.names, merges: sourcesState.merges, preview: false, fingerprints: sourcesState.fingerprints}, declaredBody(sourcesState.names)));
   if (sourcesState.activeVersion !== null && sourcesState.activeVersion !== undefined) body.expected_version = sourcesState.activeVersion;
   try {
     const r = (await apiPost('/api/v1/sources/ontology', body)).data;
     sourcesMsg(r.saved ? 'Published — ontology version ' + r.version + '.' : 'Nothing to change — the ontology already matches.');
     sourcesState.merges = [];
     sourcesState.fingerprints = null;
+    // what was just published is now the ontology's, not pending: the next preview reports it
+    if (r.saved) { sourcesState.identities = {}; sourcesState.links = []; sourcesState.assertions = []; }
     if (r.saved && document.getElementById('panel-ontology')) loadOntologyPanel(true);
   } catch (e) {
     sourcesMsg(/schema changed/.test(e.message) ? 'The schema changed since the preview — preview again.' : e.message);

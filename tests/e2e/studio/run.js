@@ -111,7 +111,7 @@ async function main() {
   const mkdb = (file, sql) => execFileSync('python3', ['-c', 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.executescript(sys.argv[2]); c.commit(); c.close()', file, sql]);
   const crmDb = path.join(dir, 'crm.sqlite'), shopDb = path.join(dir, 'shop.sqlite'), weirdDb = path.join(dir, 'weird.sqlite');
   mkdb(crmDb, "CREATE TABLE customers (id INTEGER PRIMARY KEY, email TEXT NOT NULL); CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES customers(id), total REAL); INSERT INTO customers VALUES (1, 'a@x.test');");
-  mkdb(shopDb, "CREATE TABLE clients (id INTEGER PRIMARY KEY, email_address TEXT NOT NULL); INSERT INTO clients VALUES (7, 'b@y.test');");
+  mkdb(shopDb, "CREATE TABLE clients (id INTEGER PRIMARY KEY, email_address TEXT NOT NULL); INSERT INTO clients VALUES (7, 'b@y.test'), (1, 'changed@y.test');");
   mkdb(weirdDb, 'CREATE TABLE "<img src=x onerror=window.__pwned=1>" (id INTEGER PRIMARY KEY, "<b>col</b>" TEXT);');
   const sourcesToml = ['crm', 'shop', 'weird'].map(n => `[[sources]]\nname = "${n}"\nkind = "sqlite"\nurl_env = "E2E_${n.toUpperCase()}_DB"\n`).join('\n');
   const chatState = { companyKoid: '' };
@@ -281,9 +281,14 @@ async function main() {
     const withAuth = await page.innerText('#sources-preview');
     ok('declared authority is listed with its rank', /rank 10/.test(withAuth) && /rank 20/.test(withAuth) && await page.locator('[data-click="removeAssertion"]').count() === 2, withAuth.slice(-300));
     await addAssertion('crm.customers.nope', 'Customer', 'email=email', '5');
-    ok('an assertion naming a missing column is refused with the reason, not published', /assertion ignored/.test(await page.innerText('#sources-preview')) || /no column nope/.test(await page.innerText('#sources-preview')), (await page.innerText('#sources-preview')).slice(-200));
+    ok('an assertion naming a missing column is refused with the reason, not published', /assertion ignored/.test(await page.innerText('#sources-msg')) && /no column nope/.test(await page.innerText('#sources-msg')), await page.innerText('#sources-msg'));
+    ok('a refused assertion is not left listed as declared', await page.locator('[data-click="removeAssertion"]').count() === 2);
+    await addAssertion('crm.customers.id', 'Temp', 'email=email', '50');
+    ok('a third assertion is listed', await page.locator('[data-click="removeAssertion"]').count() === 3);
     await page.locator('[data-click="removeAssertion"]').last().click({ timeout: 2000 }).catch(() => {}); await page.waitForTimeout(500);
-    ok('a declared assertion can be removed', await page.locator('[data-click="removeAssertion"]').count() === 2);
+    ok('a pending assertion can be removed', await page.locator('[data-click="removeAssertion"]').count() === 2);
+    await addAssertion('crm.customers.id', 'Customer', 'email=email', '');
+    ok('a blank rank is refused, not read as the highest authority (0)', /whole-number rank/.test(await page.innerText('#sources-msg')) && await page.locator('[data-click="removeAssertion"]').count() === 2, await page.innerText('#sources-msg'));
     await tryClick('[data-click="applySourceOntology"]');
     ok('Publish saves the ontology', /Published/.test(await page.innerText('#sources-msg').catch(() => '')), await page.innerText('#sources-msg').catch(() => ''));
     const onto = ((await (await fetch(BASE + '/api/v1/ontology', { headers: H })).json()).data || {}).properties || {};
@@ -304,7 +309,19 @@ async function main() {
     ok('Resolve is offered for the class that has authority', (await page.locator('#reconcile-class option').allInnerTexts()).includes('Customer') && await page.locator('#reconcile-run').isEnabled());
     await tryClick('#reconcile-run'); await page.waitForTimeout(800);
     const rec = await page.innerText('#reconcile-result').catch(() => '');
-    ok('Resolve reports entities and claims, and says when the sources agree', /2 entities from 2 claims/.test(rec) && /agree about every property/.test(rec), rec.slice(0, 300));
+    ok('Resolve reports entities and claims', /2 entities from 3 claims/.test(rec) && /1 disagreements settled by authority, 0 open/.test(rec), rec.slice(0, 300));
+    const row = page.locator('#reconcile-result tbody tr');
+    ok('the disagreement is a row naming both values, the winner and the rule', await row.count() === 1 && /a@x\.test/.test(await row.innerText()) && /changed@y\.test/.test(await row.innerText()) && /resolved/.test(await row.innerText()) && /sqlite\.customers/.test(await row.innerText()) && /rank/.test(await row.innerText()), await row.first().innerText().catch(() => 'no row'));
+    await tryClick('#reconcile-result [data-click="openInInspector"]'); await page.waitForTimeout(800);
+    ok('Inspect opens the contradiction in the Inspector', /aikoql:contradiction/.test(await page.innerText('#inspector-detail').catch(() => '')) || /KOID/.test(await page.innerText('#inspector-detail').catch(() => '')), (await page.innerText('#inspector-detail').catch(() => '')).slice(0, 200));
+    ok('a reload of the preview reports published keys and authority as published, with no Remove', await (async () => {
+      await tryClick('button[data-panel="sources"]');
+      await page.locator('.src-pick[data-name="crm"]').check({ timeout: 2000 }).catch(() => {});
+      await page.locator('.src-pick[data-name="shop"]').check({ timeout: 2000 }).catch(() => {});
+      await tryClick('[data-click="previewSourceOntology"]');
+      const t = await page.innerText('#sources-preview');
+      return /published/.test(t) && /rank 10/.test(t) && await page.locator('[data-click="removeAssertion"]').count() === 0 && await page.locator('[data-click="toggleIdentity"][data-container="crm.customers"]').count() === 0;
+    })());
     await tryClick('button[data-panel="sources"]');
     ok('hostile table and column names are rendered inertly',
       await page.evaluate(() => document.querySelectorAll('#panel-sources [onerror], #panel-sources img').length === 0 && !window.__pwned) && /<img src=x onerror/.test(await page.textContent('#sources-list').catch(() => '')));

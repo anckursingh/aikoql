@@ -1218,20 +1218,21 @@ mod tests {
         let page = page_for_tests();
         // keys, links and authority ride along with BOTH the preview and the publish,
         // so the draft the reviewer sees is the draft that is saved
-        let body_uses = page.matches("declaredBody()").count();
+        let body_uses = page.matches("declaredBody(").count();
         assert!(
-            body_uses >= 2,
-            "preview and publish must both send the accepted declarations"
+            body_uses >= 3,
+            "the definition, the preview and the publish must all use declaredBody"
         );
         for field in ["identities", "relationships", "assertions"] {
-            let d = page.find("function declaredBody()").expect("declaredBody");
-            assert!(page[d..d + 500].contains(field), "{field}");
+            let d = page.find("function declaredBody(").expect("declaredBody");
+            let window: String = page[d..].chars().take(700).collect();
+            assert!(window.contains(field), "{field}");
         }
         // reconciling goes through the one route and lists contradictions by class
         let r = page
             .find("async function resolveClass()")
             .expect("resolveClass");
-        let body = &page[r..r + 1400];
+        let body: String = page[r..].chars().take(1400).collect();
         assert!(body.contains("/api/v1/sources/resolve"), "{body}");
         assert!(body.contains("aikoql:contradiction"), "{body}");
         // the raw definition editor is a collapsed, advanced section
