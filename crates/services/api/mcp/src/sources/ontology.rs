@@ -610,6 +610,44 @@ mod tests {
         m.definition["mappings"][0]["identity"].clone()
     }
 
+    // ---- links published after the first publish ----
+
+    fn lk(name: &str, col: &str) -> J {
+        json!({"name": name, "column": col, "target_source": "postgres", "target_type": "accounts", "target_column": "id"})
+    }
+
+    fn with_links(mut o: J, links: Vec<J>) -> J {
+        o["mappings"][0]["links"] = J::Array(links);
+        o
+    }
+
+    fn links_of(m: &Merged) -> Vec<J> {
+        m.definition["mappings"][0]["links"].as_array().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn links_declared_later_are_added_and_a_humans_are_kept() {
+        // added to a mapping that had none, and alongside existing ones
+        let plain = onto("Discovered from s.t", None);
+        let m = merge(Some(&plain), &with_links(draft_with(None), vec![lk("for_account", "account_id")]));
+        assert_eq!(links_of(&m), vec![lk("for_account", "account_id")]);
+        let have = with_links(onto("Discovered from s.t", None), vec![lk("for_account", "account_id")]);
+        let m = merge(Some(&have), &with_links(draft_with(None), vec![lk("for_owner", "owner_id")]));
+        assert_eq!(links_of(&m).len(), 2, "a new link name is added, the old one stays");
+        // a draft that says nothing about links never removes any
+        assert_eq!(links_of(&merge(Some(&have), &draft_with(None))), vec![lk("for_account", "account_id")]);
+        // the same link again is not a change
+        let same = merge(Some(&have), &with_links(draft_with(None), vec![lk("for_account", "account_id")]));
+        assert_eq!(same.definition, have);
+        // the same name pointing elsewhere: corrected on discovery's class, kept (with a warning) on a human's
+        let ours = merge(Some(&have), &with_links(draft_with(None), vec![lk("for_account", "acct")]));
+        assert_eq!(links_of(&ours), vec![lk("for_account", "acct")]);
+        let theirs_base = with_links(onto("our own T", None), vec![lk("for_account", "account_id")]);
+        let theirs = merge(Some(&theirs_base), &with_links(draft_with(None), vec![lk("for_account", "acct")]));
+        assert_eq!(links_of(&theirs), vec![lk("for_account", "account_id")]);
+        assert!(theirs.warnings.iter().any(|w| w.contains("link") && w.contains("kept")), "{:?}", theirs.warnings);
+    }
+
     #[test]
     fn a_key_declared_later_fills_a_mapping_that_had_none() {
         let existing = onto("Discovered from s.t", None);

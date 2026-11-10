@@ -848,6 +848,91 @@ mod tests {
         });
     }
 
+    // ---- links: relationships declared by column values (Phase B) ----
+
+    fn publish_with_link(k: &Kernel) {
+        let args = json!({"sources": ["crm"], "preview": true, "relationships":
+            [{"name": "placed_by", "from": "crm.orders.customer_ref", "to": "crm.customers.id"}]});
+        let p = crate::sources::ontology::tool_sources_ontology(k, &args, "x").unwrap();
+        let mut apply = args.clone();
+        apply["preview"] = json!(false);
+        apply["fingerprints"] = p["fingerprints"].clone();
+        let r = crate::sources::ontology::tool_sources_ontology(k, &apply, "x").unwrap();
+        assert_eq!(r["saved"], true, "{r}");
+        assert!(r["warnings"].to_string().find("link ignored").is_none(), "{r}");
+    }
+
+    fn edges_of(k: &Kernel, order_id: i64) -> Vec<(String, aikoql_kernel::KOID)> {
+        live(k, "orders", None)
+            .into_iter()
+            .find(|ko| ko.properties.get("id") == Some(&Value::Int(order_id)))
+            .map(|ko| ko.relationships.iter().map(|r| (r.rel_type.clone(), r.target)).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_declared_link_becomes_a_relationship_to_the_row_it_names() {
+        let (k, db) = (kernel(), tmp_db("link"));
+        // no foreign key anywhere: the reference is only a column of text
+        make(
+            &db,
+            "CREATE TABLE customers (id TEXT PRIMARY KEY, name TEXT);
+             CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_ref TEXT);
+             INSERT INTO customers VALUES ('c1', 'Ann'), ('c2', 'Bob');
+             INSERT INTO orders VALUES (1, 'c1'), (2, 'c2'), (3, 'nobody'), (4, NULL);",
+        );
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            publish_with_link(&k);
+            // targets first: the edges exist at once
+            import(&k, &["customers"]).unwrap();
+            let r = import(&k, &["orders"]).unwrap();
+            let stats = &r["links"]["orders"]["placed_by"];
+            assert_eq!((stats["linked"].clone(), stats["dangling"].clone(), stats["no_value"].clone()), (json!(2), json!(1), json!(1)), "{r}");
+            let ann = live(&k, "customers", None).into_iter().find(|c| c.properties.get("id") == Some(&Value::Text("c1".into()))).unwrap();
+            assert_eq!(edges_of(&k, 1), vec![("placed_by".to_string(), ann.koid)], "order 1 points at Ann");
+            assert!(edges_of(&k, 3).is_empty(), "a reference to a row that does not exist is not an edge");
+            assert!(edges_of(&k, 4).is_empty(), "a NULL reference is not an edge");
+
+            // the missing customer arrives later: re-importing the orders links the dangling one
+            make(&db, "INSERT INTO customers VALUES ('nobody', 'Late');");
+            import(&k, &["customers"]).unwrap();
+            let r = import(&k, &["orders"]).unwrap();
+            assert_eq!(r["imported"]["orders"], 1, "only the order that gained an edge changed: {r}");
+            assert_eq!(edges_of(&k, 3).len(), 1);
+            assert_eq!(edges_of(&k, 1).len(), 1, "the others keep theirs");
+        });
+    }
+
+    #[test]
+    fn an_ambiguous_target_is_never_guessed() {
+        let (k, db) = (kernel(), tmp_db("linkamb"));
+        // two customers share the code a row refers to: no honest edge exists
+        make(
+            &db,
+            "CREATE TABLE customers (id INTEGER PRIMARY KEY, code TEXT);
+             CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_ref TEXT);
+             INSERT INTO customers VALUES (1, 'X'), (2, 'X'), (3, 'Y');
+             INSERT INTO orders VALUES (1, 'X'), (2, 'Y');",
+        );
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            let args = json!({"sources": ["crm"], "preview": true, "relationships":
+                [{"name": "placed_by", "from": "crm.orders.customer_ref", "to": "crm.customers.code"}]});
+            let p = crate::sources::ontology::tool_sources_ontology(&k, &args, "x").unwrap();
+            let mut apply = args.clone();
+            apply["preview"] = json!(false);
+            apply["fingerprints"] = p["fingerprints"].clone();
+            crate::sources::ontology::tool_sources_ontology(&k, &apply, "x").unwrap();
+            import(&k, &["customers"]).unwrap();
+            let r = import(&k, &["orders"]).unwrap();
+            let stats = &r["links"]["orders"]["placed_by"];
+            assert_eq!((stats["linked"].clone(), stats["ambiguous"].clone()), (json!(1), json!(1)), "{r}");
+            assert!(edges_of(&k, 1).is_empty(), "code X names two customers: no edge");
+            assert_eq!(edges_of(&k, 2).len(), 1);
+        });
+    }
+
     #[test]
     fn import_never_writes_to_the_source_file() {
         let (k, db) = (kernel(), items_db("imp7", 3));
