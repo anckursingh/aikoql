@@ -249,7 +249,16 @@ fn main() {
     };
 
     // AG-50: fmt (plain/json) + the OTLP layer when AIKOQL_OTEL_ENDPOINT is set.
-    crate::observability::init_tracing(&cfg.log_level, cfg.log_format == "json", use_ansi());
+    let log_file = crate::observability::log_file_path(cfg.log_file.as_deref(), &cfg.db_path);
+    crate::observability::init_tracing(
+        &cfg.log_level,
+        cfg.log_format == "json",
+        use_ansi(),
+        log_file.as_deref(),
+    );
+    if let Some(path) = &log_file {
+        info!(log_file = %path, "logging to a file as well as stderr");
+    }
     if let Some(path) = &cfg.config_path {
         info!(config = %path, "configuration loaded");
     }

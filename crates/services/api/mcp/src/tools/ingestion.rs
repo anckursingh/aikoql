@@ -602,13 +602,23 @@ pub(crate) fn extract_for_ingest_with(
                 Some(stats) => stats.status(),
                 None => "extracted",
             };
+            // the reasons go to the server log and the response, not only to a stderr nobody keeps
+            if let Some(s) = &doc.ocr_stats {
+                for why in &s.failures {
+                    tracing::warn!("OCR failed for {filename}, {why}");
+                }
+            }
             let ocr_stats = doc.ocr_stats.as_ref().map(|s| {
-                json!({
+                let mut v = json!({
                     "pages_ocr_attempted": s.pages_ocr_attempted,
                     "pages_ocr_succeeded": s.pages_ocr_succeeded,
                     "pages_ocr_failed": s.pages_ocr_failed,
                     "average_confidence": s.average_confidence,
-                })
+                });
+                if !s.failures.is_empty() {
+                    v["failures"] = json!(s.failures);
+                }
+                v
             });
             Extracted {
                 pages: doc.page_count as i64,
@@ -702,7 +712,63 @@ pub(crate) fn tool_document_status(k: &Kernel, args: &J, db_path: &str) -> Resul
     Ok(out)
 }
 
+/// Items kept per list in a compile result unless the caller asks for another `limit`.
+const COMPILE_LIST_DEFAULT: usize = 500;
+
+/// The request's `limit` (1..=1_000_000, default 500).
+fn compile_limit(args: &J) -> Result<usize, String> {
+    match args.get("limit") {
+        None | Some(J::Null) => Ok(COMPILE_LIST_DEFAULT),
+        Some(v) => v
+            .as_u64()
+            .filter(|n| (1..=1_000_000).contains(n))
+            .map(|n| n as usize)
+            .ok_or_else(|| {
+                "invalid request: limit must be a whole number from 1 to 1000000".into()
+            }),
+    }
+}
+
+/// A 1,446-page book compiles to 83 MB (50,878 plan actions, 48,578 relations, ...): more than a
+/// browser or a client can hold. Every list is cut to its first `limit` items and `truncated`
+/// records exactly what was cut, so nothing is dropped silently. The compiler's own counts
+/// (`commit_plan.stats`, `total_chars`, ...) are not touched.
+fn bound_compile_result(result: &mut J, limit: usize) {
+    const LISTS: &[&[&str]] = &[
+        &["ir", "entities"],
+        &["ir", "relations"],
+        &["ir", "facts"],
+        &["ir", "events"],
+        &["commit_plan", "actions"],
+        &["embedded_chunks"],
+        &["fragments"],
+        &["evidence_trail", "nodes"],
+        &["ontology", "classes"],
+        &["ontology", "properties"],
+        &["ontology", "relationships"],
+        &["resolution", "matched"],
+        &["resolution", "ambiguous"],
+        &["resolution", "unmatched"],
+        &["secret_findings"],
+    ];
+    let mut cut = serde_json::Map::new();
+    for path in LISTS {
+        let pointer = format!("/{}", path.join("/"));
+        if let Some(list) = result.pointer_mut(&pointer).and_then(J::as_array_mut) {
+            if list.len() > limit {
+                let total = list.len();
+                list.truncate(limit);
+                cut.insert(path.join("."), json!({"shown": limit, "total": total}));
+            }
+        }
+    }
+    if !cut.is_empty() {
+        result["truncated"] = J::Object(cut);
+    }
+}
+
 pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let limit = compile_limit(args)?;
     let hex = args
         .get("koid")
         .and_then(|v| v.as_str())
@@ -853,8 +919,72 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
         obj.insert("koid".into(), serde_json::Value::String(hex.to_string()));
         obj.insert("mime_type".into(), serde_json::Value::String(mime_type));
     }
+    bound_compile_result(&mut result, limit);
 
     Ok(result)
 }
 
 // ---- Context Compiler (MRFC-0070 Phase A6) ---------------------------
+
+#[cfg(test)]
+mod compile_bound_tests {
+    use super::*;
+
+    fn big(n: usize) -> J {
+        let list = |k: &str| (0..n).map(|i| json!({k: i})).collect::<Vec<_>>();
+        json!({
+            "ir": {"entities": list("e"), "relations": list("r"), "facts": list("f"), "temporal": {"x": 1}},
+            "commit_plan": {"actions": list("a"), "stats": {"total_actions": n}},
+            "embedded_chunks": list("c"), "fragments": list("g"),
+            "evidence_trail": {"nodes": list("n")},
+            "ontology": {"classes": list("k")},
+            "resolution": {"matched": list("m"), "stats": {"total_entities": n}},
+            "secret_findings": [], "total_chars": 7,
+        })
+    }
+
+    #[test]
+    fn a_compile_result_is_bounded_and_says_exactly_what_was_cut() {
+        let mut r = big(1200);
+        bound_compile_result(&mut r, 500);
+        assert_eq!(r["ir"]["entities"].as_array().unwrap().len(), 500);
+        assert_eq!(r["commit_plan"]["actions"].as_array().unwrap().len(), 500);
+        assert_eq!(r["embedded_chunks"].as_array().unwrap().len(), 500);
+        assert_eq!(r["evidence_trail"]["nodes"].as_array().unwrap().len(), 500);
+        // the first items are kept, in order
+        assert_eq!(r["ir"]["entities"][0]["e"], 0);
+        assert_eq!(r["ir"]["entities"][499]["e"], 499);
+        // exact totals, so a client can say "showing 500 of 1200"
+        assert_eq!(
+            r["truncated"]["ir.entities"],
+            json!({"shown": 500, "total": 1200})
+        );
+        assert_eq!(r["truncated"]["commit_plan.actions"]["total"], 1200);
+        // counts the compiler computed are not touched
+        assert_eq!(r["commit_plan"]["stats"]["total_actions"], 1200);
+        assert_eq!(r["total_chars"], 7);
+    }
+
+    #[test]
+    fn a_small_result_is_returned_whole_with_no_truncation_note() {
+        let mut r = big(10);
+        let before = r.clone();
+        bound_compile_result(&mut r, 500);
+        assert_eq!(r, before, "nothing to cut: nothing changes");
+        assert!(r.get("truncated").is_none());
+    }
+
+    #[test]
+    fn the_limit_argument_is_validated() {
+        assert_eq!(compile_limit(&json!({})).unwrap(), 500);
+        assert_eq!(compile_limit(&json!({"limit": 25})).unwrap(), 25);
+        for bad in [
+            json!({"limit": 0}),
+            json!({"limit": -1}),
+            json!({"limit": "x"}),
+            json!({"limit": 1000001}),
+        ] {
+            assert!(compile_limit(&bad).is_err(), "{bad}");
+        }
+    }
+}

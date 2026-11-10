@@ -1878,6 +1878,8 @@ async function ingestDocument() {
     const note = ocrNotice(d.status, d.char_count);
     let html = '<span style="color:var(--green);">✓ Ingested: '+esc(d.koid)+' ('+esc(d.status)+', '+esc(sz)+', SHA-256: '+esc(d.sha256.substring(0,16))+'...)</span>';
     if (note) html += '<div style="margin-top:4px;color:var(--'+esc(d.char_count > 0 ? 'muted' : 'orange')+');">'+esc(note)+'</div>';
+    // why OCR failed, from the server (the first few pages)
+    ((d.ocr_stats && d.ocr_stats.failures) || []).forEach(f => { html += '<div class="mono" style="margin-top:2px;font-size:11px;color:var(--muted);">'+esc(f)+'</div>'; });
     if (d.error) html += '<div style="margin-top:4px;color:var(--red);">'+esc(d.error)+'</div>';
     msg.innerHTML = html;
     setTimeout(() => loadDocuments(), 500);
@@ -1912,6 +1914,13 @@ async function compileDocument(koid) {
     let html = '<div class="card" style="margin-bottom:12px;"><h4>🔬 Compilation Results</h4>';
     if (r.extraction_status && !r.total_chars) {
       html += '<div style="margin-bottom:8px;color:var(--orange);">'+esc(ocrNotice(r.extraction_status, 0) || 'No text was extracted from this document.')+'</div>';
+    }
+
+    if (r.truncated) {
+      // a large document: the server bounds every list, and the counts below are of what is shown
+      html += '<div style="margin-bottom:8px;color:var(--orange);font-size:12px;">Large result: showing the first items of each list only — '
+        + esc(Object.entries(r.truncated).map(([k, v]) => k + ' ' + v.shown + ' of ' + v.total).join(', '))
+        + '. The full result is available from the API with a higher <code>limit</code>.</div>';
     }
 
     // ── Stats ──

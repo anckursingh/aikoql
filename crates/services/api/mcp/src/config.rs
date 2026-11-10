@@ -106,6 +106,9 @@ pub(crate) struct RuntimeConfig {
     pub model_auto_install: bool,
     pub log_level: String,
     pub log_format: String,
+    /// [logging].file / AIKOQL_LOG_FILE: where the persistent server log goes. None = beside the
+    /// database (`<db>.server.log`); "off" or "" = stderr only.
+    pub log_file: Option<String>,
     /// [rate_limit] — enforced as a 60s window: per connection on MCP
     /// tools/call (TCP + stdio) and per token on the REST surface.
     pub rate_enabled: bool,
@@ -250,6 +253,7 @@ struct TomlEmbedding {
 struct TomlLogging {
     level: Option<String>,
     format: Option<String>,
+    file: Option<String>,
 }
 
 const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
@@ -379,6 +383,7 @@ pub(crate) fn load(
         model_auto_install: false,
         log_level: "info".into(),
         log_format: "text".into(),
+        log_file: None,
         rate_enabled: true,
         // T-45: 120 denied the tail of a legitimate batch phase (~130
         // tool calls per dataset slice at the device eval's 115/min
@@ -510,10 +515,16 @@ pub(crate) fn load(
                 }
                 cfg.log_format = v;
             }
+            if let Some(v) = l.file {
+                cfg.log_file = Some(v);
+            }
         }
     }
 
     // Layer 3: env.
+    if let Ok(v) = std::env::var("AIKOQL_LOG_FILE") {
+        cfg.log_file = Some(v);
+    }
     if let Some(v) = env_opt("AIKOQL_DB") {
         cfg.db_path = v;
     }
@@ -1264,6 +1275,42 @@ employee = ["salary", "ssn"]
         .unwrap();
         assert!(cfg.encryption.enabled);
         assert_eq!(cfg.encryption.passphrase.as_deref(), Some("from-env"));
+    }
+
+    #[test]
+    fn the_log_file_is_configurable_and_defaults_to_beside_the_database() {
+        let plain = tmp_toml("[logging]\nlevel = \"info\"\n");
+        assert_eq!(
+            load_t(&argv(&["aikoql-mcp", "--config", &plain]), None, None)
+                .unwrap()
+                .log_file,
+            None
+        );
+        let set = tmp_toml("[logging]\nfile = \"/var/log/aikoql/server.log\"\n");
+        assert_eq!(
+            load_t(&argv(&["aikoql-mcp", "--config", &set]), None, None)
+                .unwrap()
+                .log_file
+                .as_deref(),
+            Some("/var/log/aikoql/server.log")
+        );
+        let off = tmp_toml("[logging]\nfile = \"off\"\n");
+        assert_eq!(
+            load_t(&argv(&["aikoql-mcp", "--config", &off]), None, None)
+                .unwrap()
+                .log_file
+                .as_deref(),
+            Some("off")
+        );
+        // env beats the file
+        let cfg = load_with_env(|| {
+            std::env::set_var("AIKOQL_LOG_FILE", "/env/aikoql.log");
+            let r = load(&argv(&["aikoql-mcp", "--config", &set]), None, None);
+            std::env::remove_var("AIKOQL_LOG_FILE");
+            r
+        })
+        .unwrap();
+        assert_eq!(cfg.log_file.as_deref(), Some("/env/aikoql.log"));
     }
 
     #[test]
