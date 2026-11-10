@@ -159,6 +159,10 @@ fn route_inner(
             need_auth()?;
             crate::sources::import::tool_sources_import(k, &args(), db_path)
         }
+        ("POST", "/api/v1/sources/resolve") => {
+            need_auth()?;
+            crate::sources::resolve::tool_sources_resolve(k, &args(), db_path)
+        }
         ("POST", "/api/v1/sources/ontology") => {
             need_auth()?;
             crate::sources::ontology::tool_sources_ontology(k, &args(), db_path)
@@ -828,6 +832,7 @@ fn is_admin_route(path: &str) -> bool {
             | "/api/v1/sources"
             | "/api/v1/sources/discover"
             | "/api/v1/sources/ontology"
+            | "/api/v1/sources/resolve"
             | "/api/v1/sources/import"
     )
 }
@@ -2080,6 +2085,7 @@ mod tests {
             "/api/v1/sources",
             "/api/v1/sources/discover",
             "/api/v1/sources/ontology",
+            "/api/v1/sources/resolve",
             "/api/v1/sources/import",
         ] {
             assert!(is_admin_route(p), "{p}");

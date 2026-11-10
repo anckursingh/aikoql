@@ -113,9 +113,19 @@ impl<'k> ImportSink<'k> {
     /// the all-success path — a partial run must not be mistaken for a full
     /// picture of the source (CON-007).
     pub(crate) fn prune_missing(&self, type_name: &str, present: &HashSet<KOID>) -> KResult<usize> {
+        self.prune_missing_where(type_name, present, |_| true)
+    }
+
+    /// `prune_missing`, restricted to the objects `mine` accepts (a tenant, a class).
+    pub(crate) fn prune_missing_where(
+        &self,
+        type_name: &str,
+        present: &HashSet<KOID>,
+        mine: impl Fn(&KnowledgeObject) -> bool,
+    ) -> KResult<usize> {
         let mut pruned = 0;
         for ko in self.kernel.scan_by_type(&self.subject, type_name)? {
-            if !present.contains(&ko.koid) {
+            if !present.contains(&ko.koid) && mine(&ko) {
                 self.kernel.forget(
                     KnowledgeContext::from(self.subject.clone()),
                     &ko.koid,
