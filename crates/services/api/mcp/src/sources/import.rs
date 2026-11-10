@@ -223,7 +223,7 @@ fn link_objects(objects: &mut [KnowledgeObject], d: &LinkDef, index: &TargetInde
 }
 
 /// A stable text for a key value (what identifies the row, not how it prints).
-fn key_text(v: &Value) -> String {
+pub(super) fn key_text(v: &Value) -> String {
     match v {
         Value::Text(s) => s.clone(),
         Value::Int(n) => n.to_string(),
@@ -234,7 +234,7 @@ fn key_text(v: &Value) -> String {
 }
 
 /// 128 bits from two independent FNV-1a passes over (source, container, key values).
-fn identity_koid(source: &str, container: &str, parts: &[String]) -> KOID {
+pub(super) fn identity_koid(source: &str, container: &str, parts: &[String]) -> KOID {
     let text = format!("{source}\u{1f}{container}\u{1f}{}", parts.join("\u{1e}"));
     let fnv = |seed: u64| {
         text.bytes().fold(seed, |h, b| {
