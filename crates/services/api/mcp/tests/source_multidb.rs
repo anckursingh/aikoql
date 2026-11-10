@@ -1813,3 +1813,138 @@ fn accounts_sharing_a_device_are_a_traversal_across_clickhouse_and_postgres() {
     l.assert_no_secret_anywhere();
     exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
 }
+
+/// Case study question 4 (docs/ONTOLOGY-IN-PRACTICE.md, Phase C): the risk engine says
+/// *block*, the CRM says *active* — which wins, and why? Two databases, one account.
+#[test]
+fn a_crm_and_a_risk_engine_that_disagree_leave_a_contradiction_with_the_rule_that_decides() {
+    let (Some(ch), Some(pg)) = (connectors::Live::clickhouse(), connectors::Live::pg()) else {
+        return;
+    };
+    let pid = std::process::id();
+    let db = format!("md_res_{pid}");
+    let exec = |stmts: &[String]| {
+        let refs: Vec<&str> = stmts.iter().map(String::as_str).collect();
+        connectors::clickhouse_exec(&ch.clickhouse_url, "default", &refs);
+    };
+    exec(&[
+        format!("DROP DATABASE IF EXISTS {db}"),
+        format!("CREATE DATABASE {db}"),
+        format!("CREATE TABLE {db}.risk_decisions (account_id String, decision String, ts DateTime) ENGINE = MergeTree ORDER BY (account_id, ts)"),
+        // acct_0077 was allowed, challenged, allowed, then blocked; acct_0078 is allowed throughout
+        format!("INSERT INTO {db}.risk_decisions VALUES ('acct_0077','allow','2026-01-01 00:00:00'),('acct_0077','challenge','2026-01-02 00:00:00'),('acct_0077','allow','2026-01-03 00:00:00'),('acct_0077','block','2026-01-04 00:00:00'),('acct_0078','allow','2026-01-01 00:00:00')"),
+        // the latest decision per account: one claim per account
+        format!("CREATE VIEW {db}.account_risk AS SELECT account_id, argMax(decision, ts) AS decision FROM {db}.risk_decisions GROUP BY account_id"),
+    ]);
+    let dsn = connectors::pg_private_db(&pg.dsn, &format!("cert_multidb_res_{pid}"));
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT NOT NULL, status TEXT NOT NULL)",
+            "INSERT INTO accounts VALUES ('acct_0077','a@example.test','active'),('acct_0078','b@example.test','allow'),('acct_0079','c@example.test','active')",
+        ],
+    );
+    let l = Live::start(
+        "resolve",
+        &format!("[[sources]]\nname = \"olap\"\nkind = \"clickhouse\"\nurl_env = \"MD_CH\"\ndatabase = \"{db}\"\n\n[[sources]]\nname = \"crm\"\nkind = \"postgres\"\nurl_env = \"MD_PG\"\n"),
+        &[("MD_CH", &ch.clickhouse_url), ("MD_PG", &dsn)],
+        &["aikoql-dev-only"],
+    );
+    for s in ["olap", "crm"] {
+        l.post("/api/v1/sources/discover", serde_json::json!({"source": s}));
+    }
+    // both sources assert the account's `status`; the risk engine outranks the CRM
+    let assertions = serde_json::json!([
+        {"from": "crm.accounts.id", "class": "Account", "properties": {"status": "status"}, "rank": 20},
+        {"from": "olap.account_risk.account_id", "class": "Account", "properties": {"decision": "status"}, "rank": 5},
+    ]);
+    let identities = serde_json::json!({"olap.account_risk": ["account_id"]});
+    let body = |preview: bool, fp: &serde_json::Value| serde_json::json!({"sources": ["olap", "crm"], "preview": preview, "fingerprints": fp, "identities": identities, "assertions": assertions});
+    let p = l.post(
+        "/api/v1/sources/ontology",
+        body(true, &serde_json::json!({})),
+    );
+    let published = l.post("/api/v1/sources/ontology", body(false, &p["fingerprints"]));
+    assert_eq!(published["saved"], true, "{published}");
+    assert!(
+        !published["warnings"]
+            .to_string()
+            .contains("assertion ignored"),
+        "{published}"
+    );
+
+    l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "crm", "containers": ["accounts"]}),
+    );
+    l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["account_risk"]}),
+    );
+    let r = l.post(
+        "/api/v1/sources/resolve",
+        serde_json::json!({"class": "Account"}),
+    );
+    assert_eq!(
+        (r["entities"].clone(), r["claims"].clone()),
+        (3.into(), 5.into()), // 3 CRM accounts + 2 risk accounts
+        "{r}"
+    );
+    assert_eq!(
+        (
+            r["contradictions"]["resolved"].clone(),
+            r["contradictions"]["open"].clone()
+        ),
+        (1.into(), 0.into()),
+        "{r}"
+    );
+
+    // the disagreement is a queryable object that names both sides, the rule and the winner
+    let found = query(&l, "MATCH aikoql:contradiction RETURN *");
+    let rows = found["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{found}");
+    let c = &rows[0]["properties"];
+    assert_eq!(
+        (
+            c["key"].as_str(),
+            c["property"].as_str(),
+            c["status"].as_str()
+        ),
+        (Some("acct_0077"), Some("status"), Some("resolved")),
+        "{c}"
+    );
+    assert_eq!(c["winner"], "clickhouse.account_risk", "{c}");
+    assert!(c["rule"].as_str().unwrap().contains("rank 5"), "{c}");
+    let mut sides: Vec<(String, String)> = c["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            (
+                v["source"].as_str().unwrap().into(),
+                v["value"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    sides.sort();
+    assert_eq!(
+        sides,
+        [
+            ("clickhouse.account_risk".into(), "block".into()),
+            ("postgres.accounts".into(), "active".into())
+        ],
+        "{c}"
+    );
+
+    // the canonical account carries the winning value (acct_0078 agrees in both: no contradiction)
+    let canon = query(
+        &l,
+        "MATCH aikoql:canonical WHERE key == \"acct_0077\" RETURN *",
+    );
+    assert_eq!(
+        canon["results"][0]["properties"]["values"]["status"], "block",
+        "{canon}"
+    );
+    l.assert_no_secret_anywhere();
+    exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
+}

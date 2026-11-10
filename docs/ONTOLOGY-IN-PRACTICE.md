@@ -166,7 +166,23 @@ graph depend on them and they are the smallest changes.
   v1 and v7). Found on the way: a later publish ignored every existing mapping (fixed for keys and links);
   **traversal and `SIMILAR TO` results carry only `koid`/`rel_type`/`depth`, not properties** (Phase E).
   Not yet: `JOIN` resolving ontology classes, a Studio editor for links (Phase D).
-- Phases C, D, E, F, G: open, in the order above.
+- **Phase C — done (2026-11-10).** `assertions [{from, class, properties, rank}]` on the ontology
+  route (stored as `MappingEntry.asserts`, carried by the publish merge) and `POST
+  /api/v1/sources/resolve {class}`. Rows are claims; rows with an exactly equal key are one entity.
+  Written under reserved types so an imported container is never touched: `aikoql:canonical`,
+  `aikoql:source-identity` (rule `exact-key`, confidence 1.0, `RESOLVES_TO` the entity) and
+  `aikoql:contradiction` (both values, both sources, the rule, the winner). Proven live on ClickHouse +
+  Postgres: `acct_0077` is *active* in the CRM and *block* at the risk engine; with the risk engine
+  ranked 5 against the CRM's 20 the contradiction is `resolved`, winner `clickhouse.account_risk`.
+  Rulings (decisions 2 and the open questions in §6): authority is a **rank on each assertion**
+  (lowest wins; equal ranks stay `open` and claim no value), not a per-property list; a source that
+  gives one key several rows is **ambiguous and says nothing** (reported, never guessed: expose the
+  latest row through a view); near spellings (case, whitespace) are **proposals** in the response, never
+  merges. Resolution is its own call, not part of import, so it cannot depend on import order. The
+  existing `contradict` / `resolve_conflict_by_authority` kernel tools model epistemic claims and
+  origin-derived authority and are not idempotent, so they are not reused for record-level
+  disagreement. Not yet: Studio review of contradictions (Phase D), a per-property authority list.
+- Phases D, E, F, G: open, in the order above.
 
 ## 6. Decisions to confirm
 1. **Where identity lives:** a field of the ontology class (proposed) versus a separate mapping

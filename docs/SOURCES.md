@@ -143,6 +143,25 @@ recorded in the published mapping.
   `no_value` per link, and no edge is ever guessed. Import the target container first (or re-import the
   referring one afterwards: only rows that gained an edge change). `TRAVERSE for_account` walks them.
 
+## Reconciling sources: claims and contradictions
+
+Two sources often describe one thing (a CRM account and a risk engine's decisions about it). Declare
+what each asserts, then resolve:
+
+- `assertions: [{"from": "crm.accounts.id", "class": "Account", "properties": {"status": "status"},
+  "rank": 20}, {"from": "olap.account_risk.account_id", "class": "Account", "properties":
+  {"decision": "status"}, "rank": 5}]` on `POST /api/v1/sources/ontology`: rows of that container are
+  claims about the `Account` named by that key column. **The lowest rank is the most authoritative.**
+- `POST /api/v1/sources/resolve {"class": "Account"}` (after importing the containers) writes, under
+  reserved types, one `aikoql:canonical` per entity, one `aikoql:source-identity` per claim (rule
+  `exact-key`, confidence 1.0, edge `RESOLVES_TO`) and one `aikoql:contradiction` per property the
+  sources disagree about, naming both values, both sources, the rule and the winner
+  (`MATCH aikoql:contradiction RETURN *`). Equal ranks leave it `open` and the entity claims no value.
+- Only an exactly equal key merges. A source giving one key several rows is reported `ambiguous` and
+  contributes nothing (expose the latest row through a view); case or whitespace variants are listed in
+  `proposals`, never merged. Re-running changes nothing, the import order is irrelevant, and a
+  contradiction the sources stop having is retired.
+
 ## Importing
 
 `POST /api/v1/sources/import {source, containers}` copies chosen, already-discovered tables as objects typed by
