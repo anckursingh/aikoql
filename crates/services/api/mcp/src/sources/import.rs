@@ -264,10 +264,15 @@ pub(super) fn live_koid(k: &Kernel, id_of: impl Fn(u32) -> KOID) -> KOID {
         .unwrap_or_else(|| id_of(1000))
 }
 
-/// Objects that were retired and now return get a fresh generation of their id.
-fn revive_koids(k: &Kernel, objects: &mut [KnowledgeObject]) {
+/// Every object's id is scoped to its tenant (the same table imported into two tenants must
+/// give two independent sets of objects), and an object that was retired and now returns gets
+/// a fresh generation of its id. The global scope keeps the ids it has always had.
+fn scope_koids(k: &Kernel, tenant: Option<&str>, objects: &mut [KnowledgeObject]) {
     for ko in objects {
-        let base = ko.koid;
+        let base = match tenant {
+            Some(t) => identity_koid("tenant", t, &[ko.koid.to_hex()]),
+            None => ko.koid,
+        };
         ko.koid = live_koid(k, |g| {
             if g == 0 {
                 base
@@ -496,7 +501,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
                     .insert(d.name.clone(), link_objects(&mut objects, d, &index));
             }
         }
-        revive_koids(k, &mut objects);
+        scope_koids(k, src.tenant.as_deref(), &mut objects);
         let present: HashSet<KOID> = objects.iter().map(|o| o.koid).collect();
         let (mut wrote, mut same) = (0u64, 0u64);
         let mut failure = None;

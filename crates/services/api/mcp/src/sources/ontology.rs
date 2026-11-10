@@ -27,6 +27,55 @@ struct Merged {
 /// Was this class written by discovery? The description alone is not proof, since a
 /// human can type the same words: it must also name containers ("<source>.<container>")
 /// that the ontology's mappings tie to this very class, which only discovery writes.
+/// What the ontology already holds, in the terms the preview speaks (`source.container`):
+/// keys, links and assertions of the mappings, so the page can tell a declaration that is
+/// pending from one that is published (and so cannot be removed from the preview).
+fn published_view(existing: Option<&J>, inputs: &[SourceInput]) -> J {
+    let empty = Vec::new();
+    let mappings = existing
+        .and_then(|o| o["mappings"].as_array())
+        .unwrap_or(&empty);
+    let key_of = |kind: &str, ty: &str| {
+        inputs
+            .iter()
+            .find(|s| s.kind == kind && s.meta.containers.iter().any(|c| c.name == ty))
+            .map(|s| format!("{}.{}", s.name, ty))
+    };
+    let (mut identities, mut links, mut assertions) =
+        (serde_json::Map::new(), Vec::new(), Vec::new());
+    for s in inputs {
+        for c in &s.meta.containers {
+            let Some(m) = mappings
+                .iter()
+                .find(|m| m["source"] == s.kind && m["physical_type"] == c.name.as_str())
+            else {
+                continue;
+            };
+            let here = format!("{}.{}", s.name, c.name);
+            if m["identity"].as_array().is_some_and(|i| !i.is_empty()) {
+                identities.insert(here.clone(), m["identity"].clone());
+            }
+            for l in m["links"].as_array().unwrap_or(&empty) {
+                let to = key_of(
+                    l["target_source"].as_str().unwrap_or(""),
+                    l["target_type"].as_str().unwrap_or(""),
+                );
+                if let (Some(to), Some(col)) = (to, l["column"].as_str()) {
+                    links.push(json!({"name": l["name"], "from": format!("{here}.{col}"),
+                                      "to": format!("{to}.{}", l["target_column"].as_str().unwrap_or(""))}));
+                }
+            }
+            for a in m["asserts"].as_array().unwrap_or(&empty) {
+                if let Some(col) = a["key_column"].as_str() {
+                    assertions.push(json!({"from": format!("{here}.{col}"), "class": a["class"],
+                                           "properties": a["properties"], "rank": a["rank"]}));
+                }
+            }
+        }
+    }
+    json!({"identities": identities, "links": links, "assertions": assertions})
+}
+
 fn written_by_discovery(class: &J, mappings: &[J]) -> bool {
     let Some(keys) = class["description"]
         .as_str()
@@ -528,7 +577,28 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
         .filter(|s| !links.iter().any(|l| l.from == s.from && l.name == s.name))
         .map(|s| json!({"name": s.name, "from": s.from, "to": s.to, "confidence": s.confidence, "evidence": s.evidence}))
         .collect();
+    let published = published_view(existing_json.as_ref(), &inputs);
+    // a key the ontology already holds is marked, a link it already holds is not proposed again
+    let identity_suggestions: Vec<J> = identity_suggestions
+        .into_iter()
+        .map(|mut s| {
+            let held =
+                published["identities"][s["container"].as_str().unwrap_or("")] == s["columns"];
+            s["published"] = json!(held);
+            s
+        })
+        .collect();
+    let link_suggestions: Vec<J> = link_suggestions
+        .into_iter()
+        .filter(|s| {
+            !published["links"].as_array().is_some_and(|l| {
+                l.iter()
+                    .any(|p| p["name"] == s["name"] && p["from"] == s["from"])
+            })
+        })
+        .collect();
     let summary = json!({
+        "published": published,
         "links": link_suggestions,
         "identities": identity_suggestions,
         "classes": classes, "adds": merged.adds, "refreshed": merged.refreshed,

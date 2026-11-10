@@ -183,6 +183,11 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
         subject = subject.in_tenant(t);
     }
     let sink = ImportSink::new(k, fresh_run_id(), subject.clone(), vec![]);
+    // ids are tenant-scoped: two tenants with identical data must not share an object
+    let scoped = |scope: &str| match &tenant {
+        Some(t) => format!("{t}\u{1f}{scope}"),
+        None => scope.to_string(),
+    };
     let build = |ty: &str,
                  koid: KOID,
                  props: BTreeMap<String, Value>,
@@ -216,7 +221,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     let (mut open, mut resolved) = (0u64, 0u64);
     for (key, group) in &by_key {
         let canonical = live_koid(k, |g| {
-            gen_koid(T_CANONICAL, &class, std::slice::from_ref(key), g)
+            gen_koid(T_CANONICAL, &scoped(&class), std::slice::from_ref(key), g)
         });
         // per canonical property, who says what
         let mut said: BTreeMap<&str, Vec<(&Claim, &Value)>> = BTreeMap::new();
@@ -242,7 +247,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             let koid = live_koid(k, |g| {
                 gen_koid(
                     T_CONTRADICTION,
-                    &class,
+                    &scoped(&class),
                     &[key.clone(), (*prop).to_string()],
                     g,
                 )
@@ -317,7 +322,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
         );
         for c in group {
             let koid = live_koid(k, |g| {
-                gen_koid(T_CLAIM, &c.label, &[class.clone(), key.clone()], g)
+                gen_koid(T_CLAIM, &scoped(&c.label), &[class.clone(), key.clone()], g)
             });
             let props = BTreeMap::from([
                 ("class".to_string(), text(&class)),
@@ -784,6 +789,110 @@ mod tests {
             );
             assert!(live(&k, "aikoql:canonical", Some("t2")).is_empty());
         });
+    }
+
+    #[test]
+    fn a_preview_after_publishing_reports_what_is_already_published() {
+        let (k, db) = setup("c9", None);
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            let body = |preview: bool, fp: &J| {
+                json!({"sources": ["crm"], "preview": preview, "fingerprints": fp,
+                       "identities": {"crm.accounts": ["id"]}, "assertions": assertions(10, 20),
+                       "relationships": [{"name": "scored_by", "from": "crm.account_risk.account_id", "to": "crm.accounts.id"}]})
+            };
+            let p = tool_sources_ontology(&k, &body(true, &json!({})), "x").unwrap();
+            assert_eq!(
+                p["published"]["assertions"],
+                json!([]),
+                "nothing is published before the first publish: {p}"
+            );
+            tool_sources_ontology(&k, &body(false, &p["fingerprints"]), "x").unwrap();
+            // a fresh preview that declares nothing still knows what the ontology holds
+            let q = tool_sources_ontology(&k, &json!({"sources": ["crm"], "preview": true}), "x")
+                .unwrap();
+            assert_eq!(
+                q["published"]["identities"]["crm.accounts"],
+                json!(["id"]),
+                "{q}"
+            );
+            let a = q["published"]["assertions"].as_array().unwrap();
+            assert_eq!(a.len(), 2, "{q}");
+            assert!(
+                a.iter().any(|x| x["from"] == "crm.accounts.id"
+                    && x["class"] == "Account"
+                    && x["rank"] == 10),
+                "{a:?}"
+            );
+            assert_eq!(q["published"]["links"][0]["name"], "scored_by", "{q}");
+            assert_eq!(q["published"]["links"][0]["to"], "crm.accounts.id", "{q}");
+            // published links are not proposed again; published keys are marked
+            assert!(
+                q["links"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|l| l["name"] != "scored_by"),
+                "{q}"
+            );
+            let key = q["identities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|i| i["container"] == "crm.accounts")
+                .unwrap();
+            assert_eq!(key["published"], true, "{key}");
+        });
+    }
+
+    #[test]
+    fn two_tenants_with_identical_data_get_independent_objects() {
+        let (k, db) = setup("c10", None);
+        with_test_sources(
+            vec![
+                sqlite_source("crm", Some("t1")),
+                sqlite_source("crm", Some("t2")),
+            ],
+            vec![("crm".to_string(), conn(&db))],
+            || {
+                for t in ["t1", "t2"] {
+                    tool_sources_discover(&k, &json!({"source": "crm", "tenant": t}), "x").unwrap();
+                    publish(&k, Some(t), assertions(10, 20));
+                    import(&k, &["accounts", "account_risk"], Some(t));
+                }
+                for t in ["t1", "t2"] {
+                    let r = resolve(&k, Some(t));
+                    assert_eq!(
+                        (r["entities"].clone(), r["written"].clone()),
+                        (json!(3), json!(9)),
+                        "{t}: {r}"
+                    );
+                }
+                for t in ["t1", "t2"] {
+                    assert_eq!(
+                        live(&k, "aikoql:canonical", Some(t)).len(),
+                        3,
+                        "{t} keeps its own entities"
+                    );
+                    assert_eq!(live(&k, "aikoql:contradiction", Some(t)).len(), 1, "{t}");
+                    assert_eq!(
+                        live(&k, "accounts", Some(t)).len(),
+                        3,
+                        "{t} keeps its own imported rows"
+                    );
+                }
+                let ids = |t: &str| -> std::collections::BTreeSet<_> {
+                    live(&k, "aikoql:canonical", Some(t))
+                        .into_iter()
+                        .map(|e| e.koid)
+                        .collect()
+                };
+                assert!(
+                    ids("t1").is_disjoint(&ids("t2")),
+                    "no object is shared between tenants"
+                );
+            },
+        );
     }
 
     #[test]
