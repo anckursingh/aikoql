@@ -234,6 +234,32 @@ pub fn definition_from_sources_keyed(
     merges: &[ClassMerge],
     identities: &BTreeMap<String, Vec<String>>,
 ) -> DefinitionDraft {
+    definition_from_sources_with(sources, merges, identities, &[])
+}
+
+/// A relationship the owner declares by column values: `from` and `to` are
+/// `"<source>.<container>.<column>"`. Rows of `from`'s container get a
+/// relationship `name` to the row of `to`'s container whose column equals theirs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkSpec {
+    pub name: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// `"src.container.column"` -> (`"src.container"`, `"column"`).
+fn split_ref(r: &str) -> Option<(&str, &str)> {
+    let (container, column) = r.rsplit_once('.')?;
+    (container.contains('.') && !column.is_empty()).then_some((container, column))
+}
+
+/// The full draft: classes, mappings, identity keys and declared links.
+pub fn definition_from_sources_with(
+    sources: &[SourceInput],
+    merges: &[ClassMerge],
+    identities: &BTreeMap<String, Vec<String>>,
+    links: &[LinkSpec],
+) -> DefinitionDraft {
     let mut warnings: Vec<String> = Vec::new();
     let entries: Vec<Entry> = sources
         .iter()
@@ -507,6 +533,87 @@ pub fn definition_from_sources_keyed(
                     json!({"name": name, "domain": domain, "range": range}),
                 );
             }
+        }
+    }
+
+    // Declared links: validated whole, or ignored with the reason.
+    for l in links {
+        let ignore =
+            |why: String, warnings: &mut Vec<String>| warnings.push(format!("link ignored: {why}"));
+        if l.name.trim().is_empty() {
+            ignore("a link needs a name".into(), &mut warnings);
+            continue;
+        }
+        let (Some((from_key, from_col)), Some((to_key, to_col))) =
+            (split_ref(&l.from), split_ref(&l.to))
+        else {
+            ignore(
+                format!(
+                    "{}: references must look like source.container.column",
+                    l.name
+                ),
+                &mut warnings,
+            );
+            continue;
+        };
+        let find = |key: &str| entries.iter().position(|e| e.key == key);
+        let (Some(fi), Some(ti)) = (find(from_key), find(to_key)) else {
+            let missing = if find(from_key).is_none() {
+                from_key
+            } else {
+                to_key
+            };
+            ignore(
+                format!("{}: {missing} is not a discovered container", l.name),
+                &mut warnings,
+            );
+            continue;
+        };
+        let has = |i: usize, col: &str| entries[i].container.fields.iter().any(|f| f.name == col);
+        if let Some((key, col)) = [(from_key, from_col, fi), (to_key, to_col, ti)]
+            .iter()
+            .find(|(_, c, i)| !has(*i, c))
+            .map(|(k, c, _)| (*k, *c))
+        {
+            ignore(
+                format!("{}: {key} has no column {col}", l.name),
+                &mut warnings,
+            );
+            continue;
+        }
+        let (from, to) = (&entries[fi], &entries[ti]);
+        let Some(m) = mappings.iter_mut().find(|m| {
+            m["source"] == from.kind && m["physical_type"] == from.container.name.as_str()
+        }) else {
+            ignore(format!("{}: {from_key} is not mapped (its physical type is already mapped by another source)", l.name), &mut warnings);
+            continue;
+        };
+        if m["links"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|x| x["name"] == l.name.as_str()))
+        {
+            ignore(
+                format!("{}: already a link on {from_key}", l.name),
+                &mut warnings,
+            );
+            continue;
+        }
+        let entry = json!({"name": l.name, "column": from_col, "target_source": to.kind,
+                           "target_type": to.container.name, "target_column": to_col});
+        match m["links"].as_array_mut() {
+            Some(a) => a.push(entry),
+            None => m["links"] = json!([entry]),
+        }
+        let (domain, range) = (class_of_entry(fi).clone(), class_of_entry(ti).clone());
+        match rels.get(&l.name) {
+            None => {
+                rels.insert(l.name.clone(), json!({"name": l.name, "domain": domain, "range": range}));
+            }
+            Some(e) if e["domain"] == json!(domain) && e["range"] == json!(range) => {}
+            Some(_) => warnings.push(format!(
+                "link {}: a relationship of that name already connects other classes; the link is kept, the class relationship is not changed",
+                l.name
+            )),
         }
     }
 
@@ -1303,6 +1410,199 @@ mod tests {
         assert!(
             identity_of(&d, "visits").is_empty(),
             "a plain MergeTree sorting key is not unique: no claim"
+        );
+    }
+
+    // ---- links (docs/ONTOLOGY-IN-PRACTICE.md, Phase B) ----
+
+    fn two_sources() -> (ConnectorMetadata, ConnectorMetadata) {
+        (
+            meta(
+                "clickhouse",
+                "olap",
+                &[
+                    (
+                        "device_accounts",
+                        &[
+                            ("visitor_id", "String", false, false, false),
+                            ("account_id", "String", false, false, false),
+                        ],
+                    ),
+                    ("devices", &[("visitor_id", "String", false, false, false)]),
+                ],
+                &[],
+            ),
+            meta(
+                "postgres",
+                "crm",
+                &[(
+                    "accounts",
+                    &[
+                        ("id", "text", true, false, true),
+                        ("email", "text", false, false, false),
+                    ],
+                )],
+                &[],
+            ),
+        )
+    }
+
+    fn link(name: &str, from: &str, to: &str) -> LinkSpec {
+        LinkSpec {
+            name: name.into(),
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    fn with_links(links: &[LinkSpec]) -> DefinitionDraft {
+        let (a, b) = two_sources();
+        definition_from_sources_with(
+            &[
+                SourceInput {
+                    name: "olap",
+                    kind: "clickhouse",
+                    meta: &a,
+                },
+                SourceInput {
+                    name: "crm",
+                    kind: "postgres",
+                    meta: &b,
+                },
+            ],
+            &[],
+            &BTreeMap::new(),
+            links,
+        )
+    }
+
+    #[test]
+    fn a_link_becomes_a_mapping_link_and_a_class_relationship_even_across_sources() {
+        let d = with_links(&[
+            link(
+                "for_account",
+                "olap.device_accounts.account_id",
+                "crm.accounts.id",
+            ),
+            link(
+                "for_device",
+                "olap.device_accounts.visitor_id",
+                "olap.devices.visitor_id",
+            ),
+        ]);
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "device_accounts")
+            .unwrap();
+        let links = m["links"]
+            .as_array()
+            .expect("links on the from-container's mapping");
+        let acct = links.iter().find(|l| l["name"] == "for_account").unwrap();
+        assert_eq!(
+            (
+                acct["column"].as_str(),
+                acct["target_source"].as_str(),
+                acct["target_type"].as_str(),
+                acct["target_column"].as_str()
+            ),
+            (
+                Some("account_id"),
+                Some("postgres"),
+                Some("accounts"),
+                Some("id")
+            ),
+            "the target is named by its source KIND and physical type"
+        );
+        let dev = links.iter().find(|l| l["name"] == "for_device").unwrap();
+        assert_eq!(dev["target_source"], "clickhouse");
+        // the class model says the same thing
+        let rels = list(&d, "relationships");
+        let r = rels.iter().find(|r| r["name"] == "for_account").unwrap();
+        assert_eq!(
+            (r["domain"].as_str(), r["range"].as_str()),
+            (Some("DeviceAccount"), Some("Account")),
+            "{r}"
+        );
+        assert!(
+            d.warnings.iter().all(|w| !w.contains("link ignored")),
+            "{:?}",
+            d.warnings
+        );
+        // a container with no link writes none
+        let plain = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "accounts")
+            .unwrap();
+        assert!(plain.get("links").is_none());
+    }
+
+    #[test]
+    fn a_link_that_cannot_be_honoured_is_ignored_with_a_reason() {
+        for (l, why) in [
+            (
+                link("x", "olap.device_accounts.nope", "crm.accounts.id"),
+                "no column nope",
+            ),
+            (
+                link("x", "olap.device_accounts.account_id", "crm.accounts.nope"),
+                "no column nope",
+            ),
+            (
+                link("x", "olap.ghost.account_id", "crm.accounts.id"),
+                "not a discovered container",
+            ),
+            (
+                link("x", "crm.accounts.id", "elsewhere.t.id"),
+                "not a discovered container",
+            ),
+            (
+                link("x", "no-dots", "crm.accounts.id"),
+                "source.container.column",
+            ),
+            (
+                link("", "olap.device_accounts.account_id", "crm.accounts.id"),
+                "needs a name",
+            ),
+        ] {
+            let d = with_links(&[l.clone()]);
+            assert!(
+                d.warnings
+                    .iter()
+                    .any(|w| w.contains("link ignored") && w.contains(why)),
+                "{l:?}: {:?}",
+                d.warnings
+            );
+            assert!(
+                list(&d, "mappings")
+                    .iter()
+                    .all(|m| m.get("links").is_none()),
+                "{l:?}"
+            );
+        }
+        // two links with one name on one container: the second is refused, the first stands
+        let d = with_links(&[
+            link(
+                "for_x",
+                "olap.device_accounts.account_id",
+                "crm.accounts.id",
+            ),
+            link(
+                "for_x",
+                "olap.device_accounts.visitor_id",
+                "olap.devices.visitor_id",
+            ),
+        ]);
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "device_accounts")
+            .unwrap();
+        assert_eq!(m["links"].as_array().unwrap().len(), 1);
+        assert!(
+            d.warnings
+                .iter()
+                .any(|w| w.contains("link ignored") && w.contains("already")),
+            "{:?}",
+            d.warnings
         );
     }
 

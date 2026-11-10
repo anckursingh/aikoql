@@ -273,8 +273,9 @@ pub use connector_bridge::{
 
 mod ontology_draft;
 pub use ontology_draft::{
-    declared_identity, definition_from_sources, definition_from_sources_keyed, ClassMerge,
-    ClassStatus, DefinitionDraft, DraftClass, SourceInput,
+    declared_identity, definition_from_sources, definition_from_sources_keyed,
+    definition_from_sources_with, ClassMerge, ClassStatus, DefinitionDraft, DraftClass, LinkSpec,
+    SourceInput,
 };
 mod ontology_suggest;
 pub use ontology_suggest::{
