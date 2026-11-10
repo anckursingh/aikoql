@@ -667,6 +667,7 @@ pub(crate) fn tool_document_list(k: &Kernel, args: &J) -> Result<J, String> {
             "status": d.properties.get("status").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }).unwrap_or("?"),
             "lifecycle": d.lifecycle.state.to_string(),
         })).zip(&docs).map(|(mut row, d)| {
+            row["graph"] = crate::tools::doc_graph::graph_info(d);
             if pint(&d.properties, "batches_total") > 0 {
                 row["page_count"] = json!(pint(&d.properties, "page_count"));
             }
@@ -693,6 +694,7 @@ pub(crate) fn tool_document_status(k: &Kernel, args: &J, db_path: &str) -> Resul
         Vec::new()
     };
     let mut out = json!({
+        "graph": crate::tools::doc_graph::graph_info(&ko),
         "koid": ko.koid.to_hex(),
         "filename": ko.properties.get("filename").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }),
         "mime_type": ko.properties.get("mime_type").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }),
@@ -995,6 +997,14 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
     }
     bound_compile_result(&mut result, limit);
     bound_compile_text(&mut result, max_text);
+    // an agent must never mistake a partial preview for the knowledge: say what this is
+    result["preview"] = json!(true);
+    result["complete"] = json!(result.get("truncated").is_none());
+    result["note"] = json!(
+        "This is a dry-run preview of what the compiler extracts; nothing is stored. Use document_commit \
+         to save the document into the knowledge base and then query the stored objects. If `complete` is \
+         false the lists above are cut (see `truncated`); never treat them as the whole document."
+    );
 
     Ok(result)
 }

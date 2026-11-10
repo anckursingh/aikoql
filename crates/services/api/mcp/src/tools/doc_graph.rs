@@ -669,6 +669,228 @@ pub(crate) fn list_objects(k: &Kernel, args: &J) -> Result<J, String> {
     )
 }
 
+/// Documents being saved right now (a restart leaves `saving` with nothing running: reported as interrupted).
+static SAVING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+struct Saving(String);
+impl Drop for Saving {
+    fn drop(&mut self) {
+        if let Ok(mut r) = SAVING.lock() {
+            r.retain(|k| k != &self.0);
+        }
+    }
+}
+
+/// How a document stands in the knowledge base, for `document_list` / `document_status`.
+pub(crate) fn graph_info(ko: &KnowledgeObject) -> J {
+    let get = |p: &str| match ko.properties.get(p) {
+        Some(Value::Text(t)) if !t.is_empty() => Some(t.clone()),
+        _ => None,
+    };
+    let num = |p: &str| match ko.properties.get(p) {
+        Some(Value::Int(n)) => *n,
+        _ => 0,
+    };
+    let mut status = get("graph_status").unwrap_or_else(|| "not_saved".into());
+    if status == "saving"
+        && !SAVING
+            .lock()
+            .map(|r| r.contains(&ko.koid.to_hex()))
+            .unwrap_or(false)
+    {
+        status = "interrupted".into();
+    }
+    json!({
+        "status": status,
+        "phase": get("graph_phase"),
+        "progress": num("graph_progress"),
+        "total": num("graph_total"),
+        "message": get("graph_message"),
+        "manifest": get("graph_manifest").and_then(|m| serde_json::from_str::<J>(&m).ok()),
+    })
+}
+
+fn set_graph(k: &Kernel, koid: &KOID, subject: &Subject, pairs: &[(&str, Value)]) {
+    let props: BTreeMap<String, Value> = pairs
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.clone()))
+        .collect();
+    if let Err(e) = k.set_document_properties(koid, props, subject) {
+        tracing::warn!(
+            "document {}: could not record its knowledge-base status: {e}",
+            koid.to_hex()
+        );
+    }
+}
+
+/// `document_commit`: save the document into the knowledge base. Runs in the background (compiling a
+/// large book alone takes minutes); poll `document_status` for `graph.status`, `phase` and `progress`.
+pub(crate) fn tool_document_commit(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let hex = args
+        .get("koid")
+        .and_then(J::as_str)
+        .ok_or("missing: koid")?;
+    let koid = KOID::from_hex(hex).map_err(|e| e.to_string())?;
+    let subject = crate::session::subject_of(args);
+    let ko = k
+        .get(KnowledgeContext::from(subject.clone()), &koid)
+        .map_err(|e| e.to_string())?;
+    let status = match ko.properties.get("status") {
+        Some(Value::Text(t)) => t.clone(),
+        _ => String::new(),
+    };
+    if status == "processing" || status == "interrupted" {
+        return Err(format!("the document is {status}: wait for ingestion to finish (or upload it again) before saving it"));
+    }
+    let mime = match ko.properties.get("mime_type") {
+        Some(Value::Text(t)) => t.clone(),
+        _ => String::new(),
+    };
+    let sha = sha_of(&ko)?;
+    let artifact = format!("{db_path}.artifacts/{sha}");
+    if mime.contains("markdown")
+        || artifact.ends_with(".md")
+        || mime.contains("rust")
+        || artifact.ends_with(".rs")
+    {
+        return Err("saving Markdown and Rust sources into the knowledge graph is not supported yet (their compilers produce a different shape); ingest them as plain text instead".into());
+    }
+    if !std::path::Path::new(&artifact).exists() {
+        return Err(format!("artifact not found: {artifact}"));
+    }
+    {
+        let mut r = SAVING
+            .lock()
+            .map_err(|_| "saving lock poisoned".to_string())?;
+        if r.contains(&hex.to_string()) {
+            return Err("this document is already being saved: wait for it to finish".into());
+        }
+        r.push(hex.to_string());
+    }
+    let guard = Saving(hex.to_string());
+    set_graph(
+        k,
+        &koid,
+        &subject,
+        &[
+            ("graph_status", text("saving")),
+            ("graph_phase", text("compiling")),
+            ("graph_progress", Value::Int(0)),
+            ("graph_total", Value::Int(0)),
+            ("graph_message", text("")),
+            ("graph_manifest", text("")),
+        ],
+    );
+    let batches_total = match ko.properties.get("batches_total") {
+        Some(Value::Int(n)) => *n,
+        _ => 0,
+    };
+    let (k2, db_path, mime) = (k.clone(), db_path.to_string(), mime);
+    std::thread::spawn(move || {
+        let _guard = guard;
+        let result = (|| -> Result<J, String> {
+            let (doc, cr, batches) = crate::tools::ingestion::compile_document_pipeline(
+                &db_path,
+                &sha,
+                &mime,
+                &artifact,
+                batches_total,
+            )?;
+            let failed =
+                batches.map_or(0, |b| b.iter().filter(|x| x["status"] == "failed").count());
+            let ko = k2
+                .get(KnowledgeContext::from(subject.clone()), &koid)
+                .map_err(|e| e.to_string())?;
+            set_graph(&k2, &koid, &subject, &[("graph_phase", text("writing"))]);
+            commit_knowledge(&k2, &ko, &doc, &cr, failed, &|done, total| {
+                set_graph(
+                    &k2,
+                    &koid,
+                    &subject,
+                    &[
+                        ("graph_progress", Value::Int(done as i64)),
+                        ("graph_total", Value::Int(total as i64)),
+                    ],
+                );
+            })
+        })();
+        match result {
+            Ok(m) => {
+                tracing::info!(
+                    "document {} saved to the knowledge base: complete={}",
+                    koid.to_hex(),
+                    m["complete"]
+                );
+                set_graph(
+                    &k2,
+                    &koid,
+                    &subject,
+                    &[
+                        ("graph_status", text("saved")),
+                        ("graph_phase", text("done")),
+                        ("graph_manifest", text(&m.to_string())),
+                    ],
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "document {} could not be saved to the knowledge base: {e}",
+                    koid.to_hex()
+                );
+                set_graph(
+                    &k2,
+                    &koid,
+                    &subject,
+                    &[
+                        ("graph_status", text("failed")),
+                        ("graph_message", text(&cut(&e, 500))),
+                    ],
+                );
+            }
+        }
+    });
+    Ok(json!({"koid": hex, "graph": {"status": "saving", "phase": "compiling"}}))
+}
+
+/// `document_uncommit`: take the document's knowledge out of the knowledge base (the document stays ingested).
+pub(crate) fn tool_document_uncommit(k: &Kernel, args: &J) -> Result<J, String> {
+    let hex = args
+        .get("koid")
+        .and_then(J::as_str)
+        .ok_or("missing: koid")?;
+    let koid = KOID::from_hex(hex).map_err(|e| e.to_string())?;
+    let subject = crate::session::subject_of(args);
+    let ko = k
+        .get(KnowledgeContext::from(subject.clone()), &koid)
+        .map_err(|e| e.to_string())?;
+    if SAVING
+        .lock()
+        .map(|r| r.contains(&hex.to_string()))
+        .unwrap_or(false)
+    {
+        return Err(
+            "this document is being saved: wait for it to finish before removing it".into(),
+        );
+    }
+    let r = remove_knowledge(k, &ko)?;
+    set_graph(
+        k,
+        &koid,
+        &subject,
+        &[
+            ("graph_status", text("not_saved")),
+            ("graph_manifest", text("")),
+            ("graph_message", text("")),
+        ],
+    );
+    Ok(json!({"koid": hex, "removed": r["removed"], "graph": {"status": "not_saved"}}))
+}
+
+/// `document_objects`: the document's saved objects of one kind, paged; never a sample.
+pub(crate) fn tool_document_objects(k: &Kernel, args: &J) -> Result<J, String> {
+    list_objects(k, args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -954,5 +1176,76 @@ mod tests {
         )
         .unwrap();
         assert_eq!(q["total"], 1, "{q}");
+    }
+
+    #[test]
+    fn the_tool_saves_a_real_ingested_text_in_the_background_and_reports_a_complete_manifest() {
+        use base64::Engine;
+        let k = kernel();
+        let db = tmp_db("tool");
+        let body = (1..=40).map(|i| format!("Chapter {i}. Alice Johnson met Bob Smith at Acme Corporation in Paris. They discussed the Beta Labs merger. ")).collect::<String>();
+        let r = tool_document_ingest(
+            &k,
+            &json!({"filename": "story.txt", "mime_type": "text/plain",
+            "content_base64": base64::engine::general_purpose::STANDARD.encode(&body)}),
+            db.to_str().unwrap(),
+        )
+        .unwrap();
+        let koid = r["koid"].as_str().unwrap().to_string();
+        let started =
+            tool_document_commit(&k, &json!({"koid": koid}), db.to_str().unwrap()).unwrap();
+        assert_eq!(started["graph"]["status"], "saving");
+        let mut info = J::Null;
+        for _ in 0..200 {
+            let ko = k
+                .get(
+                    crate::KnowledgeContext::from(crate::Subject::with_roles("t", &["admin"])),
+                    &aikoql_kernel::KOID::from_hex(&koid).unwrap(),
+                )
+                .unwrap();
+            info = graph_info(&ko);
+            if info["status"] != "saving" {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(info["status"], "saved", "{info}");
+        assert_eq!(info["manifest"]["complete"], true, "{info}");
+        assert!(
+            info["manifest"]["kinds"]["pages"]["stored"]
+                .as_u64()
+                .unwrap()
+                >= 1,
+            "{info}"
+        );
+        assert!(
+            info["manifest"]["kinds"]["chunks"]["stored"]
+                .as_u64()
+                .unwrap()
+                >= 1,
+            "{info}"
+        );
+        // removal takes it all out and says so
+        let gone = tool_document_uncommit(&k, &json!({"koid": koid})).unwrap();
+        assert!(gone["removed"].as_u64().unwrap() > 0, "{gone}");
+        assert!(live(&k, T_PAGE, None).is_empty() && live(&k, T_CHUNK, None).is_empty());
+        let ko = k
+            .get(
+                crate::KnowledgeContext::from(crate::Subject::with_roles("t", &["admin"])),
+                &aikoql_kernel::KOID::from_hex(&koid).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(graph_info(&ko)["status"], "not_saved");
+        // markdown is refused loudly, not half-saved
+        let md = tool_document_ingest(
+            &k,
+            &json!({"filename": "n.md", "mime_type": "text/markdown",
+            "content_base64": base64::engine::general_purpose::STANDARD.encode("# T\n\nbody")}),
+            db.to_str().unwrap(),
+        )
+        .unwrap();
+        let e = tool_document_commit(&k, &json!({"koid": md["koid"]}), db.to_str().unwrap())
+            .unwrap_err();
+        assert!(e.contains("not supported yet"), "{e}");
     }
 }

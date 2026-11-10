@@ -431,6 +431,18 @@ fn route_inner(
             need_auth()?;
             tool_document_compile(k, &args(), db_path)
         }
+        ("POST", "/api/v1/documents/commit") => {
+            need_auth()?;
+            crate::tools::doc_graph::tool_document_commit(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/documents/uncommit") => {
+            need_auth()?;
+            crate::tools::doc_graph::tool_document_uncommit(k, &args())
+        }
+        ("GET", "/api/v1/documents/objects") => {
+            need_auth()?;
+            crate::tools::doc_graph::tool_document_objects(k, &args())
+        }
         ("POST", "/api/v1/backup") => {
             need_auth()?;
             tool_backup(k, db_path, admin)
