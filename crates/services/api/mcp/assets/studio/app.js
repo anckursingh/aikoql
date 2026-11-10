@@ -1076,12 +1076,14 @@ async function loadOntologyPanel(fill) {
       if (fill) editor.value = '';
       statusDiv.innerHTML = '<div class="empty-state">No ontology defined yet. Use the form below to create one.</div>';
       classesDiv.innerHTML = ''; relsDiv.innerHTML = ''; mapsDiv.innerHTML = '';
+      fillReconcileClasses([]);
       return;
     }
     const ko = data.results[0];
     ontologyVersion = ko.version; ontologySource = ko.source;
     if (fill) editor.value = JSON.stringify(ko.properties || {}, null, 2);
     window.__ontologyClasses = ((ko.properties||{}).classes||[]).map(c => c && c.name).filter(Boolean);
+    fillReconcileClasses((ko.properties || {}).mappings || []);
     const props = ko.properties || {};
     statusDiv.innerHTML = '<div style="color:var(--green);margin-bottom:8px;">✓ Ontology loaded — <b>'+ esc(props.namespace||'?') +'</b> v'+ esc(props.version||'?') +' <span style="color:var(--muted);">('+ esc(ko.source||'?') +', revision '+ esc(ko.version) +')</span></div>';
 
@@ -1090,7 +1092,14 @@ async function loadOntologyPanel(fill) {
       let h = '<h3>Classes ('+esc(props.classes.length)+')</h3><div class="ontology-grid">';
       props.classes.forEach(c => {
         const cm = typeof c === 'object' ? c : {};
+        const mine = (props.mappings || []).filter(m => m && m.class === cm.name);
         h += '<div class="card" style="padding:8px 12px;"><span style="color:var(--accent);font-weight:600;">'+ esc(cm.name||'?') +'</span>';
+        mine.forEach(m => {
+          h += '<div style="font-size:10px;margin-top:3px;"><span class="mono">'+esc(m.source)+'.'+esc(m.physical_type)+'</span> ';
+          if ((m.identity || []).length) h += '<span class="badge badge-green">key: '+esc(m.identity.join(', '))+'</span>';
+          else h += '<span class="badge badge-orange">no key</span>';
+          h += '</div>';
+        });
         if (cm.parent) h += ' <span style="color:var(--muted);">extends</span> <span style="color:var(--green);">'+esc(cm.parent)+'</span>';
         if (cm.description) h += '<div style="font-size:10px;color:var(--muted);">'+esc(cm.description)+'</div>';
         h += '</div>';
@@ -1111,17 +1120,69 @@ async function loadOntologyPanel(fill) {
 
     // Render mappings
     if (props.mappings && Array.isArray(props.mappings)) {
-      let h = '<h3>Mappings ('+esc(props.mappings.length)+')</h3><table><thead><tr><th>Source</th><th>Physical Type</th><th>Class</th><th>Property Map</th></tr></thead><tbody>';
+      let h = '<h3>Mappings ('+esc(props.mappings.length)+')</h3><table><thead><tr><th>Source</th><th>Physical Type</th><th>Class</th><th>Key</th><th>Links</th><th>Authority</th><th>Property Map</th></tr></thead><tbody>';
       props.mappings.forEach(m => {
         const pm = typeof m.property_map === 'object' ? m.property_map : {};
         const pmStr = Object.entries(pm).map(([k,v]) => k+' → '+v).join(', ');
-        h += '<tr><td><span class="badge badge-cyan">'+ esc(m.source||'?') +'</span></td><td class="mono" style="font-size:10px;">'+ esc(m.physical_type||'?') +'</td><td>'+ esc(m.class||'?') +'</td><td style="font-size:10px;color:var(--muted);">'+esc(pmStr)+'</td></tr>';
+        h += '<tr><td><span class="badge badge-cyan">'+ esc(m.source||'?') +'</span></td><td class="mono" style="font-size:10px;">'+ esc(m.physical_type||'?') +'</td><td>'+ esc(m.class||'?') +'</td>'
+          + '<td class="mono" style="font-size:10px;">'+esc((m.identity || []).join(', ') || '—')+'</td>'
+          + '<td style="font-size:10px;">'+esc((m.links || []).map(l => l.name + ' → ' + l.target_type + '.' + l.target_column).join('; ') || '—')+'</td>'
+          + '<td style="font-size:10px;">'+esc((m.asserts || []).map(a => a.class + ' (rank ' + a.rank + ')').join('; ') || '—')+'</td>'
+          + '<td style="font-size:10px;color:var(--muted);">'+esc(pmStr)+'</td></tr>';
       });
       h += '</tbody></table>';
       mapsDiv.innerHTML = h;
     }
   } catch(e) {
     document.getElementById('ontology-status').innerHTML = '<div class="error-text">'+esc(e.message)+'</div>';
+  }
+}
+
+// The classes some mapping asserts properties of: the ones that can be reconciled.
+function fillReconcileClasses(mappings) {
+  const sel = document.getElementById('reconcile-class');
+  const names = [...new Set(mappings.flatMap(m => (m.asserts || []).map(a => a.class)))];
+  sel.innerHTML = names.length ? names.map(n => '<option value="'+esc(n)+'">'+esc(n)+'</option>').join('') : '<option value="">(no authority declared yet)</option>';
+  document.getElementById('reconcile-run').disabled = !names.length;
+}
+// Resolve one class, then show what the sources disagree about and who wins.
+async function resolveClass() {
+  const cls = document.getElementById('reconcile-class').value;
+  const out = document.getElementById('reconcile-result');
+  if (!cls) { out.innerHTML = '<div class="empty-state">Declare authority first: Data Sources → Preview → Authority.</div>'; return; }
+  const tenant = document.getElementById('ontology-tenant').value;
+  out.innerHTML = '<div class="loading">Resolving...</div>';
+  try {
+    const body = tenant ? {class: cls, tenant: tenant} : {class: cls};
+    const r = (await apiPost('/api/v1/sources/resolve', body)).data;
+    let url = '/api/aikoql?query=' + encodeURIComponent('MATCH aikoql:contradiction WHERE class == "' + cls.replace(/[\\"]/g, '') + '" RETURN *');
+    if (tenant) url += '&tenant=' + encodeURIComponent(tenant);
+    const found = await api(url);
+    const list = found.results || [];
+    let h = '<div style="font-size:12px;margin:8px 0;"><b>'+esc(r.entities)+'</b> entities from <b>'+esc(r.claims)+'</b> claims · '
+      + '<b>'+esc(r.contradictions.resolved)+'</b> disagreements settled by authority, <b>'+esc(r.contradictions.open)+'</b> open';
+    if (r.ambiguous) h += ' · '+esc(r.ambiguous)+' key(s) skipped because a source gave them several rows';
+    if (r.no_key) h += ' · '+esc(r.no_key)+' row(s) without a key';
+    h += '</div>';
+    (r.proposals || []).forEach(pr => {
+      h += '<div style="font-size:11px;color:var(--orange);">Possibly the same: '+esc(pr.keys.join(' ≈ '))+' ('+esc(pr.rule)+', '+esc(pct(pr.confidence))+') — not merged.</div>';
+    });
+    if (list.length) {
+      h += '<table><thead><tr><th>Entity</th><th>Property</th><th>Sources say</th><th>Decision</th><th></th></tr></thead><tbody>';
+      list.forEach(row => {
+        const c = row.properties || {};
+        const says = (c.values || []).map(v => v.source + ': ' + v.value).join(' | ');
+        h += '<tr><td class="mono">'+esc(c.key)+'</td><td>'+esc(c.property)+'</td><td style="font-size:11px;">'+esc(says)+'</td>'
+          + '<td><span class="badge '+esc(c.status === 'resolved' ? 'badge-green' : 'badge-orange')+'">'+esc(c.status)+'</span> <span style="font-size:10px;color:var(--muted);">'+esc(c.winner ? c.winner + ' — ' : '')+esc(c.rule)+'</span></td>'
+          + '<td><button class="btn btn-sec btn-sm" data-click="openInInspector" data-koid="'+esc(row.koid)+'">Inspect</button></td></tr>';
+      });
+      h += '</tbody></table>';
+    } else {
+      h += '<div class="empty-state">The sources agree about every property they both assert.</div>';
+    }
+    out.innerHTML = h;
+  } catch (e) {
+    out.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>';
   }
 }
 
@@ -1963,7 +2024,17 @@ document.addEventListener('DOMContentLoaded', () => {
 // ═══════════════════════════════════════════
 // Panel: Data Sources (/api/v1/sources*)
 // ═══════════════════════════════════════════
-const sourcesState = { merges: [], names: [], fingerprints: null, activeVersion: null, suggestions: [] };
+const sourcesState = { merges: [], names: [], fingerprints: null, activeVersion: null, suggestions: [],
+  identities: {}, links: [], assertions: [] };
+// What the owner has accepted in the preview: keys, links and assertions ride along with
+// every preview and publish, so the draft the reviewer sees is the draft that is saved.
+function declaredBody() {
+  const b = {};
+  if (Object.keys(sourcesState.identities).length) b.identities = sourcesState.identities;
+  if (sourcesState.links.length) b.relationships = sourcesState.links;
+  if (sourcesState.assertions.length) b.assertions = sourcesState.assertions;
+  return b;
+}
 function pct(x) { return Math.round(Number(x) * 100) + '%'; }
 function sourcesBody(extra) {
   const t = document.getElementById('sources-tenant').value;
@@ -2015,6 +2086,76 @@ async function discoverSource(name) {
     out.innerHTML = '<div class="card" style="border-color:var(--red);">'+esc(e.message)+'</div>';
   }
 }
+function renderDeclared(p) {
+  const st = sourcesState;
+  let h = '<h4 style="margin-top:14px;">Keys — which rows are the same row</h4>'
+    + '<div style="font-size:11px;color:var(--muted);">A key makes a re-imported row update in place and keep a history. A key that is not unique or has gaps is refused at import, never guessed.</div>';
+  const ids = p.identities || [];
+  if (ids.length) {
+    h += '<table style="font-size:12px;margin-top:6px;"><thead><tr><th>Container</th><th>Key</th><th>Confidence</th><th>Why</th><th></th></tr></thead><tbody>';
+    ids.forEach(s => {
+      const on = (st.identities[s.container] || []).join(',') === (s.columns || []).join(',');
+      h += '<tr><td class="mono" style="font-size:10px;">'+esc(s.container)+'</td><td class="mono">'+esc((s.columns || []).join(', '))+'</td>'
+        + '<td><span class="badge badge-cyan">'+esc(pct(s.confidence))+'</span>';
+      if (s.declared) h += ' <span class="badge badge-green">declared by the source</span>';
+      h += '</td><td style="font-size:10px;color:var(--muted);">'+esc((s.evidence || []).join('; '))+'</td>'
+        + '<td><button class="btn btn-sec btn-sm" data-click="toggleIdentity" data-container="'+esc(s.container)+'" data-columns="'+esc((s.columns || []).join(','))+'">'+esc(on ? 'Remove' : 'Use as key')+'</button></td></tr>';
+    });
+    h += '</tbody></table>';
+  } else {
+    h += '<div style="font-size:11px;margin-top:6px;">No key could be proposed for these sources.</div>';
+  }
+  h += '<h4 style="margin-top:14px;">Links — which rows relate</h4>'
+    + '<div style="font-size:11px;color:var(--muted);">An accepted link becomes a relationship between the rows at import (walk it with TRAVERSE). A reference to no row, or to several, gets no edge.</div>';
+  st.links.forEach((l, i) => {
+    h += '<div style="font-size:12px;margin-top:4px;"><span class="badge badge-green">accepted</span> <b>'+esc(l.name)+'</b> <span class="mono" style="font-size:10px;">'+esc(l.from)+' → '+esc(l.to)+'</span> <button class="btn btn-sec btn-sm" data-click="removeLink" data-index="'+esc(i)+'">Remove</button></div>';
+  });
+  (p.links || []).forEach((l, i) => {
+    h += '<div style="font-size:12px;margin-top:4px;"><b>'+esc(l.name)+'</b> <span class="mono" style="font-size:10px;">'+esc(l.from)+' → '+esc(l.to)+'</span> <span class="badge badge-cyan">'+esc(pct(l.confidence))+'</span> <span style="font-size:10px;color:var(--muted);">'+esc((l.evidence || []).join('; '))+'</span> <button class="btn btn-sec btn-sm" data-click="acceptLink" data-index="'+esc(i)+'">Accept</button></div>';
+  });
+  if (!st.links.length && !(p.links || []).length) h += '<div style="font-size:11px;margin-top:6px;">No link could be proposed.</div>';
+  h += '<h4 style="margin-top:14px;">Authority — who is believed when sources disagree</h4>'
+    + '<div style="font-size:11px;color:var(--muted);">Rows of a container become claims about one thing (for example an Account) named by its key column. The <b>lowest rank wins</b>; equal ranks leave the disagreement open.</div>';
+  st.assertions.forEach((a, i) => {
+    h += '<div style="font-size:12px;margin-top:4px;"><span class="badge badge-green">declared</span> <span class="mono" style="font-size:10px;">'+esc(a.from)+'</span> asserts <b>'+esc(a.class)+'</b> '+esc(Object.entries(a.properties).map(([k, v]) => k + ' → ' + v).join(', '))+' <span class="badge badge-purple">rank '+esc(a.rank)+'</span> <button class="btn btn-sec btn-sm" data-click="removeAssertion" data-index="'+esc(i)+'">Remove</button></div>';
+  });
+  h += '<div style="margin-top:6px;font-size:11px;">'
+    + '<input id="as-from" placeholder="source.container.keycolumn" aria-label="Key column of the claim" size="30"> '
+    + '<input id="as-class" placeholder="Class (e.g. Account)" aria-label="Class the claim is about" size="16"> '
+    + '<input id="as-props" placeholder="column=property, column=property" aria-label="Columns and the properties they assert" size="30"> '
+    + '<input id="as-rank" type="number" min="0" value="100" aria-label="Rank (lowest wins)" style="width:70px;"> '
+    + '<button class="btn btn-sec btn-sm" data-click="addAssertion">Add</button></div>';
+  return h;
+}
+function toggleIdentity(el) {
+  const c = el.dataset.container, cols = el.dataset.columns.split(',');
+  if ((sourcesState.identities[c] || []).join(',') === cols.join(',')) delete sourcesState.identities[c];
+  else sourcesState.identities[c] = cols;
+  return previewSources();
+}
+function acceptLink(index) {
+  const l = (sourcesState.lastPreview.links || [])[index];
+  if (!l) { sourcesMsg('That suggestion is no longer current — preview again.'); return; }
+  sourcesState.links.push({name: l.name, from: l.from, to: l.to});
+  return previewSources();
+}
+function removeLink(index) { sourcesState.links.splice(index, 1); return previewSources(); }
+function addAssertion() {
+  const v = id => document.getElementById(id).value.trim();
+  const props = {};
+  for (const part of v('as-props').split(',')) {
+    const [a, b] = part.split('=').map(x => (x || '').trim());
+    if (a && b) props[a] = b;
+  }
+  const rank = Number(v('as-rank'));
+  if (!v('as-from') || !v('as-class') || !Object.keys(props).length || !Number.isInteger(rank) || rank < 0) {
+    sourcesMsg('An assertion needs a key column (source.container.column), a class, at least one column=property pair, and a whole-number rank.');
+    return;
+  }
+  sourcesState.assertions.push({from: v('as-from'), class: v('as-class'), properties: props, rank: rank});
+  return previewSources();
+}
+function removeAssertion(index) { sourcesState.assertions.splice(index, 1); return previewSources(); }
 function renderSourcesPreview(p) {
   return '<div class="card"><h4>Proposed ontology</h4>'
     + '<table style="font-size:12px;border-collapse:collapse;">'
@@ -2031,6 +2172,7 @@ function renderSourcesPreview(p) {
           + (s.properties || []).map(pr => '<div class="mono" style="font-size:11px;">'+esc(pr.a_field)+' = '+esc(pr.b_field)+' ('+esc(pct(pr.confidence))+')</div>').join('')
           + '<button class="btn btn-sec btn-sm" data-click="applySuggestion" data-index="'+esc(i)+'">Apply this merge</button></div>').join('')
       : '')
+    + renderDeclared(p)
     + '<div style="margin-top:10px;"><button class="btn btn-sec btn-sm" data-click="mergeSelectedClasses">Merge the two checked classes</button> <button class="btn btn-pri btn-sm" data-click="applySourceOntology">Publish</button></div>'
     + '</div>';
 }
@@ -2039,8 +2181,8 @@ async function previewSources() {
   if (!names.length) { sourcesMsg('Check at least one source first.'); return; }
   const out = document.getElementById('sources-preview');
   try {
-    const p = (await apiPost('/api/v1/sources/ontology', sourcesBody({sources: names, merges: sourcesState.merges, preview: true}))).data;
-    Object.assign(sourcesState, {names: names, fingerprints: p.fingerprints, activeVersion: p.active_version, suggestions: p.suggestions || []});
+    const p = (await apiPost('/api/v1/sources/ontology', sourcesBody(Object.assign({sources: names, merges: sourcesState.merges, preview: true}, declaredBody())))).data;
+    Object.assign(sourcesState, {names: names, fingerprints: p.fingerprints, activeVersion: p.active_version, suggestions: p.suggestions || [], lastPreview: p});
     out.innerHTML = renderSourcesPreview(p);
     sourcesMsg('Preview ready — nothing has been written.');
   } catch (e) {
@@ -2062,13 +2204,14 @@ function applySuggestion(index) {
 }
 async function applySourceOntology() {
   if (!sourcesState.fingerprints) { sourcesMsg('Preview first.'); return; }
-  const body = sourcesBody({sources: sourcesState.names, merges: sourcesState.merges, preview: false, fingerprints: sourcesState.fingerprints});
+  const body = sourcesBody(Object.assign({sources: sourcesState.names, merges: sourcesState.merges, preview: false, fingerprints: sourcesState.fingerprints}, declaredBody()));
   if (sourcesState.activeVersion !== null && sourcesState.activeVersion !== undefined) body.expected_version = sourcesState.activeVersion;
   try {
     const r = (await apiPost('/api/v1/sources/ontology', body)).data;
     sourcesMsg(r.saved ? 'Published — ontology version ' + r.version + '.' : 'Nothing to change — the ontology already matches.');
     sourcesState.merges = [];
     sourcesState.fingerprints = null;
+    if (r.saved && document.getElementById('panel-ontology')) loadOntologyPanel(true);
   } catch (e) {
     sourcesMsg(/schema changed/.test(e.message) ? 'The schema changed since the preview — preview again.' : e.message);
   }
@@ -2203,6 +2346,12 @@ const ACTIONS = Object.assign(Object.create(null), {
   previewSourceOntology: el => previewSources(),
   mergeSelectedClasses: el => mergeSelectedClasses(),
   applySuggestion: el => applySuggestion(Number(el.dataset.index)),
+  toggleIdentity: el => toggleIdentity(el),
+  acceptLink: el => acceptLink(Number(el.dataset.index)),
+  removeLink: el => removeLink(Number(el.dataset.index)),
+  addAssertion: el => addAssertion(),
+  removeAssertion: el => removeAssertion(Number(el.dataset.index)),
+  resolveClass: el => resolveClass(),
   applySourceOntology: el => applySourceOntology(),
   importSource: el => importSource(el.dataset.name),
   askQuestion: el => askQuestion(),

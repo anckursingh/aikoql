@@ -31,6 +31,9 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   as relationships at import and walked with `TRAVERSE`; unresolved references are reported, never guessed.
 - **Assertions + `POST /api/v1/sources/resolve`**: rows of several sources become claims about one canonical
   entity; disagreements are `aikoql:contradiction` objects decided by a declared source rank.
+- **Studio ontology workbench**: accept keys and links, declare source authority, and reconcile a class from the
+  UI; the Ontology panel shows keys, links and authority per mapping and lists contradictions with the rule that
+  decided them. The raw definition editor moved under *Advanced*.
 - A later publish now carries a key or link declared after the first publish (it silently ignored them).
 - ClickHouse's "primary key" is a sort prefix, not an identity.
 

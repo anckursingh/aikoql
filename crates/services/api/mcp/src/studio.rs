@@ -525,8 +525,15 @@ td a:hover { text-decoration: underline; }
           <div id="ontology-relationships"></div>
           <div id="ontology-mappings"></div>
         </div>
-        <div class="card">
-          <h3>Create / Replace Ontology</h3>
+        <div class="card" id="ontology-reconcile">
+          <h3>Reconcile sources</h3>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:8px;">When several sources describe the same thing, <b>Resolve</b> merges rows with an exactly equal key into one entity, records where the sources disagree, and settles each disagreement by the authority you declared (Data Sources → Preview → Authority). Nothing is merged on a near match.</p>
+          <label style="font-size:11px;color:var(--muted);">Class <select id="reconcile-class" aria-label="Class to reconcile"></select></label>
+          <button class="btn btn-pri btn-sm" id="reconcile-run" data-click="resolveClass">Resolve</button>
+          <div id="reconcile-result" role="status" aria-live="polite"></div>
+        </div>
+        <details class="card">
+          <summary><b>Advanced: Create / Replace Ontology</b> <span style="font-size:11px;color:var(--muted);">(raw definition)</span></summary>
           <p style="font-size:11px;color:var(--muted);margin-bottom:8px;">Paste an ontology definition as YAML-like JSON. Saves to the tenant chosen above (Global by default); an existing ontology there is replaced.</p>
           <textarea id="ontology-yaml-input" style="width:100%;min-height:240px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:10px;font-size:11px;font-family:'JetBrains Mono',monospace;" placeholder='{
   "namespace": "enterprise",
@@ -551,7 +558,7 @@ td a:hover { text-decoration: underline; }
           <button class="btn btn-pri" data-click="saveOntology" style="margin-top:8px;">Save Ontology</button>
           <button class="btn btn-sec" data-click="discoverOntology" style="margin-top:8px;margin-left:4px;">🔍 Auto-Discover</button>
           <span id="ontology-save-msg" style="margin-left:12px;font-size:11px;"></span>
-        </div>
+        </details>
       </div>
 
       <!-- ── KO Inspector ── -->
@@ -1204,6 +1211,56 @@ mod tests {
             page_for_tests().contains("discoverOntology(true)"),
             "the preview must offer an explicit Save action"
         );
+    }
+
+    #[test]
+    fn the_ontology_workbench_declares_through_the_publish_flow_and_keeps_raw_json_advanced() {
+        let page = page_for_tests();
+        // keys, links and authority ride along with BOTH the preview and the publish,
+        // so the draft the reviewer sees is the draft that is saved
+        let body_uses = page.matches("declaredBody()").count();
+        assert!(
+            body_uses >= 2,
+            "preview and publish must both send the accepted declarations"
+        );
+        for field in ["identities", "relationships", "assertions"] {
+            let d = page.find("function declaredBody()").expect("declaredBody");
+            assert!(page[d..d + 500].contains(field), "{field}");
+        }
+        // reconciling goes through the one route and lists contradictions by class
+        let r = page
+            .find("async function resolveClass()")
+            .expect("resolveClass");
+        let body = &page[r..r + 1400];
+        assert!(body.contains("/api/v1/sources/resolve"), "{body}");
+        assert!(body.contains("aikoql:contradiction"), "{body}");
+        // the raw definition editor is a collapsed, advanced section
+        let d = page
+            .find("<details class=\"card\">")
+            .expect("advanced section");
+        let y = page.find("id=\"ontology-yaml-input\"").expect("editor");
+        assert!(
+            d < y && !page[d..y].contains("</details>"),
+            "the editor lives inside <details>"
+        );
+        assert!(!page[d..d + 40].contains("open"), "collapsed by default");
+        for a in [
+            "toggleIdentity",
+            "acceptLink",
+            "removeLink",
+            "addAssertion",
+            "removeAssertion",
+            "resolveClass",
+        ] {
+            assert!(
+                page.contains(&format!("data-click=\"{a}\"")),
+                "{a} is used by the markup"
+            );
+            assert!(
+                page.contains(&format!("  {a}: el =>")),
+                "{a} is in the closed ACTIONS table"
+            );
+        }
     }
 
     #[test]

@@ -185,7 +185,18 @@ graph depend on them and they are the smallest changes.
   retired by an import and later came back (same key) was written but stayed invisible. Returning objects
   now take the next generation of their id (`live_koid`), for imports and for resolution objects alike.
   Not yet: Studio review of contradictions (Phase D), a per-property authority list.
-- Phases D, E, F, G: open, in the order above.
+- **Phase D — first slice done (2026-11-10).** The owner can now curate the record layer in Studio without
+  JSON: Data Sources → Preview shows **Keys** (each proposal with its confidence and why; *Use as key* /
+  *Remove*), **Links** (proposed from keys; *Accept* / *Remove*) and **Authority** (a small form: key
+  column, class, `column=property` pairs, rank). Accepted declarations ride along with both the preview and
+  the publish, and a declaration the draft cannot honour comes back as a warning instead of being
+  published. The Ontology panel shows each class with the keys of its sources, a mapping table with Key /
+  Links / Authority columns, a **Reconcile sources** card (Resolve a class, see entities, claims, who
+  disagrees, who wins, near matches left unmerged, Inspect a contradiction), and the raw definition editor
+  as a collapsed *Advanced* section. Real-Chrome e2e: 169/169. Not yet: editing a class (name, parent,
+  properties) or a property map by hand, schema history (`AS_OF` over `aikoql:source-table`), the
+  schema / sample / ingest mode choice, and the parked empty-source guidance.
+- Phases E, F, G: open, in the order above.
 
 ## 6. Decisions to confirm
 1. **Where identity lives:** a field of the ontology class (proposed) versus a separate mapping
