@@ -761,6 +761,7 @@ mod tests {
                     property_map: std::collections::BTreeMap::new(),
                     identity: Vec::new(),
                     links: Vec::new(),
+                    asserts: Vec::new(),
                 },
                 MappingEntry {
                     source: "mongo".into(),
@@ -769,6 +770,7 @@ mod tests {
                     property_map: std::collections::BTreeMap::new(),
                     identity: Vec::new(),
                     links: Vec::new(),
+                    asserts: Vec::new(),
                 },
             ],
         })
@@ -992,6 +994,7 @@ mod tests {
                     .collect(),
                 identity: Vec::new(),
                 links: Vec::new(),
+                asserts: Vec::new(),
             })
             .collect();
         OntologyRegistry::new(OntologyDef {

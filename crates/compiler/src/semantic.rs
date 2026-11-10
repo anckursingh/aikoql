@@ -348,6 +348,7 @@ mod tests {
                 property_map: std::collections::BTreeMap::new(),
                 identity: Vec::new(),
                 links: Vec::new(),
+                asserts: Vec::new(),
             })
             .collect();
         let ont = OntologyRegistry::new(OntologyDef {

@@ -134,6 +134,7 @@ fn enterprise_ontology() -> OntologyRegistry {
             property_map: pg_map,
             identity: Vec::new(),
             links: Vec::new(),
+            asserts: Vec::new(),
         },
         MappingEntry {
             source: "mongodb".into(),
@@ -142,6 +143,7 @@ fn enterprise_ontology() -> OntologyRegistry {
             property_map: mongo_map,
             identity: Vec::new(),
             links: Vec::new(),
+            asserts: Vec::new(),
         },
         MappingEntry {
             source: "postgres".into(),
@@ -150,6 +152,7 @@ fn enterprise_ontology() -> OntologyRegistry {
             property_map: std::collections::BTreeMap::new(),
             identity: Vec::new(),
             links: Vec::new(),
+            asserts: Vec::new(),
         },
     ];
 

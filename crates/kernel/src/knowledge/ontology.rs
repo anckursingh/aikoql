@@ -111,6 +111,29 @@ pub struct MappingEntry {
     /// Relationships this container's rows have to rows of another container,
     /// declared by column values rather than by a source foreign key.
     pub links: Vec<LinkDef>,
+    /// Properties of a canonical entity that this container's rows assert, so
+    /// rows of different sources about one thing can be reconciled.
+    pub asserts: Vec<AssertDef>,
+}
+
+/// "Each row of this container is a claim about the `class` entity named by
+/// `key_column`; these columns assert these canonical properties."
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssertDef {
+    /// Canonical class the claims are about (`"Account"`).
+    pub class: String,
+    /// Physical column holding the canonical entity's key. Rows of any container
+    /// with the same key value (as text) are about the same entity.
+    pub key_column: String,
+    /// Physical column -> canonical property it asserts.
+    pub properties: BTreeMap<String, String>,
+    /// Source authority for these properties: when sources disagree, the lowest
+    /// rank wins; equal ranks leave the disagreement open.
+    pub rank: u32,
+}
+
+impl AssertDef {
+    pub const DEFAULT_RANK: u32 = 100;
 }
 
 /// "`column` of this container references `target_column` of `target_type`":
@@ -270,6 +293,26 @@ impl OntologyDef {
                     .collect();
                 mm.insert("links".into(), Value::List(list));
             }
+            if !me.asserts.is_empty() {
+                let list = me
+                    .asserts
+                    .iter()
+                    .map(|a| {
+                        let mut am = BTreeMap::new();
+                        am.insert("class".to_string(), Value::Text(a.class.clone()));
+                        am.insert("key_column".to_string(), Value::Text(a.key_column.clone()));
+                        am.insert("rank".to_string(), Value::Int(i64::from(a.rank)));
+                        let props = a
+                            .properties
+                            .iter()
+                            .map(|(k, v)| (k.clone(), Value::Text(v.clone())))
+                            .collect();
+                        am.insert("properties".to_string(), Value::Map(props));
+                        Value::Map(am)
+                    })
+                    .collect();
+                mm.insert("asserts".into(), Value::List(list));
+            }
             map_list.push(Value::Map(mm));
         }
         m.insert("mappings".into(), Value::List(map_list));
@@ -418,6 +461,38 @@ impl OntologyDef {
                             .collect(),
                         _ => Vec::new(),
                     };
+                    let asserts = match map_get(mm, "asserts") {
+                        Some(Value::List(items)) => items
+                            .iter()
+                            .filter_map(|it| {
+                                let Value::Map(am) = it else { return None };
+                                let get = |k: &str| map_get_str(am, k).map(str::to_string);
+                                let properties = match map_get(am, "properties") {
+                                    Some(Value::Map(pm)) => pm
+                                        .iter()
+                                        .filter_map(|(k, v)| match v {
+                                            Value::Text(t) => Some((k.clone(), t.clone())),
+                                            _ => None,
+                                        })
+                                        .collect(),
+                                    _ => BTreeMap::new(),
+                                };
+                                let rank = match map_get(am, "rank") {
+                                    Some(Value::Int(n)) if *n >= 0 => {
+                                        u32::try_from(*n).unwrap_or(u32::MAX)
+                                    }
+                                    _ => AssertDef::DEFAULT_RANK,
+                                };
+                                Some(AssertDef {
+                                    class: get("class")?,
+                                    key_column: get("key_column")?,
+                                    properties,
+                                    rank,
+                                })
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     mappings.push(MappingEntry {
                         source,
                         physical_type,
@@ -425,6 +500,7 @@ impl OntologyDef {
                         property_map,
                         identity,
                         links,
+                        asserts,
                     });
                 }
             }
@@ -858,6 +934,7 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
             property_map: BTreeMap::new(),
             identity: Vec::new(),
             links: Vec::new(),
+            asserts: Vec::new(),
         });
     }
 
@@ -1018,6 +1095,7 @@ mod tests {
                 property_map: property_map.clone(),
                 identity: Vec::new(),
                 links: Vec::new(),
+                asserts: Vec::new(),
             },
             MappingEntry {
                 source: "mongodb".into(),
@@ -1026,6 +1104,7 @@ mod tests {
                 property_map: property_map.clone(),
                 identity: Vec::new(),
                 links: Vec::new(),
+                asserts: Vec::new(),
             },
         ];
 
@@ -1578,6 +1657,7 @@ mod tests {
                 property_map: BTreeMap::new(),
                 identity: Vec::new(),
                 links: Vec::new(),
+                asserts: Vec::new(),
             })
             .collect();
         let r = OntologyRegistry::new(OntologyDef {
@@ -1638,6 +1718,7 @@ mod tests {
                     property_map: BTreeMap::new(),
                     identity: Vec::new(),
                     links: Vec::new(),
+                    asserts: Vec::new(),
                 },
                 MappingEntry {
                     source: "mongo".into(),
@@ -1646,6 +1727,7 @@ mod tests {
                     property_map: BTreeMap::new(),
                     identity: Vec::new(),
                     links: Vec::new(),
+                    asserts: Vec::new(),
                 },
             ],
         })
@@ -2055,6 +2137,54 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_assertion_round_trips_and_old_ontologies_still_load() {
+        let mut def = sample_ontology();
+        def.mappings[0].asserts = vec![AssertDef {
+            class: "Account".into(),
+            key_column: "account_id".into(),
+            properties: [("decision".to_string(), "status".to_string())].into(),
+            rank: 20,
+        }];
+        let back = OntologyDef::from_property_map(&def.to_property_map()).unwrap();
+        assert_eq!(back.mappings[0].asserts, def.mappings[0].asserts);
+        assert_eq!(back, def, "nothing else moved");
+        // none declared: nothing written
+        let props = sample_ontology().to_property_map();
+        if let Some(Value::List(ml)) = props.get("mappings") {
+            for m in ml {
+                if let Value::Map(mm) = m {
+                    assert!(!mm.contains_key("asserts"));
+                }
+            }
+        }
+        // a missing rank means the default; a half-written assertion is dropped
+        let mut junk = def.to_property_map();
+        if let Some(Value::List(ml)) = junk.get_mut("mappings") {
+            if let Value::Map(mm) = &mut ml[0] {
+                let bad: BTreeMap<String, Value> =
+                    [("class".to_string(), Value::Text("A".into()))].into();
+                let norank: BTreeMap<String, Value> = [
+                    ("class".to_string(), Value::Text("A".into())),
+                    ("key_column".to_string(), Value::Text("k".into())),
+                ]
+                .into();
+                mm.insert(
+                    "asserts".into(),
+                    Value::List(vec![Value::Map(bad), Value::Map(norank), Value::Int(3)]),
+                );
+            }
+        }
+        let got = OntologyDef::from_property_map(&junk).unwrap().mappings[0]
+            .asserts
+            .clone();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(
+            (got[0].class.as_str(), got[0].rank),
+            ("A", AssertDef::DEFAULT_RANK)
+        );
+    }
+
+    #[test]
     fn a_declared_link_round_trips_and_old_ontologies_still_load() {
         let mut def = sample_ontology();
         def.mappings[0].links = vec![LinkDef {
@@ -2142,6 +2272,7 @@ mod tests {
                 property_map: BTreeMap::new(),
                 identity: Vec::new(),
                 links: Vec::new(),
+                asserts: Vec::new(),
             }],
         })
         .unwrap();
