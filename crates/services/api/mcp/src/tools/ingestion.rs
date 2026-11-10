@@ -729,57 +729,101 @@ fn compile_limit(args: &J) -> Result<usize, String> {
     }
 }
 
+/// Characters kept per text field in a compile result unless the caller asks for another `max_text`.
+const COMPILE_TEXT_DEFAULT: usize = 2000;
+
+/// The request's `max_text` (100..=100_000_000, default 2000).
+fn compile_max_text(args: &J) -> Result<usize, String> {
+    match args.get("max_text") {
+        None | Some(J::Null) => Ok(COMPILE_TEXT_DEFAULT),
+        Some(v) => v
+            .as_u64()
+            .filter(|n| (100..=100_000_000).contains(n))
+            .map(|n| n as usize)
+            .ok_or_else(|| {
+                "invalid request: max_text must be a whole number from 100 to 100000000".into()
+            }),
+    }
+}
+
+/// Entity mentions of a book hold whole chapters (twenty entities weighed 11 MB): any string
+/// longer than `max_chars` is cut on a character boundary and says how much was dropped.
+/// `truncated.long_text` counts the fields cut. The compiler's numbers are not touched.
+fn bound_compile_text(result: &mut J, max_chars: usize) {
+    fn walk(v: &mut J, max: usize, cut: &mut usize) {
+        match v {
+            J::String(s) => {
+                if let Some((at, _)) = s.char_indices().nth(max) {
+                    let more = s[at..].chars().count();
+                    s.truncate(at);
+                    s.push_str(&format!("… [{more} more characters]"));
+                    *cut += 1;
+                }
+            }
+            J::Array(a) => a.iter_mut().for_each(|x| walk(x, max, cut)),
+            J::Object(o) => o.values_mut().for_each(|x| walk(x, max, cut)),
+            _ => {}
+        }
+    }
+    let mut cut = 0;
+    walk(result, max_chars, &mut cut);
+    if cut > 0 {
+        if !result["truncated"].is_object() {
+            result["truncated"] = json!({});
+        }
+        result["truncated"]["long_text"] = json!({"fields": cut, "max_chars": max_chars});
+    }
+}
+
 /// A 1,446-page book compiles to 83 MB (50,878 plan actions, 48,578 relations, ...): more than a
 /// browser or a client can hold. Every list is cut to its first `limit` items and `truncated`
 /// records exactly what was cut, so nothing is dropped silently. The compiler's own counts
 /// (`commit_plan.stats`, `total_chars`, ...) are not touched.
 fn bound_compile_result(result: &mut J, limit: usize) {
-    // every list directly under these roots (the document, Markdown and Rust compilers differ)
-    const ROOTS: &[&str] = &["ir", "markdown_ir", "code_ir"];
-    const LISTS: &[&[&str]] = &[
-        &["commit_plan", "actions"],
-        &["embedded_chunks"],
-        &["fragments"],
-        &["evidence_trail", "nodes"],
-        &["ontology", "classes"],
-        &["ontology", "properties"],
-        &["ontology", "relationships"],
-        &["resolution", "matched"],
-        &["resolution", "ambiguous"],
-        &["resolution", "unmatched"],
-        &["secret_findings"],
-    ];
-    let mut paths: Vec<Vec<String>> = LISTS
-        .iter()
-        .map(|p| p.iter().map(|s| s.to_string()).collect())
-        .collect();
-    for root in ROOTS {
-        if let Some(obj) = result.get(*root).and_then(J::as_object) {
-            for (k, v) in obj {
-                if v.is_array() {
-                    paths.push(vec![root.to_string(), k.clone()]);
+    use std::collections::BTreeMap;
+    // every list at every depth (evidence lists nest inside entities and ontology items), except
+    // arrays of plain numbers: an embedding vector is one value, and cutting it would corrupt it
+    fn walk(v: &mut J, path: &str, limit: usize, cut: &mut BTreeMap<String, usize>) {
+        match v {
+            J::Array(a) => {
+                if !a.is_empty() && a.iter().all(J::is_number) {
+                    return;
+                }
+                if a.len() > limit {
+                    let total = a.len();
+                    a.truncate(limit);
+                    let seen = cut.entry(path.to_string()).or_insert(0);
+                    *seen = (*seen).max(total);
+                }
+                a.iter_mut().for_each(|x| walk(x, path, limit, cut));
+            }
+            J::Object(o) => {
+                for (k, x) in o.iter_mut() {
+                    let p = if path.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{path}.{k}")
+                    };
+                    walk(x, &p, limit, cut);
                 }
             }
+            _ => {}
         }
     }
-    let mut cut = serde_json::Map::new();
-    for path in &paths {
-        let pointer = format!("/{}", path.join("/"));
-        if let Some(list) = result.pointer_mut(&pointer).and_then(J::as_array_mut) {
-            if list.len() > limit {
-                let total = list.len();
-                list.truncate(limit);
-                cut.insert(path.join("."), json!({"shown": limit, "total": total}));
-            }
-        }
-    }
+    let mut cut = BTreeMap::new();
+    walk(result, "", limit, &mut cut);
     if !cut.is_empty() {
-        result["truncated"] = J::Object(cut);
+        let note: serde_json::Map<String, J> = cut
+            .into_iter()
+            .map(|(p, total)| (p, json!({"shown": limit, "total": total})))
+            .collect();
+        result["truncated"] = J::Object(note);
     }
 }
 
 pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let limit = compile_limit(args)?;
+    let max_text = compile_max_text(args)?;
     let hex = args
         .get("koid")
         .and_then(|v| v.as_str())
@@ -931,6 +975,7 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
         obj.insert("mime_type".into(), serde_json::Value::String(mime_type));
     }
     bound_compile_result(&mut result, limit);
+    bound_compile_text(&mut result, max_text);
 
     Ok(result)
 }
@@ -994,6 +1039,81 @@ mod compile_bound_tests {
                 r["entities"], 900,
                 "the compiler's own count is not touched"
             );
+        }
+    }
+
+    #[test]
+    fn lists_nested_inside_items_are_bounded_but_number_vectors_are_not() {
+        let evidence: Vec<J> = (0..900).map(|i| json!({"page": i})).collect();
+        let vector: Vec<J> = (0..384).map(|i| json!(i as f64 * 0.5)).collect();
+        let mut r = json!({
+            "ontology": {"relationships": [{"name": "r", "evidence": evidence}]},
+            "embedded_chunks": [{"embedding": vector.clone()}],
+        });
+        bound_compile_result(&mut r, 50);
+        assert_eq!(
+            r["ontology"]["relationships"][0]["evidence"]
+                .as_array()
+                .unwrap()
+                .len(),
+            50
+        );
+        assert_eq!(
+            r["truncated"]["ontology.relationships.evidence"],
+            json!({"shown": 50, "total": 900})
+        );
+        // an embedding vector is one value, not a list of items: cutting it would corrupt it
+        assert_eq!(
+            r["embedded_chunks"][0]["embedding"]
+                .as_array()
+                .unwrap()
+                .len(),
+            384
+        );
+        assert!(r["truncated"].get("embedded_chunks.embedding").is_none());
+    }
+
+    #[test]
+    fn very_long_text_fields_are_cut_and_counted() {
+        let long = "é".repeat(5000); // multi-byte: the cut must land on a character boundary
+        let mut r = json!({
+            "ir": {"entities": [{"name": "short", "mentions": [long.clone(), "ok"]}]},
+            "ontology": {"relationships": [{"name": long.clone()}]},
+            "total_chars": 5000,
+        });
+        bound_compile_text(&mut r, 100);
+        let m = r["ir"]["entities"][0]["mentions"][0].as_str().unwrap();
+        assert!(
+            m.starts_with(&"é".repeat(100)) && m.contains("4900 more characters"),
+            "{m}"
+        );
+        assert_eq!(
+            r["ir"]["entities"][0]["mentions"][1], "ok",
+            "short text is untouched"
+        );
+        assert_eq!(r["ir"]["entities"][0]["name"], "short");
+        assert_eq!(
+            r["truncated"]["long_text"],
+            json!({"fields": 2, "max_chars": 100})
+        );
+        assert_eq!(r["total_chars"], 5000, "numbers are untouched");
+        // nothing long: nothing changes, no note
+        let mut small = json!({"a": ["x", "y"]});
+        bound_compile_text(&mut small, 100);
+        assert_eq!(small, json!({"a": ["x", "y"]}));
+    }
+
+    #[test]
+    fn the_text_limit_argument_is_validated() {
+        assert_eq!(compile_max_text(&json!({})).unwrap(), 2000);
+        assert_eq!(compile_max_text(&json!({"max_text": 500})).unwrap(), 500);
+        for bad in [
+            json!({"max_text": 0}),
+            json!({"max_text": 99}),
+            json!({"max_text": "x"}),
+            json!({"max_text": 100000001}),
+        ] {
+            assert!(compile_max_text(&bad).is_err(), "{bad}");
         }
     }
 

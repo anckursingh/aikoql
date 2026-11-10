@@ -1890,7 +1890,8 @@ async function compileDocument(koid) {
   const el = document.getElementById('doc-compile-result');
   el.innerHTML = '<div class="loading">Compiling document... (running D3→D9 pipeline)</div>';
   try {
-    const raw = await apiPost('/api/v1/documents/compile', {koid});
+    // a book compiles to tens of MB: ask for a view a page can hold (the API has the full result)
+    const raw = await apiPost('/api/v1/documents/compile', {koid, limit: 100, max_text: 1000});
     const r = raw.data || raw; // REST API wraps in {"data": ...}
 
     // Helper: extract enum variant name from serde's tagged representation.
@@ -1919,8 +1920,8 @@ async function compileDocument(koid) {
     if (r.truncated) {
       // a large document: the server bounds every list, and the counts below are of what is shown
       html += '<div style="margin-bottom:8px;color:var(--orange);font-size:12px;">Large result: showing the first items of each list only — '
-        + esc(Object.entries(r.truncated).map(([k, v]) => k + ' ' + v.shown + ' of ' + v.total).join(', '))
-        + '. The full result is available from the API with a higher <code>limit</code>.</div>';
+        + esc(Object.entries(r.truncated).map(([k, v]) => k === 'long_text' ? v.fields + ' long text field(s) cut to ' + v.max_chars + ' characters' : k + ' ' + v.shown + ' of ' + v.total).join(', '))
+        + '. The full result is available from the API with a higher <code>limit</code> / <code>max_text</code>.</div>';
     }
 
     // ── Stats ──

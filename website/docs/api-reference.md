@@ -531,6 +531,10 @@ POST /api/v1/documents/compile
 MCP: document_compile
 ```
 
+Body: `{"koid": "...", "limit": 500, "max_text": 2000}`. `limit` (1 to 1,000,000) bounds every list in the result and
+`max_text` (100 to 100,000,000) every text field; `truncated` in the response reports exactly what was cut
+(`{"ir.entities": {"shown": 100, "total": 2300}, "long_text": {"fields": 2090, "max_chars": 2000}}`).
+
 ### `list-documents` — List all ingested documents with status
 
 ```

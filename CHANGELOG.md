@@ -34,6 +34,13 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 - **Studio ontology workbench**: accept keys and links, declare source authority, and reconcile a class from the
   UI; the Ontology panel shows keys, links and authority per mapping and lists contradictions with the rule that
   decided them. The raw definition editor moved under *Advanced*.
+- **Ingestion fix:** a PDF of 10 or more pages that needed OCR could never be OCR'd (`pdftoppm` pads page
+  numbers, the image was looked up unpadded); the cover page of a 1,446-page book failed with `ocr_partial`. OCR
+  failures now carry tesseract's own message (`ocr_stats.failures`, the ingest response, Studio, the log).
+- **`document_compile` is bounded** (`limit`, `max_text`; `truncated` reports every cut): a large book returned
+  83 MB, more than a browser can hold. See docs/LOGGING.md.
+- **Persistent server log**: `<db>.server.log`, size-rotated, appended across restarts, panics included;
+  `[logging] file` / `AIKOQL_LOG_FILE` / `off`. See docs/LOGGING.md.
 - A later publish now carries a key or link declared after the first publish (it silently ignored them).
 - ClickHouse's "primary key" is a sort prefix, not an identity.
 

@@ -1265,6 +1265,21 @@ mod tests {
     }
 
     #[test]
+    fn compile_asks_for_a_view_a_browser_can_hold() {
+        // a 1,446-page book compiles to 83 MB; the page must never request that
+        let page = page_for_tests();
+        let c = page
+            .find("async function compileDocument(")
+            .expect("compileDocument");
+        let body: String = page[c..].chars().take(700).collect();
+        assert!(body.contains("/api/v1/documents/compile"), "{body}");
+        assert!(
+            body.contains("limit:") && body.contains("max_text:"),
+            "{body}"
+        );
+    }
+
+    #[test]
     fn ontology_panel_reads_the_active_ontology_and_saves_with_cas() {
         // The panel shows what the compiler uses (GET /api/v1/ontology, not
         // results[0] of a MATCH) and saves in place under expected_version.
