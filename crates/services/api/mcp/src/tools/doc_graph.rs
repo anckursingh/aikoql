@@ -98,9 +98,12 @@ fn cut(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+/// entity name -> (ontology class, attributes) from the compiler's commit plan
+type ClassOf = HashMap<String, (Option<String>, Vec<(String, String)>)>;
+
 /// What `ensure_entity` needs to name and describe an entity object.
 struct EntityCtx<'a> {
-    class_of: &'a HashMap<String, (Option<String>, Vec<(String, String)>)>,
+    class_of: &'a ClassOf,
     doc_koid: KOID,
     doc_hex: &'a str,
     id: &'a dyn Fn(&str, &str) -> KOID,
@@ -213,7 +216,7 @@ fn plan_objects(
     let page_chars: usize = doc.pages.iter().map(|p| p.text.chars().count()).sum();
 
     // entities: from the compiler's plan (class, attributes) and the IR (mentions, confidence)
-    let mut class_of: HashMap<String, (Option<String>, Vec<(String, String)>)> = HashMap::new();
+    let mut class_of: ClassOf = HashMap::new();
     for a in &cr.commit_plan.actions {
         if let CommitAction::CreateKO {
             entity_name,
@@ -499,8 +502,7 @@ pub(crate) fn commit_knowledge(
     progress(total, total);
     // what an earlier save wrote and this one no longer contains
     let mine = |ko: &KnowledgeObject| {
-        ko.metadata.tenant.as_deref() == tenant.as_deref()
-            && ko.metadata.tags.iter().any(|t| *t == tag)
+        ko.metadata.tenant.as_deref() == tenant.as_deref() && ko.metadata.tags.contains(&tag)
     };
     let mut pruned = 0;
     for ty in DOC_TYPES {
@@ -667,6 +669,113 @@ pub(crate) fn list_objects(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(
         json!({"koid": hex, "kind": ty, "total": total, "offset": offset, "rows": rows, "next_offset": next}),
     )
+}
+
+/// The graph of one saved document: the document as the hub plus one page of its objects of one
+/// kind. A browser cannot draw tens of thousands of nodes, so the view pages (entities most
+/// connected first); `view` carries exact totals and `next_offset`, so nothing is ever a sample
+/// that looks like the whole, and the saved objects are all reachable by paging or `document_objects`.
+pub(crate) fn document_graph(
+    k: &Kernel,
+    subject: &Subject,
+    doc_hex: &str,
+    kind: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<String, String> {
+    let koid = KOID::from_hex(doc_hex).map_err(|e| format!("bad koid: {e}"))?;
+    let ctx = KnowledgeContext::from(subject.clone());
+    let doc_ko = k.get(ctx, &koid).map_err(|e| e.to_string())?;
+    let tag = doc_tag(&sha_of(&doc_ko)?);
+    let tenant = tenant_of(&doc_ko);
+    let ty = match kind {
+        "page" => T_PAGE,
+        "chunk" => T_CHUNK,
+        "fragment" => T_FRAGMENT,
+        "entity" => T_ENTITY,
+        "fact" => T_FACT,
+        other => {
+            return Err(format!(
+                "invalid request: kind must be page, chunk, fragment, entity or fact (got {other})"
+            ))
+        }
+    };
+    let limit = limit.clamp(1, 2000);
+    let by_ty: Vec<(&str, Vec<KnowledgeObject>)> = DOC_TYPES
+        .iter()
+        .map(|t| (*t, saved(k, t, &tag, tenant.as_deref())))
+        .collect();
+    let totals: serde_json::Map<String, J> = [
+        ("page", T_PAGE),
+        ("fragment", T_FRAGMENT),
+        ("chunk", T_CHUNK),
+        ("entity", T_ENTITY),
+        ("fact", T_FACT),
+    ]
+    .iter()
+    .map(|(n, t)| {
+        (
+            n.to_string(),
+            json!(by_ty
+                .iter()
+                .find(|(x, _)| x == t)
+                .map_or(0, |(_, v)| v.len())),
+        )
+    })
+    .collect();
+    let mut objs: Vec<&KnowledgeObject> = by_ty
+        .iter()
+        .find(|(t, _)| *t == ty)
+        .map(|(_, v)| v.iter().collect())
+        .unwrap_or_default();
+    let ordinal = |o: &KnowledgeObject| match o.properties.get("ordinal") {
+        Some(Value::Int(n)) => *n,
+        _ => 0,
+    };
+    // entities: the most connected first, so a page of the view is the page worth drawing
+    if ty == T_ENTITY {
+        objs.sort_by_key(|o| (std::cmp::Reverse(o.relationships.len()), ordinal(o), o.koid));
+    } else {
+        objs.sort_by_key(|o| (ordinal(o), o.koid));
+    }
+    let total = objs.len();
+    let page: Vec<&KnowledgeObject> = objs.into_iter().skip(offset).take(limit).collect();
+    let mut nodes: Vec<J> = Vec::new();
+    let mut added: HashSet<String> = HashSet::new();
+    crate::http::add_node_api(&mut nodes, &mut added, &doc_ko, true);
+    for o in &page {
+        crate::http::add_node_api(&mut nodes, &mut added, o, true);
+    }
+    let mut edges: Vec<J> = Vec::new();
+    let mut degree: HashMap<String, usize> = HashMap::new();
+    for o in &page {
+        for r in &o.relationships {
+            let target = r.target.to_hex();
+            if added.contains(&target) {
+                *degree.entry(o.koid.to_hex()).or_insert(0) += 1;
+                *degree.entry(target.clone()).or_insert(0) += 1;
+                edges.push(
+                    json!({"source": o.koid.to_hex(), "target": target, "rel_type": r.rel_type}),
+                );
+            }
+        }
+    }
+    for n in &mut nodes {
+        let c = degree
+            .get(n["koid"].as_str().unwrap_or(""))
+            .copied()
+            .unwrap_or(0);
+        n["size"] = json!((18 + c * 3).min(42));
+        n["edge_count"] = json!(c);
+    }
+    let next = (offset + page.len() < total).then_some(offset + page.len());
+    Ok(json!({
+        "nodes": nodes, "edges": edges, "tenants": [], "tenant_filter": tenant,
+        "document": doc_hex,
+        "manifest": graph_info(&doc_ko)["manifest"],
+        "view": {"kind": kind, "total": total, "offset": offset, "shown": page.len(), "next_offset": next, "totals": totals},
+    })
+    .to_string())
 }
 
 /// Documents being saved right now (a restart leaves `saving` with nothing running: reported as interrupted).
@@ -1247,5 +1356,89 @@ mod tests {
         let e = tool_document_commit(&k, &json!({"koid": md["koid"]}), db.to_str().unwrap())
             .unwrap_err();
         assert!(e.contains("not supported yet"), "{e}");
+    }
+
+    #[test]
+    fn the_default_graph_hides_saved_objects_and_says_how_many_while_the_document_view_pages_through_all(
+    ) {
+        let (k, doc) = (kernel(), document());
+        let cr = compiled(&doc);
+        let ko = ingest(&k, None, "g1");
+        let manifest = save(&k, &ko, &doc, &cr);
+        let admin = crate::Subject::with_roles("t", &["admin"]);
+        // the tool layer records the manifest on the document; do the same here
+        set_graph(
+            &k,
+            &ko.koid,
+            &admin,
+            &[
+                ("graph_status", text("saved")),
+                ("graph_manifest", text(&manifest.to_string())),
+            ],
+        );
+        // the global view stays small: one node for the document, the rest counted as hidden
+        let g: J = serde_json::from_str(
+            &crate::http::graph_api(&k, "/api/graph?detail=1", &admin).unwrap(),
+        )
+        .unwrap();
+        let types: Vec<&str> = g["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["type_name"].as_str())
+            .collect();
+        assert!(DOC_TYPES.iter().all(|t| !types.contains(t)), "{types:?}");
+        assert!(g["hidden"]["document_objects"].as_u64().unwrap() > 0, "{g}");
+        // the document view: every entity is reachable by paging, none twice, with exact totals
+        let total_entities = live(&k, T_ENTITY, None).len();
+        let (mut seen, mut offset) = (std::collections::BTreeSet::new(), 0usize);
+        loop {
+            let v: J = serde_json::from_str(
+                &document_graph(&k, &admin, &ko.koid.to_hex(), "entity", offset, 3).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(v["view"]["total"], total_entities, "{v}");
+            let nodes = v["nodes"].as_array().unwrap();
+            assert!(
+                nodes.iter().any(|n| n["koid"] == ko.koid.to_hex()),
+                "the document is the hub"
+            );
+            let shown: Vec<String> = nodes
+                .iter()
+                .filter(|n| n["type_name"] == T_ENTITY)
+                .map(|n| n["koid"].as_str().unwrap().to_string())
+                .collect();
+            assert!(shown.len() <= 3);
+            let ids: std::collections::HashSet<&str> =
+                nodes.iter().map(|n| n["koid"].as_str().unwrap()).collect();
+            assert!(
+                v["edges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|e| ids.contains(e["source"].as_str().unwrap())
+                        && ids.contains(e["target"].as_str().unwrap())),
+                "no dangling edges"
+            );
+            for s in shown {
+                assert!(seen.insert(s), "no entity on two pages");
+            }
+            match v["view"]["next_offset"].as_u64() {
+                Some(n) => offset = n as usize,
+                None => break,
+            }
+        }
+        assert_eq!(seen.len(), total_entities, "paging reaches every entity");
+        let v: J = serde_json::from_str(
+            &document_graph(&k, &admin, &ko.koid.to_hex(), "page", 0, 100).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v["view"]["total"], PAGES);
+        assert_eq!(
+            v["view"]["totals"]["chunk"],
+            cr.embedded_chunks.len(),
+            "{v}"
+        );
+        assert_eq!(v["manifest"]["complete"], true);
     }
 }
