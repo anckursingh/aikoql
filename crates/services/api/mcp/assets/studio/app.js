@@ -1574,7 +1574,8 @@ document.addEventListener('DOMContentLoaded', () => {
 // ═══════════════════════════════════════════
 // Panel: Data Sources (/api/v1/sources*)
 // ═══════════════════════════════════════════
-const sourcesState = { merges: [], names: [], fingerprints: null, activeVersion: null };
+const sourcesState = { merges: [], names: [], fingerprints: null, activeVersion: null, suggestions: [] };
+function pct(x) { return Math.round(Number(x) * 100) + '%'; }
 function sourcesBody(extra) {
   const t = document.getElementById('sources-tenant').value;
   return Object.assign(t ? {tenant: t} : {}, extra);
@@ -1584,7 +1585,10 @@ function describeDiff(d) {
   const parts = [];
   if ((d.added_containers || []).length) parts.push('added ' + d.added_containers.join(', '));
   if ((d.removed_containers || []).length) parts.push('removed ' + d.removed_containers.join(', '));
-  (d.changed || []).forEach(c => parts.push(c.name + ': +' + (c.added_fields || []).length + ' -' + (c.removed_fields || []).length + ' fields, ' + (c.type_changes || []).length + ' retyped'));
+  (d.changed || []).forEach(c => parts.push(c.name + ': +' + (c.added_fields || []).length + ' -' + (c.removed_fields || []).length + ' fields, ' + (c.type_changes || []).length + ' retyped'
+    + ((c.added_indexes || []).length + (c.removed_indexes || []).length + (c.redefined_indexes || []).length ? ', indexes +' + (c.added_indexes || []).length + ' -' + (c.removed_indexes || []).length + ' ~' + (c.redefined_indexes || []).length : '')
+    + ((c.added_checks || []).length + (c.removed_checks || []).length + (c.redefined_checks || []).length ? ', checks +' + (c.added_checks || []).length + ' -' + (c.removed_checks || []).length + ' ~' + (c.redefined_checks || []).length : '')
+    + ((c.property_changes || []).length ? ', ' + c.property_changes.length + ' storage setting(s) changed' : '')));
   return parts.join('; ');
 }
 function renderSourceCard(s) {
@@ -1631,6 +1635,13 @@ function renderSourcesPreview(p) {
     + '<div style="font-size:11px;">Refreshed: '+esc((p.refreshed || []).join(', ') || 'none')+'</div>'
     + '<div style="font-size:11px;">Left untouched: '+esc((p.untouched || []).join(', ') || 'none')+'</div>'
     + (p.warnings || []).map(w => '<div style="font-size:11px;color:var(--orange);">'+esc(w)+'</div>').join('')
+    + ((p.suggestions || []).length
+      ? '<h4 style="margin-top:12px;">Suggested merges</h4><div style="font-size:11px;color:var(--muted);">Proposals only — nothing changes until you apply one.</div>'
+        + p.suggestions.map((s, i) => '<div class="card" style="margin:6px 0;"><b>'+esc(s.a)+'</b> ~ <b>'+esc(s.b)+'</b> <span class="badge badge-cyan">'+esc(pct(s.confidence))+'</span>'
+          + (s.evidence || []).map(e => '<div style="font-size:11px;">'+esc(e)+'</div>').join('')
+          + (s.properties || []).map(pr => '<div class="mono" style="font-size:11px;">'+esc(pr.a_field)+' = '+esc(pr.b_field)+' ('+esc(pct(pr.confidence))+')</div>').join('')
+          + '<button class="btn btn-sec btn-sm" data-click="applySuggestion" data-index="'+esc(i)+'">Apply this merge</button></div>').join('')
+      : '')
     + '<div style="margin-top:10px;"><button class="btn btn-sec btn-sm" data-click="mergeSelectedClasses">Merge the two checked classes</button> <button class="btn btn-pri btn-sm" data-click="applySourceOntology">Publish</button></div>'
     + '</div>';
 }
@@ -1640,7 +1651,7 @@ async function previewSources() {
   const out = document.getElementById('sources-preview');
   try {
     const p = (await apiPost('/api/v1/sources/ontology', sourcesBody({sources: names, merges: sourcesState.merges, preview: true}))).data;
-    Object.assign(sourcesState, {names: names, fingerprints: p.fingerprints, activeVersion: p.active_version});
+    Object.assign(sourcesState, {names: names, fingerprints: p.fingerprints, activeVersion: p.active_version, suggestions: p.suggestions || []});
     out.innerHTML = renderSourcesPreview(p);
     sourcesMsg('Preview ready — nothing has been written.');
   } catch (e) {
@@ -1652,6 +1663,12 @@ function mergeSelectedClasses() {
   const picked = [...document.querySelectorAll('.cls-pick:checked')];
   if (picked.length !== 2) { sourcesMsg('Check exactly two classes to merge.'); return; }
   sourcesState.merges.push([picked[0].dataset.ref, picked[1].dataset.ref]);
+  return previewSources();
+}
+function applySuggestion(index) {
+  const s = sourcesState.suggestions[index];
+  if (!s) { sourcesMsg('That suggestion is no longer current — preview again.'); return; }
+  sourcesState.merges.push({a: s.a, b: s.b, properties: (s.properties || []).map(pr => [pr.a_field, pr.b_field])});
   return previewSources();
 }
 async function applySourceOntology() {
@@ -1781,6 +1798,7 @@ const ACTIONS = Object.assign(Object.create(null), {
   discoverSource: el => discoverSource(el.dataset.name),
   previewSourceOntology: el => previewSources(),
   mergeSelectedClasses: el => mergeSelectedClasses(),
+  applySuggestion: el => applySuggestion(Number(el.dataset.index)),
   applySourceOntology: el => applySourceOntology(),
   importSource: el => importSource(el.dataset.name),
   askQuestion: el => askQuestion(),

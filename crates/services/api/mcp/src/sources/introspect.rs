@@ -221,6 +221,46 @@ fn map_neo4j(label: &str, props: &[aikoql_neo4j::LabelProp], mode: Mode) -> Cont
     }
 }
 
+/// Attach a label's indexes and constraints. A uniqueness / node-key
+/// constraint is a guarantee (unique group, unique field); an existence or
+/// node-key constraint makes its properties mandatory; a plain index is not.
+fn apply_neo4j_schema(
+    container: &mut ContainerInfo,
+    indexes: &[aikoql_neo4j::SchemaIndex],
+    constraints: &[aikoql_neo4j::SchemaConstraint],
+) {
+    let label = container.name.clone();
+    container.indexes = indexes
+        .iter()
+        .filter(|i| i.labels.contains(&label) && !i.properties.is_empty())
+        .map(|i| aikoql_ingestion::IndexInfo {
+            name: i.name.clone(),
+            columns: i.properties.clone(),
+            unique: i.unique,
+            method: Some(i.kind.to_lowercase()),
+            predicate: None,
+        })
+        .collect();
+    for k in constraints
+        .iter()
+        .filter(|k| k.labels.contains(&label) && !k.properties.is_empty())
+    {
+        let unique = matches!(k.kind.as_str(), "UNIQUENESS" | "NODE_KEY");
+        let mandatory = matches!(k.kind.as_str(), "NODE_KEY" | "NODE_PROPERTY_EXISTENCE");
+        if unique && !container.unique_groups.contains(&k.properties) {
+            container.unique_groups.push(k.properties.clone());
+        }
+        for f in container
+            .fields
+            .iter_mut()
+            .filter(|f| k.properties.contains(&f.name))
+        {
+            f.is_unique |= unique && k.properties.len() == 1;
+            f.nullable &= !mandatory;
+        }
+    }
+}
+
 fn map_clickhouse(t: &aikoql_clickhouse::TableSchema) -> ContainerInfo {
     ContainerInfo {
         name: t.name.clone(),
@@ -236,8 +276,61 @@ fn map_clickhouse(t: &aikoql_clickhouse::TableSchema) -> ContainerInfo {
             })
             .collect(),
         row_count: Some(t.row_count_estimate),
+        kind: match t.engine.as_str() {
+            "MaterializedView" => Some("materialized_view".to_string()),
+            "View" | "LiveView" | "WindowView" => Some("view".to_string()),
+            _ => None,
+        },
+        properties: [
+            ("engine", t.engine.clone()),
+            ("sorting_key", t.sorting_key.join(", ")),
+            ("primary_key", t.primary_key.join(", ")),
+            ("partition_key", t.partition_key.clone()),
+            ("as_select", t.as_select.chars().take(4_000).collect()),
+        ]
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| (k.to_string(), v))
+        .collect(),
+        indexes: t
+            .skip_indexes
+            .iter()
+            .map(|i| aikoql_ingestion::IndexInfo {
+                name: i.name.clone(),
+                columns: vec![i.expr.clone()],
+                unique: false,
+                method: Some(i.kind.clone()),
+                predicate: None,
+            })
+            .collect(),
         ..Default::default()
     }
+}
+
+/// Views point at the tables they read: `view -derived_from-> table`.
+fn clickhouse_lineage(tables: &[aikoql_clickhouse::TableSchema]) -> Vec<ReferenceInfo> {
+    let known: HashSet<&str> = tables.iter().map(|t| t.name.as_str()).collect();
+    let mut out: Vec<ReferenceInfo> = tables
+        .iter()
+        .flat_map(|source| {
+            source
+                .dependents
+                .iter()
+                .filter(|d| known.contains(d.as_str()))
+                .map(|view| ReferenceInfo {
+                    from_container: view.clone(),
+                    from_fields: Vec::new(),
+                    to_container: source.name.clone(),
+                    to_fields: Vec::new(),
+                    name: Some("derived_from".to_string()),
+                })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        (&a.from_container, &a.to_container).cmp(&(&b.from_container, &b.to_container))
+    });
+    out.dedup_by(|a, b| a.from_container == b.from_container && a.to_container == b.to_container);
+    out
 }
 
 fn map_postgres(t: &aikoql_postgres::TableSchema) -> ContainerInfo {
@@ -261,6 +354,26 @@ fn map_postgres(t: &aikoql_postgres::TableSchema) -> ContainerInfo {
         row_count: u64::try_from(t.row_count_estimate).ok(),
         schema: (!t.schema.is_empty()).then(|| t.schema.clone()),
         unique_groups: t.unique_groups.clone(),
+        indexes: t
+            .indexes
+            .iter()
+            .map(|i| aikoql_ingestion::IndexInfo {
+                name: i.name.clone(),
+                columns: i.columns.clone(),
+                unique: i.unique,
+                method: Some(i.method.clone()),
+                predicate: i.predicate.clone(),
+            })
+            .collect(),
+        checks: t
+            .checks
+            .iter()
+            .map(|k| aikoql_ingestion::CheckInfo {
+                name: k.name.clone(),
+                expression: k.expression.clone(),
+            })
+            .collect(),
+        ..Default::default()
     }
 }
 
@@ -375,6 +488,7 @@ fn sqlite_meta(path: &str, ms: u64, max: usize, own: std::time::Duration) -> Res
             row_count: None,
             schema: None,
             unique_groups: t.unique_groups,
+            ..Default::default()
         });
     }
     let references = c
@@ -437,24 +551,37 @@ fn mongo_meta(
     Ok((containers, Vec::new(), truncated, None))
 }
 
-fn neo4j_meta(conn: &str, ms: u64, max: usize, sample: u32, mode: Mode) -> Result<Parts, String> {
+/// A Neo4j connector from `http(s)://user:password@host[:port]`, every request
+/// bounded by `ms`. The error never contains the password.
+pub(super) fn neo4j_connector(conn: &str, ms: u64) -> Result<aikoql_neo4j::Neo4jConnector, String> {
     let (_, rest) = conn.split_once("://").ok_or("invalid Neo4j URL")?;
     let scheme = &conn[..conn.len() - rest.len()];
     let (userinfo, host) = rest
         .rsplit_once('@')
         .ok_or("Neo4j URL needs user:password@host")?;
     let (user, pass) = userinfo.split_once(':').unwrap_or((userinfo, ""));
-    let c = aikoql_neo4j::Neo4jConnector::connect_with_timeout(
+    aikoql_neo4j::Neo4jConnector::connect_with_timeout(
         &format!("{scheme}{host}"),
         &percent_decode(user),
         &percent_decode(pass),
         Some(ms),
-    )?;
+    )
+}
+
+fn neo4j_meta(conn: &str, ms: u64, max: usize, sample: u32, mode: Mode) -> Result<Parts, String> {
+    let c = neo4j_connector(conn, ms)?;
     let (labels, truncated) = cap(c.list_labels()?, max);
     let included: HashSet<String> = labels.iter().cloned().collect();
     let mut containers = Vec::with_capacity(labels.len());
     for l in &labels {
         containers.push(map_neo4j(l, &c.introspect_label_schema(l, sample)?, mode));
+    }
+    // best effort: SHOW needs Neo4j 4.3+ and the privilege to run it, and a
+    // source that worked before must not start failing for lacking either
+    let indexes = c.introspect_indexes().unwrap_or_default();
+    let constraints = c.introspect_constraints().unwrap_or_default();
+    for container in &mut containers {
+        apply_neo4j_schema(container, &indexes, &constraints);
     }
     let references = c
         .introspect_rel_patterns(1_000)?
@@ -479,7 +606,7 @@ fn clickhouse_meta(url: &str, database: &str, ms: u64, max: usize) -> Result<Par
     let version = Some(c.version().to_string()).filter(|v| !v.is_empty());
     Ok((
         tables.iter().map(map_clickhouse).collect(),
-        Vec::new(),
+        clickhouse_lineage(&tables),
         truncated,
         version,
     ))
@@ -860,6 +987,61 @@ mod tests {
             .all(|f| f.profile.is_none()));
     }
 
+    fn ch_table(name: &str, engine: &str, dependents: &[&str]) -> aikoql_clickhouse::TableSchema {
+        aikoql_clickhouse::TableSchema {
+            name: name.into(),
+            engine: engine.into(),
+            columns: Vec::new(),
+            sorting_key: vec!["a".into(), "b".into()],
+            primary_key: vec!["a".into()],
+            partition_key: String::new(),
+            row_count_estimate: 0,
+            as_select: if engine.ends_with("View") {
+                "SELECT 1".into()
+            } else {
+                String::new()
+            },
+            dependents: dependents.iter().map(|d| d.to_string()).collect(),
+            skip_indexes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn clickhouse_views_storage_properties_and_lineage_map() {
+        let events = ch_table("events", "MergeTree", &["daily", "recent", "gone"]);
+        let daily = ch_table("daily", "MaterializedView", &[]);
+        let recent = ch_table("recent", "View", &[]);
+        let c = map_clickhouse(&events);
+        assert_eq!(c.kind, None);
+        assert_eq!(c.properties["engine"], "MergeTree");
+        assert_eq!(c.properties["sorting_key"], "a, b");
+        assert!(
+            !c.properties.contains_key("partition_key"),
+            "empty facts are not recorded"
+        );
+        assert!(!c.properties.contains_key("as_select"));
+        assert_eq!(
+            map_clickhouse(&daily).kind.as_deref(),
+            Some("materialized_view")
+        );
+        assert_eq!(map_clickhouse(&recent).kind.as_deref(), Some("view"));
+        assert_eq!(map_clickhouse(&daily).properties["as_select"], "SELECT 1");
+        // lineage: a view points at the table it reads; a dependent outside the list is dropped
+        let refs = clickhouse_lineage(&[events, daily, recent]);
+        let pairs: Vec<(&str, &str)> = refs
+            .iter()
+            .map(|r| (r.from_container.as_str(), r.to_container.as_str()))
+            .collect();
+        assert_eq!(pairs, [("daily", "events"), ("recent", "events")]);
+        assert!(refs
+            .iter()
+            .all(|r| r.name.as_deref() == Some("derived_from")));
+        // a very long defining query is bounded
+        let mut long = ch_table("v", "View", &[]);
+        long.as_select = "x".repeat(50_000);
+        assert_eq!(map_clickhouse(&long).properties["as_select"].len(), 4_000);
+    }
+
     #[test]
     fn clickhouse_tables_map_keys_and_nullability() {
         let t = aikoql_clickhouse::TableSchema {
@@ -885,6 +1067,9 @@ mod tests {
             primary_key: vec!["ts".into()],
             partition_key: String::new(),
             row_count_estimate: 42,
+            as_select: String::new(),
+            dependents: Vec::new(),
+            skip_indexes: Vec::new(),
         };
         let c = map_clickhouse(&t);
         assert_eq!(
@@ -895,6 +1080,92 @@ mod tests {
         let ts = c.fields.iter().find(|f| f.name == "ts").unwrap();
         assert!(ts.is_primary_key && !ts.nullable && ts.data_type == "DateTime");
         assert!(c.fields.iter().find(|f| f.name == "note").unwrap().nullable);
+    }
+
+    #[test]
+    fn neo4j_constraints_make_properties_unique_or_mandatory_and_other_labels_are_ignored() {
+        let field = |n: &str| FieldInfo {
+            name: n.into(),
+            nullable: true,
+            ..Default::default()
+        };
+        let mut c = ContainerInfo {
+            name: "Person".into(),
+            fields: vec![
+                field("email"),
+                field("ssn"),
+                field("region"),
+                field("tag"),
+                field("other"),
+            ],
+            ..Default::default()
+        };
+        let k =
+            |name: &str, kind: &str, label: &str, props: &[&str]| aikoql_neo4j::SchemaConstraint {
+                name: name.into(),
+                kind: kind.into(),
+                labels: vec![label.into()],
+                properties: props.iter().map(|p| p.to_string()).collect(),
+            };
+        let idx =
+            |name: &str, label: &str, props: &[&str], unique: bool| aikoql_neo4j::SchemaIndex {
+                name: name.into(),
+                kind: "RANGE".into(),
+                labels: vec![label.into()],
+                properties: props.iter().map(|p| p.to_string()).collect(),
+                unique,
+            };
+        apply_neo4j_schema(
+            &mut c,
+            &[
+                idx("p_email", "Person", &["email"], true),
+                idx("p_region_tag", "Person", &["region", "tag"], false),
+                idx("elsewhere", "Company", &["other"], false),
+                idx("token_like", "Person", &[], false),
+            ],
+            &[
+                k("u_email", "UNIQUENESS", "Person", &["email"]),
+                k("key_pair", "NODE_KEY", "Person", &["region", "tag"]),
+                k("ex_ssn", "NODE_PROPERTY_EXISTENCE", "Person", &["ssn"]),
+                k("u_other", "UNIQUENESS", "Company", &["other"]),
+            ],
+        );
+        let f = |n: &str| c.fields.iter().find(|f| f.name == n).unwrap();
+        assert!(
+            f("email").is_unique && f("email").nullable,
+            "unique, not mandatory"
+        );
+        assert!(
+            !f("ssn").nullable && !f("ssn").is_unique,
+            "existence makes it mandatory only"
+        );
+        assert!(
+            !f("region").nullable && !f("tag").nullable,
+            "a node key is mandatory"
+        );
+        assert!(
+            !f("region").is_unique,
+            "a composite key member is not unique alone"
+        );
+        assert!(
+            f("other").nullable && !f("other").is_unique,
+            "another label's constraint"
+        );
+        assert_eq!(
+            c.unique_groups,
+            [
+                vec!["email".to_string()],
+                vec!["region".to_string(), "tag".to_string()]
+            ]
+        );
+        let names: Vec<&str> = c.indexes.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["p_email", "p_region_tag"],
+            "other labels and property-less indexes are dropped"
+        );
+        assert_eq!(c.indexes[0].method.as_deref(), Some("range"));
+        assert!(c.indexes[0].unique && !c.indexes[1].unique);
     }
 
     #[test]
@@ -925,8 +1196,37 @@ mod tests {
             primary_keys: vec!["id".into()],
             row_count_estimate: -1,
             unique_groups: vec![vec!["code".into()], vec!["x".into(), "id".into()]],
+            indexes: vec![aikoql_postgres::IndexDef {
+                name: "child_code_part".into(),
+                columns: vec!["code".into()],
+                unique: true,
+                method: "btree".into(),
+                predicate: Some("(code IS NOT NULL)".into()),
+                plain: true,
+            }],
+            checks: vec![aikoql_postgres::CheckDef {
+                name: "x_pos".into(),
+                expression: "x > 0".into(),
+            }],
         };
         let c = map_postgres(&t);
+        assert_eq!(
+            c.indexes,
+            [aikoql_ingestion::IndexInfo {
+                name: "child_code_part".into(),
+                columns: vec!["code".into()],
+                unique: true,
+                method: Some("btree".into()),
+                predicate: Some("(code IS NOT NULL)".into()),
+            }]
+        );
+        assert_eq!(
+            c.checks,
+            [aikoql_ingestion::CheckInfo {
+                name: "x_pos".into(),
+                expression: "x > 0".into()
+            }]
+        );
         assert_eq!(c.schema.as_deref(), Some("hr"));
         assert_eq!(
             c.row_count, None,

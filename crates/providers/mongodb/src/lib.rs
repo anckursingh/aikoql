@@ -273,10 +273,10 @@ impl MongoConnector {
                 .limit(limit)
                 .await
                 .map_err(|e| format!("import {}: {}", schema.name, e))?;
-            use futures_util::StreamExt;
-            let mut objects = Vec::new();
-            while let Some(Ok(doc)) = cursor.next().await {
-                let (props, koid) = document_to_ko(&doc, &schema.name);
+            let (docs, truncated) = drain_documents(&mut cursor, &schema.name, max_rows).await?;
+            let mut objects = Vec::with_capacity(docs.len());
+            for doc in &docs {
+                let (props, koid) = document_to_ko(doc, &schema.name);
                 objects.push(KnowledgeObject {
                     koid,
                     version: 0,
@@ -306,8 +306,6 @@ impl MongoConnector {
                     extensions: ExtensionMap::new(),
                 });
             }
-            let truncated = objects.len() as u64 > max_rows;
-            objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
             Ok((objects, truncated))
         })
         .map_err(|e: String| e)
@@ -318,15 +316,41 @@ impl MongoConnector {
 // BSON → Aikoql Value
 // ---------------------------------------------------------------------------
 
+/// Every document of a cursor, at most `max_rows`; the flag says there were more.
+/// A cursor error (killed cursor, dropped connection, bad BSON) FAILS the import:
+/// ending the loop at the first `Err` would report a partial copy as complete.
+async fn drain_documents<S, E>(
+    mut stream: S,
+    collection: &str,
+    max_rows: u64,
+) -> Result<(Vec<Document>, bool), String>
+where
+    S: futures_util::Stream<Item = Result<Document, E>> + Unpin,
+    E: std::fmt::Display,
+{
+    use futures_util::StreamExt;
+    let mut docs = Vec::new();
+    while let Some(item) = stream.next().await {
+        docs.push(item.map_err(|e| format!("import {collection}: {e}"))?);
+        if docs.len() as u64 > max_rows {
+            break;
+        }
+    }
+    let truncated = docs.len() as u64 > max_rows;
+    docs.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
+    Ok((docs, truncated))
+}
+
 fn document_to_ko(doc: &Document, collection: &str) -> (PropertyMap, KOID) {
     let mut props = PropertyMap::new();
     let mut id_str: Option<String> = None;
     for (key, value) in doc.iter() {
         if key == "_id" {
             id_str = Some(bson_id_to_string(value));
-        } else {
-            props.insert(key.clone(), bson_to_value(value));
         }
+        // `_id` stays a property too: the source identity must be readable
+        // from the object, not only recoverable through the KOID hash.
+        props.insert(key.clone(), bson_to_value(value));
     }
     // ponytail: the fallback key is non-deterministic across re-imports, but
     // it cannot occur in practice — MongoDB always assigns _id on insert.
@@ -352,9 +376,20 @@ fn bson_to_value(bson: &Bson) -> Value {
         Bson::Int64(i) => Value::Int(*i),
         Bson::Binary(bin) => Value::Bytes(bin.bytes.clone()),
         Bson::ObjectId(oid) => Value::Text(oid.to_hex()),
-        Bson::DateTime(dt) => Value::Text(dt.to_string()),
-        Bson::RegularExpression(re) => Value::Text(re.pattern.clone()),
-        _ => Value::Text(format!("{:?}", bson)),
+        Bson::DateTime(dt) => Value::Text(
+            dt.try_to_rfc3339_string()
+                .unwrap_or_else(|_| dt.timestamp_millis().to_string()),
+        ),
+        Bson::Decimal128(d) => Value::Text(d.to_string()),
+        Bson::Timestamp(t) => Value::Map(BTreeMap::from([
+            ("t".to_string(), Value::Int(i64::from(t.time))),
+            ("i".to_string(), Value::Int(i64::from(t.increment))),
+        ])),
+        Bson::RegularExpression(re) => Value::Text(format!("/{}/{}", re.pattern, re.options)),
+        Bson::Symbol(s) | Bson::JavaScriptCode(s) => Value::Text(s.clone()),
+        // remaining exotic types (MinKey, MaxKey, Undefined, DBPointer, scoped
+        // JS): their canonical extended-JSON text, never the Rust Debug form
+        other => Value::Text(other.clone().into_canonical_extjson().to_string()),
     }
 }
 
@@ -479,6 +514,85 @@ mod tests {
         let oid = mongodb::bson::oid::ObjectId::new();
         let hex = oid.to_hex();
         assert_eq!(bson_to_value(&Bson::ObjectId(oid)), Value::Text(hex));
+    }
+
+    #[test]
+    fn bson_decimal_dates_timestamps_and_regex_are_readable_values() {
+        use mongodb::bson::{DateTime, Decimal128, Regex, Timestamp};
+        let dec: Decimal128 = "12345.6789".parse().unwrap();
+        assert_eq!(
+            bson_to_value(&Bson::Decimal128(dec)),
+            Value::Text("12345.6789".into())
+        );
+        let dt = DateTime::parse_rfc3339_str("2026-01-02T03:04:05Z").unwrap();
+        assert_eq!(
+            bson_to_value(&Bson::DateTime(dt)),
+            Value::Text("2026-01-02T03:04:05Z".into())
+        );
+        let ts = Bson::Timestamp(Timestamp {
+            time: 1,
+            increment: 2,
+        });
+        assert_eq!(
+            bson_to_value(&ts),
+            Value::Map(BTreeMap::from([
+                ("t".to_string(), Value::Int(1)),
+                ("i".to_string(), Value::Int(2)),
+            ]))
+        );
+        let re = Bson::RegularExpression(Regex {
+            pattern: "^a".into(),
+            options: "i".into(),
+        });
+        assert_eq!(bson_to_value(&re), Value::Text("/^a/i".into()));
+        // nothing is ever rendered with the Rust Debug form
+        for b in [
+            Bson::MinKey,
+            Bson::MaxKey,
+            Bson::Undefined,
+            Bson::Symbol("s".into()),
+        ] {
+            let v = bson_to_value(&b);
+            assert!(!format!("{v:?}").contains("Symbol("), "{b:?} -> {v:?}");
+        }
+    }
+
+    #[test]
+    fn the_source_id_is_kept_as_a_property() {
+        let (props, _) = document_to_ko(&doc! { "_id": 7_i32, "a": 1 }, "c");
+        assert_eq!(props.get("_id"), Some(&Value::Int(7)));
+        let oid = mongodb::bson::oid::ObjectId::new();
+        let (props, _) = document_to_ko(&doc! { "_id": oid, "a": 1 }, "c");
+        assert_eq!(props.get("_id"), Some(&Value::Text(oid.to_hex())));
+    }
+
+    #[test]
+    fn a_cursor_error_fails_the_import_instead_of_ending_it_quietly() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let items: Vec<Result<Document, String>> = vec![
+            Ok(doc! { "_id": 1 }),
+            Err("cursor killed".into()),
+            Ok(doc! { "_id": 2 }),
+        ];
+        let err = rt
+            .block_on(drain_documents(
+                futures_util::stream::iter(items),
+                "c",
+                u64::MAX,
+            ))
+            .unwrap_err();
+        assert!(err.contains("cursor killed") && err.contains("c"), "{err}");
+        let ok: Vec<Result<Document, String>> = vec![Ok(doc! { "_id": 1 }), Ok(doc! { "_id": 2 })];
+        let (docs, truncated) = rt
+            .block_on(drain_documents(futures_util::stream::iter(ok), "c", 1))
+            .unwrap();
+        assert_eq!(
+            (docs.len(), truncated),
+            (1, true),
+            "the cap is reported, not an error"
+        );
     }
 
     #[test]

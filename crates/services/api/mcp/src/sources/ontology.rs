@@ -6,7 +6,9 @@ use super::{
 };
 use crate::helpers::value_to_json;
 use crate::{json, Kernel, J};
-use aikoql_ingestion::{definition_from_sources, ClassMerge, ClassStatus, SourceInput};
+use aikoql_ingestion::{
+    definition_from_sources, suggest_merges, ClassMerge, ClassStatus, SourceInput,
+};
 use std::collections::BTreeMap;
 
 const DISCOVERED: &str = "Discovered from";
@@ -159,6 +161,44 @@ fn merge(existing: Option<&J>, draft: &J) -> Merged {
     }
 }
 
+const MERGE_SHAPE: &str = "merges must be a list of [\"source.container\", \"source.container\"] pairs or {a, b, properties: [[field of a, field of b], ...]} objects";
+
+/// A merge is a pair of `source.container` references, or an object adding
+/// the property alignments the reviewer accepted.
+fn parse_merge(p: &J) -> Result<ClassMerge, String> {
+    let bad = || format!("{INVALID}{MERGE_SHAPE}");
+    let text = |v: &J| v.as_str().filter(|s| s.len() <= 512).map(str::to_string);
+    if let Some([J::String(x), J::String(y)]) = p.as_array().map(Vec::as_slice) {
+        return Ok(ClassMerge {
+            a: x.clone(),
+            b: y.clone(),
+            properties: Vec::new(),
+        });
+    }
+    let o = p.as_object().ok_or_else(bad)?;
+    if o.keys()
+        .any(|k| !matches!(k.as_str(), "a" | "b" | "properties"))
+    {
+        return Err(bad());
+    }
+    let (a, b) = (
+        o.get("a").and_then(text).ok_or_else(bad)?,
+        o.get("b").and_then(text).ok_or_else(bad)?,
+    );
+    let properties = match o.get("properties") {
+        None | Some(J::Null) => Vec::new(),
+        Some(J::Array(pairs)) if pairs.len() <= 200 => pairs
+            .iter()
+            .map(|pair| match pair.as_array().map(Vec::as_slice) {
+                Some([x, y]) => text(x).zip(text(y)).ok_or_else(bad),
+                _ => Err(bad()),
+            })
+            .collect::<Result<_, _>>()?,
+        _ => return Err(bad()),
+    };
+    Ok(ClassMerge { a, b, properties })
+}
+
 pub(crate) fn tool_sources_ontology(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let result = run(k, args);
     let detail = |what: &str| {
@@ -212,14 +252,10 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     };
     let merges: Vec<ClassMerge> = match o.get("merges") {
         None | Some(J::Null) => Vec::new(),
-        Some(J::Array(a)) if a.len() <= 1_000 => a
-            .iter()
-            .map(|p| match p.as_array().map(Vec::as_slice) {
-                Some([J::String(x), J::String(y)]) => Ok(ClassMerge { a: x.clone(), b: y.clone() }),
-                _ => Err(format!("{INVALID}merges must be a list of [\"source.container\", \"source.container\"] pairs")),
-            })
-            .collect::<Result<_, _>>()?,
-        _ => return Err(format!("{INVALID}merges must be a list of pairs")),
+        Some(J::Array(a)) if a.len() <= 1_000 => {
+            a.iter().map(parse_merge).collect::<Result<_, _>>()?
+        }
+        _ => return Err(format!("{INVALID}merges must be a list of merges")),
     };
     let given: BTreeMap<String, String> = match o.get("fingerprints") {
         None | Some(J::Null) => BTreeMap::new(),
@@ -296,10 +332,29 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             }
         })
         .collect();
+    // advice only: pairs the reviewer already merged are not offered again
+    let suggestions: Vec<J> = suggest_merges(&inputs)
+        .into_iter()
+        .filter(|s| {
+            !merges
+                .iter()
+                .any(|m| (m.a == s.a && m.b == s.b) || (m.a == s.b && m.b == s.a))
+        })
+        .map(|s| {
+            json!({
+                "a": s.a, "b": s.b, "confidence": s.confidence, "evidence": s.evidence,
+                "properties": s.properties.iter().map(|p| json!({
+                    "a_field": p.a_field, "b_field": p.b_field,
+                    "confidence": p.confidence, "evidence": p.evidence,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
     let summary = json!({
         "classes": classes, "adds": merged.adds, "refreshed": merged.refreshed,
         "untouched": merged.untouched, "mappings": merged.mappings, "warnings": warnings,
         "fingerprints": fingerprints, "active_version": active_version, "base": base,
+        "suggestions": suggestions,
     });
     if preview {
         let mut out = summary;
@@ -397,6 +452,79 @@ mod tests {
             a[k] = v.clone();
         }
         a
+    }
+
+    #[test]
+    fn a_merge_is_a_pair_or_an_object_with_alignments_and_nothing_else() {
+        let ok = parse_merge(&json!(["a.x", "b.y"])).unwrap();
+        assert_eq!(
+            (ok.a.as_str(), ok.b.as_str(), ok.properties.len()),
+            ("a.x", "b.y", 0)
+        );
+        let m = parse_merge(
+            &json!({"a": "a.x", "b": "b.y", "properties": [["email", "email_address"]]}),
+        )
+        .unwrap();
+        assert_eq!(
+            m.properties,
+            [("email".to_string(), "email_address".to_string())]
+        );
+        assert!(parse_merge(&json!({"a": "a.x", "b": "b.y"}))
+            .unwrap()
+            .properties
+            .is_empty());
+        for bad in [
+            json!(["only-one"]),
+            json!(["a", "b", "c"]),
+            json!([1, 2]),
+            json!("a.x"),
+            json!(null),
+            json!({"a": "a.x"}),
+            json!({"a": "a.x", "b": 7}),
+            json!({"a": "a.x", "b": "b.y", "extra": 1}),
+            json!({"a": "a.x", "b": "b.y", "properties": "email"}),
+            json!({"a": "a.x", "b": "b.y", "properties": [["only"]]}),
+            json!({"a": "a.x", "b": "b.y", "properties": [["x", 1]]}),
+            json!({"a": "a.x", "b": "b.y", "properties": [["x", "y", "z"]]}),
+            json!({"a": "x".repeat(513), "b": "b.y"}),
+            json!({"a": "a.x", "b": "b.y", "properties": (0..201).map(|_| json!(["x", "y"])).collect::<Vec<_>>()}),
+        ] {
+            let e = parse_merge(&bad).unwrap_err();
+            assert!(e.starts_with(INVALID), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn preview_offers_suggestions_and_stops_offering_an_applied_one() {
+        let (k, crm, shop) = (kernel(), crm_db("sg"), shop_db("sg"));
+        two_sources(&crm, &shop, || {
+            discover(&k, "crm");
+            discover(&k, "shop");
+            let p = tool_sources_ontology(
+                &k,
+                &json!({"sources": ["crm", "shop"], "preview": true}),
+                "x",
+            )
+            .unwrap();
+            let all = p["suggestions"].as_array().unwrap();
+            assert!(
+                all.iter()
+                    .all(|s| s["a"].as_str().unwrap().split('.').next()
+                        != s["b"].as_str().unwrap().split('.').next()),
+                "never a same-source pair: {all:?}"
+            );
+            let applied = tool_sources_ontology(
+                &k,
+                &json!({"sources": ["crm", "shop"], "preview": true, "merges": [["crm.customers", "shop.clients"]]}),
+                "x",
+            )
+            .unwrap();
+            assert!(applied["suggestions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|s| { !(s["a"] == "crm.customers" && s["b"] == "shop.clients") }));
+        });
     }
 
     #[test]

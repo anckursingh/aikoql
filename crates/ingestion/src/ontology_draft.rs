@@ -22,6 +22,10 @@ pub struct SourceInput<'a> {
 pub struct ClassMerge {
     pub a: String,
     pub b: String,
+    /// `(field of a, field of b)` pairs a human decided are the same property:
+    /// both map to the canonical name of a's field (`email` / `email_address`
+    /// -> `email`). Never inferred here; see `ontology_suggest` for proposals.
+    pub properties: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,7 +64,7 @@ fn pascal(s: &str) -> String {
     class_name_for_container(&s.replace(['-', '.'], "_"))
 }
 
-fn canonical_property(name: &str) -> String {
+pub(crate) fn canonical_property(name: &str) -> String {
     let c = to_snake_case(name);
     if c.is_empty() {
         name.to_string()
@@ -69,14 +73,50 @@ fn canonical_property(name: &str) -> String {
     }
 }
 
-/// aikoql value type of a field: the observed non-null type when there is a
-/// profile, else the declared type.
-fn field_value_type(f: &FieldInfo) -> &'static str {
-    let observed = f
-        .profile
-        .as_ref()
-        .and_then(|p| p.types.iter().find(|t| !t.eq_ignore_ascii_case("null")));
-    connector_type_to_value_type(observed.unwrap_or(&f.data_type))
+/// Value type of one observed BSON type name, matching what the importer
+/// stores (Decimal128 as exact text, a Timestamp as a {t,i} map).
+fn observed_value_type(t: &str) -> &'static str {
+    match t {
+        "Decimal128" | "Timestamp" => "Text",
+        // Neo4j's integer type name has no "int" in it
+        "Long" => "Int",
+        other => connector_type_to_value_type(other),
+    }
+}
+
+/// aikoql value type of a field, and the observed types that disagreed.
+///
+/// With a profile, every observed non-null type counts: one type is that type,
+/// Int + Float is Float, anything else is Text (the only type every observed
+/// value fits) and is reported as mixed. No profile: the declared type.
+pub(crate) fn field_value_type(f: &FieldInfo) -> (&'static str, Option<Vec<String>>) {
+    // The observed types: the profile's when there is one, else the union
+    // schema-only discovery keeps in the type string ("Int32|String").
+    let from_type: Vec<String>;
+    let all: &[String] = match &f.profile {
+        Some(p) => &p.types,
+        None => {
+            from_type = f.data_type.split('|').map(str::to_string).collect();
+            &from_type
+        }
+    };
+    let observed: Vec<&String> = all
+        .iter()
+        .filter(|t| !t.eq_ignore_ascii_case("null"))
+        .collect();
+    if observed.is_empty() {
+        return (connector_type_to_value_type(&f.data_type), None);
+    }
+    // a declared SQL type is read as SQL; a single observed (schemaless) type by its BSON/graph name
+    if f.profile.is_none() && observed.len() == 1 && f.provenance != Provenance::Observed {
+        return (connector_type_to_value_type(&f.data_type), None);
+    }
+    let kinds: BTreeSet<&'static str> = observed.iter().map(|t| observed_value_type(t)).collect();
+    match kinds.iter().copied().collect::<Vec<_>>()[..] {
+        [one] => (one, None),
+        ["Float", "Int"] => ("Float", None),
+        _ => ("Text", Some(observed.into_iter().cloned().collect())),
+    }
 }
 
 impl DefinitionDraft {
@@ -85,6 +125,53 @@ impl DefinitionDraft {
     pub fn publishable(&self) -> bool {
         !self.classes.is_empty()
     }
+}
+
+/// Fold field `fb` of `b` into the canonical property of field `fa` of `a`.
+/// Refused (with a warning, nothing changes) when a field is missing or when
+/// two fields of `b` would end up as one property: one column would overwrite
+/// the other on every object.
+fn align_property(
+    a: &Entry,
+    b: &Entry,
+    fa: &str,
+    fb: &str,
+    aligned: &mut BTreeMap<(String, String), String>,
+    warnings: &mut Vec<String>,
+) {
+    let skip = |why: &str, warnings: &mut Vec<String>| {
+        warnings.push(format!(
+            "alignment ignored: {}.{fa} / {}.{fb} - {why}",
+            a.key, b.key
+        ));
+    };
+    if !a.container.fields.iter().any(|f| f.name == fa) {
+        return skip(&format!("no such field {fa} in {}", a.key), warnings);
+    }
+    if !b.container.fields.iter().any(|f| f.name == fb) {
+        return skip(&format!("no such field {fb} in {}", b.key), warnings);
+    }
+    let canon = aligned
+        .get(&(a.key.clone(), fa.to_string()))
+        .cloned()
+        .unwrap_or_else(|| canonical_property(fa));
+    let effective = |f: &str| {
+        aligned
+            .get(&(b.key.clone(), f.to_string()))
+            .cloned()
+            .unwrap_or_else(|| canonical_property(f))
+    };
+    if b.container
+        .fields
+        .iter()
+        .any(|f| f.name != fb && effective(&f.name) == canon)
+    {
+        return skip(
+            &format!("another field of {} is already {canon}", b.key),
+            warnings,
+        );
+    }
+    aligned.insert((b.key.clone(), fb.to_string()), canon);
 }
 
 pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -> DefinitionDraft {
@@ -112,6 +199,8 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
         i
     };
     let mut leader: BTreeMap<usize, usize> = BTreeMap::new();
+    // (entry key, physical field) -> the canonical property it was folded into
+    let mut aligned: BTreeMap<(String, String), String> = BTreeMap::new();
     for m in merges {
         let idx = |k: &str| entries.iter().position(|e| e.key == k);
         match (idx(&m.a), idx(&m.b)) {
@@ -120,6 +209,16 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
                 let lead = leader.get(&ra).copied().unwrap_or(a);
                 group_of[rb] = ra;
                 leader.insert(ra, lead);
+                for (fa, fb) in &m.properties {
+                    align_property(
+                        &entries[a],
+                        &entries[b],
+                        fa,
+                        fb,
+                        &mut aligned,
+                        &mut warnings,
+                    );
+                }
             }
             _ => warnings.push(format!(
                 "merge ignored: {} / {} not found among the discovered containers",
@@ -209,13 +308,26 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
         let gi = groups.iter().position(|(_, m)| m.contains(&i)).unwrap_or(0);
         let mut property_map = serde_json::Map::new();
         for f in &e.container.fields {
-            let canon = canonical_property(&f.name);
+            let canon = aligned
+                .get(&(e.key.clone(), f.name.clone()))
+                .cloned()
+                .unwrap_or_else(|| canonical_property(&f.name));
             let required = f.is_primary_key || !f.nullable;
             let p = props.entry(canon.clone()).or_insert(Prop {
                 types: BTreeSet::new(),
                 required_everywhere: true,
             });
-            p.types.insert(field_value_type(f));
+            let (value_type, mixed) = field_value_type(f);
+            if let Some(types) = mixed {
+                warnings.push(format!(
+                    "{}.{}.{}: mixed observed types ({}); widened to Text",
+                    e.source,
+                    e.container.name,
+                    f.name,
+                    types.join(", ")
+                ));
+            }
+            p.types.insert(value_type);
             p.required_everywhere &= required;
             class_props[gi].insert(canon.clone());
             property_map.insert(f.name.clone(), json!(canon));
@@ -292,18 +404,31 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
                 ));
             }
             let (domain, range) = (class_for(&r.from_container), class_for(&r.to_container));
-            let mut name = to_snake_case(&base_name);
-            if let Some(existing) = rels.get(&name) {
-                if existing["domain"] != json!(domain) || existing["range"] != json!(range) {
-                    name = format!("{name}_{}", s.name);
-                } else {
-                    continue;
+            // the first free name for this (domain, range): the type's own name,
+            // then `<name>_<source>`, then `<name>_<source>_2`, ...; the same pair
+            // under any of them is already recorded
+            let base = to_snake_case(&base_name);
+            let mut n = 0;
+            let name = loop {
+                let candidate = match n {
+                    0 => base.clone(),
+                    1 => format!("{base}_{}", s.name),
+                    k => format!("{base}_{}_{k}", s.name),
+                };
+                match rels.get(&candidate) {
+                    None => break Some(candidate),
+                    Some(e) if e["domain"] == json!(domain) && e["range"] == json!(range) => {
+                        break None
+                    }
+                    Some(_) => n += 1,
                 }
+            };
+            if let Some(name) = name {
+                rels.insert(
+                    name.clone(),
+                    json!({"name": name, "domain": domain, "range": range}),
+                );
             }
-            rels.insert(
-                name.clone(),
-                json!({"name": name, "domain": domain, "range": range}),
-            );
         }
     }
 
@@ -518,6 +643,7 @@ mod tests {
             &[ClassMerge {
                 a: "crm.customers".into(),
                 b: "shop.clients".into(),
+                properties: Vec::new(),
             }],
         );
         assert_eq!(names(&d), ["Customer"]);
@@ -534,6 +660,143 @@ mod tests {
         assert!(d.classes[0].sources.contains(&"shop.clients".to_string()));
     }
 
+    fn crm_and_shop() -> (ConnectorMetadata, ConnectorMetadata) {
+        (
+            meta(
+                "postgres",
+                "crm",
+                &[(
+                    "customers",
+                    &[
+                        ID,
+                        ("email", "text", false, false, false),
+                        ("tier", "text", false, true, false),
+                    ],
+                )],
+                &[],
+            ),
+            meta(
+                "sqlite",
+                "shop",
+                &[(
+                    "clients",
+                    &[
+                        ID,
+                        ("email_address", "text", false, false, false),
+                        ("tier", "integer", false, true, false),
+                    ],
+                )],
+                &[],
+            ),
+        )
+    }
+
+    fn merged(properties: Vec<(&str, &str)>) -> DefinitionDraft {
+        let (a, b) = crm_and_shop();
+        definition_from_sources(
+            &[
+                SourceInput {
+                    name: "crm",
+                    kind: "postgres",
+                    meta: &a,
+                },
+                SourceInput {
+                    name: "shop",
+                    kind: "sqlite",
+                    meta: &b,
+                },
+            ],
+            &[ClassMerge {
+                a: "crm.customers".into(),
+                b: "shop.clients".into(),
+                properties: properties
+                    .into_iter()
+                    .map(|(x, y)| (x.to_string(), y.to_string()))
+                    .collect(),
+            }],
+        )
+    }
+
+    #[test]
+    fn aligned_properties_become_one_canonical_property_in_both_mappings() {
+        let d = merged(vec![("email", "email_address")]);
+        let class_props: Vec<&str> = list(&d, "classes")[0]["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+            .collect();
+        assert!(class_props.contains(&"email"), "{class_props:?}");
+        assert!(
+            !class_props.contains(&"email_address"),
+            "folded into email: {class_props:?}"
+        );
+        let maps = list(&d, "mappings");
+        let of = |t: &str| maps.iter().find(|m| m["physical_type"] == t).unwrap();
+        assert_eq!(of("customers")["property_map"]["email"], "email");
+        assert_eq!(of("clients")["property_map"]["email_address"], "email");
+        assert!(!list(&d, "property_defs")
+            .iter()
+            .any(|p| p["name"] == "email_address"));
+        assert!(
+            d.warnings.iter().all(|w| !w.contains("ignored")),
+            "{:?}",
+            d.warnings
+        );
+    }
+
+    #[test]
+    fn aligning_properties_of_different_types_widens_with_the_existing_warning() {
+        let d = merged(vec![("tier", "tier")]);
+        let tier = list(&d, "property_defs")
+            .iter()
+            .find(|p| p["name"] == "tier")
+            .unwrap();
+        assert_eq!(tier["type"], "Text");
+    }
+
+    #[test]
+    fn an_alignment_naming_a_missing_field_is_ignored_with_a_warning() {
+        let d = merged(vec![("email", "nope"), ("ghost", "email_address")]);
+        assert_eq!(
+            d.warnings
+                .iter()
+                .filter(|w| w.contains("alignment ignored"))
+                .count(),
+            2,
+            "{:?}",
+            d.warnings
+        );
+        // nothing was folded: both source properties survive
+        let maps = list(&d, "mappings");
+        let shop = maps
+            .iter()
+            .find(|m| m["physical_type"] == "clients")
+            .unwrap();
+        assert_eq!(shop["property_map"]["email_address"], "email_address");
+    }
+
+    #[test]
+    fn two_fields_of_one_container_cannot_fold_into_one_property() {
+        // folding both `email_address` and `tier` into `email` would make one source column overwrite another
+        let d = merged(vec![("email", "email_address"), ("email", "tier")]);
+        assert!(
+            d.warnings.iter().any(|w| w.contains("alignment ignored")),
+            "{:?}",
+            d.warnings
+        );
+        let maps = list(&d, "mappings");
+        let shop = maps
+            .iter()
+            .find(|m| m["physical_type"] == "clients")
+            .unwrap();
+        assert_eq!(shop["property_map"]["email_address"], "email");
+        assert_eq!(
+            shop["property_map"]["tier"], "tier",
+            "the second fold was refused"
+        );
+    }
+
     #[test]
     fn unknown_merge_reference_warns_and_is_ignored() {
         let a = meta("postgres", "crm", &[("customers", &[ID])], &[]);
@@ -546,6 +809,7 @@ mod tests {
             &[ClassMerge {
                 a: "crm.customers".into(),
                 b: "nope.nothing".into(),
+                properties: Vec::new(),
             }],
         );
         assert_eq!(names(&d), ["Customer"]);
@@ -686,6 +950,180 @@ mod tests {
             d.warnings.iter().any(|w| w.contains("observed")),
             "{:?}",
             d.warnings
+        );
+    }
+
+    fn observed_type_of(types: &[&str]) -> (String, Vec<String>) {
+        let mut m = meta(
+            "mongodb",
+            "crm",
+            &[("people", &[("v", "bson", false, true, false)])],
+            &[],
+        );
+        m.containers[0].fields[0].provenance = Provenance::Observed;
+        m.containers[0].fields[0].profile = Some(FieldProfile {
+            types: types.iter().map(|t| t.to_string()).collect(),
+            presence_ratio: 1.0,
+            null_ratio: 0.0,
+            samples: 10,
+        });
+        let d = definition_from_sources(
+            &[SourceInput {
+                name: "crm",
+                kind: "mongodb",
+                meta: &m,
+            }],
+            &[],
+        );
+        let ty = list(&d, "property_defs")
+            .iter()
+            .find(|p| p["name"] == "v")
+            .unwrap()["type"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        (ty, d.warnings)
+    }
+
+    #[test]
+    fn mixed_observed_types_widen_to_text_with_a_warning() {
+        let (ty, warnings) = observed_type_of(&["Int32", "Null", "String"]);
+        assert_eq!(
+            ty, "Text",
+            "an Int-typed property would be wrong for the string rows"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("mixed") && w.contains("v")),
+            "{warnings:?}"
+        );
+        let (ty, _) = observed_type_of(&["Boolean", "Int32"]);
+        assert_eq!(ty, "Text");
+    }
+
+    #[test]
+    fn int_and_double_observed_widen_to_float_without_a_mixed_warning() {
+        let (ty, warnings) = observed_type_of(&["Int32", "Double", "Int64"]);
+        assert_eq!(ty, "Float");
+        assert!(
+            !warnings.iter().any(|w| w.contains("mixed")),
+            "{warnings:?}"
+        );
+        assert_eq!(observed_type_of(&["Int32", "Null"]).0, "Int");
+        assert_eq!(
+            observed_type_of(&["Null"]).0,
+            "Text",
+            "only nulls observed: no type claim"
+        );
+    }
+
+    #[test]
+    fn observed_types_follow_what_the_importer_stores() {
+        // Decimal128 imports as exact text, a BSON Timestamp as a {t,i} map
+        assert_eq!(observed_type_of(&["Decimal128"]).0, "Text");
+        assert_eq!(observed_type_of(&["Timestamp"]).0, "Text");
+        assert_eq!(observed_type_of(&["DateTime"]).0, "DateTime");
+        assert_eq!(observed_type_of(&["ObjectId"]).0, "Text");
+        assert_eq!(observed_type_of(&["Document"]).0, "Text");
+    }
+
+    #[test]
+    fn a_union_declared_type_without_a_profile_widens_too() {
+        // schema-only discovery keeps no profile: the union rides in the type string
+        for (declared, want) in [
+            ("Int32|String", "Text"),
+            ("Int32|Double", "Float"),
+            ("Long|Double", "Float"),
+            ("String|Long|Boolean", "Text"),
+            ("Int32", "Int"),
+        ] {
+            let m = meta(
+                "mongodb",
+                "crm",
+                &[("people", &[("v", declared, false, true, false)])],
+                &[],
+            );
+            let d = definition_from_sources(
+                &[SourceInput {
+                    name: "crm",
+                    kind: "mongodb",
+                    meta: &m,
+                }],
+                &[],
+            );
+            let ty = list(&d, "property_defs")
+                .iter()
+                .find(|p| p["name"] == "v")
+                .unwrap()["type"]
+                .clone();
+            assert_eq!(ty, want, "{declared}");
+        }
+    }
+
+    #[test]
+    fn one_relationship_type_between_several_label_pairs_keeps_every_pair() {
+        // a Neo4j type linking Person->Company, Employee->Customer and Person->Customer
+        let mut m = meta(
+            "neo4j",
+            "g",
+            &[
+                ("Person", &[ID]),
+                ("Employee", &[ID]),
+                ("Company", &[ID]),
+                ("Customer", &[ID]),
+            ],
+            &[],
+        );
+        let pair = |from: &str, to: &str| crate::connector_bridge::ReferenceInfo {
+            from_container: from.into(),
+            from_fields: Vec::new(),
+            to_container: to.into(),
+            to_fields: Vec::new(),
+            name: Some("WORKS_AT".into()),
+        };
+        m.references = vec![
+            pair("Person", "Company"),
+            pair("Employee", "Customer"),
+            pair("Person", "Customer"),
+            pair("Person", "Company"), // the same pair again: one relationship
+        ];
+        let d = definition_from_sources(
+            &[SourceInput {
+                name: "g",
+                kind: "neo4j",
+                meta: &m,
+            }],
+            &[],
+        );
+        let mut got: Vec<(String, String)> = list(&d, "relationships")
+            .iter()
+            .map(|r| {
+                (
+                    r["domain"].as_str().unwrap().to_string(),
+                    r["range"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                ("Employee".to_string(), "Customer".to_string()),
+                ("Person".to_string(), "Company".to_string()),
+                ("Person".to_string(), "Customer".to_string()),
+            ],
+            "{:?}",
+            list(&d, "relationships")
+        );
+        let names: std::collections::BTreeSet<&str> = list(&d, "relationships")
+            .iter()
+            .map(|r| r["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names.len(),
+            3,
+            "every relationship has its own name: {names:?}"
         );
     }
 

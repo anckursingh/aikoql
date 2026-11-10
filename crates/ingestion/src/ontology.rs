@@ -486,18 +486,30 @@ fn upsert_property(
     }
 }
 
-/// Convert a CamelCase or space-separated name to snake_case.
+/// Convert a CamelCase, SCREAMING_SNAKE or space-separated name to snake_case.
+/// A capital starts a new word after a lowercase letter or digit (`createdAt`)
+/// and at the end of an acronym (`HTTPServer`); runs of capitals stay whole
+/// (`MD_WORKS_AT` -> `md_works_at`, `userID` -> `user_id`).
 pub(crate) fn to_snake_case(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
     let mut out = String::new();
-    for (i, ch) in name.chars().enumerate() {
-        if ch == ' ' || ch == '-' {
-            out.push('_');
-        } else if ch.is_uppercase() && i > 0 {
-            out.push('_');
-            out.push(ch.to_lowercase().next().unwrap_or(ch));
-        } else {
-            out.push(ch.to_lowercase().next().unwrap_or(ch));
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch == ' ' || ch == '-' || ch == '_' {
+            if !out.ends_with('_') {
+                out.push('_');
+            }
+            continue;
         }
+        if ch.is_uppercase() && i > 0 {
+            let prev = chars[i - 1];
+            let next_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
+            let boundary =
+                prev.is_lowercase() || prev.is_ascii_digit() || (prev.is_uppercase() && next_lower);
+            if boundary && !out.ends_with('_') {
+                out.push('_');
+            }
+        }
+        out.extend(ch.to_lowercase());
     }
     out.trim_matches('_').to_string()
 }
@@ -574,6 +586,29 @@ pub fn merge_proposals(proposals: &[OntologyProposal]) -> OntologyProposal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_snake_case_keeps_acronyms_and_screaming_snake_whole() {
+        for (input, want) in [
+            ("MD_WORKS_AT", "md_works_at"),
+            ("WORKS_AT", "works_at"),
+            ("customerId", "customer_id"),
+            ("createdAt", "created_at"),
+            ("userID", "user_id"),
+            ("HTTPServer", "http_server"),
+            ("parseURL", "parse_url"),
+            ("ID", "id"),
+            ("already_snake", "already_snake"),
+            ("two words", "two_words"),
+            ("a-b", "a_b"),
+            ("profile.city", "profile.city"),
+            ("Order2Items", "order2_items"),
+            ("__X__", "x"),
+            ("", ""),
+        ] {
+            assert_eq!(to_snake_case(input), want, "{input}");
+        }
+    }
     use crate::ir::{
         EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate, TemporalAssertion,
     };

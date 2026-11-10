@@ -13,6 +13,37 @@ pub struct ContainerDiff {
     pub removed_fields: Vec<String>,
     /// (field, old type, new type)
     pub type_changes: Vec<(String, String, String)>,
+    #[serde(default)]
+    pub added_indexes: Vec<String>,
+    #[serde(default)]
+    pub removed_indexes: Vec<String>,
+    /// Same index name, different columns / uniqueness / method.
+    #[serde(default)]
+    pub redefined_indexes: Vec<String>,
+    #[serde(default)]
+    pub added_checks: Vec<String>,
+    #[serde(default)]
+    pub removed_checks: Vec<String>,
+    #[serde(default)]
+    pub redefined_checks: Vec<String>,
+    /// (property, old value, new value); an absent side is the empty string.
+    #[serde(default)]
+    pub property_changes: Vec<(String, String, String)>,
+}
+
+impl ContainerDiff {
+    fn is_empty(&self) -> bool {
+        self.added_fields.is_empty()
+            && self.removed_fields.is_empty()
+            && self.type_changes.is_empty()
+            && self.added_indexes.is_empty()
+            && self.removed_indexes.is_empty()
+            && self.redefined_indexes.is_empty()
+            && self.added_checks.is_empty()
+            && self.removed_checks.is_empty()
+            && self.redefined_checks.is_empty()
+            && self.property_changes.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -52,6 +83,28 @@ impl ConnectorMetadata {
                 c.name,
                 uniques.join(";")
             ));
+            // present only when non-empty, so a schema without them keeps the
+            // fingerprint it had before this metadata existed
+            for i in &c.indexes {
+                lines.push(format!(
+                    "I|{}|{}|{}|{}|{}|{}",
+                    c.name,
+                    i.name,
+                    i.columns.join(","),
+                    i.unique,
+                    i.method.as_deref().unwrap_or(""),
+                    i.predicate.as_deref().unwrap_or("")
+                ));
+            }
+            for k in &c.checks {
+                lines.push(format!("K|{}|{}|{}", c.name, k.name, k.expression));
+            }
+            if let Some(kind) = &c.kind {
+                lines.push(format!("T|{}|{kind}", c.name));
+            }
+            for (key, value) in &c.properties {
+                lines.push(format!("P|{}|{key}|{value}", c.name));
+            }
             for f in &c.fields {
                 let mut observed = f
                     .profile
@@ -94,6 +147,29 @@ impl ConnectorMetadata {
     }
 }
 
+/// Added, removed and redefined (same name, different definition) items of a
+/// named list, each sorted by name.
+fn named_diff<T: PartialEq>(
+    old: &[T],
+    new: &[T],
+    key: impl for<'a> Fn(&'a T) -> (&'a String, &'a T),
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let o: BTreeMap<&String, &T> = old.iter().map(&key).collect();
+    let n: BTreeMap<&String, &T> = new.iter().map(&key).collect();
+    let pick = |from: &BTreeMap<&String, &T>, other: &BTreeMap<&String, &T>| -> Vec<String> {
+        from.keys()
+            .filter(|k| !other.contains_key(*k))
+            .map(|k| (*k).clone())
+            .collect()
+    };
+    let redefined = n
+        .iter()
+        .filter(|(k, v)| o.get(*k).is_some_and(|ov| ov != *v))
+        .map(|(k, _)| (*k).clone())
+        .collect();
+    (pick(&n, &o), pick(&o, &n), redefined)
+}
+
 /// What changed between two snapshots of one source, by container and field name.
 pub fn diff_metadata(old: &ConnectorMetadata, new: &ConnectorMetadata) -> SchemaDiff {
     let names = |m: &ConnectorMetadata| -> BTreeSet<String> {
@@ -116,7 +192,35 @@ pub fn diff_metadata(old: &ConnectorMetadata, new: &ConnectorMetadata) -> Schema
                 .collect()
         };
         let (ot, nt) = (types(oc), types(nc));
+        let (added_indexes, removed_indexes, redefined_indexes) =
+            named_diff(&oc.indexes, &nc.indexes, |i| (&i.name, i));
+        let (added_checks, removed_checks, redefined_checks) =
+            named_diff(&oc.checks, &nc.checks, |k| (&k.name, k));
+        let property_changes = oc
+            .properties
+            .keys()
+            .chain(nc.properties.keys())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|k| {
+                let (o, n) = (oc.properties.get(k), nc.properties.get(k));
+                (o != n).then(|| {
+                    (
+                        k.clone(),
+                        o.cloned().unwrap_or_default(),
+                        n.cloned().unwrap_or_default(),
+                    )
+                })
+            })
+            .collect();
         let cd = ContainerDiff {
+            added_indexes,
+            removed_indexes,
+            redefined_indexes,
+            added_checks,
+            removed_checks,
+            redefined_checks,
+            property_changes,
             name: nc.name.clone(),
             added_fields: nt
                 .keys()
@@ -136,10 +240,7 @@ pub fn diff_metadata(old: &ConnectorMetadata, new: &ConnectorMetadata) -> Schema
                 })
                 .collect(),
         };
-        if !(cd.added_fields.is_empty()
-            && cd.removed_fields.is_empty()
-            && cd.type_changes.is_empty())
-        {
+        if !cd.is_empty() {
             diff.changed.push(cd);
         }
     }
@@ -150,7 +251,7 @@ pub fn diff_metadata(old: &ConnectorMetadata, new: &ConnectorMetadata) -> Schema
 mod tests {
     use super::*;
     use crate::connector_bridge::{
-        ContainerInfo, FieldInfo, FieldProfile, Provenance, ReferenceInfo,
+        CheckInfo, ContainerInfo, FieldInfo, FieldProfile, IndexInfo, Provenance, ReferenceInfo,
     };
 
     fn field(name: &str, ty: &str) -> FieldInfo {
@@ -189,6 +290,139 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_schema_without_indexes_checks_or_kinds_keeps_its_pre_existing_fingerprint() {
+        // stored snapshots must not all "change" the day this metadata was added
+        assert_eq!(
+            meta().fingerprint(),
+            "3e6cd8bb904df197be7502db49c1b476a73791e8923ac7c284ef853279129ed1"
+        );
+    }
+
+    fn with(f: impl FnOnce(&mut ContainerInfo)) -> ConnectorMetadata {
+        let mut m = meta();
+        f(&mut m.containers[1]);
+        m
+    }
+
+    fn idx(name: &str, cols: &[&str], unique: bool) -> IndexInfo {
+        IndexInfo {
+            name: name.into(),
+            columns: cols.iter().map(|c| c.to_string()).collect(),
+            unique,
+            method: Some("btree".into()),
+            predicate: None,
+        }
+    }
+
+    #[test]
+    fn indexes_checks_kind_and_properties_are_part_of_the_schema_identity() {
+        let base = meta().fingerprint();
+        let indexed = with(|c| {
+            c.indexes
+                .push(idx("orders_customer_idx", &["customer_id"], false))
+        });
+        assert_ne!(indexed.fingerprint(), base);
+        let unique = with(|c| {
+            c.indexes
+                .push(idx("orders_customer_idx", &["customer_id"], true))
+        });
+        assert_ne!(unique.fingerprint(), indexed.fingerprint(), "unique vs not");
+        let reordered = with(|c| {
+            c.indexes.push(idx("b", &["x", "y"], false));
+            c.indexes.push(idx("a", &["customer_id"], false));
+        });
+        let swapped = with(|c| {
+            c.indexes.push(idx("a", &["customer_id"], false));
+            c.indexes.push(idx("b", &["x", "y"], false));
+        });
+        assert_eq!(
+            reordered.fingerprint(),
+            swapped.fingerprint(),
+            "index order is not identity"
+        );
+        let cols_swapped = with(|c| c.indexes.push(idx("b", &["y", "x"], false)));
+        let cols = with(|c| c.indexes.push(idx("b", &["x", "y"], false)));
+        assert_ne!(
+            cols.fingerprint(),
+            cols_swapped.fingerprint(),
+            "column order IS identity"
+        );
+        let check = with(|c| {
+            c.checks.push(CheckInfo {
+                name: "pos".into(),
+                expression: "total > 0".into(),
+            })
+        });
+        let check2 = with(|c| {
+            c.checks.push(CheckInfo {
+                name: "pos".into(),
+                expression: "total >= 0".into(),
+            })
+        });
+        assert_ne!(check.fingerprint(), base);
+        assert_ne!(check.fingerprint(), check2.fingerprint());
+        let view = with(|c| c.kind = Some("materialized_view".into()));
+        assert_ne!(view.fingerprint(), base);
+        let engine = with(|c| {
+            c.properties.insert("engine".into(), "MergeTree".into());
+        });
+        let engine2 = with(|c| {
+            c.properties
+                .insert("engine".into(), "ReplacingMergeTree".into());
+        });
+        assert_ne!(engine.fingerprint(), base);
+        assert_ne!(engine.fingerprint(), engine2.fingerprint());
+    }
+
+    #[test]
+    fn the_diff_names_added_and_removed_indexes_and_checks_and_changed_properties() {
+        let old = with(|c| {
+            c.indexes.push(idx("keep", &["a"], false));
+            c.indexes.push(idx("gone", &["b"], false));
+            c.checks.push(CheckInfo {
+                name: "old_chk".into(),
+                expression: "a > 0".into(),
+            });
+            c.properties.insert("engine".into(), "MergeTree".into());
+        });
+        let new = with(|c| {
+            c.indexes.push(idx("keep", &["a"], false));
+            c.indexes.push(idx("fresh", &["c"], true));
+            c.checks.push(CheckInfo {
+                name: "new_chk".into(),
+                expression: "a > 1".into(),
+            });
+            c.properties
+                .insert("engine".into(), "ReplacingMergeTree".into());
+        });
+        let d = diff_metadata(&old, &new);
+        assert_eq!(d.changed.len(), 1, "{d:?}");
+        let c = &d.changed[0];
+        assert_eq!(
+            (c.added_indexes.clone(), c.removed_indexes.clone()),
+            (vec!["fresh".to_string()], vec!["gone".to_string()])
+        );
+        assert_eq!(
+            (c.added_checks.clone(), c.removed_checks.clone()),
+            (vec!["new_chk".to_string()], vec!["old_chk".to_string()])
+        );
+        assert_eq!(
+            c.property_changes,
+            [(
+                "engine".to_string(),
+                "MergeTree".to_string(),
+                "ReplacingMergeTree".to_string()
+            )]
+        );
+        assert!(c.added_fields.is_empty() && c.removed_fields.is_empty());
+        // an index definition change under the same name is a change too
+        let redef = with(|c| c.indexes.push(idx("keep", &["z"], false)));
+        let base = with(|c| c.indexes.push(idx("keep", &["a"], false)));
+        let d = diff_metadata(&base, &redef);
+        assert_eq!(d.changed[0].redefined_indexes, ["keep"], "{d:?}");
     }
 
     #[test]

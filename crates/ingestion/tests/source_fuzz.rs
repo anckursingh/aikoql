@@ -3,7 +3,7 @@
 //! seed; raise the volume with AIKOQL_FUZZ_ITERS (default 2 000).
 
 use aikoql_ingestion::{
-    class_name_for_container, definition_from_sources, diff_metadata, ClassMerge,
+    class_name_for_container, definition_from_sources, diff_metadata, suggest_merges, ClassMerge,
     ConnectorMetadata, ContainerInfo, FieldInfo, FieldProfile, Provenance, ReferenceInfo,
     SourceInput,
 };
@@ -40,6 +40,9 @@ impl Rng {
         (self.next() % n.max(1) as u64) as usize
     }
     fn pick<'a>(&mut self, xs: &[&'a str]) -> &'a str {
+        xs[self.below(xs.len())]
+    }
+    fn pick_pair<'a>(&mut self, xs: &[(&'a str, &'a str)]) -> (&'a str, &'a str) {
         xs[self.below(xs.len())]
     }
     fn shuffle<T>(&mut self, v: &mut [T]) {
@@ -94,6 +97,53 @@ const POOL: &[&str] = &[
     "сrm",
     "crm",
 ];
+
+/// Plant one related family across two sources: the same concept under a
+/// synonym / variant name with variant field spellings and types, so the
+/// suggestion fuzz exercises real positives, not only hostile noise.
+fn plant_related(r: &mut Rng, a: &mut ConnectorMetadata, b: &mut ConnectorMetadata) {
+    let (na, nb) = r.pick_pair(&[
+        ("customers", "clients"),
+        ("customers", "customers"),
+        ("employees", "staff"),
+        ("orders", "orders"),
+    ]);
+    let spellings: [(&str, &str, &str); 4] = [
+        ("email", "email_address", "text"),
+        ("created_at", "createdAt", "timestamp"),
+        ("tier", "tier", "text"),
+        ("age", "age", "integer"),
+    ];
+    let mk = |r: &mut Rng, container: &str, second: bool| {
+        let mut fields = vec![FieldInfo {
+            name: if second { "_id".into() } else { "id".into() },
+            data_type: "integer".into(),
+            is_primary_key: true,
+            ..Default::default()
+        }];
+        for (x, y, ty) in spellings {
+            if r.below(4) != 0 {
+                let ty = if r.below(5) == 0 { "text" } else { ty };
+                fields.push(FieldInfo {
+                    name: if second { y.into() } else { x.into() },
+                    data_type: ty.into(),
+                    nullable: r.below(2) == 0,
+                    ..Default::default()
+                });
+            }
+        }
+        ContainerInfo {
+            name: container.to_string(),
+            fields,
+            ..Default::default()
+        }
+    };
+    a.containers.retain(|c| c.name != na);
+    b.containers.retain(|c| c.name != nb);
+    let (ca, cb) = (mk(r, na, false), mk(r, nb, true));
+    a.containers.push(ca);
+    b.containers.push(cb);
+}
 
 fn hostile_name(r: &mut Rng) -> String {
     let mut s = String::new();
@@ -328,6 +378,15 @@ fn draft_fuzz_always_valid() {
                         .cloned()
                         .unwrap_or_else(|| "nope.c".into())
                 },
+                // alignments name real, missing and colliding fields alike
+                properties: (0..r.below(3))
+                    .map(|_| {
+                        let pick = |r: &mut Rng| {
+                            ["id", "name", "email", "tier", "zz"][r.below(5)].to_string()
+                        };
+                        (pick(&mut r), pick(&mut r))
+                    })
+                    .collect(),
             })
             .collect();
         let d = definition_from_sources(&inputs, &merges);
@@ -426,4 +485,151 @@ fn a_5000_container_schema_fingerprints_and_drafts_in_bounded_time() {
         "took {:?}",
         t.elapsed()
     );
+}
+
+/// Suggestions are deterministic, bounded, well-formed, and applying every one
+/// of them still yields a valid draft (unique class names, no panic).
+#[test]
+fn suggestion_fuzz_is_deterministic_well_formed_and_applicable() {
+    let mut with_suggestions = 0;
+    for seed in 1..=iters() {
+        let mut r = Rng::new(seed);
+        let mut metas: Vec<(String, &str, ConnectorMetadata)> = (0..2 + r.below(3))
+            .map(|i| {
+                let kind = r.pick(&["postgres", "mongodb", "sqlite", "neo4j"]);
+                (format!("src{i}"), kind, random_meta(&mut r, kind))
+            })
+            .collect();
+        if r.below(3) != 0 {
+            let (left, right) = metas.split_at_mut(1);
+            plant_related(&mut r, &mut left[0].2, &mut right[0].2);
+        }
+        let inputs: Vec<SourceInput> = metas
+            .iter()
+            .map(|(n, k, m)| SourceInput {
+                name: n,
+                kind: k,
+                meta: m,
+            })
+            .collect();
+        let first = suggest_merges(&inputs);
+        with_suggestions += usize::from(!first.is_empty());
+        assert_eq!(
+            first,
+            suggest_merges(&inputs),
+            "seed {seed}: not deterministic"
+        );
+        assert!(first.len() <= 200, "seed {seed}");
+        let source_of = |key: &str| key.split('.').next().unwrap_or("").to_string();
+        let keys: Vec<String> = metas
+            .iter()
+            .flat_map(|(n, _, m)| m.containers.iter().map(move |c| format!("{n}.{}", c.name)))
+            .collect();
+        for w in first.windows(2) {
+            assert!(w[0].confidence >= w[1].confidence, "seed {seed}: unordered");
+        }
+        for m in &first {
+            assert!(
+                (0.5..=1.0).contains(&m.confidence),
+                "seed {seed}: {}",
+                m.confidence
+            );
+            assert!(
+                keys.contains(&m.a) && keys.contains(&m.b),
+                "seed {seed}: unknown {m:?}"
+            );
+            assert_ne!(
+                source_of(&m.a),
+                source_of(&m.b),
+                "seed {seed}: same-source pair {m:?}"
+            );
+            assert!(
+                !m.evidence.is_empty(),
+                "seed {seed}: a suggestion without evidence"
+            );
+            for p in &m.properties {
+                assert!(
+                    (0.0..=1.0).contains(&p.confidence) && !p.evidence.is_empty(),
+                    "seed {seed}"
+                );
+            }
+        }
+        let merges: Vec<ClassMerge> = first
+            .iter()
+            .map(|m| ClassMerge {
+                a: m.a.clone(),
+                b: m.b.clone(),
+                properties: m
+                    .properties
+                    .iter()
+                    .map(|p| (p.a_field.clone(), p.b_field.clone()))
+                    .collect(),
+            })
+            .collect();
+        let d = definition_from_sources(&inputs, &merges);
+        let names: Vec<&str> = d.classes.iter().map(|c| c.name.as_str()).collect();
+        let mut uniq = names.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(
+            names.len(),
+            uniq.len(),
+            "seed {seed}: duplicate class names after applying suggestions"
+        );
+    }
+    eprintln!("seeds with suggestions: {with_suggestions}/{}", iters());
+    assert!(
+        with_suggestions > 0,
+        "the generator never produced a suggestion: the fuzz is vacuous"
+    );
+}
+
+/// Thousands of containers, including the pathological shape where every one
+/// shares a name and every field: suggestions stay bounded in time and count.
+#[test]
+fn suggestions_are_bounded_on_huge_and_pathological_schemas() {
+    let field = |n: &str, pk: bool| FieldInfo {
+        name: n.to_string(),
+        data_type: "text".into(),
+        is_primary_key: pk,
+        ..Default::default()
+    };
+    let big = |prefix: &str, same_name: bool| ConnectorMetadata {
+        connector_type: "postgres".into(),
+        label: prefix.into(),
+        containers: (0..5_000)
+            .map(|i| ContainerInfo {
+                name: if same_name {
+                    "data".into()
+                } else {
+                    format!("{prefix}{i}")
+                },
+                fields: (0..8).map(|j| field(&format!("c{j}"), j == 0)).collect(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    for same_name in [false, true] {
+        let (a, b) = (big("a", same_name), big("b", same_name));
+        let started = std::time::Instant::now();
+        let s = suggest_merges(&[
+            SourceInput {
+                name: "a",
+                kind: "postgres",
+                meta: &a,
+            },
+            SourceInput {
+                name: "b",
+                kind: "postgres",
+                meta: &b,
+            },
+        ]);
+        let took = started.elapsed();
+        assert!(s.len() <= 200, "{}", s.len());
+        assert!(
+            took < std::time::Duration::from_secs(20),
+            "same_name={same_name}: {took:?} for 10k containers"
+        );
+    }
 }

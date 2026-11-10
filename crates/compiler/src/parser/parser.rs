@@ -91,6 +91,8 @@ fn eof_err(line: usize, col: usize) -> Diagnostic {
 pub struct Parser {
     lexer: Lexer,
     current: Token,
+    /// Source spelling of `current` when it is a word (see `Lexer::last_word`).
+    current_word: Option<String>,
     line: usize,
     col: usize,
 }
@@ -99,17 +101,20 @@ impl Parser {
     pub fn new(source: &str) -> Self {
         let mut lexer = Lexer::new(source);
         let current = lexer.next_token();
+        let current_word = lexer.last_word.take();
         let line = lexer.last_span.line;
         let col = lexer.last_span.col;
         Parser {
             lexer,
             current,
+            current_word,
             line,
             col,
         }
     }
     fn advance(&mut self) {
         self.current = self.lexer.next_token();
+        self.current_word = self.lexer.last_word.take();
         self.line = self.lexer.last_span.line;
         self.col = self.lexer.last_span.col;
     }
@@ -128,14 +133,17 @@ impl Parser {
         }
     }
 
+    /// A name: an identifier, or any keyword read as one with its spelling
+    /// kept — ontology classes come from table names, and `orders`/`groups`
+    /// are common ones. Clause keywords are only consumed where a name is
+    /// required, so `MATCH Order ORDER BY x` still parses.
     fn expect_ident(&mut self, desc: &str) -> Result<String, ParseError> {
-        match &self.current {
-            Token::Ident(s) => {
-                let v = s.clone();
+        match self.current_word.clone() {
+            Some(word) => {
                 self.advance();
-                Ok(v)
+                Ok(word)
             }
-            _ => Err(expected_err(desc, &self.current, self.line, self.col)),
+            None => Err(expected_err(desc, &self.current, self.line, self.col)),
         }
     }
     fn expect_string(&mut self) -> Result<String, ParseError> {
@@ -1066,6 +1074,59 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    // ---- keyword-named classes: a table `orders` becomes class `Order` ----
+
+    #[test]
+    fn a_keyword_is_a_valid_entity_name_with_its_spelling_kept() {
+        for name in [
+            "Order", "Group", "Update", "Count", "Left", "Match", "Score", "Tables",
+        ] {
+            let m = parse_match(&format!("MATCH {name} RETURN *"));
+            assert_eq!(m.entity, name, "{name}");
+        }
+        // clause keywords still work after the entity
+        let m = parse_match("MATCH Order WHERE total > 5 ORDER BY total DESC LIMIT 3 RETURN *");
+        assert_eq!(m.entity, "Order");
+        assert!(m.order_by.is_some() && m.limit == Some(3));
+    }
+
+    #[test]
+    fn a_keyword_is_a_valid_property_in_where_and_order_by() {
+        let m =
+            parse_match("MATCH Item WHERE group == \"a\" AND order > 2 ORDER BY order RETURN *");
+        assert_eq!(m.entity, "Item");
+        assert_eq!(
+            m.order_by.as_ref().map(|o| o.keys[0].field.as_str()),
+            Some("order")
+        );
+    }
+
+    #[test]
+    fn a_keyword_is_a_valid_entity_in_create_update_delete_and_join() {
+        assert!(matches!(
+            Parser::new("CREATE Order total == 3").parse_statement().unwrap(),
+            Statement::Create(c) if c.entity == "Order"
+        ));
+        assert!(matches!(
+            Parser::new("UPDATE Group \"abc\" name == \"x\"").parse_statement().unwrap(),
+            Statement::Update(u) if u.entity == "Group"
+        ));
+        assert!(matches!(
+            Parser::new("DELETE Order \"abc\"").parse_statement().unwrap(),
+            Statement::Delete(d) if d.entity == "Order"
+        ));
+    }
+
+    #[test]
+    fn a_bare_clause_keyword_where_a_name_is_needed_still_fails_cleanly() {
+        // `MATCH` alone, or a clause keyword where nothing can follow, is an error — not a panic
+        assert!(Parser::new("MATCH").parse_statement().is_err());
+        assert!(Parser::new("MATCH Order WHERE").parse_statement().is_err());
+        assert!(Parser::new("MATCH Order ORDER BY")
+            .parse_statement()
+            .is_err());
     }
 
     // ---- v0.3 K2: temporal + epistemic clauses ----

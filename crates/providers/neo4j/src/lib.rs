@@ -53,6 +53,37 @@ pub fn quote_label(label: &str) -> String {
     label.replace('`', "``")
 }
 
+/// A property index (or a constraint's backing index) on node labels.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SchemaIndex {
+    pub name: String,
+    /// RANGE, TEXT, POINT, VECTOR, FULLTEXT (the token LOOKUP index is not listed).
+    pub kind: String,
+    pub labels: Vec<String>,
+    pub properties: Vec<String>,
+    /// The index backs a uniqueness / node-key constraint.
+    pub unique: bool,
+}
+
+/// A node constraint: UNIQUENESS, NODE_KEY, NODE_PROPERTY_EXISTENCE, ...
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SchemaConstraint {
+    pub name: String,
+    pub kind: String,
+    pub labels: Vec<String>,
+    pub properties: Vec<String>,
+}
+
+fn strings(v: Option<&serde_json::Value>) -> Vec<String> {
+    v.and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// One property of a label: observed value types and whether every node has it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LabelProp {
@@ -94,6 +125,9 @@ pub fn label_props_from_sample(rows: &[serde_json::Value]) -> Vec<LabelProp> {
         })
         .collect()
 }
+
+/// Imported nodes, their elementId -> KOID map, and whether the label had more.
+pub type NodeImport = (Vec<KnowledgeObject>, HashMap<String, KOID>, bool);
 
 pub struct Neo4jConnector {
     base_url: String,
@@ -288,6 +322,53 @@ impl Neo4jConnector {
         }
     }
 
+    /// Node property indexes (`SHOW INDEXES`), sorted by name. The token lookup
+    /// index (no properties) is skipped.
+    pub fn introspect_indexes(&self) -> Result<Vec<SchemaIndex>, String> {
+        let rows = self.cypher_rows(
+            "SHOW INDEXES YIELD name, type, entityType, labelsOrTypes, properties, owningConstraint \
+             WHERE entityType = 'NODE' AND type <> 'LOOKUP' \
+             RETURN name, type, labelsOrTypes, properties, owningConstraint IS NOT NULL",
+            serde_json::json!({}),
+        )?;
+        let mut out: Vec<SchemaIndex> = rows
+            .iter()
+            .filter_map(|r| {
+                Some(SchemaIndex {
+                    name: r.first()?.as_str()?.to_string(),
+                    kind: r.get(1)?.as_str()?.to_string(),
+                    labels: strings(r.get(2)),
+                    properties: strings(r.get(3)),
+                    unique: r.get(4)?.as_bool().unwrap_or(false),
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    /// Node constraints (`SHOW CONSTRAINTS`), sorted by name.
+    pub fn introspect_constraints(&self) -> Result<Vec<SchemaConstraint>, String> {
+        let rows = self.cypher_rows(
+            "SHOW CONSTRAINTS YIELD name, type, entityType, labelsOrTypes, properties \
+             WHERE entityType = 'NODE' RETURN name, type, labelsOrTypes, properties",
+            serde_json::json!({}),
+        )?;
+        let mut out: Vec<SchemaConstraint> = rows
+            .iter()
+            .filter_map(|r| {
+                Some(SchemaConstraint {
+                    name: r.first()?.as_str()?.to_string(),
+                    kind: r.get(1)?.as_str()?.to_string(),
+                    labels: strings(r.get(2)),
+                    properties: strings(r.get(3)),
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
     /// Distinct (relationship type, from label, to label) patterns, at most `limit`.
     pub fn introspect_rel_patterns(
         &self,
@@ -296,8 +377,8 @@ impl Neo4jConnector {
         let rows = self.cypher_rows(
             &format!(
                 "MATCH (a)-[r]->(b) \
-                 WITH DISTINCT type(r) AS t, head(labels(a)) AS la, head(labels(b)) AS lb \
-                 WHERE la IS NOT NULL AND lb IS NOT NULL RETURN t, la, lb LIMIT {}",
+                 UNWIND labels(a) AS la UNWIND labels(b) AS lb \
+                 WITH DISTINCT type(r) AS t, la, lb RETURN t, la, lb LIMIT {}",
                 limit.clamp(1, 10_000)
             ),
             serde_json::json!({}),
@@ -328,12 +409,27 @@ impl Neo4jConnector {
         label: &str,
         tenant: Option<&str>,
     ) -> Result<(Vec<KnowledgeObject>, HashMap<String, KOID>), String> {
+        self.import_nodes_limited(label, tenant, u64::MAX)
+            .map(|(objects, ids, _)| (objects, ids))
+    }
+
+    /// At most `max_rows` nodes, in elementId order; the flag says the label had more.
+    pub fn import_nodes_limited(
+        &self,
+        label: &str,
+        tenant: Option<&str>,
+        max_rows: u64,
+    ) -> Result<NodeImport, String> {
+        let limit = max_rows.saturating_add(1).min(i64::MAX as u64);
         let stmt = format!(
-            "MATCH (n:`{}`) RETURN elementId(n), properties(n), labels(n)",
+            "MATCH (n:`{}`) RETURN elementId(n), properties(n), labels(n) \
+             ORDER BY elementId(n) LIMIT {limit}",
             quote_label(label)
         );
         let body = serde_json::json!({ "statements": [{"statement": stmt}] });
-        let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", self.base_url))
+        let resp = self
+            .agent
+            .post(&format!("{}/db/neo4j/tx/commit", self.base_url))
             .set("Authorization", &self.auth)
             .set("Content-Type", "application/json")
             .send_json(&body)
@@ -343,7 +439,7 @@ impl Neo4jConnector {
             return Err(format!("{}: {}", neo.errors[0].code, neo.errors[0].message));
         }
 
-        let mut objects = Vec::new();
+        let mut objects: Vec<KnowledgeObject> = Vec::new();
         let mut id_map: HashMap<String, KOID> = HashMap::new(); // elementId → KOID
 
         for result in &neo.results {
@@ -411,7 +507,14 @@ impl Neo4jConnector {
                 });
             }
         }
-        Ok((objects, id_map))
+        let truncated = objects.len() as u64 > max_rows;
+        if truncated {
+            // the extra row only proved there was more: it is not imported
+            objects.truncate(usize::try_from(max_rows).unwrap_or(usize::MAX));
+            let keep: std::collections::HashSet<KOID> = objects.iter().map(|o| o.koid).collect();
+            id_map.retain(|_, k| keep.contains(k));
+        }
+        Ok((objects, id_map, truncated))
     }
 
     /// Import all relationships of a given type.
@@ -427,14 +530,17 @@ impl Neo4jConnector {
         // in MATCH does NOT, the endpoints come back in elementId order and
         // inverted rels would land on the wrong KO. The undirected match
         // returns each relationship in BOTH orientations, so the WHERE keeps
-        // exactly one row per rel; ORDER BY makes the order deterministic so
+        // exactly one row per rel (`<=`: a node's loop to itself has equal
+        // ends and must not be filtered out); ORDER BY makes the order deterministic so
         // re-imports are byte-identical.
         let stmt = format!(
-            "MATCH (a)-[r:`{}`]-(b) WHERE elementId(a) < elementId(b) RETURN elementId(startNode(r)), elementId(endNode(r)), type(r), properties(r) ORDER BY elementId(startNode(r)), elementId(endNode(r))",
+            "MATCH (a)-[r:`{}`]-(b) WHERE elementId(a) <= elementId(b) RETURN elementId(startNode(r)), elementId(endNode(r)), type(r), properties(r) ORDER BY elementId(startNode(r)), elementId(endNode(r))",
             quote_label(rel_type)
         );
         let body = serde_json::json!({ "statements": [{"statement": stmt}] });
-        let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", self.base_url))
+        let resp = self
+            .agent
+            .post(&format!("{}/db/neo4j/tx/commit", self.base_url))
             .set("Authorization", &self.auth)
             .set("Content-Type", "application/json")
             .send_json(&body)
@@ -744,5 +850,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A server that answers the connect probe, then goes silent.
+    fn silent_after_connect() -> String {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for (n, conn) in l.incoming().enumerate() {
+                let Ok(mut c) = conn else { break };
+                let mut buf = [0u8; 4096];
+                let _ = c.read(&mut buf);
+                if n == 0 {
+                    let _ = c.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    );
+                } else {
+                    held.push(c); // never answered
+                }
+            }
+        });
+        url
+    }
+
+    fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5)).ok()
+    }
+
+    #[test]
+    fn a_silent_server_ends_every_import_request_at_the_timeout() {
+        let url = silent_after_connect();
+        let c = Neo4jConnector::connect_with_timeout(&url, "u", "p", Some(400)).unwrap();
+        let nodes = within(move || c.import_nodes("P", None).map(|_| ()));
+        assert!(
+            matches!(nodes, Some(Err(_))),
+            "import_nodes hung past its timeout: {nodes:?}"
+        );
+        let url = silent_after_connect();
+        let c = Neo4jConnector::connect_with_timeout(&url, "u", "p", Some(400)).unwrap();
+        let rels = within(move || c.import_relationships("R", &HashMap::new()).map(|_| ()));
+        assert!(
+            matches!(rels, Some(Err(_))),
+            "import_relationships hung past its timeout: {rels:?}"
+        );
     }
 }

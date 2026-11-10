@@ -40,8 +40,35 @@ pub struct TableSchema {
     pub columns: Vec<ColumnInfo>,
     pub primary_keys: Vec<String>,
     pub row_count_estimate: i64,
-    /// Column groups under a UNIQUE constraint (single and composite), in key order.
+    /// Column groups the table guarantees unique (UNIQUE constraints and full,
+    /// plain-column unique indexes; single and composite), in key order.
     pub unique_groups: Vec<Vec<String>>,
+    /// Every secondary index except the primary key's.
+    pub indexes: Vec<IndexDef>,
+    /// CHECK constraints.
+    pub checks: Vec<CheckDef>,
+}
+
+/// One index. `columns` are the key columns in order; an expression key is
+/// its expression text (`lower(email)`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndexDef {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    /// btree, hash, gin, gist, brin, ...
+    pub method: String,
+    /// A partial index's WHERE.
+    pub predicate: Option<String>,
+    /// Every key is a plain column (no expression).
+    pub plain: bool,
+}
+
+/// One CHECK constraint: its name and the condition (without `CHECK`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckDef {
+    pub name: String,
+    pub expression: String,
 }
 
 /// One foreign key as discovered from information_schema.
@@ -204,13 +231,27 @@ impl PostgresConnector {
                 .unwrap_or(-1)
         };
 
+        let indexes = self.indexes(table_name)?;
+        let mut unique_groups = self.unique_groups(table_name)?;
+        // a unique index is a guarantee too (CREATE UNIQUE INDEX makes no
+        // constraint) - but only a full one on plain columns
+        for i in indexes
+            .iter()
+            .filter(|i| i.unique && i.plain && i.predicate.is_none())
+        {
+            if !unique_groups.contains(&i.columns) {
+                unique_groups.push(i.columns.clone());
+            }
+        }
         Ok(TableSchema {
             name: table_name.to_string(),
             columns,
             primary_keys: pks,
             row_count_estimate: count,
             schema: self.table_schema_name(table_name)?,
-            unique_groups: self.unique_groups(table_name)?,
+            unique_groups,
+            indexes,
+            checks: self.checks(table_name)?,
         })
     }
 
@@ -249,6 +290,59 @@ impl PostgresConnector {
         Ok(rows
             .iter()
             .filter_map(|r| r.get::<_, Option<Vec<String>>>(0))
+            .collect())
+    }
+
+    /// Valid secondary indexes (not the primary key's), by name.
+    fn indexes(&mut self, table: &str) -> Result<Vec<IndexDef>, String> {
+        let rows = self
+            .client
+            .query(
+                "SELECT i.relname::text, am.amname::text, ix.indisunique,
+                        pg_get_expr(ix.indpred, ix.indrelid),
+                        ARRAY(SELECT pg_get_indexdef(ix.indexrelid, k, true)
+                                FROM generate_series(1, ix.indnkeyatts::int) AS k ORDER BY k),
+                        NOT EXISTS (SELECT 1 FROM generate_series(1, ix.indnkeyatts::int) AS k
+                                     WHERE ix.indkey[k - 1] = 0)
+                 FROM pg_index ix
+                 JOIN pg_class i ON i.oid = ix.indexrelid
+                 JOIN pg_am am ON am.oid = i.relam
+                 WHERE ix.indrelid = to_regclass($1) AND NOT ix.indisprimary AND ix.indisvalid
+                 ORDER BY i.relname",
+                &[&quote_ident(table)],
+            )
+            .map_err(|e| format!("indexes of {table}: {e}"))?;
+        Ok(rows
+            .iter()
+            .map(|r| IndexDef {
+                name: r.get(0),
+                method: r.get(1),
+                unique: r.get(2),
+                predicate: r.get::<_, Option<String>>(3),
+                columns: r.get(4),
+                plain: r.get(5),
+            })
+            .collect())
+    }
+
+    /// CHECK constraints of a table, by name.
+    fn checks(&mut self, table: &str) -> Result<Vec<CheckDef>, String> {
+        let rows = self
+            .client
+            .query(
+                "SELECT con.conname::text, pg_get_constraintdef(con.oid, true)
+                 FROM pg_constraint con
+                 WHERE con.conrelid = to_regclass($1) AND con.contype = 'c'
+                 ORDER BY con.conname",
+                &[&quote_ident(table)],
+            )
+            .map_err(|e| format!("check constraints of {table}: {e}"))?;
+        Ok(rows
+            .iter()
+            .map(|r| CheckDef {
+                name: r.get(0),
+                expression: check_condition(&r.get::<_, String>(1)),
+            })
             .collect())
     }
 
@@ -309,15 +403,25 @@ impl PostgresConnector {
             .iter()
             .map(|c| {
                 let q = quote_ident(&c.name);
-                // pgvector UDTs have no driver-native FromSql — read the
-                // column ::text and let pg_cell_to_value parse the form.
-                if c.pg_type.starts_with("vector") {
-                    format!("{q}::text")
-                } else {
+                // Only types the driver decodes exactly are read natively;
+                // everything else (numeric, timestamps, uuid, json, arrays,
+                // enums, pgvector, ...) is read ::text and parsed by
+                // pg_cell_to_value — a failed native decode must never
+                // degrade a real value to NULL.
+                if is_native(&c.pg_type) {
                     q
+                } else {
+                    format!("{q}::text")
                 }
             })
             .collect();
+        // Pin the text forms: the same row imports identically whatever the
+        // server's or role's TimeZone / DateStyle / IntervalStyle defaults.
+        self.client
+            .batch_execute(
+                "SET TimeZone = 'UTC'; SET DateStyle = 'ISO, YMD'; SET IntervalStyle = 'postgres'",
+            )
+            .map_err(|e| format!("import {}: session settings: {}", schema.name, e))?;
         let query = format!(
             "SELECT {} FROM {} LIMIT {limit}",
             col_list.join(", "),
@@ -495,11 +599,70 @@ impl PostgresConnector {
 // Value mapping helpers
 // ---------------------------------------------------------------------------
 
+/// The bare type name: `format_type` adds typmods ("numeric(10,2)",
+/// "character varying(10)") that never change how a value is read.
+fn base_type(pg_type: &str) -> &str {
+    pg_type.split('(').next().unwrap_or(pg_type)
+}
+
+/// Types the driver decodes exactly into the Rust type `pg_cell_to_value`
+/// asks for. Array types (`integer[]`, `character varying(10)[]`) are never
+/// native, whatever their element.
+fn is_native(pg_type: &str) -> bool {
+    !pg_type.contains("[]")
+        && matches!(
+            base_type(pg_type),
+            "smallint"
+                | "int2"
+                | "integer"
+                | "int"
+                | "int4"
+                | "bigint"
+                | "int8"
+                | "double precision"
+                | "float8"
+                | "boolean"
+                | "bool"
+                | "text"
+                | "varchar"
+                | "character varying"
+                | "char"
+                | "character"
+                | "bpchar"
+                | "name"
+                | "bytea"
+        )
+}
+
+/// A float written as text, exactly: non-finite forms stay text.
+fn float_text(s: String) -> Value {
+    match s.parse::<f64>() {
+        Ok(f) if f.is_finite() => Value::Float(f),
+        _ => Value::Text(s),
+    }
+}
+
+/// `numeric` text -> Float while an f64 holds every digit (15 significant);
+/// beyond that the exact decimal stays Text rather than silently rounding.
+fn numeric_text(s: String) -> Value {
+    let significant = s
+        .chars()
+        .filter(char::is_ascii_digit)
+        .skip_while(|c| *c == '0')
+        .count();
+    if significant <= 15 {
+        float_text(s)
+    } else {
+        Value::Text(s)
+    }
+}
+
 /// Convert a PostgreSQL cell to an Aikoql Value. Each family reads as
 /// `Option<T>` so a NULL cell is recognized by the driver itself — the old
 /// try-get heuristic misread nullable non-NULL integers as NULL (item 4 red
-/// debug found FK values importing as Value::Null). Read failures per type
-/// also become Value::Null, as before.
+/// debug found FK values importing as Value::Null). Columns that are not
+/// `is_native` arrive as text (the import selects them `::text`) and are
+/// parsed here, so no decodable value ever becomes NULL by a type mismatch.
 fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str) -> Value {
     fn opt<T, F>(row: &postgres::Row, col_idx: usize, f: F) -> Value
     where
@@ -512,34 +675,21 @@ fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str) -> Value
             .map(f)
             .unwrap_or(Value::Null)
     }
-    // format_type adds typmods ("vector(3)", "numeric(10,2)") — match on the
-    // bare type name.
-    let base = pg_type.split('(').next().unwrap_or(pg_type);
-    match base {
-        // Integer family
-        "smallint" | "integer" | "int" | "int4" => opt(row, col_idx, |v: i32| Value::Int(v as i64)),
+    if !is_native(pg_type) {
+        return opt(row, col_idx, |s: String| match base_type(pg_type) {
+            "real" | "float4" => float_text(s),
+            "numeric" | "decimal" => numeric_text(s),
+            "vector" => parse_vector(s),
+            _ => Value::Text(s),
+        });
+    }
+    match base_type(pg_type) {
+        "smallint" | "int2" => opt(row, col_idx, |v: i16| Value::Int(v as i64)),
+        "integer" | "int" | "int4" => opt(row, col_idx, |v: i32| Value::Int(v as i64)),
         "bigint" | "int8" => opt(row, col_idx, Value::Int),
-        // Float family
-        "real" | "float4" => opt(row, col_idx, |v: f32| Value::Float(v as f64)),
-        "double precision" | "float8" | "numeric" | "decimal" => opt(row, col_idx, Value::Float),
-        // Boolean
+        "double precision" | "float8" => opt(row, col_idx, Value::Float),
         "boolean" | "bool" => opt(row, col_idx, Value::Bool),
-        // Text family
-        "text" | "varchar" | "character varying" | "char" | "character" | "name" | "uuid"
-        | "json" | "jsonb" => opt(row, col_idx, Value::Text),
-        // Binary
         "bytea" => opt(row, col_idx, Value::Bytes),
-        // Timestamps → ISO 8601 text
-        "timestamp"
-        | "timestamptz"
-        | "timestamp without time zone"
-        | "timestamp with time zone"
-        | "date"
-        | "time"
-        | "timetz" => opt(row, col_idx, Value::Text),
-        // pgvector (import_table selects the column ::text) → List of floats
-        "vector" => opt(row, col_idx, parse_vector),
-        // Everything else → text representation
         _ => opt(row, col_idx, Value::Text),
     }
 }
@@ -582,6 +732,22 @@ fn deterministic_koid(table_name: &str, pk_parts: &[String]) -> KOID {
     // for single-table imports. Full SHA-256 lands when cross-table FK resolution
     // is added (Phase 2).
     KOID(koid)
+}
+
+/// `CHECK ((a > 0))` -> `a > 0`: the keyword and one wrapping pair of parentheses go.
+fn check_condition(def: &str) -> String {
+    let body = def.trim().strip_prefix("CHECK").unwrap_or(def).trim();
+    let wrapped = body.starts_with('(')
+        && body.ends_with(')')
+        && body[1..body.len() - 1].chars().try_fold(0i32, |depth, c| {
+            let d = depth + i32::from(c == '(') - i32::from(c == ')');
+            (d >= 0).then_some(d)
+        }) == Some(0);
+    if wrapped {
+        body[1..body.len() - 1].trim().to_string()
+    } else {
+        body.to_string()
+    }
 }
 
 fn quote_ident(name: &str) -> String {
@@ -644,15 +810,74 @@ mod tests {
     }
 
     #[test]
+    fn check_condition_strips_the_keyword_and_one_wrapping_pair() {
+        for (def, want) in [
+            (
+                "CHECK ((balance >= (0)::numeric))",
+                "(balance >= (0)::numeric)",
+            ),
+            ("CHECK (balance >= 0)", "balance >= 0"),
+            ("CHECK ((a > 0) AND (b < 5))", "(a > 0) AND (b < 5)"),
+            ("CHECK (a > 0) NOT VALID", "(a > 0) NOT VALID"),
+            ("CHECK ()", ""),
+        ] {
+            assert_eq!(check_condition(def), want, "{def}");
+        }
+    }
+
+    #[test]
     fn quote_ident_handles_special_chars() {
         assert_eq!(quote_ident("normal"), "\"normal\"");
         assert_eq!(quote_ident("has\"quote"), "\"has\"\"quote\"");
     }
 
     #[test]
-    fn pg_cell_text_to_value() {
-        // ponytail: unit-tested via integration test with real PG.
-        // Type mapping is verified by inspection.
+    fn only_exactly_decodable_types_are_read_natively() {
+        for t in [
+            "smallint",
+            "integer",
+            "bigint",
+            "double precision",
+            "boolean",
+            "text",
+            "character varying(10)",
+            "character(3)",
+            "bytea",
+        ] {
+            assert!(is_native(t), "{t}");
+        }
+        for t in [
+            "real",
+            "numeric(10,2)",
+            "timestamp with time zone",
+            "date",
+            "uuid",
+            "jsonb",
+            "integer[]",
+            "character varying(10)[]",
+            "interval",
+            "inet",
+            "vector(3)",
+            "mood",
+        ] {
+            assert!(!is_native(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn numeric_text_keeps_every_digit() {
+        assert_eq!(numeric_text("12345.67".into()), Value::Float(12345.67));
+        assert_eq!(numeric_text("0.0000123".into()), Value::Float(0.0000123));
+        assert_eq!(numeric_text("-9.50".into()), Value::Float(-9.5));
+        // 16+ significant digits would round in an f64: stay exact text
+        let big = "12345678901234567890.1234567890".to_string();
+        assert_eq!(numeric_text(big.clone()), Value::Text(big));
+        assert_eq!(numeric_text("NaN".into()), Value::Text("NaN".into()));
+        assert_eq!(
+            float_text("Infinity".into()),
+            Value::Text("Infinity".into())
+        );
+        assert_eq!(float_text("9.4".into()), Value::Float(9.4));
     }
 
     #[test]

@@ -42,6 +42,42 @@ pub struct ContainerInfo {
     /// Column groups with a unique constraint (single and composite).
     #[serde(default)]
     pub unique_groups: Vec<Vec<String>>,
+    /// Secondary indexes (and unique indexes), in key-column order.
+    #[serde(default)]
+    pub indexes: Vec<IndexInfo>,
+    /// CHECK constraints, as the source reports their definition.
+    #[serde(default)]
+    pub checks: Vec<CheckInfo>,
+    /// `None` for a plain table / collection / label; `"view"`,
+    /// `"materialized_view"` otherwise.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Source-specific storage facts (ClickHouse engine, sorting / partition /
+    /// primary key, a view's defining query). Declared by the source, so part
+    /// of the schema's identity.
+    #[serde(default)]
+    pub properties: std::collections::BTreeMap<String, String>,
+}
+
+/// A secondary index. `unique` is a guarantee the source enforces.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IndexInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    /// btree / hash / gin / range / text / vector, as the source names it.
+    #[serde(default)]
+    pub method: Option<String>,
+    /// A partial index's WHERE: it constrains / covers only the rows matching it.
+    #[serde(default)]
+    pub predicate: Option<String>,
+}
+
+/// A CHECK constraint.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CheckInfo {
+    pub name: String,
+    pub expression: String,
 }
 
 /// Whether a field's type was declared by the source or only observed in a sample.
@@ -254,6 +290,48 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
                     evidence: connector_evidence(&source_id, &meta.connector_type),
                 });
             }
+        }
+    }
+
+    // Container-level schema facts: indexes, CHECK constraints, view kind and
+    // storage properties, each a statement about the container's entity.
+    for container in &meta.containers {
+        let entity_name = format!("{}.{}", meta.label, container.name);
+        let mut statements: Vec<String> = Vec::new();
+        for i in &container.indexes {
+            statements.push(format!(
+                "{entity_name} has {}index {} on ({}){}{}",
+                if i.unique { "unique " } else { "" },
+                i.name,
+                i.columns.join(", "),
+                i.method
+                    .as_ref()
+                    .map_or(String::new(), |m| format!(" [{m}]")),
+                i.predicate
+                    .as_ref()
+                    .map_or(String::new(), |p| format!(" where {p}"))
+            ));
+        }
+        for k in &container.checks {
+            statements.push(format!(
+                "{entity_name} has check constraint {}: {}",
+                k.name, k.expression
+            ));
+        }
+        if let Some(kind) = &container.kind {
+            statements.push(format!("{entity_name} is a {}", kind.replace('_', " ")));
+        }
+        for (key, value) in &container.properties {
+            statements.push(format!("{entity_name} {key} = {value}"));
+        }
+        for statement in statements {
+            facts.push(FactCandidate {
+                snippet: None,
+                statement,
+                entities: vec![entity_name.clone()],
+                confidence: 1.0,
+                evidence: connector_evidence(&source_id, &meta.connector_type),
+            });
         }
     }
 
@@ -541,5 +619,84 @@ mod tests {
             .unwrap();
         assert!(pk_fact.statement.contains("uuid"));
         assert!(pk_fact.statement.contains("db.items.id"));
+    }
+
+    #[test]
+    fn indexes_checks_kinds_and_storage_properties_become_facts() {
+        let meta = ConnectorMetadata {
+            connector_type: "clickhouse".into(),
+            label: "analytics".into(),
+            containers: vec![ContainerInfo {
+                name: "orders".into(),
+                fields: vec![FieldInfo {
+                    name: "id".into(),
+                    data_type: "UInt64".into(),
+                    ..Default::default()
+                }],
+                indexes: vec![
+                    IndexInfo {
+                        name: "orders_customer_idx".into(),
+                        columns: vec!["customer_id".into()],
+                        unique: false,
+                        method: Some("btree".into()),
+                        predicate: None,
+                    },
+                    IndexInfo {
+                        name: "orders_email_key".into(),
+                        columns: vec!["email".into(), "tenant".into()],
+                        unique: true,
+                        method: None,
+                        predicate: Some("deleted_at IS NULL".into()),
+                    },
+                ],
+                checks: vec![CheckInfo {
+                    name: "pos".into(),
+                    expression: "total > 0".into(),
+                }],
+                kind: Some("materialized_view".into()),
+                properties: [("engine".to_string(), "ReplacingMergeTree".to_string())].into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ir = connector_metadata_to_ir(&meta);
+        let facts: Vec<&str> = ir.facts.iter().map(|f| f.statement.as_str()).collect();
+        let has = |needle: &str| facts.iter().any(|f| f.contains(needle));
+        assert!(
+            has("analytics.orders has index orders_customer_idx on (customer_id) [btree]"),
+            "{facts:?}"
+        );
+        assert!(
+            has("analytics.orders has unique index orders_email_key on (email, tenant) where deleted_at IS NULL"),
+            "{facts:?}"
+        );
+        assert!(
+            has("analytics.orders has check constraint pos: total > 0"),
+            "{facts:?}"
+        );
+        assert!(has("analytics.orders is a materialized view"), "{facts:?}");
+        assert!(
+            has("analytics.orders engine = ReplacingMergeTree"),
+            "{facts:?}"
+        );
+        // all of it hangs off the container's entity
+        for f in ir
+            .facts
+            .iter()
+            .filter(|f| f.statement.contains("index") || f.statement.contains("check"))
+        {
+            assert_eq!(f.entities, vec!["analytics.orders".to_string()]);
+        }
+        // a plain table says none of it
+        let plain = connector_metadata_to_ir(&ConnectorMetadata {
+            containers: vec![ContainerInfo {
+                name: "t".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(plain.facts.iter().all(|f| !f.statement.contains("index")
+            && !f.statement.contains("check")
+            && !f.statement.contains(" is a ")));
     }
 }

@@ -95,6 +95,10 @@ pub struct Lexer {
     col: usize,
     /// Span of the most recently returned token.
     pub last_span: Span,
+    /// The source spelling when the most recent token was a word (identifier
+    /// or keyword), else `None`: lets the parser read a keyword as a name
+    /// (a table `orders` becomes the class `Order`) with its case intact.
+    pub last_word: Option<String>,
 }
 
 impl Lexer {
@@ -105,6 +109,7 @@ impl Lexer {
             line: 1,
             col: 1,
             last_span: Span { line: 1, col: 1 },
+            last_word: None,
         }
     }
 
@@ -156,13 +161,22 @@ impl Lexer {
         while let Some(c) = self.peek() {
             // ':' joins ident segments — namespaced types like aikoql:document
             // (P3-M4 follow-up). It appears nowhere else in the grammar.
-            if c.is_alphanumeric() || c == '_' || c == ':' {
+            // '-' joins segments of a NAMESPACED name only (aikoql:source-table,
+            // the schema KO types): in plain words it stays an operator error.
+            let hyphen_in_namespace = c == '-'
+                && s.contains(':')
+                && self
+                    .chars
+                    .get(self.pos + 1)
+                    .is_some_and(|n| n.is_alphanumeric() || *n == '_');
+            if c.is_alphanumeric() || c == '_' || c == ':' || hyphen_in_namespace {
                 s.push(c);
                 self.advance();
             } else {
                 break;
             }
         }
+        self.last_word = Some(s.clone());
         match s.to_uppercase().as_str() {
             "MATCH" => Token::Match,
             "WHERE" => Token::Where,
@@ -245,6 +259,7 @@ impl Lexer {
     pub fn next_token(&mut self) -> Token {
         self.skip_whitespace();
         self.last_span = self.span();
+        self.last_word = None;
         match self.advance() {
             None => Token::Eof,
             Some(c) if c.is_alphabetic() || c == '_' => self.read_word(c),
@@ -330,6 +345,22 @@ mod tests {
         assert_eq!(ts[1], Token::Ident("aikoql:document".into()));
         assert_eq!(ts[2], Token::Return);
         assert_eq!(ts[3], Token::Star);
+    }
+
+    #[test]
+    fn a_hyphen_joins_a_namespaced_type_name_only() {
+        let ts = tokens("MATCH aikoql:source-table RETURN *");
+        assert_eq!(ts[1], Token::Ident("aikoql:source-table".into()));
+        assert_eq!(ts[2], Token::Return);
+        let ts = tokens("MATCH ns:a-b-c WHERE x == 1 RETURN *");
+        assert_eq!(ts[1], Token::Ident("ns:a-b-c".into()));
+        // outside a namespaced name a hyphen is still not part of a word
+        let ts = tokens("MATCH a-b RETURN *");
+        assert_eq!(ts[1], Token::Ident("a".into()));
+        assert!(matches!(ts[2], Token::Error(_)), "{ts:?}");
+        // a trailing or doubled hyphen after a namespace is not swallowed into the name
+        let ts = tokens("MATCH ns:a- RETURN *");
+        assert_eq!(ts[1], Token::Ident("ns:a".into()), "{ts:?}");
     }
 
     #[test]
