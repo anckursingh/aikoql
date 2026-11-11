@@ -2448,3 +2448,151 @@ fn the_status_report_and_the_scrape_carry_the_node_the_lease_and_the_archive() {
 fn strs_owned(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| s.to_string()).collect()
 }
+
+/// PROD-6 (failure matrix row 11 — both nodes restart): nothing but the
+/// lease and the two directories survives. The previous holder resumes
+/// its own lease at the same term — no second term, no second writer —
+/// with every acknowledged object; the other node follows again, serves
+/// the same objects, and receives a write made after the restart.
+#[test]
+fn ha_both_nodes_restart_and_the_holder_resumes_with_every_object() {
+    let (adir, bdir) = (tmp("ha-cold-a"), tmp("ha-cold-b"));
+    let lease = tmp("ha-cold-lease").join("lease.json");
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let (a_args, b_args) = (ha_args(&lease, "a", &ra), ha_args(&lease, "b", &rb));
+    let koids: Vec<String> = {
+        let mut a = Mcp::start(&adir, &strs(&a_args));
+        let koids = (0..6).map(|i| a.remember(i)).collect();
+        let mut b = Mcp::spawn_raw(&bdir, &strs(&b_args), true);
+        let log = b.log.take().unwrap();
+        wait_line(&log, "standby caught up");
+        // both die at once: the drop is a kill, not a planned stop
+        koids
+    };
+
+    let mut a = Mcp::start(&adir, &strs(&a_args));
+    assert_eq!(
+        std::fs::read_to_string(adir.join("REPL-TERM")).unwrap(),
+        "1 leader\n",
+        "the holder resumes its own term"
+    );
+    for (i, koid) in koids.iter().enumerate() {
+        let got = a.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "leader lost {koid}");
+    }
+    let after = a.remember(100);
+
+    let mut b = Mcp::spawn_raw(&bdir, &strs(&b_args), true);
+    let log = b.log.take().unwrap();
+    wait_line(&log, "standby caught up");
+    b.init();
+    let read = |b: &mut Mcp, koid: &str| -> J {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let res = b.request(
+                "tools/call",
+                json!({"name": "get", "arguments": {"subject": "admin", "koid": koid}}),
+            );
+            if res["isError"] == json!(false) {
+                return serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the standby never served {koid}: {res}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    for (i, koid) in koids.iter().enumerate() {
+        assert_eq!(read(&mut b, koid)["properties"]["n"], json!(i), "{koid}");
+    }
+    assert_eq!(read(&mut b, &after)["properties"]["n"], json!(100));
+    assert_eq!(
+        std::fs::read_to_string(bdir.join("REPL-TERM")).unwrap(),
+        "1 standby\n",
+        "one term, one writer"
+    );
+}
+
+/// PROD-6 (failure matrix row 16 — archive outage): the database keeps
+/// taking writes, the outage is visible (failures count up, lag grows),
+/// and when the archive returns it catches up to the head — the log it
+/// could not upload was held, not released.
+#[test]
+fn an_archive_outage_is_visible_and_heals_without_losing_log() {
+    let dir = tmp("arch-out-db");
+    let archive = tmp("arch-out-archive");
+    let away = tmp("arch-out-away");
+    let http = format!("127.0.0.1:{}", free_port());
+    let args = [
+        "--metrics-addr",
+        &http,
+        "--archive",
+        archive.to_str().unwrap(),
+        "--archive-log-ms",
+        "200",
+    ];
+    let env = vec![("AIKOQL_ADMIN_PASSWORD".to_string(), "ar-pw".to_string())];
+    let _srv = Mcp::spawn_env(&dir, &args, false, &env);
+    wait_port(&http);
+    let status = || -> J {
+        let (st, body) = http_req(&http, "GET", "/status", "application/json", &[], "");
+        assert_eq!(st, 200, "/status: {body}");
+        serde_json::from_str(&body).unwrap()
+    };
+    let until = |what: &str, done: &dyn Fn(&J) -> bool| -> J {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let s = status();
+            if done(&s) {
+                return s;
+            }
+            assert!(std::time::Instant::now() < deadline, "never {what}: {s}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let auth = format!("Bearer {}", admin_login(&http, "ar-pw"));
+    let remember = |n: u32| {
+        let (st, body) = http_req(
+            &http,
+            "POST",
+            "/api/v1/remember",
+            "application/json",
+            &[("Authorization", auth.as_str())],
+            &json!({"type_name": "note", "properties": {"n": n}}).to_string(),
+        );
+        assert_eq!(st, 200, "a write during the test: {body}");
+    };
+
+    remember(1);
+    until("archived the first write", &|s| {
+        s["archive"]["lag_frames"] == json!(0) && s["archive"]["uploaded_seq"] != json!(0)
+    });
+
+    // the outage: the archive root is a file — every upload fails
+    std::fs::rename(&archive, &away).unwrap();
+    std::fs::write(&archive, b"not a directory").unwrap();
+    remember(2); // the database is unaffected
+    let down = until("reported the outage", &|s| {
+        s["archive"]["failures"].as_u64().unwrap_or(0) > 0
+            && s["archive"]["lag_frames"].as_u64().unwrap_or(0) > 0
+    });
+    let stuck = down["archive"]["uploaded_seq"].as_u64().unwrap();
+    remember(3);
+
+    // the archive returns
+    std::fs::remove_file(&archive).unwrap();
+    std::fs::rename(&away, &archive).unwrap();
+    let healed = until("caught up after the outage", &|s| {
+        s["archive"]["lag_frames"] == json!(0)
+    });
+    let (head, uploaded) = (
+        healed["replication"]["head_seq"].as_u64().unwrap(),
+        healed["archive"]["uploaded_seq"].as_u64().unwrap(),
+    );
+    assert_eq!(uploaded, head, "{healed}");
+    assert!(uploaded > stuck, "the held log was uploaded: {healed}");
+}
