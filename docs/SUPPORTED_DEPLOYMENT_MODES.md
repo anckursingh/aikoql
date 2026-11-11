@@ -70,8 +70,14 @@ to `users.db` only if no user was added or changed after the upgrade.
 
 - Two replicas; no PodDisruptionBudget, NetworkPolicy or HPA.
 - One serving certificate shared by both pods.
-- `/metrics` is unauthenticated and doubles as the liveness and
-  readiness probe; neither probe reflects the node's role.
+- `/metrics` is unauthenticated. The probes no longer scrape it
+  (PROD-4): startup and liveness ask `/livez` (the process answers
+  HTTP), readiness asks `/readyz` (the node serves reads — true for the
+  leader and the standby, false for a fenced or stopping node).
+  `/readyz/write` answers 200 on the leader only, for a Service or load
+  balancer that routes by traffic class; the chart does not use it. All
+  three are unauthenticated, like `/health`, and report the role, the
+  term and readiness — no data.
 - The server handles SIGTERM (PROD-3): a deleted leader pod fences its
   writes, releases its lease and exits 0, and the standby takes over on
   its next lease poll (TTL/5) instead of after a full TTL. The chart sets
