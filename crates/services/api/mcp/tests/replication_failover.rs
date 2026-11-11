@@ -2161,6 +2161,19 @@ fn ha_users_and_role_changes_survive_a_failover() {
     );
     assert_eq!(st, 200, "the leader changes the role: {body}");
 
+    // the standby signs the same admin in (the row replicated) and refuses
+    // the write: the store is the leader's to change
+    let standby = format!("Bearer {}", admin_login(&hb, "ha-pw"));
+    let (st, body) = http_req(
+        &hb,
+        "POST",
+        "/api/users",
+        "application/json",
+        &[("Authorization", standby.as_str())],
+        r#"{"sub": "mallory", "roles": ["admin"]}"#,
+    );
+    assert_eq!(st, 503, "a standby cannot keep a user: {body}");
+
     let _ = a.child.kill();
     let _ = a.child.wait();
     wait_line(&blog, "won the lease");

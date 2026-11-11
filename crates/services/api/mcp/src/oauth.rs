@@ -703,7 +703,7 @@ impl OAuth {
             return ("429 Too Many Requests", h, ctype, body);
         }
         // Enterprise break-glass (Task 5): with multi-user on, the bootstrap
-        // admin verifies against the users.db hash — AIKOQL_ADMIN_PASSWORD
+        // admin verifies against the user store's hash — AIKOQL_ADMIN_PASSWORD
         // only seeded it. A config-file admin ([auth].users) keeps its
         // v0.4.0 password as the fallback; the env bootstrap entry is never
         // consulted. Config-file users keep the AuthResolver path.
