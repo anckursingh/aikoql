@@ -14,6 +14,12 @@
 //! A renewal lands after it starts and is seen after it lands, so the old
 //! leader stops writing at least TTL/3 before anyone may take over — the
 //! margin that covers clock-rate drift and in-flight writes.
+//!
+//! PROD-3 — a leader that stops on purpose does not make its standby wait
+//! that TTL out: once its writes are fenced it marks the record
+//! `released` at its final seq (`Held::release`), and a standby holding
+//! that seq takes over on its next poll. A reader that predates the field
+//! ignores it and falls back to the TTL — never less safe than a crash.
 
 use crate::replication::{self, Role};
 #[cfg(test)]
@@ -25,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
@@ -47,6 +53,11 @@ pub(crate) struct Lease {
     pub(crate) seq: u64,
     /// Bumped by every renewal, so every renewal changes the version.
     pub(crate) beat: u64,
+    /// PROD-3 — the holder stopped on purpose, its writes fenced, `seq`
+    /// final: a standby holding `seq` may take over without waiting out
+    /// the TTL. Absent (false) in every record a live holder renews.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) released: bool,
 }
 
 #[derive(Debug)]
@@ -396,12 +407,61 @@ pub(crate) struct HaConfig {
 /// set once the kernel has opened.
 pub(crate) type AdminSlot = Arc<OnceLock<Arc<dyn StorageAdminApi>>>;
 
+/// The renewer's state: renewing, asked to release, stopped.
+const RENEWING: u8 = 0;
+const RELEASE_ASKED: u8 = 1;
+const RELEASED: u8 = 2;
+const RELEASE_FAILED: u8 = 3;
+
+/// A lease this node holds: the renewer's fence target, and the switch
+/// that ends the renewer with a released record (PROD-3).
+#[derive(Clone)]
+pub(crate) struct Held {
+    pub(crate) admin: AdminSlot,
+    state: Arc<AtomicU8>,
+}
+
+impl Held {
+    /// Ask the renewer to mark the lease released and stop, and wait for
+    /// it (at most `wait`). Call only once this node's writes are fenced:
+    /// the record tells a standby it may lead. True = the released record
+    /// landed; false = the lease is left to lapse (the store was
+    /// unreachable, the lease was already taken, or the wait ran out).
+    pub(crate) fn release(&self, wait: Duration) -> bool {
+        if self
+            .state
+            .compare_exchange(RENEWING, RELEASE_ASKED, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return self.state.load(Ordering::SeqCst) == RELEASED;
+        }
+        let deadline = Instant::now() + wait;
+        loop {
+            match self.state.load(Ordering::SeqCst) {
+                RELEASED => return true,
+                RELEASE_FAILED => return false,
+                _ if Instant::now() >= deadline => return false,
+                _ => std::thread::sleep(RELEASE_POLL),
+            }
+        }
+    }
+}
+
+/// How finely the renewer's sleep is sliced to notice a release request.
+const RELEASE_POLL: Duration = Duration::from_millis(20);
+
+/// PROD-3 — may a standby take the lease now? After a full TTL unchanged
+/// on its own clock, or at once when the holder released it.
+fn takeover_due(rec: &Lease, unchanged: Duration, ttl: Duration) -> bool {
+    rec.released || unchanged >= ttl
+}
+
 /// Where `begin` leaves this node.
 pub(crate) enum Begun {
     /// It holds the lease: the directory is claimed at the lease's term and
     /// the renewer runs (it started before the kernel opens — a slow open
     /// must not let the lease lapse). Serve as the leader.
-    Lead(AdminSlot),
+    Lead(Held),
     /// Another node holds it: serve reads as its standby (`stand_by`).
     Standby(Arc<HaConfig>),
 }
@@ -442,10 +502,11 @@ pub(crate) fn begin(cfg: HaConfig) -> Result<Begun, String> {
 }
 
 /// Renew this node's lease now (CAS); the renewer takes over from there.
-fn resume(cfg: &Arc<HaConfig>, rec: Lease, ver: &str) -> Option<AdminSlot> {
+fn resume(cfg: &Arc<HaConfig>, rec: Lease, ver: &str) -> Option<Held> {
     let started = Instant::now();
     let next = Lease {
         beat: rec.beat + 1,
+        released: false, // this node's own released lease, live again
         ..rec
     };
     match cfg.store.write(&next, Some(ver)) {
@@ -484,7 +545,9 @@ pub(crate) fn stand_by(cfg: Arc<HaConfig>, replica: Arc<dyn StorageAdminApi>) {
                     following =
                         lead_addr.map(|a| Follower::start(&cfg, a.clone(), replica.clone()));
                 }
-                let stale = seen.as_ref().is_some_and(|(_, at)| at.elapsed() >= cfg.ttl);
+                let stale = seen
+                    .as_ref()
+                    .is_some_and(|(_, at)| takeover_due(&rec, at.elapsed(), cfg.ttl));
                 if stale {
                     let last = replica.last_seq();
                     if last >= rec.seq {
@@ -492,11 +555,19 @@ pub(crate) fn stand_by(cfg: Arc<HaConfig>, replica: Arc<dyn StorageAdminApi>) {
                         // logged BEFORE the CAS: an operator (and the R5c
                         // cert) can order it against the old leader's
                         // "fenced" line — one writer per term
-                        info!(
-                            holder = %rec.holder,
-                            term = next,
-                            "ha: the lease lapsed — taking over"
-                        );
+                        if rec.released {
+                            info!(
+                                holder = %rec.holder,
+                                term = next,
+                                "ha: the lease was released — taking over"
+                            );
+                        } else {
+                            info!(
+                                holder = %rec.holder,
+                                term = next,
+                                "ha: the lease lapsed — taking over"
+                            );
+                        }
                         win(&cfg, Some(&ver), next, &replica);
                     } else if !behind_warned {
                         behind_warned = true;
@@ -521,6 +592,7 @@ fn win(cfg: &HaConfig, expected: Option<&str>, term: u64, replica: &Arc<dyn Stor
         client: cfg.client.clone(),
         seq: replica.last_seq(),
         beat: 0,
+        released: false,
     };
     match cfg.store.write(&lease, expected) {
         Ok(_) => {
@@ -551,11 +623,7 @@ fn reexec() -> ! {
 
 /// One CAS attempt for `term`; on a win the directory is claimed and the
 /// renewer runs.
-fn try_win(
-    cfg: &Arc<HaConfig>,
-    expected: Option<&str>,
-    term: u64,
-) -> Result<Option<AdminSlot>, String> {
+fn try_win(cfg: &Arc<HaConfig>, expected: Option<&str>, term: u64) -> Result<Option<Held>, String> {
     let lease = Lease {
         holder: cfg.node.clone(),
         term,
@@ -563,6 +631,7 @@ fn try_win(
         client: cfg.client.clone(),
         seq: last_seq(cfg)?,
         beat: 0,
+        released: false,
     };
     let started = Instant::now();
     match cfg.store.write(&lease, expected) {
@@ -586,22 +655,64 @@ fn last_seq(cfg: &HaConfig) -> Result<u64, String> {
         .map_err(|e| format!("open {}: {e}", cfg.dir.display()))
 }
 
-fn start_renewer(cfg: Arc<HaConfig>, lease: Lease, ver: String, last_ok: Instant) -> AdminSlot {
-    let slot: AdminSlot = Arc::new(OnceLock::new());
-    let s = slot.clone();
-    std::thread::spawn(move || renew(&cfg, lease, ver, last_ok, &s));
-    slot
+fn start_renewer(cfg: Arc<HaConfig>, lease: Lease, ver: String, last_ok: Instant) -> Held {
+    let held = Held {
+        admin: Arc::new(OnceLock::new()),
+        state: Arc::new(AtomicU8::new(RENEWING)),
+    };
+    let h = held.clone();
+    std::thread::spawn(move || renew(&cfg, lease, ver, last_ok, &h));
+    held
 }
 
-fn renew(
-    cfg: &HaConfig,
-    mut lease: Lease,
-    mut ver: String,
-    mut last_ok: Instant,
-    slot: &AdminSlot,
-) {
+/// Sleep one renew period in slices; true = a release was asked meanwhile.
+fn release_asked_within(state: &AtomicU8, period: Duration) -> bool {
+    let until = Instant::now() + period;
     loop {
-        std::thread::sleep(cfg.ttl / 3);
+        if state.load(Ordering::SeqCst) == RELEASE_ASKED {
+            return true;
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        std::thread::sleep(left.min(RELEASE_POLL));
+    }
+}
+
+/// PROD-3 — the renewer's last write: the record at this node's final seq,
+/// marked released. A lost CAS or an unreachable store leaves the lease to
+/// lapse; either way the renewer is done.
+fn release(cfg: &HaConfig, lease: &Lease, ver: &str, held: &Held) {
+    let last = Lease {
+        beat: lease.beat + 1,
+        seq: held.admin.get().map_or(lease.seq, |a| a.last_seq()),
+        released: true,
+        ..lease.clone()
+    };
+    let end = match cfg.store.write(&last, Some(ver)) {
+        Ok(_) => {
+            info!(term = last.term, seq = last.seq, "ha: released the lease");
+            RELEASED
+        }
+        Err(LeaseError::Conflict) => {
+            warn!("ha: release the lease: it was taken meanwhile");
+            RELEASE_FAILED
+        }
+        Err(LeaseError::Other(e)) => {
+            warn!("ha: release the lease: {e}");
+            RELEASE_FAILED
+        }
+    };
+    held.state.store(end, Ordering::SeqCst);
+}
+
+fn renew(cfg: &HaConfig, mut lease: Lease, mut ver: String, mut last_ok: Instant, held: &Held) {
+    let slot = &held.admin;
+    loop {
+        if release_asked_within(&held.state, cfg.ttl / 3) {
+            return release(cfg, &lease, &ver, held);
+        }
         let started = Instant::now();
         let next = Lease {
             beat: lease.beat + 1,
@@ -707,6 +818,7 @@ mod tests {
 
     fn lease(holder: &str, term: u64, beat: u64) -> Lease {
         Lease {
+            released: false,
             holder: holder.into(),
             term,
             repl: "127.0.0.1:1".into(),
@@ -1093,6 +1205,90 @@ mod tests {
             begin(ha_cfg(store, dir)).unwrap(),
             Begun::Standby(_)
         ));
+    }
+
+    /// PROD-3 — a holder that stops on purpose ends its renewer with the
+    /// record marked released; a second release is a no-op that still
+    /// reports it. The record keeps the holder and the term (a takeover
+    /// moves to the next term), and a reader that predates the field
+    /// parses the same JSON.
+    #[test]
+    fn a_stopping_holder_marks_its_lease_released() {
+        let dir = tmp("release-db");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::replication::store_term(&dir, 1, Role::Leader).unwrap();
+        let store: Arc<dyn LeaseStore> =
+            Arc::new(FileLease::new(tmp("release").join("lease.json")));
+        store.write(&lease("a", 1, 0), None).unwrap();
+        let Begun::Lead(held) = begin(ha_cfg(store.clone(), dir)).unwrap() else {
+            panic!("this node holds the lease");
+        };
+        assert!(!store.read().unwrap().unwrap().0.released, "a live lease");
+        assert!(held.release(Duration::from_secs(10)), "released");
+        let (rec, _) = store.read().unwrap().unwrap();
+        assert!(rec.released, "the record on the store: {rec:?}");
+        assert_eq!((rec.holder.as_str(), rec.term, rec.beat), ("a", 1, 2));
+        assert!(held.release(Duration::from_secs(10)), "idempotent");
+        assert_eq!(store.read().unwrap().unwrap().0.beat, 2, "no second write");
+    }
+
+    /// PROD-3 — a lease taken from under a stopping holder is not marked
+    /// released: the CAS loses and the release reports false.
+    #[test]
+    fn a_release_that_loses_the_lease_reports_it() {
+        let dir = tmp("release-lost-db");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::replication::store_term(&dir, 1, Role::Leader).unwrap();
+        let store: Arc<dyn LeaseStore> =
+            Arc::new(FileLease::new(tmp("release-lost").join("lease.json")));
+        store.write(&lease("a", 1, 0), None).unwrap();
+        let Begun::Lead(held) = begin(ha_cfg(store.clone(), dir)).unwrap() else {
+            panic!("this node holds the lease");
+        };
+        let (_, ver) = store.read().unwrap().unwrap();
+        store.write(&lease("b", 2, 0), Some(&ver)).unwrap(); // taken
+        assert!(
+            !held.release(Duration::from_secs(10)),
+            "not ours to release"
+        );
+        let (rec, _) = store.read().unwrap().unwrap();
+        assert_eq!((rec.holder.as_str(), rec.released), ("b", false));
+    }
+
+    /// PROD-3 — a released lease is due at once; a live one only after a
+    /// full TTL unchanged. And this node's own released lease, resumed
+    /// after a restart, is live again.
+    #[test]
+    fn a_released_lease_is_due_at_once_and_live_again_once_resumed() {
+        let ttl = Duration::from_secs(10);
+        let live = lease("a", 1, 3);
+        let gone = Lease {
+            released: true,
+            ..live.clone()
+        };
+        assert!(!takeover_due(&live, Duration::from_secs(9), ttl));
+        assert!(takeover_due(&live, ttl, ttl));
+        assert!(takeover_due(&gone, Duration::ZERO, ttl));
+        // the wire: absent when false (an older reader sees its own shape)
+        assert!(!serde_json::to_string(&live).unwrap().contains("released"));
+        let old: Lease = serde_json::from_str(
+            r#"{"holder":"a","term":1,"repl":"r","client":null,"seq":0,"beat":3}"#,
+        )
+        .unwrap();
+        assert!(!old.released);
+
+        let dir = tmp("release-resume-db");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::replication::store_term(&dir, 1, Role::Leader).unwrap();
+        let store: Arc<dyn LeaseStore> =
+            Arc::new(FileLease::new(tmp("release-resume").join("lease.json")));
+        store.write(&gone, None).unwrap();
+        assert!(matches!(
+            begin(ha_cfg(store.clone(), dir)).unwrap(),
+            Begun::Lead(_)
+        ));
+        let (rec, _) = store.read().unwrap().unwrap();
+        assert!(!rec.released, "resumed: {rec:?}");
     }
 
     fn unique(tag: &str) -> String {

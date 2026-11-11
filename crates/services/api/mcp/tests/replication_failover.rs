@@ -2241,10 +2241,8 @@ fn ha_a_stopping_leader_releases_its_lease() {
     assert_eq!(ack["shutting_down"], json!(true), "{ack}");
     let status = a.child.wait().unwrap();
     assert!(status.success(), "a requested stop exits 0: {status:?}");
-    let held: J = serde_json::from_slice(&std::fs::read(&lease).unwrap()).unwrap();
-    assert_eq!(held["released"], json!(true), "the lease on disk: {held}");
-    assert_eq!(held["holder"], json!("a"), "{held}");
-
+    // (the record itself is pinned by ha.rs's unit tests: reading the
+    // file here races the standby, which may already hold the next term)
     wait_line(&log, "the lease was released");
     wait_line(&log, "won the lease");
     promoted(&mut b, &mut log, || {
@@ -2256,4 +2254,42 @@ fn ha_a_stopping_leader_releases_its_lease() {
         assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
     }
     b.remember(99);
+}
+
+/// PROD-3 (G4): SIGTERM — what Kubernetes sends a terminating pod — is a
+/// stop, not a crash: the leader fences its writes, releases its lease
+/// and exits 0. No standby here, so the released record stays on disk to
+/// be read. Unix only: the Windows console-control path has no portable
+/// way to be raised at a child from a test.
+#[cfg(unix)]
+#[test]
+fn ha_sigterm_releases_the_lease_and_exits_zero() {
+    let adir = tmp("ha-term-a");
+    let lease = tmp("ha-term-lease").join("lease.json");
+    let ra = format!("127.0.0.1:{}", free_port());
+    let http = format!("127.0.0.1:{}", free_port());
+    let a_args = [
+        ha_args(&lease, "a", &ra),
+        vec!["--metrics-addr".into(), http.clone()],
+    ]
+    .concat();
+    let mut a = Mcp::spawn_env(&adir, &strs(&a_args), true, &[]);
+    let alog = a.log.take().unwrap();
+    wait_port(&http);
+
+    let killed = Command::new("kill")
+        .args(["-TERM", &a.child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success(), "kill -TERM");
+    let status = a.child.wait().unwrap();
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "SIGTERM is a clean stop: {status:?}"
+    );
+    wait_line(&alog, "the lease is released");
+    let held: J = serde_json::from_slice(&std::fs::read(&lease).unwrap()).unwrap();
+    assert_eq!(held["released"], json!(true), "the lease on disk: {held}");
+    assert_eq!(held["holder"], json!("a"), "{held}");
 }

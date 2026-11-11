@@ -403,6 +403,18 @@ impl Acked {
         standbys.values().map(|(_, seq)| *seq).min().unwrap_or(0)
     }
 
+    /// PROD-3 — wait until a standby acked `seq`, at most `timeout`;
+    /// true = it did. Seq 0 (an empty store) is held by everyone.
+    pub(crate) fn wait(&self, seq: u64, timeout: Duration) -> bool {
+        // justified: Mutex poison is unrecoverable
+        let guard = self.seq.lock().unwrap();
+        let (guard, _) = self
+            .cv
+            .wait_timeout_while(guard, timeout, |a| *a < seq)
+            .unwrap();
+        *guard >= seq
+    }
+
     fn record(&self, seq: u64) {
         // justified: Mutex poison is unrecoverable
         let mut acked = self.seq.lock().unwrap();
@@ -417,13 +429,7 @@ impl Acked {
 /// `timeout`.
 pub(crate) fn sync_gate(acked: Arc<Acked>, timeout: Duration) -> CommitGate {
     Box::new(move |seq| {
-        // justified: Mutex poison is unrecoverable
-        let guard = acked.seq.lock().unwrap();
-        let (guard, _) = acked
-            .cv
-            .wait_timeout_while(guard, timeout, |a| *a < seq)
-            .unwrap();
-        if *guard >= seq {
+        if acked.wait(seq, timeout) {
             Ok(())
         } else {
             Err(format!(
