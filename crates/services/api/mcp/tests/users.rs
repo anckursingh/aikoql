@@ -1,4 +1,5 @@
-//! Enterprise multi-user store (Task 3). aikoql-mcp is a binary crate (no
+//! Enterprise multi-user store (Task 3; PROD-2: rows of the kernel's system
+//! store, not a SQLite file). aikoql-mcp is a binary crate (no
 //! lib target to link), so users.rs is compiled directly into this test
 //! crate for the unit tests; the integration tests spawn the debug binary
 //! with a TEST keypair license via the debug-only AIKOQL_LICENSE_PUBLIC_KEY
@@ -12,16 +13,11 @@ use users::UserStore;
 
 mod common;
 
-static STORE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// A fresh store file unique to this test process, swept at thread exit.
-fn tmp_store(tag: &str) -> (UserStore, std::path::PathBuf) {
-    let n = STORE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!("aikoql-users-{tag}-{}-{n}.db", std::process::id()));
-    let _ = std::fs::remove_file(&p);
-    common::register_temp_path(&p);
-    let store = UserStore::open(&p).expect("open a fresh user store");
-    (store, p)
+/// A fresh store over an in-memory engine (the serve path hands the
+/// kernel's system store to the same constructor).
+fn tmp_store(_tag: &str) -> (UserStore, ()) {
+    let engine = aikoql_kernel::storage::store::MemoryEngine::new();
+    (UserStore::new(std::sync::Arc::new(engine)), ())
 }
 
 #[test]
@@ -154,7 +150,8 @@ fn multi_user_without_admin_refuses_start() {
 }
 
 /// No license anywhere ⇒ exactly v0.4.0 behavior: TCP-token MCP auth and
-/// password login work as before, and no enterprise users.db is created.
+/// password login work as before, and no enterprise user row is written
+/// (nor the pre-PROD-2 users.db file created).
 #[test]
 fn unlicensed_server_unchanged() {
     let db = std::env::temp_dir().join(format!("aikoql-users-parity-db-{}", std::process::id()));
@@ -239,77 +236,4 @@ fn unlicensed_server_unchanged() {
         !db.join("users.db").exists(),
         "community mode must not create users.db"
     );
-}
-
-/// PROD-1 (G1): users and roles live in a node-local `users.db`, so a
-/// multi-user licence on a replicated node has undefined identity
-/// semantics after a promotion. Until the store replicates, every
-/// replication entry point must refuse to start — exit 2, naming the
-/// combination — instead of serving a deployment that only looks supported.
-#[test]
-fn multi_user_with_replication_refuses_start() {
-    let (pk, blob) = common::sign("test", None, &["multi-user"]);
-    let pid = std::process::id();
-    let lic = std::env::temp_dir().join(format!("aikoql-users-repl-{pid}.lic"));
-    std::fs::write(&lic, &blob).unwrap();
-    common::register_temp_path(&lic);
-    let lic_str = lic.to_str().unwrap();
-    let pk_b64 = URL_SAFE_NO_PAD.encode(&pk);
-    let repl = format!("127.0.0.1:{}", common::free_port());
-    let lease = std::env::temp_dir().join(format!("aikoql-users-repl-{pid}.lease"));
-    common::register_temp_path(&lease);
-    let lease_str = lease.to_str().unwrap();
-
-    let cases: [(&str, Vec<&str>); 3] = [
-        (
-            "leader",
-            vec!["--replicate-listen", &repl, "--tcp-token", "t:acme:admin"],
-        ),
-        (
-            "replica",
-            vec!["--follow", &repl, "--tcp-token", "t:acme:admin"],
-        ),
-        (
-            "ha",
-            vec![
-                "--ha-lease",
-                lease_str,
-                "--ha-node",
-                "n1",
-                "--replicate-listen",
-                &repl,
-                "--tcp-token",
-                "t:acme:admin",
-            ],
-        ),
-    ];
-    for (tag, extra) in &cases {
-        let db = std::env::temp_dir().join(format!("aikoql-users-repl-db-{tag}-{pid}"));
-        let _ = std::fs::remove_dir_all(&db);
-        common::register_temp_path(&db);
-        let log = std::env::temp_dir().join(format!("aikoql-users-repl-{tag}-{pid}.log"));
-        common::register_temp_path(&log);
-        let mut srv = common::spawn_server(
-            &db,
-            &log,
-            &[
-                ("AIKOQL_LICENSE", lic_str),
-                ("AIKOQL_LICENSE_PUBLIC_KEY", pk_b64.as_str()),
-                ("AIKOQL_ADMIN_PASSWORD", "repl-pw"),
-            ],
-            extra,
-        );
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        let status = common::wait_exit(&mut srv.child, deadline);
-        let log_text = std::fs::read_to_string(&log).unwrap_or_default();
-        assert_eq!(
-            status.code(),
-            Some(2),
-            "{tag}: a multi-user licence with replication must refuse to start: {log_text}"
-        );
-        assert!(
-            log_text.contains("a multi-user license does not combine with replication"),
-            "{tag}: stderr must name the refused combination: {log_text}"
-        );
-    }
 }

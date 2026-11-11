@@ -190,27 +190,18 @@ fn admin_token(port: u16) -> String {
     j["token"].as_str().expect("token").to_string()
 }
 
-/// Overwrite the stored roles (the store is the authority). The server may
-/// hold the file briefly — retry past SQLITE_BUSY.
-fn set_roles(db: &std::path::Path, sub: &str, roles: &[&str]) {
-    let conn = rusqlite::Connection::open(db.join("users.db")).expect("users.db");
-    let roles_json = serde_json::to_string(roles).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match conn.execute(
-            "UPDATE users SET roles = ?1 WHERE sub = ?2",
-            rusqlite::params![roles_json, sub],
-        ) {
-            Ok(_) => return,
-            Err(rusqlite::Error::SqliteFailure(e, _))
-                if e.code == rusqlite::ErrorCode::DatabaseBusy =>
-            {
-                assert!(Instant::now() < deadline, "users.db stayed busy");
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => panic!("set roles: {e}"),
-        }
-    }
+/// Flip the bootstrap admin to viewer through the admin API — its own
+/// last act as an admin (the store is the authority, read per request).
+/// PROD-2: the users live in the server's store; there is no file to edit.
+fn demote_admin(port: u16) {
+    let token = admin_token(port);
+    let r = http(
+        port,
+        "PUT",
+        &format!("/api/users/admin/roles?token={token}"),
+        r#"{"roles":["viewer"]}"#,
+    );
+    assert_eq!(r.status, 200, "demote the bootstrap admin: {}", r.body);
 }
 
 #[test]
@@ -304,8 +295,21 @@ fn viewer_aikoql_mcp_match_ok_create_denied() {
 #[test]
 fn viewer_admin_route_rest_gate() {
     let (srv, _mcp) = serve("adminroute", &["ttok:acme:admin"]);
-    // viewer: the admin-only arm refuses with 403
-    set_roles(&srv.db, "admin", &["viewer"]);
+    // admin: the route succeeds with its success marker
+    let atok = admin_token(srv.port);
+    let ok = http(
+        srv.port,
+        "POST",
+        &format!("/api/v1/backup?token={atok}"),
+        "{}",
+    );
+    assert_eq!(
+        ok.status, 200,
+        "admin must backup: {} {}",
+        ok.status, ok.body
+    );
+    // viewer: the same route, the same login, refuses with 403
+    demote_admin(srv.port);
     let token = admin_token(srv.port);
     let denied = http(
         srv.port,
@@ -323,20 +327,6 @@ fn viewer_admin_route_rest_gate() {
         "{}",
         denied.body
     );
-    // admin: the same route succeeds with its success marker
-    set_roles(&srv.db, "admin", &["admin"]);
-    let atok = admin_token(srv.port);
-    let ok = http(
-        srv.port,
-        "POST",
-        &format!("/api/v1/backup?token={atok}"),
-        "{}",
-    );
-    assert_eq!(
-        ok.status, 200,
-        "admin must backup: {} {}",
-        ok.status, ok.body
-    );
     let j: J = serde_json::from_str(&ok.body).expect("json");
     assert_eq!(j["data"]["verified"], true, "backup marker: {}", ok.body);
 }
@@ -344,7 +334,7 @@ fn viewer_admin_route_rest_gate() {
 #[test]
 fn viewer_read_post_routes_reachable() {
     let (srv, _mcp) = serve("readpost", &["ttok:acme:admin"]);
-    set_roles(&srv.db, "admin", &["viewer"]);
+    demote_admin(srv.port);
     let token = admin_token(srv.port);
     // aikoql MATCH over REST reads (Studio drives queries over POST)
     let m = http(
@@ -401,7 +391,7 @@ fn viewer_cannot_post_rest_write() {
     let (srv, _mcp) = serve("rest", &["ttok:acme:admin"]);
     // flip the bootstrap admin to viewer — the store is authoritative, so
     // the session's LIVE roles are viewer from here on
-    set_roles(&srv.db, "admin", &["viewer"]);
+    demote_admin(srv.port);
     let token = admin_token(srv.port);
     // reads keep working...
     let get = http(

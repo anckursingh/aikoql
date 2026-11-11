@@ -220,6 +220,34 @@ fn use_ansi() -> bool {
         || std::env::var_os("CI").is_some()
 }
 
+/// PROD-2: the writer's user-store startup — import a pre-PROD-2 users.db,
+/// then make sure an admin exists. Exits on failure: serve never runs with
+/// an unverifiable store (1) or with no admin to seed or claim (2).
+fn seed_users(store: &users::UserStore, db_path: &str, admin_password: Option<&str>) {
+    let legacy = std::path::PathBuf::from(format!("{db_path}/users.db"));
+    match store.import_legacy(&legacy) {
+        Ok(0) => {}
+        Ok(n) => {
+            info!(rows = n, path = %legacy.display(), "users.db imported into the replicated store")
+        }
+        Err(e) => {
+            eprintln!("multi-user user store: {e}");
+            std::process::exit(1);
+        }
+    }
+    if store.has_admin() {
+        return;
+    }
+    let Some(pw) = admin_password else {
+        eprintln!("multi-user requires a bootstrap admin (set AIKOQL_ADMIN_PASSWORD)");
+        std::process::exit(2);
+    };
+    if let Err(e) = store.seed_bootstrap_admin(pw) {
+        eprintln!("multi-user user store: seed bootstrap admin: {e}");
+        std::process::exit(1);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -343,22 +371,6 @@ fn main() {
             path = %cfg.license_path,
             "license rejected: cannot read file: {e}; running community mode"
         ),
-    }
-
-    // PROD-1 (G1): users and roles live in a node-local users.db, outside
-    // replication and outside the storage fence — after a promotion the new
-    // leader has a different user table. Refuse the combination (exit 2, an
-    // operator fix) until the store replicates; a deployment must not look
-    // supported while its identity semantics are undefined.
-    if license::LICENSE_STATE
-        .get()
-        .is_some_and(|s| s.features.multi_user)
-        && (replicate_listen.is_some() || cfg.follow.is_some() || cfg.ha_lease.is_some())
-    {
-        eprintln!(
-            "a multi-user license does not combine with replication              (--replicate-listen, --follow, --ha-lease): users and roles are              node-local in this version — see docs/SUPPORTED_DEPLOYMENT_MODES.md"
-        );
-        std::process::exit(2);
     }
 
     // Enterprise audit retention (Task 7): startup rotation, gated on the
@@ -588,37 +600,25 @@ fn main() {
                 std::process::exit(1);
             }
         };
-    // Enterprise multi-user (Task 3): only a verified multi-user license
-    // opens the user store — community mode never creates users.db. The
-    // store lives in the data dir, which the kernel has just opened. First
-    // start seeds the bootstrap admin from AIKOQL_ADMIN_PASSWORD; with no
-    // admin to seed or claim, serve refuses (exit 2 — an operator fix, not
-    // a runtime failure).
+    // Enterprise multi-user (Task 3; PROD-2): only a verified multi-user
+    // license opens the user store — community mode never writes a user
+    // row. The rows live in the kernel's system store, so they replicate
+    // and a promoted standby serves the same users. The writer (a leader)
+    // carries a pre-PROD-2 users.db over, then seeds the bootstrap admin
+    // from AIKOQL_ADMIN_PASSWORD; with no admin to seed or claim, serve
+    // refuses (exit 2 — an operator fix, not a runtime failure). A serving
+    // standby writes nothing: its rows arrive on the replication stream.
     if license::LICENSE_STATE
         .get()
         .is_some_and(|s| s.features.multi_user)
     {
-        let store_path = std::path::PathBuf::from(format!("{db_path}/users.db"));
-        let store = match users::UserStore::open(&store_path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("multi-user user store {}: {e}", store_path.display());
-                std::process::exit(1);
-            }
-        };
-        if !store.has_admin() {
-            let Some(pw) = cfg.admin_password.as_deref() else {
-                eprintln!("multi-user requires a bootstrap admin (set AIKOQL_ADMIN_PASSWORD)");
-                std::process::exit(2);
-            };
-            if let Err(e) = store.seed_bootstrap_admin(pw) {
-                eprintln!("multi-user user store: seed bootstrap admin: {e}");
-                std::process::exit(1);
-            }
+        let store = users::UserStore::new(kernel.system_store());
+        if !serving_standby {
+            seed_users(&store, &db_path, cfg.admin_password.as_deref());
         }
         // Final review I-1: publish the handle process-wide so every serve
         // surface sees the store — MCP over TCP gates viewers even without
-        // a metrics listener (serve_metrics' open_users is then a no-op).
+        // a metrics listener.
         crate::session::set_users(Arc::new(Mutex::new(store)));
     }
     if let (Some(slot), Some(a)) = (&ha_slot, &admin) {

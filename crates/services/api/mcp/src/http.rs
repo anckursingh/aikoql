@@ -190,9 +190,6 @@ pub(crate) fn serve_metrics(
     // in spawn_metrics precedes the bind, so it cannot gate a client.
     info!(addr = %addr, "metrics HTTP server listening");
     let sessions: Arc<Mutex<HashMap<String, HttpSession>>> = Arc::new(Mutex::new(HashMap::new()));
-    // Enterprise (Task 5): the serving handle on the user store main.rs
-    // opened (users.db); None in community mode.
-    crate::session::open_users(db_path.as_str());
     for stream in listener.incoming() {
         match stream {
             Ok(mut s) => {
@@ -1002,7 +999,7 @@ pub(crate) fn handle_login(
         ));
     }
     // Enterprise break-glass (Task 5): with multi-user on, the bootstrap
-    // admin verifies against the users.db hash — AIKOQL_ADMIN_PASSWORD only
+    // admin verifies against the user store's hash — AIKOQL_ADMIN_PASSWORD only
     // seeded it. Config-file users keep the AuthResolver path untouched.
     let roles = match crate::session::users() {
         Some(store) if username == crate::users::ADMIN_SUB => store

@@ -711,12 +711,20 @@ fn admin_only(
 /// Run `f` against the shared user store. The "user store unavailable"
 /// error covers community mode (no multi-user store is ever opened there).
 fn with_store<T>(
-    f: impl FnOnce(&crate::users::UserStore) -> rusqlite::Result<T>,
+    f: impl FnOnce(&crate::users::UserStore) -> crate::users::UserResult<T>,
 ) -> Result<T, (String, String, String)> {
     let store = crate::session::users()
         .ok_or_else(|| json_response(500, &json!({"error": "user store unavailable"})))?;
     let guard = store.lock().unwrap(); // justified: Mutex poison is unrecoverable
-    f(&guard).map_err(|e| json_response(500, &json!({"error": format!("user store: {e}")})))
+    f(&guard).map_err(|e| {
+        // PROD-2: the store refusing (a standby, a fenced node) is the
+        // leader's to answer — 503, like the OAuth routes; a bad row is ours
+        let status = match e {
+            crate::users::UserError::Store(_) => 503,
+            crate::users::UserError::Invalid(_) => 500,
+        };
+        json_response(status, &json!({"error": format!("user store: {e}")}))
+    })
 }
 
 /// Task 9: GET /api/audit-export — the retention-trimmed audit log as a
