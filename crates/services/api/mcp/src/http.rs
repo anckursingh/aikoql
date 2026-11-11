@@ -1632,6 +1632,28 @@ pub(crate) fn handle_http(
             "application/javascript; charset=utf-8",
             studio::VIS_JS.to_string(),
         ),
+        // PROD-4: three questions, three answers. Liveness consults no
+        // state (the process answered); readiness is by traffic class —
+        // a standby is ready for reads and not for writes.
+        "/livez" => (
+            "200 OK",
+            "application/json",
+            json!({"status": "ok"}).to_string(),
+        ),
+        "/readyz" | "/readyz/write" => {
+            let node = crate::node::state();
+            let ready = if path == "/readyz" {
+                node.read_ready()
+            } else {
+                node.write_ready()
+            };
+            let status = if ready {
+                "200 OK"
+            } else {
+                "503 Service Unavailable"
+            };
+            (status, "application/json", node.to_json().to_string())
+        }
         "/health" => {
             let uptime = SERVER_START
                 .get()
@@ -1641,6 +1663,7 @@ pub(crate) fn handle_http(
             let sem = crate::semantic_status_snapshot();
             let body = json!({
                 "status": "ok",
+                "node": crate::node::state().to_json(),
                 "uptime_seconds": (uptime * 10.0).round() / 10.0,
                 "semantic": {"state": sem.state, "detail": sem.detail},
             })
