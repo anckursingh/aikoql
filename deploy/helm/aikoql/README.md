@@ -5,7 +5,7 @@ binary; whoever holds the lease (`k8s://<namespace>/<leaseName>`)
 serves writes, the other follows the holder's replication stream
 (TLS) and serves reads (with a `NOT_LEADER` hint to SDKs). MCP is
 Streamable HTTP on the metrics port (`/mcp`, bearer = the auth token;
-`/metrics` for Prometheus and the readiness probe).
+`/metrics` for Prometheus; `/livez` and `/readyz` for the probes).
 
 ## Install
 
@@ -25,6 +25,22 @@ helm install aikoql deploy/helm/aikoql
   yourself for a real CA (per-pod certs would be a cert-manager step).
 - `appVersion` tracks the workspace version — `scripts/bump-version.py`
   bumps this Chart.yaml too (pinned by `tests/helm_chart.rs`).
+
+## Probes and stopping
+
+- Startup and liveness: `/livez` — the process answers HTTP. A slow
+  metrics scrape never restarts a pod.
+- Readiness: `/readyz` — the node serves reads. Both the leader and the
+  standby are ready; a fenced or stopping node is not. The body names the
+  role (`leader`, `standby`, `fenced`, `standalone`) and the term.
+- `/readyz/write` is 200 on the lease holder only. The chart does not
+  probe it (the standby must stay Ready); point a write-only Service or
+  load-balancer health check at it if you route by traffic class.
+- A terminating pod gets `terminationGracePeriodSeconds` (default 30)
+  for its planned stop: writes are fenced, the leader waits at most 5 s
+  for the standby to hold its final seq, releases the lease and exits 0.
+  The standby then takes over on its next lease poll, not after a full
+  TTL.
 
 ## Known limits
 
