@@ -1082,6 +1082,38 @@ impl Db {
         self.write_at(ops, Some(seq))
     }
 
+    /// One frame onto the WAL's end (the caller sought there), synced
+    /// when the mode says so. Any error leaves the caller to cut the tail
+    /// back: nothing here is acknowledged until this returns Ok.
+    fn append_frame(&self, wal: &mut std::fs::File, frame: &[u8]) -> Result<(), FormatError> {
+        // PR6-R2-003 test hook — the frame is NOT appended: the
+        // reservations carried in the ops never become durable. What
+        // happens to them across a restart is exactly the contract under
+        // test (acknowledged ids never reused; an unacknowledged
+        // reservation may recycle — nothing ever observed it).
+        if self.wal_fail_next.swap(false, Ordering::Relaxed) {
+            return Err(FormatError::Io(
+                "injected WAL append failure (wal_fail_next)".into(),
+            ));
+        }
+        wal.write_all(frame)
+            .map_err(|e| FormatError::Io(format!("WAL append: {e}")))?;
+        if self.config.durability == DurabilityMode::Sync {
+            let t = Instant::now();
+            wal.sync_all()
+                .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
+            record_latency_us(
+                &self.wstats.fsync_latency_us_buckets,
+                t.elapsed().as_micros() as u64,
+            );
+            self.fsyncs.fetch_add(1, Ordering::SeqCst);
+        }
+        self.wstats
+            .wal_bytes
+            .fetch_add(frame.len() as u64, Ordering::Relaxed);
+        Ok(())
+    }
+
     /// MRFC-0080 R4 — refuse every client write from now on (a newer
     /// term deposed this node); `why` rides each refusal.
     pub fn fence(&self, why: String) {
@@ -1233,38 +1265,33 @@ impl Db {
             }
             _ => {}
         }
-        state.next_seq += 1;
         let frame = encode_frame(seq, ops)?;
         {
             let mut wal = self.wal.lock().unwrap();
-            wal.seek(SeekFrom::End(0))
+            let end = wal
+                .seek(SeekFrom::End(0))
                 .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
-            // PR6-R2-003 test hook — the frame is NOT appended: the
-            // reservations carried in `ops` never become durable. What
-            // happens to them across a restart is exactly the contract
-            // under test (acknowledged ids never reused; an unacknowledged
-            // reservation may recycle — nothing ever observed it).
-            if self.wal_fail_next.swap(false, Ordering::Relaxed) {
-                return Err(FormatError::Io(
-                    "injected WAL append failure (wal_fail_next)".into(),
-                ));
-            }
-            wal.write_all(&frame)
-                .map_err(|e| FormatError::Io(format!("WAL append: {e}")))?;
-            self.wstats
-                .wal_bytes
-                .fetch_add(frame.len() as u64, Ordering::Relaxed);
-            if self.config.durability == DurabilityMode::Sync {
-                let t = Instant::now();
-                wal.sync_all()
-                    .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
-                record_latency_us(
-                    &self.wstats.fsync_latency_us_buckets,
-                    t.elapsed().as_micros() as u64,
-                );
-                self.fsyncs.fetch_add(1, Ordering::SeqCst);
+            if let Err(e) = self.append_frame(&mut wal, &frame) {
+                // PROD-6: the frame is not durable, so nothing of it may
+                // stay. A torn tail left in place would sit BEFORE every
+                // later frame, and replay stops at the first torn frame —
+                // the acked writes behind it would be lost at the next
+                // open. If the tail cannot be cut back, stop taking client
+                // writes: an unacked failure is safe, a silent hole is not.
+                if let Err(cut) = wal.set_len(end) {
+                    // justified: RwLock poison is unrecoverable
+                    *self.fenced.write().unwrap() = Some(format!(
+                        "the WAL could not be rolled back after a failed append ({cut})"
+                    ));
+                }
+                return Err(e);
             }
         }
+        // PROD-6: the seq is taken only once its frame is durable. A failed
+        // append returned above with `next_seq` untouched — `last_seq`
+        // never names a write that does not exist, and the replication
+        // log has no hole for a follower to stall on.
+        state.next_seq += 1;
         for op in ops {
             match op {
                 Op::Put(k, v) => state.active.apply(k.clone(), seq, Some(v.clone())),
