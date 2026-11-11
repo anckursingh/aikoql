@@ -28,8 +28,8 @@ reports nothing.
 
 | # | Gap | Severity | Section |
 |---|---|---|---|
-| G1 | A multi-user licence combined with replication or `--ha-lease` starts without refusal; the docs call the combination unsupported — **closed by PROD-1** (startup now exits 2) | high | 3 |
-| G2 | `users.db` is node-local SQLite, outside replication and outside the storage fence | high | 3 |
+| G1 | A multi-user licence combined with replication or `--ha-lease` starts without refusal; the docs call the combination unsupported — **closed**: PROD-1 refused the combination, PROD-2 made it supported | high | 3 |
+| G2 | `users.db` is node-local SQLite, outside replication and outside the storage fence — **closed by PROD-2** (users are rows of the replicated system store) | high | 3 |
 | G3 | The tool audit log is a node-local file; it does not follow a promotion | high | 3 |
 | G4 | No SIGTERM/SIGINT handler: a pod termination is a hard kill and the lease is left to expire | high | 6 |
 | G5 | Liveness and readiness both probe `/metrics`; `/health` is a static `ok` with no role, lease or dependency state | medium | 5 |
@@ -71,6 +71,11 @@ Defaults (`config.rs`): `--ha-ttl-ms` 10 000; `--archive-log-ms` 5 000;
 `--replicate-sync-ms` is set.
 
 ## 3. Identity, licensing and audit across HA
+
+> **Status after PROD-2:** rows 1 and 3–7 below describe the audited
+> revision. Users and roles now live in the replicated system store
+> (`sys/users/`); see `SUPPORTED_DEPLOYMENT_MODES.md` section 2. The
+> audit-log rows (8) and gaps G3 and G9 are unchanged.
 
 The review's ten investigation questions, answered from code:
 
