@@ -150,3 +150,44 @@ fn release_log_prunes_and_follower_resumes_after_restart() {
         "released frames are gone — asking for them is a gap"
     );
 }
+
+/// PROD-6 (failure matrix row 12 — the leader's disk refuses a WAL
+/// append): the write fails, is not acknowledged, and takes no seq. A
+/// consumed seq with no frame behind it is a hole in the log: `last_seq`
+/// would name a write that does not exist (the HA lease records it, and a
+/// standby that cannot reach it never takes over), and the next frame
+/// would skip a seq no follower can ever apply — one transient I/O error
+/// on the leader would cost every standby a re-bootstrap.
+#[test]
+fn a_failed_wal_append_takes_no_seq_and_leaves_no_hole_in_the_log() {
+    let (ld, fd) = (dir("repl-walfail-leader"), dir("repl-walfail-follower"));
+    let mut cfg = leader_config(ld);
+    cfg.wal_fail_next = true;
+    let leader = Db::open(cfg).unwrap();
+    let follower = Db::open(Config::new(fd)).unwrap();
+    let before = leader.last_seq();
+
+    assert!(
+        leader.put(b"lost", b"never acked").is_err(),
+        "the injected WAL failure must surface"
+    );
+    assert_eq!(
+        leader.last_seq(),
+        before,
+        "a write that was never durable must not take a seq"
+    );
+    assert_eq!(leader.get(b"lost").unwrap(), None, "nor be readable");
+
+    let seq = leader.put(b"kept", b"acked").unwrap();
+    assert_eq!(seq, before + 1, "the next write takes the next seq");
+    let frames = leader.log_since(before, 16).unwrap();
+    assert_eq!(
+        frames.iter().map(|f| f.seq).collect::<Vec<_>>(),
+        vec![before + 1],
+        "the log is contiguous past the failed write"
+    );
+    ship(&leader, &follower);
+    assert_eq!(follower.last_seq(), leader.last_seq());
+    assert_eq!(follower.get(b"kept").unwrap(), Some(b"acked".to_vec()));
+    assert_eq!(follower.get(b"lost").unwrap(), None);
+}
