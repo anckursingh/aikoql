@@ -35,9 +35,9 @@ reports nothing.
 | G5 | Liveness and readiness both probe `/metrics`; `/health` is a static `ok` with no role, lease or dependency state — **closed by PROD-4** for role and traffic class (`/livez`, `/readyz`, `/readyz/write`); dependency health (archive, lease API, KMS) is still not reported | medium | 5 |
 | G6 | No archive metrics and no lease/role/term metrics; archive failures are log lines only — **closed by PROD-5** (`aikoql_node_role`, `aikoql_replication_term`, `aikoql_ha_lease_*`, `aikoql_archive_*`). Correction to this audit: archive lag in frames was already exported, as the `peer="archive"` row of `aikoql_replication_standby_lag_frames` | medium | 6 |
 | G7 | `status` reports health, metrics and ABI only — nothing about role, lease, lag or archive — **closed by PROD-5** for a running node (`GET /status`); the offline `status` CLI verb is unchanged, and disk free space, KMS state and lease holder/expiry are not in the report yet | medium | 6 |
-| G8 | No alert rules, runbooks, restore drill or support bundle | medium | 6 |
+| G8 | No alert rules, runbooks, restore drill or support bundle — **closed by PROD-7** for alert rules (`deploy/prometheus/aikoql-alerts.yaml`), runbooks (`docs/RUNBOOKS.md`) and the restore drill (`restore-drill`); a redacted support bundle is still not built | medium | 6 |
 | G9 | No user-disable operation, so "a disabled user stays disabled after failover" cannot be tested yet | medium | 3 |
-| G10 | The Helm chart has no licence wiring, no PodDisruptionBudget, no NetworkPolicy, no termination settings | low | 5 |
+| G10 | The Helm chart has no licence wiring, no PodDisruptionBudget, no NetworkPolicy, no termination settings — **partly closed**: termination settings (PROD-4) and a PodDisruptionBudget (PROD-7) are in the chart; licence and archive wiring and a NetworkPolicy are not | low | 5 |
 | G11 | Failure-matrix cells with no test: disk full, certificate expiry/rotation, full-cluster restart, replication partition, process pause — **partly closed by PROD-6**: disk full (both nodes, by injection), full restart and archive outage are tested, and the disk-full test found and fixed a seq-hole defect in the WAL write path; partition, certificate lifetime and process pause remain | medium | `HA_FAILURE_MATRIX.md` |
 
 ## 2. High availability and replication

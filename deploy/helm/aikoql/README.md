@@ -66,6 +66,16 @@ storage stats. The same facts are Prometheus series:
 `aikoql_archive_last_snapshot_timestamp_seconds`,
 `aikoql_archive_failures_total`.
 
+## Alerts, runbooks and the restore drill
+
+- `deploy/prometheus/aikoql-alerts.yaml` — Prometheus alert rules over
+  the series above (plus kubelet volume stats for disk space). Each
+  alert links its section of `docs/RUNBOOKS.md`.
+- `aikoql-mcp restore-drill --archive <URL>` restores the archive into
+  a scratch directory, opens and checks the copy, prints a JSON report
+  and exits 0 only if every check passed. `docs/RUNBOOKS.md` has a
+  CronJob for it; `AikoqlRestoreDrillFailed` fires on its failure.
+
 ## Known limits
 
 - One shared serving cert for both pods, and no `--advertise` client
@@ -73,7 +83,12 @@ storage stats. The same facts are Prometheus series:
   `NOT_LEADER` hint).
 - `/metrics` is unauthenticated (in-cluster reachable); the MCP bearer
   token is what protects knowledge.
-- No HPA or PodDisruptionBudget yet — two replicas is the HA story.
+- No HPA, by design: the two members are a leader and its standby, not
+  stateless workers. A PodDisruptionBudget (`maxUnavailable: 1`, on by
+  default, `podDisruptionBudget.enabled`) keeps a node drain from
+  evicting both at once; it is no protection against a node failure.
+- No NetworkPolicy and no chart wiring for an enterprise licence or an
+  archive: add those in your own values overlay or manifests.
 
 ## Backups: PVC snapshots
 

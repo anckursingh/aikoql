@@ -68,7 +68,9 @@ to `users.db` only if no user was added or changed after the upgrade.
 
 ## 4. Kubernetes chart limits
 
-- Two replicas; no PodDisruptionBudget, NetworkPolicy or HPA.
+- Two replicas. A PodDisruptionBudget (`maxUnavailable: 1`, PROD-7)
+  keeps a node drain from evicting both members at once. No
+  NetworkPolicy; no HPA, by design.
 - One serving certificate shared by both pods.
 - `/metrics` is unauthenticated. The probes no longer scrape it
   (PROD-4): startup and liveness ask `/livez` (the process answers
