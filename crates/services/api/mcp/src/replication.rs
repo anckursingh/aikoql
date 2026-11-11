@@ -358,6 +358,21 @@ pub(crate) struct Acked {
 /// by `serve`; each test leader keeps its own).
 pub(crate) static LEADER: std::sync::OnceLock<Arc<Acked>> = std::sync::OnceLock::new();
 
+/// PROD-5 — the connected standbys (and the archive, which holds the log
+/// like one) as `/status` reports them: peer, acked seq, frames behind.
+pub(crate) fn standbys_json(acked: &Acked, head: u64) -> serde_json::Value {
+    // justified: Mutex poison is unrecoverable
+    let standbys = acked.standbys.lock().unwrap();
+    let mut rows: Vec<_> = standbys.iter().collect();
+    rows.sort_by_key(|(id, _)| **id);
+    rows.into_iter()
+        .map(|(_, (peer, seq))| {
+            serde_json::json!({"peer": peer, "acked_seq": seq,
+                               "lag_frames": head.saturating_sub(*seq)})
+        })
+        .collect()
+}
+
 /// R3c-2 — the replication series in Prometheus text format: the head,
 /// the connected standbys, and per standby the frames it has not acked.
 pub(crate) fn metrics(acked: &Acked, head: u64) -> String {

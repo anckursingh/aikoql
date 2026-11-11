@@ -1674,6 +1674,14 @@ pub(crate) fn handle_http(
             let body = prometheus_metrics(k, admin);
             ("200 OK", "text/plain; version=0.0.4", body)
         }
+        // PROD-5: one machine-readable answer to "what is this node and
+        // how are its dependencies" — the facts behind the probes and the
+        // scrape, no data and no secrets (unauthenticated like both).
+        "/status" => (
+            "200 OK",
+            "application/json",
+            status_report(admin).to_string(),
+        ),
         "/api/login" if method == "POST" => {
             match handle_login(&body_str, sessions, auth, client_ip) {
                 Ok(token) => {
@@ -1948,6 +1956,28 @@ fn enc_query(s: &str) -> String {
         .collect()
 }
 
+/// PROD-5 — the `/status` body: version, the node (role, term, readiness
+/// by traffic class), replication (head seq, each standby's lag), the HA
+/// lease and the archive when this node runs them, and storage stats.
+/// Everything is read from counters the serving loops already keep — no
+/// scan, so a probe-rate caller is harmless.
+pub(crate) fn status_report(admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>) -> J {
+    let head = admin.map_or(0, |a| a.last_seq());
+    let standbys = crate::replication::LEADER.get().map_or(json!([]), |acked| {
+        crate::replication::standbys_json(acked, head)
+    });
+    let deps = &crate::node::DEPS;
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "node": crate::node::state().to_json(),
+        "replication": {"head_seq": head, "standbys": standbys},
+        "lease": deps.lease_json(),
+        "archive": deps.archive_json(head),
+        "storage": crate::tools::admin::tool_storage_stats(admin).unwrap_or(J::Null),
+        "uptime_seconds": SERVER_START.get().map_or(0.0, |s| s.elapsed().as_secs_f64()),
+    })
+}
+
 pub(crate) fn prometheus_metrics(
     k: &Kernel,
     admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
@@ -2003,6 +2033,8 @@ pub(crate) fn prometheus_metrics(
     if let (Some(acked), Some(admin)) = (crate::replication::LEADER.get(), admin) {
         storage_metrics.push_str(&crate::replication::metrics(acked, admin.last_seq()));
     }
+    // PROD-5: the node's role and term, and the lease and archive it runs
+    storage_metrics.push_str(&crate::node::DEPS.metrics(crate::node::state()));
 
     format!(
         "# HELP aikoql_journal_seq Monotonically increasing journal sequence number.\n\
