@@ -627,6 +627,31 @@ R5c limits:
   by a cert.
 - Clock-rate drift is argued, not injected.
 
+## Planned stop — the lease is released (PROD-3) ✅
+
+A leader that dies is detected by silence: the standby waits a full TTL.
+A leader that stops on purpose (SIGTERM, Ctrl-C, the `shutdown` method,
+stdin EOF) says so:
+
+1. the accept loops stop and client writes are fenced in the engine —
+   nothing is acknowledged from here on;
+2. the leader waits, at most 5 s, for a standby to ack its final seq;
+3. the renewer's last write marks the lease record `released: true` at
+   that seq (`ha::Held::release`), and the process exits 0.
+
+A standby that reads a released record takes over on that poll (TTL/5)
+— subject to the same rule as ever: it must hold the record's seq. The
+field is absent from every record a live holder renews, so a standby
+that predates it parses the same JSON and falls back to the TTL. A
+release that cannot be written (the store is unreachable, the lease was
+already taken) changes nothing: the lease lapses as after a crash. A
+node that restarts onto its own released lease resumes it, cleared.
+
+Pinned by `ha_a_stopping_leader_releases_its_lease`,
+`ha_sigterm_releases_the_lease_and_exits_zero` (unix) and three unit
+tests in `ha.rs`. Not covered: the Windows console-control handler has
+no test.
+
 ## R6 — continuous archive, point-in-time restore ✅
 
 `serve --archive DIR|s3://BUCKET[/PREFIX] [--archive-log-ms 5000]

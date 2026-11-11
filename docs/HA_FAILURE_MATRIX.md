@@ -38,7 +38,7 @@ neighbouring test exists but not this fault. **none** — no test found.
 | 15 | Clock skew between nodes | No effect on election by design: each side measures elapsed time on its own monotonic clock | none targeted | none — the design claim has no test |
 | 16 | Archive outage | Uploads fail and are logged; log release is held, so the leader's retained log grows. Writes continue | unit `archive.rs`: `the_archive_holds_log_release_until_it_uploads` | partial — no outage test, and nothing reports the lag |
 | 17 | Promotion during an archive upload | Each term archives its own timeline; an unfinished upload is left alone by pruning | unit `archive.rs`: `each_term_archives_its_own_timeline`, `pruning_leaves_an_unfinished_upload_alone`; `real_s3_ha_failover_then_pitr_from_the_bucket` (env-gated) | partial |
-| 18 | *(added)* Leader pod terminated by Kubernetes (SIGTERM) | Today: identical to a kill — no handler, no drain, no lease release; writes are unavailable for up to a full TTL plus promotion | kind e2e deletes the pod, which exercises the kill path only | partial — the graceful path does not exist |
+| 18 | *(added)* Leader stopped on purpose (SIGTERM, Ctrl-C, the `shutdown` method) | PROD-3: writes are fenced, the leader waits up to 5 s for its standby to hold the final seq, marks the lease released and exits 0; the standby takes over on its next poll (TTL/5) instead of after a full TTL | `ha_a_stopping_leader_releases_its_lease`; `ha_sigterm_releases_the_lease_and_exits_zero` (unix only); unit `ha.rs`: `a_stopping_holder_marks_its_lease_released`, `a_release_that_loses_the_lease_reports_it`, `a_released_lease_is_due_at_once_and_live_again_once_resumed` | covered — the SIGTERM test runs on Linux CI only; the Windows console-control path is untested |
 | 19 | *(added)* Leader process paused longer than the TTL, then resumed (VM stall, SIGSTOP) | The standby has taken over. On resume the old leader's next renewal conflicts and it fences. Between resume and that renewal it may accept writes: sync mode cannot ack them (its standby is gone or on a newer term); async mode could acknowledge writes that are then discarded by re-bootstrap | unit `replication.rs`: `a_standby_refuses_an_older_term_leader_which_then_fences_itself`; `a_diverged_old_leader_rejoins_the_promoted_standby_by_itself` | partial — the window itself is untested and is a hypothesis from reading `ha.rs` `renew` |
 | 20 | *(added)* Enterprise identity across promotion | Users, roles and the bootstrap admin are rows of the replicated store (PROD-2); a standby refuses user writes | `ha_an_oauth_sign_in_survives_a_failover`, `ha_users_and_role_changes_survive_a_failover` | covered for users and roles; none for an OIDC sign-in or the tool audit log across promotion |
 
@@ -76,7 +76,7 @@ under synchronous mode with the loss counted.
 
 1. Row 19 (process pause) — cheapest to write, decides a contract.
 2. Rows 12 and 13 (disk full) — the durability claims rest on them.
-3. Row 18 (SIGTERM) — arrives with the graceful-shutdown change.
+3. Row 18 (SIGTERM) — done in PROD-3.
 4. Row 11 (full restart) and row 5 (held partition) — integration,
    using the existing fault proxy (`crates/sdk/fault-proxy`) where it
    fits.
