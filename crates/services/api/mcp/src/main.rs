@@ -35,6 +35,7 @@ mod license;
 mod mcp_http;
 mod model;
 mod native;
+mod node;
 mod oauth;
 mod observability;
 mod oidc;
@@ -582,6 +583,16 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // PROD-4: what the probes and the status report call this node
+    node::set(
+        match role {
+            _ if serving_standby => node::NodeRole::Standby,
+            replication::Role::Fenced => node::NodeRole::Fenced,
+            _ if replicate_listen.is_some() => node::NodeRole::Leader,
+            _ => node::NodeRole::Standalone,
+        },
+        term,
+    );
     let (kernel, admin) =
         // the log is retained for standbys and for the archive (R6)
         match engine::open_kernel(

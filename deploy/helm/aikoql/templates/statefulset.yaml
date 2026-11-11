@@ -21,6 +21,10 @@ spec:
         {{- include "aikoql.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "aikoql.fullname" . }}
+      # PROD-3: SIGTERM is a planned stop — writes fenced, at most 5 s for
+      # the standby to hold the final seq, the lease released, exit 0. The
+      # budget covers that with room for a slow lease API.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -95,15 +99,29 @@ spec:
             - name: repl-tls
               mountPath: /tls
               readOnly: true
+          # PROD-4: three questions, three probes. Startup and liveness ask
+          # only whether the process answers HTTP (/livez) — a slow metrics
+          # scrape must never restart a database. Readiness asks whether
+          # the node serves reads (/readyz): true for the leader AND the
+          # standby, false for a fenced or stopping node. Writes follow the
+          # lease, not a probe — /readyz/write answers 200 on the leader
+          # only, for a Service or a load balancer that routes by class.
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: mcp
+              scheme: HTTPS
+            periodSeconds: 5
+            failureThreshold: 60
           readinessProbe:
             httpGet:
-              path: /metrics
+              path: /readyz
               port: mcp
               scheme: HTTPS
             periodSeconds: 5
           livenessProbe:
             httpGet:
-              path: /metrics
+              path: /livez
               port: mcp
               scheme: HTTPS
             periodSeconds: 10

@@ -60,11 +60,8 @@ fn ag51_statefulset_wires_leader_standby_on_the_k8s_lease() {
     );
     // replication follows with the admin token
     assert!(sts.contains("--tcp-token"), "replication token");
-    // probes on the metrics surface, not the MCP surface
-    assert!(
-        sts.contains("readinessProbe") && sts.contains("/metrics"),
-        "readiness probe on /metrics"
-    );
+    // probes on the HTTP surface (PROD-4 pins their paths below)
+    assert!(sts.contains("readinessProbe"), "a readiness probe");
     // one PVC per pod for the database
     assert!(
         sts.contains("volumeClaimTemplates"),

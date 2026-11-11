@@ -39,6 +39,10 @@ storage:
   # "" = the cluster default StorageClass
   storageClass: ""
 
+# seconds a terminating pod gets for its planned stop (drain, wait for the
+# standby, release the lease) before Kubernetes kills it
+terminationGracePeriodSeconds: 30
+
 resources: {}
 nodeSelector: {}
 tolerations: []

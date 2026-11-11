@@ -110,6 +110,7 @@ impl Stop {
     /// Steps 2–3 of the module header. Idempotent: a second call finds the
     /// engine fenced and the lease already released.
     pub(crate) fn settle(&self, why: &str) {
+        crate::node::set_stopping(); // PROD-4: the probes withdraw readiness
         let Some(admin) = &self.admin else {
             return;
         };
