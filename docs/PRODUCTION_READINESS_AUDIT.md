@@ -33,8 +33,8 @@ reports nothing.
 | G3 | The tool audit log is a node-local file; it does not follow a promotion | high | 3 |
 | G4 | No SIGTERM/SIGINT handler: a pod termination is a hard kill and the lease is left to expire — **closed by PROD-3** (`shutdown.rs`: fence, release the lease, exit 0) | high | 6 |
 | G5 | Liveness and readiness both probe `/metrics`; `/health` is a static `ok` with no role, lease or dependency state — **closed by PROD-4** for role and traffic class (`/livez`, `/readyz`, `/readyz/write`); dependency health (archive, lease API, KMS) is still not reported | medium | 5 |
-| G6 | No archive metrics and no lease/role/term metrics; archive failures are log lines only | medium | 6 |
-| G7 | `status` reports health, metrics and ABI only — nothing about role, lease, lag or archive | medium | 6 |
+| G6 | No archive metrics and no lease/role/term metrics; archive failures are log lines only — **closed by PROD-5** (`aikoql_node_role`, `aikoql_replication_term`, `aikoql_ha_lease_*`, `aikoql_archive_*`). Correction to this audit: archive lag in frames was already exported, as the `peer="archive"` row of `aikoql_replication_standby_lag_frames` | medium | 6 |
+| G7 | `status` reports health, metrics and ABI only — nothing about role, lease, lag or archive — **closed by PROD-5** for a running node (`GET /status`); the offline `status` CLI verb is unchanged, and disk free space, KMS state and lease holder/expiry are not in the report yet | medium | 6 |
 | G8 | No alert rules, runbooks, restore drill or support bundle | medium | 6 |
 | G9 | No user-disable operation, so "a disabled user stays disabled after failover" cannot be tested yet | medium | 3 |
 | G10 | The Helm chart has no licence wiring, no PodDisruptionBudget, no NetworkPolicy, no termination settings | low | 5 |
