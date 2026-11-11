@@ -1,0 +1,150 @@
+# aikoql — Prometheus alert rules (PROD-7).
+#
+# Load as a rule file (`rule_files:` in prometheus.yml), or wrap the
+# `groups:` in a PrometheusRule for the Prometheus Operator. Thresholds
+# are starting points: tune `for:` and the numbers to your scrape
+# interval, lease TTL (default 10 s) and archive period (default 5 s).
+#
+# Every alert links a section of docs/RUNBOOKS.md with diagnosis, safe
+# remediation, the data-loss risk and when to escalate. The link between
+# the two, and every aikoql_* series read here, is pinned by
+# crates/services/api/mcp/tests/helm_chart.rs.
+#
+# Not alertable from aikoql's own series yet (see RUNBOOKS.md, "Not
+# covered"): certificate expiry, KMS availability, synchronous-write
+# timeouts, OIDC provider outage. Disk space and the restore drill use
+# kubelet and kube-state-metrics series.
+groups:
+  - name: aikoql-leadership
+    rules:
+      - alert: AikoqlNoWriter
+        expr: sum by (job) (aikoql_node_role{role=~"leader|standalone"}) < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: No aikoql node is accepting writes
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlnowriter
+      - alert: AikoqlMultipleWriters
+        expr: sum by (job) (aikoql_node_role{role="leader"}) > 1
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: More than one aikoql node reports itself the leader
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlmultiplewriters
+      - alert: AikoqlLeaderChanged
+        expr: changes(aikoql_replication_term[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: The replication term moved — a failover or a restart happened
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlleaderchanged
+      - alert: AikoqlNodeFenced
+        expr: aikoql_node_role{role="fenced"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A deposed node has not rejoined as a standby
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlnodefenced
+      - alert: AikoqlLeaseRenewFailing
+        expr: increase(aikoql_ha_lease_renew_failures_total[5m]) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: The leader cannot reach its lease store
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlleaserenewfailing
+
+  - name: aikoql-replication
+    rules:
+      - alert: AikoqlStandbyDisconnected
+        expr: |
+          (aikoql_node_role{role="leader"} == 1)
+          unless on (instance)
+          (count by (instance) (aikoql_replication_standby_lag_frames{peer!="archive"}) >= 1)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: The leader has no standby connected
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlstandbydisconnected
+      - alert: AikoqlReplicationLagHigh
+        expr: aikoql_replication_standby_lag_frames{peer!="archive"} > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A standby is more than 1000 frames behind the leader
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlreplicationlaghigh
+
+  - name: aikoql-archive
+    rules:
+      - alert: AikoqlArchiveFailing
+        expr: increase(aikoql_archive_failures_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Archive uploads, snapshots or prunes are failing
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlarchivefailing
+      - alert: AikoqlArchiveStale
+        expr: time() - aikoql_archive_last_success_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: No archive pass has succeeded for over five minutes
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlarchivestale
+      - alert: AikoqlArchiveLagHigh
+        expr: aikoql_replication_standby_lag_frames{peer="archive"} > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: The archive is more than 10000 frames behind the head
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlarchivelaghigh
+      - alert: AikoqlSnapshotOverdue
+        expr: |
+          aikoql_archive_last_snapshot_timestamp_seconds > 0
+          and time() - aikoql_archive_last_snapshot_timestamp_seconds > 93600
+        labels:
+          severity: warning
+        annotations:
+          summary: The archive has taken no snapshot for over 26 hours
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlsnapshotoverdue
+      - alert: AikoqlRestoreDrillFailed
+        expr: kube_job_status_failed{job_name=~"aikoql-restore-drill.*"} > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: The scheduled restore drill failed — the archive may not restore
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlrestoredrillfailed
+
+  - name: aikoql-storage
+    rules:
+      - alert: AikoqlDiskSpaceLow
+        expr: |
+          kubelet_volume_stats_available_bytes{persistentvolumeclaim=~"data-.*aikoql.*"}
+          / kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~"data-.*aikoql.*"} < 0.15
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: An aikoql data volume has under 15% free
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqldiskspacelow
+      - alert: AikoqlCompactionBacklog
+        expr: aikoql_storage_compaction_backlog_bytes > 1e9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Over 1 GB is waiting for compaction
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlcompactionbacklog
+      - alert: AikoqlMetricsError
+        expr: aikoql_metrics_error == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: The scrape could not read the store
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlmetricserror

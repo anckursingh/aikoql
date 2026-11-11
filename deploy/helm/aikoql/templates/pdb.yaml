@@ -1,0 +1,23 @@
+# PROD-7: a voluntary disruption (a node drain, a cluster upgrade) may take
+# one member at a time, never the leader and its standby together. With
+# two replicas `maxUnavailable: 1` never blocks draining a single node; it
+# only makes the second eviction wait until the first pod is Ready again
+# (readiness = /readyz: the node serves reads, as a leader or a standby).
+#
+# What it does not do: it is no protection against involuntary loss (a
+# node failure, an OOM kill) and it does not prefer the standby — evicting
+# the leader is a planned stop (SIGTERM: the lease is released and the
+# standby takes over on its next poll).
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "aikoql.fullname" . }}
+  labels:
+    {{- include "aikoql.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "aikoql.labels" . | nindent 6 }}
+{{- end }}
