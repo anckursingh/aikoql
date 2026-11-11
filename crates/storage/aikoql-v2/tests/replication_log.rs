@@ -191,3 +191,32 @@ fn a_failed_wal_append_takes_no_seq_and_leaves_no_hole_in_the_log() {
     assert_eq!(follower.get(b"kept").unwrap(), Some(b"acked".to_vec()));
     assert_eq!(follower.get(b"lost").unwrap(), None);
 }
+
+/// PROD-6 (failure matrix row 13 — the standby's disk refuses a WAL
+/// append): the replicated frame is not applied and the standby's
+/// `last_seq` — what it acks to the leader — does not move, so a
+/// synchronous leader is never told a write is held that is not. The
+/// same frame, delivered again once the disk recovers, applies.
+#[test]
+fn a_standby_that_cannot_append_does_not_advance_what_it_acks() {
+    let (ld, fd) = (dir("repl-sbfail-leader"), dir("repl-sbfail-follower"));
+    let leader = Db::open(leader_config(ld)).unwrap();
+    let mut cfg = Config::new(fd);
+    cfg.wal_fail_next = true;
+    let follower = Db::open(cfg).unwrap();
+    leader.put(b"k", b"v").unwrap();
+    let frames = leader.log_since(follower.last_seq(), 16).unwrap();
+    let first = &frames[0];
+    let before = follower.last_seq();
+
+    assert!(
+        follower.apply_replicated(first.seq, &first.ops).is_err(),
+        "the injected WAL failure must surface"
+    );
+    assert_eq!(follower.last_seq(), before, "nothing to ack");
+    assert_eq!(follower.get(b"k").unwrap(), None);
+
+    ship(&leader, &follower); // the leader re-sends from the standby's seq
+    assert_eq!(follower.last_seq(), leader.last_seq());
+    assert_eq!(follower.get(b"k").unwrap(), Some(b"v".to_vec()));
+}
