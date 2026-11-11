@@ -203,3 +203,28 @@ fn ag51_surface_is_tls_and_the_gate_speaks_https() {
         "the gate must re-initialize the static-token session after failover: {script}"
     );
 }
+
+/// PROD-4 (G5): the probes ask the questions they are named for —
+/// liveness on /livez (the process answers HTTP), readiness on /readyz
+/// (the node serves reads, whatever its role). Neither scrapes /metrics:
+/// a slow scrape must not restart a pod, and a standby is ready.
+#[test]
+fn prod4_probes_use_the_health_endpoints_not_the_scrape() {
+    let sts = read(&root().join("deploy/helm/aikoql/templates/statefulset.yaml"));
+    let probe_path = |probe: &str| -> String {
+        let at = sts.find(probe).unwrap_or_else(|| panic!("no {probe}"));
+        let rest = &sts[at..];
+        let line = rest
+            .lines()
+            .find(|l| l.trim_start().starts_with("path:"))
+            .unwrap_or_else(|| panic!("{probe} has no path"));
+        line.trim().trim_start_matches("path:").trim().to_string()
+    };
+    assert_eq!(probe_path("livenessProbe"), "/livez");
+    assert_eq!(probe_path("readinessProbe"), "/readyz");
+    assert_eq!(probe_path("startupProbe"), "/livez");
+    assert!(
+        sts.contains("terminationGracePeriodSeconds"),
+        "the stop budget (PROD-3's drain + lease release) is explicit"
+    );
+}
