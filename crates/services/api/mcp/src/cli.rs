@@ -36,6 +36,8 @@ pub(crate) fn print_usage() {
         "  key install [DB]      Wrap the master key under a new AWS KMS CMK (offline; IAM gates later opens)\n",
         "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
         "  pitr --archive URL --to DIR [--until-seq N | --until-ms MS]  Restore from the archive\n",
+        "  restore-drill --archive URL [--until-seq N | --until-ms MS] [--expect-min-seq N] [--report FILE]\n",
+        "                         Restore the archive into a scratch dir, verify it, report (exit 0 = restorable)\n",
         "  archive-prune --archive URL --keep N  Keep the newest N archived snapshots\n",
         "  follow DIR --leader ADDR [--token T] [--tls-ca CA.pem]  Stream a leader's log into a standby DIR\n",
         "                         (token: an admin --tcp-token of the leader, or AIKOQL_REPLICATION_TOKEN)\n",
@@ -214,6 +216,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 }
             }
             true
+        }
+        Some("restore-drill") => {
+            // PROD-7: restore the archive into a scratch directory, check
+            // it, report, clean up — exit 0 only if every check passed
+            let tail: Vec<&str> = subcmd_idx
+                .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
+                .unwrap_or_default();
+            std::process::exit(crate::drill::run(&tail));
         }
         Some("pitr") => {
             // MRFC-0080 R6: aikoql-mcp pitr --archive URL --to DIR

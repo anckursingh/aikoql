@@ -22,6 +22,7 @@ mod cli;
 mod config;
 mod derived_ids;
 mod dispatcher;
+mod drill;
 mod engine;
 mod error_codes;
 mod graph_ui;
