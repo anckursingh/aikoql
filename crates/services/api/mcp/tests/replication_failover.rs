@@ -2293,3 +2293,65 @@ fn ha_sigterm_releases_the_lease_and_exits_zero() {
     assert_eq!(held["released"], json!(true), "the lease on disk: {held}");
     assert_eq!(held["holder"], json!("a"), "{held}");
 }
+
+/// PROD-4 (G5): liveness, read-readiness and write-readiness are three
+/// questions. Both members of an HA pair are alive and read-ready; only
+/// the lease holder is write-ready, and each says which role it has — so
+/// a probe (or a Service selector) can route by traffic class instead of
+/// reading one boolean off /metrics.
+#[test]
+fn ha_readiness_tells_the_roles_apart() {
+    let lease = tmp("ha-ready-lease").join("lease.json");
+    let (adir, bdir) = (tmp("ha-ready-a"), tmp("ha-ready-b"));
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let (ha, hb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let env = vec![("AIKOQL_ADMIN_PASSWORD".to_string(), "ha-pw".to_string())];
+    let a_args = [
+        ha_args(&lease, "a", &ra),
+        vec!["--metrics-addr".into(), ha.clone()],
+    ]
+    .concat();
+    let b_args = [
+        ha_args(&lease, "b", &rb),
+        vec!["--metrics-addr".into(), hb.clone()],
+    ]
+    .concat();
+    let _a = Mcp::spawn_env(&adir, &strs(&a_args), false, &env);
+    wait_port(&ha);
+    let mut b = Mcp::spawn_env(&bdir, &strs(&b_args), true, &env);
+    let blog = b.log.take().unwrap();
+    wait_line(&blog, "standby caught up");
+    wait_port(&hb);
+
+    let probe = |addr: &str, path: &str| -> (u16, J) {
+        let (st, body) = http_req(addr, "GET", path, "application/json", &[], "");
+        let j = serde_json::from_str(&body).unwrap_or_else(|_| panic!("{path} → {st}: {body}"));
+        (st, j)
+    };
+    for addr in [&ha, &hb] {
+        assert_eq!(probe(addr, "/livez").0, 200, "{addr} is alive");
+    }
+    let (st, leader) = probe(&ha, "/readyz");
+    assert_eq!(st, 200, "the leader serves reads: {leader}");
+    assert_eq!(leader["role"], json!("leader"), "{leader}");
+    assert_eq!(leader["ready"], json!({"read": true, "write": true}));
+    assert_eq!(
+        probe(&ha, "/readyz/write").0,
+        200,
+        "the leader serves writes"
+    );
+
+    let (st, standby) = probe(&hb, "/readyz");
+    assert_eq!(st, 200, "the standby serves reads: {standby}");
+    assert_eq!(standby["role"], json!("standby"), "{standby}");
+    assert_eq!(standby["ready"], json!({"read": true, "write": false}));
+    let (st, refused) = probe(&hb, "/readyz/write");
+    assert_eq!(st, 503, "the standby is not write-ready: {refused}");
+    assert_eq!(refused["role"], json!("standby"), "{refused}");
+}
