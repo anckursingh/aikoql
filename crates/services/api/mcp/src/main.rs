@@ -47,6 +47,7 @@ mod s3;
 mod sampling;
 mod session;
 mod shell;
+mod shutdown;
 mod sources;
 mod studio;
 mod tls;
@@ -559,8 +560,8 @@ fn main() {
         }
     });
     // standby reads: an HA standby serves reads until it wins the lease
-    let (ha_slot, ha_standby) = match begun {
-        Some(ha::Begun::Lead(slot)) => (Some(slot), None),
+    let (ha_held, ha_standby) = match begun {
+        Some(ha::Begun::Lead(held)) => (Some(held), None),
         Some(ha::Begun::Standby(c)) => (None, Some(c)),
         None => (None, None),
     };
@@ -621,9 +622,18 @@ fn main() {
         // a metrics listener.
         crate::session::set_users(Arc::new(Mutex::new(store)));
     }
-    if let (Some(slot), Some(a)) = (&ha_slot, &admin) {
-        let _ = slot.set(a.clone()); // the renewer can now fence writes
+    if let (Some(held), Some(a)) = (&ha_held, &admin) {
+        let _ = held.admin.set(a.clone()); // the renewer can now fence writes
     }
+    // PROD-3: from here a SIGTERM (or Ctrl-C) is a stop, not a crash —
+    // writes fenced, the lease released, exit 0. The stdio path settles
+    // the same way when its loop ends.
+    let stop = shutdown::Stop {
+        admin: admin.clone(),
+        held: ha_held.clone(),
+        ttl: std::time::Duration::from_millis(cfg.ha_ttl_ms),
+    };
+    shutdown::watch(stop.clone());
     // R4d: after the kernel created the directory (a fresh one must be
     // empty when it opens)
     if let (replication::Role::Leader, Some(addr), false) =
@@ -1206,6 +1216,10 @@ fn main() {
             admin,
             cfg.request_timeout_secs,
         );
+        // PROD-3: the loop ended (stdin EOF or the `shutdown` method) —
+        // fence and hand the lease over before the checkpoint, so a
+        // standby is not kept waiting on this node's index flush.
+        stop.settle("stdio closed");
         // P5-M22 (P1-15): stdio mode returns at stdin EOF — checkpoint the
         // maintainer before the process exits. TCP mode never returns, so
         // it has no shutdown-time checkpoint yet (honest ledger).
