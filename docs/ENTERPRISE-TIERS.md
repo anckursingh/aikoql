@@ -122,7 +122,9 @@ The export refuses to overwrite the live audit log itself.
 - **Single-node**: enterprise multi-user is single-node in v1. Users and
   roles live in a node-local SQLite file; HA (`--replicate-listen`,
   failover) + multi-user is deferred to a later wave and **unsupported** —
-  do not run a multi-user licensed server across replicated nodes.
+  a multi-user licensed server refuses to start (exit 2) with
+  `--replicate-listen`, `--follow` or `--ha-lease` (PROD-1; pinned by
+  `multi_user_with_replication_refuses_start` in `tests/users.rs`).
 - **Test seams are debug-only**: `AIKOQL_LICENSE_PUBLIC_KEY` (public-key
   override) and `AIKOQL_OIDC_MOCK` / `AIKOQL_OIDC_MOCK_CLAIMS` (mock IdP)
   exist only in debug builds (`cfg(debug_assertions)`); release builds
