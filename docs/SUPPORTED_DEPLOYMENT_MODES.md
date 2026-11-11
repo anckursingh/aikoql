@@ -31,24 +31,24 @@ non-loopback address refuses to start.
 |---|---|---|
 | Static bearer token (`--tcp-token`) | supported | supported — same Secret on both nodes |
 | Config-file logins + OAuth (community) | supported | supported — grants live in the replicated store; a sign-in made before failover keeps working (`ha_an_oauth_sign_in_survives_a_failover`) |
-| Enterprise multi-user (`multi-user` licence) | supported | **unsupported — refused at startup (exit 2)** |
-| Enterprise OIDC SSO (`oidc-sso` licence, implies multi-user) | supported | **unsupported — refused at startup (exit 2)** |
+| Enterprise multi-user (`multi-user` licence) | supported | supported (PROD-2) — users and roles live in the replicated store; `ha_users_and_role_changes_survive_a_failover` |
+| Enterprise OIDC SSO (`oidc-sso` licence, implies multi-user) | supported | starts and shares the user store (PROD-2); an OIDC sign-in across a promotion has no test yet |
 
-Why the enterprise rows are unsupported with replication: users and
-roles live in `{db}/users.db`, a SQLite file each node owns separately.
-If the combination were allowed, then after a promotion:
+What holds across a promotion, and what does not:
 
-- users that exist only in that table are refused until they sign in
-  again (fail-closed);
-- role changes made through the REST API on the old leader are gone;
+- users, roles and the bootstrap admin's password hash are rows of the
+  replicated store, so the promoted node serves the same ones;
+- only the leader changes them — a standby answers `POST /api/users` and
+  `PUT /api/users/{sub}/roles` with 503;
+- an OIDC user's sign-in on a read replica cannot record the user (the
+  write is the leader's); sign in through the leader;
 - a sign-in in progress fails, because OIDC flow state is in memory;
-- the tool audit log (`{db}.audit.log`) starts from the new leader's
-  own file.
+- Studio sessions are process-local: sign in again;
+- the tool audit log (`{db}.audit.log`) is still a node-local file and
+  starts from the new leader's own.
 
-Until the user table moves into the replicated store, a server with a
-multi-user or OIDC licence refuses to start with `--replicate-listen`,
-`--follow` or `--ha-lease` (PROD-1, test
-`multi_user_with_replication_refuses_start`).
+A pre-PROD-2 single-node deployment keeps its users: the first start
+imports `{db}/users.db` into the store and sets the file aside.
 
 ## 3. Sessions and clients
 
