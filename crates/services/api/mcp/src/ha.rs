@@ -672,6 +672,7 @@ fn start_renewer(cfg: Arc<HaConfig>, lease: Lease, ver: String, last_ok: Instant
         state: Arc::new(AtomicU8::new(RENEWING)),
     };
     let h = held.clone();
+    crate::node::DEPS.lease_renewed(); // the write that got us here landed
     std::thread::spawn(move || renew(&cfg, lease, ver, last_ok, &h));
     held
 }
@@ -741,10 +742,12 @@ fn renew(cfg: &HaConfig, mut lease: Lease, mut ver: String, mut last_ok: Instant
         };
         match cfg.store.write(&next, Some(&ver)) {
             Ok(v) => {
+                crate::node::DEPS.lease_renewed();
                 (lease, ver, last_ok) = (next, v, started);
             }
             Err(LeaseError::Conflict) => fence(cfg, slot, lease.term, "the lease was taken"),
             Err(LeaseError::Other(e)) => {
+                crate::node::DEPS.lease_renew_failed();
                 warn!("ha: renew the lease: {e}");
                 if last_ok.elapsed() >= cfg.ttl * 2 / 3 {
                     fence(
