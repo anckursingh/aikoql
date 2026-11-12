@@ -43,7 +43,10 @@ try { ({ chromium } = require('playwright-core')); } catch (_) {
 }
 
 const results = [];
-const ok = (name, cond, detail) => results.push([cond ? 'PASS' : 'FAIL', name, cond ? '' : String(detail === undefined ? '' : detail)]);
+const ok = (name, cond, detail) => {
+  results.push([cond ? 'PASS' : 'FAIL', name, cond ? '' : String(detail === undefined ? '' : detail)]);
+  if (process.env.E2E_TRACE) console.error((cond ? 'PASS' : 'FAIL') + ' - ' + name); // live, for finding a stuck step
+};
 const freePort = () => new Promise((res, rej) => {
   const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); s.on('error', rej);
 });
@@ -193,8 +196,8 @@ async function main() {
     await page.click('#explorer-tree-content .tree-item.type-node[data-type="Person"]'); await page.waitForTimeout(900);
     ok('tree item click loads the type', await page.evaluate(() => /Person/.test(document.getElementById('explorer-detail').innerText)));
     await page.click('#explorer-detail a[data-click="openInInspector"]'); await page.waitForTimeout(600);
-    ok('KOID link opens the Inspector with that KOID (and does not navigate)',
-      await page.evaluate(() => document.getElementById('panel-inspector').classList.contains('active') && document.getElementById('inspector-search-input').value.length > 8 && !location.hash));
+    ok('KOID link opens the Inspector with that KOID (at the panel address, no page navigation)',
+      await page.evaluate(() => document.getElementById('panel-inspector').classList.contains('active') && document.getElementById('inspector-search-input').value.length > 8 && location.hash === '#/inspector'));
 
     // ---- inspector: input search, suggestion click -------------------------
     await page.fill('#inspector-search-input', 'Person'); await page.waitForTimeout(900);
@@ -314,7 +317,8 @@ async function main() {
       (await page.evaluate(() => window.__csp)).length === 0 && consoleErrors.filter(e => !/Failed to load resource/.test(e)).length === 0, consoleErrors.join(' || '));
 
     // ---- sweep: every delegated control, in every panel, must REACT -------
-    const SKIP = new Set(['logout', 'adminRestoreBackup', 'signInSso', 'downloadAuditExport']);
+    // downloads stall page.click (a file save is not a DOM change); downloadResults has its own explicit check
+    const SKIP = new Set(['logout', 'adminRestoreBackup', 'signInSso', 'downloadAuditExport', 'downloadResults']);
     const panels = await page.$$eval('#sidebar nav button[data-panel]', b => b.map(x => x.dataset.panel));
     const reactions = [], unclickable = [];
     for (const name of panels) {
@@ -417,6 +421,236 @@ async function main() {
     // ---- a reload resumes the session from the cookie ----------------------
     await page.reload(); await page.waitForTimeout(1500);
     ok('reload resumes the signed-in session', await page.isHidden('#login-overlay') && /admin/.test(await page.innerText('#user-badge')), await page.innerText('#login-error').catch(() => ''));
+    // ---- E1: panels have addresses; navigation is labelled and keyboard-reachable ----
+    const hash = () => page.evaluate(() => location.hash);
+    const panel = () => page.evaluate(() => activePanel);
+    await page.click('button[data-panel="ontology"]'); await page.waitForTimeout(500);
+    ok('navigating writes the address (#/ontology)', (await hash()) === '#/ontology', await hash());
+    ok('the current destination is announced (aria-current, exactly one)', (await page.getAttribute('button[data-panel="ontology"]', 'aria-current')) === 'page' && (await page.locator('#sidebar nav [aria-current]').count()) === 1);
+    ok('the page title names the panel', /Ontology/.test(await page.title()), await page.title());
+    await page.reload(); await page.waitForTimeout(1500);
+    ok('reload lands on the same panel', (await panel()) === 'ontology' && await page.isVisible('#panel-ontology') && (await hash()) === '#/ontology', await panel() + ' ' + await hash());
+    await page.click('button[data-panel="sources"]'); await page.waitForTimeout(400);
+    await page.goBack(); await page.waitForTimeout(600);
+    ok('Back returns to the previous panel', (await panel()) === 'ontology' && (await hash()) === '#/ontology', await panel());
+    await page.goForward(); await page.waitForTimeout(600);
+    ok('Forward returns to the next panel', (await panel()) === 'sources', await panel());
+    await page.evaluate(() => { location.hash = '#/inspector'; }); await page.waitForTimeout(500);
+    ok('a pasted #/panel link opens that panel', (await panel()) === 'inspector' && await page.isVisible('#panel-inspector'));
+    await page.evaluate(() => { location.hash = '#/no-such-panel'; }); await page.waitForTimeout(400);
+    ok('an unknown address is ignored, not an error', (await panel()) === 'inspector' && await page.isVisible('#panel-inspector'));
+    ok('every nav entry has a text label and is a focusable button', await page.evaluate(() => [...document.querySelectorAll('#sidebar nav button')].every(b => b.querySelector('.lbl').textContent.trim() !== '' && b.tabIndex === 0)));
+    ok('nav entries are grouped under headings', (await page.locator('#sidebar .nav-group').count()) >= 3);
+    ok('labels are visible without hovering on a wide screen', (await page.evaluate(() => getComputedStyle(document.querySelector('#sidebar nav button .lbl')).opacity)) === '1');
+    await page.setViewportSize({ width: 800, height: 700 }); await page.mouse.move(700, 400); await page.waitForTimeout(300);
+    ok('on a narrow screen the rail is icons at rest', (await page.evaluate(() => getComputedStyle(document.querySelector('#sidebar nav button .lbl')).opacity)) === '0');
+    await page.focus('.skip'); await page.keyboard.press('Tab'); await page.waitForTimeout(300); // a real key press: focus-visible
+    ok('...and its labels appear on keyboard focus, not only on hover', (await page.evaluate(() => getComputedStyle(document.querySelector('#sidebar nav button .lbl')).opacity)) === '1');
+    await page.setViewportSize({ width: 1280, height: 720 }); await page.waitForTimeout(200);
+    await page.focus('.skip'); await page.keyboard.press('Enter'); await page.waitForTimeout(200);
+    ok('the skip link moves focus to the content', (await page.evaluate(() => document.activeElement && document.activeElement.id)) === 'panel-content');
+    await page.focus('button[data-panel="query"]');
+    ok('keyboard focus is visible on a nav entry', (await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle)) !== 'none');
+    await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
+    // ---- E3: toasts are announced; a write after the session died returns to sign-in ----
+    await page.evaluate(() => { toast('success', 'Saved the thing'); toast('error', 'It failed'); });
+    ok('a success toast is a polite status', (await page.locator('#toasts [role=status]').innerText()).includes('Saved the thing'));
+    ok('an error toast is an assertive alert', (await page.locator('#toasts [role=alert]').innerText()).includes('It failed'));
+    await page.click('#toasts [role=status] button'); await page.waitForTimeout(200);
+    ok('a toast can be dismissed with its named control', (await page.locator('#toasts [role=status]').count()) === 0 && (await page.getAttribute('#toasts [role=alert] button', 'aria-label')) !== null);
+    await page.context().clearCookies();
+    const expired = await page.evaluate(async () => { try { await apiPost('/api/v1/ontology', {}); return 'no error'; } catch (e) { return e.message; } });
+    ok('a POST after the session died reports session expiry', expired === 'session expired', expired);
+    ok('...and returns to the sign-in form with the reason', await page.isVisible('#login-overlay') && /Session expired/.test(await page.innerText('#login-error')), await page.innerText('#login-error'));
+    await page.fill('#login-user', 'admin'); await page.fill('#login-pass', PW);
+    await page.click('[data-click="doLogin"]'); await page.waitForSelector('#login-overlay', { state: 'hidden', timeout: 10000 }).catch(() => {});
+    ok('signing in again resumes the same panel', await page.isHidden('#login-overlay') && (await panel()) === 'query', await panel());
+    // ---- E2/E6: a draft survives a reload; named queries and history are real ----
+    const cm = () => page.evaluate(() => window.__cmGetValue());
+    await page.evaluate(() => window.__cmSetValue('')); await page.click('#query-editor .cm-content');
+    await page.keyboard.type('MATCH Company RETURN *'); await page.waitForTimeout(900);
+    await page.reload(); await page.waitForTimeout(1800);
+    ok('the query draft survives a reload', (await cm()) === 'MATCH Company RETURN *', await cm());
+    await page.fill('#query-save-name', 'all companies'); await page.click('[data-click="saveQuery"]'); await page.waitForTimeout(300);
+    ok('Save puts the query in the Saved list', /all companies/.test(await page.innerText('#query-saved')), await page.innerText('#query-saved'));
+    ok('saving is announced', /all companies/.test(await page.locator('#toasts [role=status]').last().innerText()));
+    await page.evaluate(() => window.__cmSetValue('MATCH Person RETURN *')); await page.click('[data-click="runQuery"]'); await page.waitForTimeout(900);
+    await page.evaluate(() => window.__cmSetValue('MATCH Company RETURN *')); await page.click('[data-click="runQuery"]'); await page.waitForTimeout(900);
+    const recent = await page.innerText('#query-history');
+    ok('Recent lists what ran, newest first', recent.indexOf('Company') !== -1 && recent.indexOf('Person') > recent.indexOf('Company'), recent);
+    await page.evaluate(() => window.__cmSetValue('')); await page.click('#query-saved [data-click="loadQuery"]'); await page.waitForTimeout(300);
+    ok('clicking a saved query loads it into the editor', (await cm()) === 'MATCH Company RETURN *', await cm());
+    await page.reload(); await page.waitForTimeout(1800);
+    ok('saved queries and history survive a reload', /all companies/.test(await page.innerText('#query-saved')) && /Person/.test(await page.innerText('#query-history')));
+    await page.evaluate(() => window.__cmSetValue('MATCH Person RETURN *')); await page.click('#query-editor .cm-content');
+    await page.keyboard.press('Control+s'); await page.waitForTimeout(300);
+    ok('Ctrl+S with no name asks for one instead of pretending to save', (await page.evaluate(() => document.activeElement && document.activeElement.id)) === 'query-save-name');
+    await page.click('#query-saved [data-click="deleteSaved"]'); await page.waitForTimeout(300);
+    ok('a saved query can be deleted', !/all companies/.test(await page.innerText('#query-saved')));
+    await page.evaluate(() => { Storage.prototype.setItem = function () { throw new Error('quota'); }; });
+    await page.fill('#query-save-name', 'blocked'); await page.click('[data-click="saveQuery"]'); await page.waitForTimeout(300);
+    ok('when the browser refuses storage the person is told, not lied to', /Could not save/.test(await page.locator('#toasts [role=alert]').last().innerText().catch(() => '')));
+    await page.reload(); await page.waitForTimeout(1500);
+    // ---- E4: the results table is sortable, copyable, exportable and linked ----
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE });
+    await page.evaluate(() => window.__cmSetValue('MATCH Person RETURN *'));
+    await page.click('[data-click="runQuery"]'); await page.waitForTimeout(1200);
+    const rowCount = await page.locator('#query-results tbody tr').count();
+    ok('the footer states the row count and the elapsed time', /^\d+ rows? · \d+ ms$/.test((await page.innerText('#query-results .res-count')).trim()), await page.innerText('#query-results .res-count').catch(() => ''));
+    const col = async name => page.evaluate(n => {
+      const ths = [...document.querySelectorAll('#query-results thead th')];
+      const i = ths.findIndex(th => th.textContent.replace(/[▲▼]/g, '').trim() === n);
+      return [...document.querySelectorAll('#query-results tbody tr')].map(tr => tr.children[i].textContent);
+    }, name);
+    const nameBefore = await col('name');
+    await page.click('#query-results th button[data-colname="name"]'); await page.waitForTimeout(200);
+    const asc = await col('name');
+    ok('clicking a header sorts ascending and announces it', JSON.stringify(asc) === JSON.stringify([...nameBefore].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) && (await page.getAttribute('#query-results th:has(button[data-colname="name"])', 'aria-sort')) === 'ascending', JSON.stringify(asc));
+    await page.click('#query-results th button[data-colname="name"]'); await page.waitForTimeout(200);
+    ok('clicking again sorts descending', JSON.stringify(await col('name')) === JSON.stringify([...asc].reverse()) && (await page.getAttribute('#query-results th:has(button[data-colname="name"])', 'aria-sort')) === 'descending');
+    await page.click('[data-click="copyResults"][data-kind="json"]'); await page.waitForTimeout(300);
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    ok('Copy JSON puts every row on the clipboard, in the current order', Array.isArray(JSON.parse(clip)) && JSON.parse(clip).length === rowCount && JSON.parse(clip)[0].properties.name === (await col('name'))[0], clip.slice(0, 120));
+    ok('copying is announced', /Copied/.test(await page.locator('#toasts [role=status]').last().innerText()));
+    await page.click('[data-click="copyResults"][data-kind="csv"]'); await page.waitForTimeout(300);
+    const csv = await page.evaluate(() => navigator.clipboard.readText());
+    ok('Copy CSV has a header and one line per row', csv.split('\r\n').filter(Boolean).length === rowCount + 1 && /^koid,/.test(csv), csv.slice(0, 120));
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }).catch(() => null), page.click('[data-click="downloadResults"][data-kind="csv"]')]);
+    const dlText = dl ? fs.readFileSync(await dl.path(), 'utf8') : '';
+    ok('Download CSV saves a file with the same rows', !!dl && /\.csv$/.test(dl.suggestedFilename()) && dlText.split('\r\n').filter(Boolean).length === rowCount + 1, dl ? dl.suggestedFilename() : 'no download');
+    ok('CSV quoting is exact and a spreadsheet formula is defused', (await page.evaluate(() => resultsToCsv(['a', 'b'], [['=1+1', 'x,y'], ['"q"\nz', null], [-5, '@cmd']]))) === 'a,b\r\n\'=1+1,"x,y"\r\n"""q""\nz",\r\n-5,\'@cmd\r\n');
+    ok('a nested value shows as JSON, not [object Object]', (await page.evaluate(() => cellText({ a: [1, { b: 2 }] }))) === '{"a":[1,{"b":2}]}');
+    await page.click('#query-results a[data-click="openInInspector"]'); await page.waitForTimeout(600);
+    ok('a row links to its object in the Inspector', (await panel()) === 'inspector' && (await page.inputValue('#inspector-search-input')).length > 8, await panel());
+    await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
+    // ---- E5: the command palette ----
+    await page.fill('#query-save-name', 'palette query'); await page.evaluate(() => window.__cmSetValue('MATCH Company RETURN *')); await page.click('[data-click="saveQuery"]'); await page.waitForTimeout(300);
+    await page.evaluate(() => window.__cmSetValue('MATCH Person RETURN *'));
+    await page.focus('button[data-panel="query"]');
+    await page.keyboard.press('Control+k'); await page.waitForTimeout(300);
+    ok('Ctrl+K opens the palette with focus in its input', await page.isVisible('#palette') && (await page.evaluate(() => document.activeElement.id)) === 'palette-input');
+    ok('the palette is an announced modal combobox', (await page.getAttribute('#palette', 'role')) === 'dialog' && (await page.getAttribute('#palette-input', 'role')) === 'combobox');
+    ok('an empty palette lists every panel and the actions', (await page.locator('#palette-list [role=option]').count()) >= 20);
+    await page.keyboard.type('onto'); await page.waitForTimeout(200);
+    ok('typing ranks the best match first', /Ontology/.test(await page.locator('#palette-list [role=option]').first().innerText()), await page.locator('#palette-list [role=option]').first().innerText());
+    ok('the first match is the active descendant', (await page.getAttribute('#palette-input', 'aria-activedescendant')) === (await page.locator('#palette-list [role=option]').first().getAttribute('id')));
+    await page.keyboard.press('Enter'); await page.waitForTimeout(500);
+    ok('Enter goes there and closes the palette', (await panel()) === 'ontology' && await page.isHidden('#palette'), await panel());
+    await page.keyboard.press('Control+k'); await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+    ok('Escape closes it and returns focus to where it was', await page.isHidden('#palette') && (await page.evaluate(() => document.activeElement.tagName)) !== 'BODY');
+    await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
+    await page.keyboard.press('Control+k'); await page.keyboard.type('palette q'); await page.waitForTimeout(200);
+    ok('saved queries are in the palette', /palette query/.test(await page.locator('#palette-list [role=option]').first().innerText()));
+    await page.keyboard.press('Enter'); await page.waitForTimeout(300);
+    ok('choosing one loads it into the editor', (await cm()) === 'MATCH Company RETURN *', await cm());
+    await page.keyboard.press('Control+k'); await page.keyboard.type('run'); await page.waitForTimeout(200);
+    await page.keyboard.press('Enter'); await page.waitForTimeout(1200);
+    ok('"Run query" runs the query from anywhere', /\d+ rows? · \d+ ms/.test(await page.innerText('#query-results')), await page.innerText('#query-results'));
+    await page.keyboard.press('Control+k'); await page.keyboard.type('zzzqqq'); await page.waitForTimeout(200);
+    ok('no match says so, politely', /No matching commands/.test(await page.innerText('#palette-list')) && (await page.locator('#palette-list [role=option]').count()) === 0);
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Control+k'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); await page.waitForTimeout(100);
+    ok('arrow keys move the selection', (await page.locator('#palette-list [role=option][aria-selected=true]').count()) === 1 && (await page.locator('#palette-list [role=option]').nth(2).getAttribute('aria-selected')) === 'true');
+    await page.click('#palette-backdrop', { position: { x: 5, y: 5 } }); await page.waitForTimeout(200);
+    ok('clicking outside closes it', await page.isHidden('#palette'));
+    ok('fuzzy ranking: a prefix beats a scattered match, a miss is rejected', await page.evaluate(() => fuzzyScore('onto', 'Ontology') > fuzzyScore('onto', 'Go to Ontology panel...x') && fuzzyScore('onto', 'Ontology') > fuzzyScore('onty', 'Ontology') && fuzzyScore('zzz', 'Ontology') === -1 && fuzzyScore('', 'anything') === 0));
+    await page.evaluate(() => { const o = Object.keys(localStorage).filter(k => k.includes('.saved')); o.forEach(k => localStorage.setItem(k, '[]')); });
+    // ---- P1: one working tenant, applied everywhere and remembered ----
+    const TENANT_IDS = ['query', 'ontology', 'sources', 'ask', 'graph'];
+    const tenantValues = () => page.evaluate(ids => ids.map(i => document.getElementById(i + '-tenant').value), TENANT_IDS);
+    await page.selectOption('#tenant-context', 't1'); await page.waitForTimeout(500);
+    ok('choosing a tenant in the header applies it to every panel', (await tenantValues()).every(v => v === 't1'), JSON.stringify(await tenantValues()));
+    const reqBeforeTenant = requests.length;
+    await page.evaluate(() => window.__cmSetValue('MATCH Company RETURN *')); await page.click('[data-click="runQuery"]'); await page.waitForTimeout(900);
+    ok('queries run in the working tenant', requests.slice(reqBeforeTenant).some(u => /api\/aikoql\?.*tenant=t1/.test(u)), requests.slice(reqBeforeTenant).join(' '));
+    await page.reload(); await page.waitForTimeout(1800);
+    ok('the working tenant survives a reload', (await page.inputValue('#tenant-context')) === 't1' && (await tenantValues()).every(v => v === 't1'), JSON.stringify(await tenantValues()));
+    await page.click('button[data-panel="ontology"]'); await page.waitForTimeout(400);
+    await page.selectOption('#ontology-tenant', ''); await page.waitForTimeout(500);
+    ok('a panel override stays local: the header and the other panels do not move', (await page.inputValue('#tenant-context')) === 't1' && (await page.inputValue('#query-tenant')) === 't1' && (await page.inputValue('#sources-tenant')) === 't1', await page.inputValue('#tenant-context'));
+    await page.selectOption('#tenant-context', ''); await page.waitForTimeout(300);
+    await page.keyboard.press('Control+k'); await page.keyboard.type('tenant t1'); await page.waitForTimeout(200);
+    ok('the palette can switch tenant', /Switch tenant: t1/.test(await page.locator('#palette-list [role=option]').first().innerText().catch(() => '')));
+    await page.keyboard.press('Enter'); await page.waitForTimeout(500);
+    ok('...and does', (await page.inputValue('#tenant-context')) === 't1');
+    await page.selectOption('#tenant-context', ''); await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
+    // ---- P1: light and dark, by system preference or by choice ----
+    const lum = rgb => { const [r, g, b] = rgb.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+    const css = (sel, prop) => page.evaluate(([s, p]) => getComputedStyle(document.querySelector(s))[p], [sel, prop]);
+    const themeAttr = () => page.evaluate(() => document.documentElement.dataset.theme || '');
+    await page.evaluate(() => localStorage.removeItem('aikoql.studio.theme')); await page.reload(); await page.waitForTimeout(1500);
+    await page.emulateMedia({ colorScheme: 'light' }); await page.waitForTimeout(200);
+    ok('with no choice a light system gets the light theme', (await themeAttr()) === '' && lum(await css('body', 'backgroundColor')) > 0.7, await css('body', 'backgroundColor'));
+    await page.emulateMedia({ colorScheme: 'dark' }); await page.waitForTimeout(200);
+    ok('...and a dark system gets the dark theme', lum(await css('body', 'backgroundColor')) < 0.05, await css('body', 'backgroundColor'));
+    await page.click('#theme-toggle'); await page.waitForTimeout(250);
+    ok('the toggle makes light explicit, beating a dark system', (await themeAttr()) === 'light' && lum(await css('body', 'backgroundColor')) > 0.7 && /Light/.test(await page.innerText('#theme-toggle')));
+    ok('the control announces its state', /Theme: light/.test(await page.getAttribute('#theme-toggle', 'aria-label')));
+    await page.reload(); await page.waitForTimeout(1500);
+    ok('the choice survives a reload (applied before first paint)', (await themeAttr()) === 'light' && lum(await css('body', 'backgroundColor')) > 0.7);
+    ok('light: secondary text is readable on the page and on cards (WCAG AA)', ratio(await css('#panel-title', 'color'), await css('#panel-header', 'backgroundColor')) >= 4.5 && ratio(await css('.panel.active .query-editor-label', 'color'), await css('.panel.active .card', 'backgroundColor')) >= 4.5, await css('.panel.active .query-editor-label', 'color') + ' on ' + await css('.panel.active .card', 'backgroundColor'));
+    ok('light: the editor follows the theme (light surface, readable text)', lum(await css('#query-editor .cm-editor', 'backgroundColor')) > 0.8 && ratio(await css('#query-editor .cm-content', 'color'), await css('#query-editor .cm-editor', 'backgroundColor')) >= 7, await css('#query-editor .cm-editor', 'backgroundColor'));
+    await page.click('button[data-panel="graph"]'); await page.waitForTimeout(1200);
+    ok('the graph draws in the light theme without errors', await page.isVisible('#graph-viz') && realErrors.length === 0, realErrors.slice(0, 2).join(' | '));
+    await page.click('button[data-panel="query"]'); await page.waitForTimeout(300);
+    await page.click('#theme-toggle'); await page.waitForTimeout(250);
+    ok('the next press makes dark explicit, beating a light system', (await themeAttr()) === 'dark' && lum(await css('body', 'backgroundColor')) < 0.05);
+    await page.emulateMedia({ colorScheme: 'light' }); await page.waitForTimeout(200);
+    ok('dark stays dark when the system is light', lum(await css('body', 'backgroundColor')) < 0.05);
+    ok('dark: the editor is dark again', lum(await css('#query-editor .cm-editor', 'backgroundColor')) < 0.05 && ratio(await css('#query-editor .cm-content', 'color'), await css('#query-editor .cm-editor', 'backgroundColor')) >= 7);
+    ok('dark: secondary text meets WCAG AA', ratio(await css('.panel.active .query-editor-label', 'color'), await css('.panel.active .card', 'backgroundColor')) >= 4.5);
+    await page.keyboard.press('Control+k'); await page.keyboard.type('theme: auto'); await page.waitForTimeout(200); await page.keyboard.press('Enter'); await page.waitForTimeout(300);
+    ok('the palette can set the theme, and auto follows the system again', (await themeAttr()) === '' && lum(await css('body', 'backgroundColor')) > 0.7 && /Auto/.test(await page.innerText('#theme-toggle')));
+    await page.emulateMedia({ colorScheme: 'dark' }); await page.waitForTimeout(200);
+    ok('auto tracks a system change live', lum(await css('body', 'backgroundColor')) < 0.05);
+    await page.emulateMedia({ colorScheme: null });
+    // ---- P1: a phone ----
+    await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
+    ok('on a phone the navigation toggle is shown and the drawer is closed', await page.isVisible('#nav-toggle') && await page.isHidden('#sidebar') && (await page.getAttribute('#nav-toggle', 'aria-expanded')) === 'false');
+    await page.click('#nav-toggle'); await page.waitForTimeout(350);
+    ok('the toggle opens the drawer, labelled, with a backdrop', await page.isVisible('#sidebar') && (await page.getAttribute('#nav-toggle', 'aria-expanded')) === 'true' && await page.isVisible('#nav-backdrop') && (await css('#sidebar nav button .lbl', 'opacity')) === '1');
+    await page.click('button[data-panel="graph"]'); await page.waitForTimeout(500);
+    ok('choosing a panel closes the drawer and goes there', (await panel()) === 'graph' && await page.isHidden('#sidebar') && (await page.getAttribute('#nav-toggle', 'aria-expanded')) === 'false', await panel());
+    await page.click('#nav-toggle'); await page.waitForTimeout(300); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+    ok('Escape closes it and returns focus to the toggle', await page.isHidden('#sidebar') && (await page.evaluate(() => document.activeElement.id)) === 'nav-toggle');
+    await page.click('#nav-toggle'); await page.waitForTimeout(300); await page.click('#nav-backdrop', { position: { x: 380, y: 400 } }); await page.waitForTimeout(300);
+    ok('tapping outside closes it', await page.isHidden('#sidebar'));
+    const overflowing = [];
+    for (const name of await page.$$eval('#sidebar nav button[data-panel]', b => b.map(x => x.dataset.panel))) {
+      await page.evaluate(n => { location.hash = '#/' + n; }, name); await page.waitForTimeout(1300);
+      const w = await page.evaluate(() => ({ doc: document.scrollingElement.scrollWidth, view: window.innerWidth, content: document.getElementById('panel-content').scrollWidth, contentView: document.getElementById('panel-content').clientWidth, main: document.getElementById('main').getBoundingClientRect().width }));
+      if (w.doc > w.view + 1 || w.content > w.contentView + 1 || w.main > w.view + 1) overflowing.push(name + ' ' + JSON.stringify(w));
+    }
+    ok('no panel makes the page scroll sideways on a phone', overflowing.length === 0, overflowing.join(' ; '));
+    await page.evaluate(() => { location.hash = '#/query'; }); await page.waitForTimeout(500);
+    const runBox = await page.locator('[data-click="runQuery"]').boundingBox();
+    ok('buttons are touch-sized on a phone (>= 40px tall)', runBox && runBox.height >= 40, JSON.stringify(runBox));
+    ok('form inputs are 16px so the phone does not zoom on focus', (await css('#query-save-name', 'fontSize')) === '16px', await css('#query-save-name', 'fontSize'));
+    await page.setViewportSize({ width: 900, height: 700 }); await page.waitForTimeout(300);
+    ok('a tablet keeps the compact rail and no toggle', await page.isHidden('#nav-toggle') && await page.isVisible('#sidebar'));
+    await page.setViewportSize({ width: 1280, height: 720 }); await page.waitForTimeout(300);
+    ok('on a desktop there is no toggle and the sidebar is open', await page.isHidden('#nav-toggle') && await page.isVisible('#sidebar'));
+    await page.evaluate(() => { location.hash = '#/query'; });
+    // ---- polish from screenshots ----
+    await page.setViewportSize({ width: 1280, height: 560 }); await page.waitForTimeout(300);
+    const navScroll = await page.evaluate(() => { const n = document.querySelector('#sidebar nav'); n.scrollTop = n.scrollHeight; const last = [...n.querySelectorAll('button')].pop().getBoundingClientRect(), box = n.getBoundingClientRect(); return { overflowY: getComputedStyle(n).overflowY, scrolls: n.scrollHeight > n.clientHeight, lastInside: last.bottom <= box.bottom + 1 && last.top >= box.top }; });
+    ok('on a short window the navigation scrolls and its last entry is reachable', navScroll.overflowY === 'auto' && navScroll.scrolls && navScroll.lastInside, JSON.stringify(navScroll));
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.keyboard.press('Control+k'); await page.keyboard.type('o'); await page.waitForTimeout(200);
+    ok('one letter in the palette never offers Sign out first', !/Sign out/.test(await page.locator('#palette-list [role=option]').first().innerText()) && !/Sign out/.test(await page.innerText('#palette-list')));
+    await page.keyboard.press('Escape'); await page.keyboard.press('Control+k'); await page.keyboard.type('sign'); await page.waitForTimeout(200);
+    ok('...but typing "sign" finds it', /Sign out/.test(await page.locator('#palette-list [role=option]').first().innerText()));
+    await page.keyboard.press('Escape');
+    ok('bare selects follow the theme (a bordered, themed control)', (await css('#sources-tenant', 'borderTopWidth')) !== '0px' && lum(await css('#sources-tenant', 'backgroundColor')) < 0.05);
+    await page.setViewportSize({ width: 390, height: 844 }); await page.evaluate(() => { location.hash = '#/query'; }); await page.waitForTimeout(500);
+    const labelBoxes = await page.evaluate(() => [...document.querySelectorAll('.panel.active .query-editor-label span')].filter(e => e.offsetParent !== null).map(e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; }));
+    const overlap = labelBoxes.some((a, i) => labelBoxes.some((b, j) => i < j && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]));
+    ok('on a phone the editor label and its hint never overlap', !overlap, JSON.stringify(labelBoxes));
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.evaluate(() => { location.hash = '#/sources'; }); await page.waitForTimeout(1200);
+    ok('a one-table source says "1 container", not "1 containers"', !/\b1 containers\b/.test(await page.innerText('#sources-list')), (await page.innerText('#sources-list')).slice(0, 200));
+    await page.evaluate(() => { location.hash = '#/query'; }); await page.waitForTimeout(300);
     // ---- a dead cookie falls back to the form; signing in must still work ---
     await page.context().addCookies([{ name: 'aikoql_session', value: 'dead', url: BASE, httpOnly: true, sameSite: 'Strict' }]);
     await page.reload(); await page.waitForSelector('#login-overlay', { state: 'visible', timeout: 10000 });

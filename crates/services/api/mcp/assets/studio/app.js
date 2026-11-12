@@ -12,7 +12,40 @@ let graphRawData = null;
 const COLORS = ['#6cc7f0','#f070a0','#5cd89c','#f0a060','#b89ae0','#f0556a','#f0d060','#60d8b0','#f090c8','#98dc80'];
 let typeColors = {}, colorIdx = 0;
 
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function colorFor(type) { if(!typeColors[type]) typeColors[type]=COLORS[colorIdx++%COLORS.length]; return typeColors[type]; }
+
+// ═══════════════════════════════════════════
+// Theme: follow the system, or be told. Stored globally (it applies before sign-in).
+// ═══════════════════════════════════════════
+const THEME_KEY = 'aikoql.studio.theme';
+const THEME_LABELS = {auto: '◐ Auto', light: '☀ Light', dark: '☾ Dark'};
+function savedTheme() {
+  try { const t = localStorage.getItem(THEME_KEY); return t === 'light' || t === 'dark' ? t : 'auto'; } catch (_) { return 'auto'; }
+}
+function effectiveDark() {
+  const t = document.documentElement.dataset.theme;
+  if (t) return t === 'dark';
+  return !window.matchMedia('(prefers-color-scheme: light)').matches;
+}
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'auto') delete root.dataset.theme; else root.dataset.theme = mode;
+  try { if (mode === 'auto') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, mode); } catch (_) { /* choice lasts for this page only */ }
+  const btn = document.getElementById('theme-toggle');
+  if (btn) {
+    btn.textContent = THEME_LABELS[mode];
+    btn.setAttribute('aria-label', 'Theme: ' + (mode === 'auto' ? 'automatic, follows your system' : mode) + '. Activate to change.');
+  }
+  if (window.__cmSetTheme) window.__cmSetTheme(effectiveDark());
+  // the graph paints with colours read at creation: rebuild it in the new palette
+  if (graphNetwork) { graphNetwork.destroy(); graphNetwork = null; if (activePanel === 'graph') initGraph(); }
+}
+function cycleTheme() {
+  const order = ['auto', 'light', 'dark'];
+  applyTheme(order[(order.indexOf(savedTheme()) + 1) % order.length]);
+}
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (savedTheme() === 'auto') applyTheme('auto'); });
 
 // ═══════════════════════════════════════════
 // Auth
@@ -68,8 +101,12 @@ window.addEventListener('load', async () => {
 function authHeaders(extra) {
   return Object.assign({'X-Aikoql-Csrf': '1'}, extra || {}, authToken ? {'Authorization': 'Bearer ' + authToken} : {});
 }
-async function api(url) {
-  const res = await fetch(url, {headers: authHeaders()});
+// One transport for every verb: CSRF header, JSON, a dead session returns to
+// sign-in (whatever the verb), and one error shape.
+async function request(method, url, body) {
+  const init = {method: method, headers: authHeaders(body === undefined ? {} : {'Content-Type': 'application/json'})};
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const res = await fetch(url, init);
   // S-10 (POC-4): a 401 means the server restarted and dropped the session —
   // return to the login overlay instead of leaking the raw body into a panel.
   if (res.status === 401) {
@@ -79,28 +116,33 @@ async function api(url) {
   }
   if (!res.ok) {
     let msg = 'HTTP ' + res.status;
-    try { const body = await res.json(); if (body.error) msg = body.error; } catch(_) {}
-    throw new Error(msg);
-  }
-  return res.json();
-}
-async function apiPost(url, body) {
-  const res = await fetch(url, {method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify(body||{})});
-  if (!res.ok) {
-    let msg = 'HTTP ' + res.status;
     try { const b = await res.json(); if (b.error) msg = b.error; } catch(_) {}
     throw new Error(msg);
   }
   return res.json();
 }
-async function apiPut(url, body) {
-  const res = await fetch(url, {method:'PUT', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify(body||{})});
-  if (!res.ok) {
-    let msg = 'HTTP ' + res.status;
-    try { const b = await res.json(); if (b.error) msg = b.error; } catch(_) {}
-    throw new Error(msg);
-  }
-  return res.json();
+async function api(url) { return request('GET', url); }
+async function apiPost(url, body) { return request('POST', url, body || {}); }
+async function apiPut(url, body) { return request('PUT', url, body || {}); }
+
+// Notifications: a polite live region; errors are alerts. Text only, never markup.
+function toast(kind, text, ms) {
+  const box = document.getElementById('toasts');
+  if (!box) return;
+  const t = document.createElement('div');
+  t.className = 'toast toast-' + kind;
+  t.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  const msg = document.createElement('span');
+  msg.textContent = text;
+  const x = document.createElement('button');
+  x.className = 'toast-x';
+  x.setAttribute('aria-label', 'Dismiss notification');
+  x.dataset.click = 'dismissToast';
+  x.textContent = '×';
+  t.append(msg, x);
+  box.append(t);
+  while (box.children.length > 4) box.firstChild.remove();
+  setTimeout(() => t.remove(), ms || (kind === 'error' ? 9000 : 4000));
 }
 
 // Epoch millis → "YYYY-MM-DD HH:MM:SS (13s ago)".
@@ -119,14 +161,54 @@ function fmtTime(ms) {
 // ═══════════════════════════════════════════
 // Navigation
 // ═══════════════════════════════════════════
-function switchPanel(name) {
+// Phone navigation: a drawer. On wider screens these are no-ops (the rail is always there).
+function setNav(open) {
+  document.getElementById('app').classList.toggle('nav-open', open);
+  document.getElementById('nav-backdrop').hidden = !open;
+  const t = document.getElementById('nav-toggle');
+  t.setAttribute('aria-expanded', open ? 'true' : 'false');
+  t.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+}
+function toggleNav() {
+  if (document.getElementById('app').classList.contains('nav-open')) { closeNav(); return; }
+  setNav(true);
+  const first = document.querySelector('#sidebar nav button.active') || document.querySelector('#sidebar nav button');
+  if (first) first.focus();
+}
+function closeNav() {
+  if (!document.getElementById('app').classList.contains('nav-open')) return;
+  setNav(false);
+  document.getElementById('nav-toggle').focus();
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeNav(); });
+window.addEventListener('resize', () => { if (window.innerWidth >= 800) setNav(false); });
+
+// Routing: a panel is a place with an address (#/ontology). Refresh, Back/Forward
+// and a pasted link all land on the same panel. Only #/<panel> hashes are ours:
+// the SSO hand-off carries its credentials in the hash and must be left alone.
+function panelFromHash() {
+  const m = /^#\/([a-z-]+)/.exec(location.hash);
+  return m && document.getElementById('panel-' + m[1]) ? m[1] : null;
+}
+window.addEventListener('hashchange', () => {
+  const p = panelFromHash();
+  if (p && p !== activePanel) switchPanel(p, true);
+});
+function switchPanel(name, fromRoute) {
+  closeNav();
   activePanel = name;
-  document.querySelectorAll('#sidebar nav button').forEach(b => b.classList.toggle('active', b.dataset.panel === name));
+  if (!fromRoute && location.hash !== '#/' + name) history.pushState(null, '', '#/' + name);
+  document.querySelectorAll('#sidebar nav button').forEach(b => {
+    const on = b.dataset.panel === name;
+    b.classList.toggle('active', on);
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panel = document.getElementById('panel-' + name);
   if (panel) panel.classList.add('active');
   const titles = { query:'Query Editor', graph:'Knowledge Graph', explorer:'Knowledge Explorer', schema:'Schema Explorer', ontology:'Ontology', inspector:'KO Inspector', admin:'Administration', timeline:'Timeline', provenance:'Provenance', debugger:'Program Debugger', benchmarks:'Benchmark Center', profiler:'Query Profiler', providers:'Provider Manager', documents:'Document Explorer', ask:'Ask', sources:'Data Sources' };
   document.getElementById('panel-title').textContent = titles[name] || name;
+  document.title = (titles[name] || name) + ' · Aikoql Studio';
   document.getElementById('panel-breadcrumb').textContent = '';
   if (name === 'graph') initGraph();
   if (name === 'explorer') loadExplorerTree();
@@ -160,15 +242,43 @@ setInterval(updateStatus, 15000);
 // Init
 // ═══════════════════════════════════════════
 function initApp() {
+  // land where the address says (or where the person was), and make the address true
+  const first = panelFromHash() || 'query';
+  if (location.hash !== '#/' + first && !/^#[a-z]+=/.test(location.hash)) history.replaceState(null, '', '#/' + first);
+  switchPanel(first, true);
   updateStatus();
   loadTenants();
   loadUsers();
   // Init CodeMirror 6 on the query editor div.
   if (window.__initCodeMirror) window.__initCodeMirror();
+  if (window.__cmSetTheme) window.__cmSetTheme(effectiveDark());
+  applyTheme(savedTheme());
+  wireDraft();
 }
 
 // Note: Ctrl+Enter query execution is handled inside CodeMirror's contentDOM listener
 // (see window.__initCodeMirror). Ctrl+S save feedback is below.
+// One working tenant for the whole console. The header sets every panel's selector; a
+// panel can still be pointed elsewhere, and that stays LOCAL to the panel: a view filter
+// (the graph's tenant) must never silently change where another panel's writes land.
+const TENANT_SELECTS = ['query-tenant', 'ontology-tenant', 'sources-tenant', 'ask-tenant', 'graph-tenant'];
+let tenantContext = '';
+function applyTenantContext() {
+  TENANT_SELECTS.forEach(id => {
+    const sel = document.getElementById(id);
+    if (sel && sel.value !== tenantContext) sel.value = tenantContext;
+  });
+  const g = document.getElementById('tenant-context');
+  if (g && g.value !== tenantContext) g.value = tenantContext;
+}
+function setTenantContext(el) {
+  tenantContext = el.value;
+  store.set('tenant', tenantContext);
+  applyTenantContext();
+  // the panel on screen re-reads its data under the new tenant
+  const sel = document.getElementById(activePanel + '-tenant');
+  if (sel) sel.dispatchEvent(new Event('change', {bubbles: true}));
+}
 function loadTenants() {
   api('/api/schema').then(d => {
     if (!d.schema) return;
@@ -190,7 +300,11 @@ function loadTenants() {
     const at = document.getElementById('ask-tenant'), askCur = at.value;
     at.innerHTML = '<option value="">All tenants</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
     at.value = askCur;
+    const gctx = document.getElementById('tenant-context');
+    gctx.innerHTML = '<option value="">Each panel’s default</option>' + [...tenants].map(t => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
+    tenantContext = store.get('tenant', '');
     document.getElementById('graph-tenant').innerHTML = '<option value="">All tenants</option>' + [...tenants].map(t => '<option>'+esc(t)+'</option>').join('');
+    applyTenantContext();
   }).catch(() => {});
 }
 
@@ -205,8 +319,10 @@ async function runQuery() {
   const tenant = document.getElementById('query-tenant').value;
   let url = '/api/aikoql?query=' + encodeURIComponent(query);
   if (tenant) url += '&tenant=' + encodeURIComponent(tenant);
+  const started = performance.now();
   try {
     const data = await api(url);
+    pushHistory(query, !data.error);
     if (data.error) {
       // S-8 (POC-4): an unknown type is fixable from the studio — point at
       // the discovery flow instead of leaving a dead end.
@@ -215,26 +331,9 @@ async function runQuery() {
     }
     if (data.created) { resDiv.innerHTML = '<div class="card"><span class="badge badge-green">Created</span> '+esc(data.created)+' v'+esc(data.version)+'</div>'; return; }
     if (data.results && data.results.length > 0) {
-      const keys = new Set();
-      data.results.forEach(r => { Object.keys(r).forEach(k => { if (k !== 'properties') keys.add(k); }); if (r.properties) Object.keys(r.properties).forEach(k => keys.add(k)); });
-      let html = '<div class="card"><table><thead><tr>';
-      [...keys].forEach(k => html += '<th>'+esc(k)+'</th>');
-      html += '</tr></thead><tbody>';
-      data.results.forEach(row => {
-        html += '<tr>';
-        [...keys].forEach(k => {
-          let v = row[k];
-          if (v === undefined && row.properties) v = row.properties[k];
-          const sv = v !== undefined && v !== null ? String(v) : '';
-          html += '<td title="'+esc(sv)+'">'+esc(sv.substring(0,80))+'</td>';
-        });
-        html += '</tr>';
-      });
-      html += '</tbody></table></div>';
-      html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">'+esc(data.results.length)+' row'+esc(data.results.length!==1?'s':'')+'</div>';
-      resDiv.innerHTML = html;
+      renderResults(resDiv, data.results, Math.round(performance.now() - started));
     } else { resDiv.innerHTML = '<div class="empty-state">Query returned 0 results.</div>'; }
-  } catch(e) { resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
+  } catch(e) { pushHistory(query, false); resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 window.runQuery = runQuery;
 async function explainQuery() {
@@ -252,6 +351,138 @@ async function explainQuery() {
     html += '</tbody></table></div>';
     resDiv.innerHTML = html;
   } catch(e) { resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
+}
+// ── Results table: ONE component for every query result ──────────────────
+// Sortable, copyable as JSON/CSV, downloadable, each row linked to its object.
+// Display is capped (copy/download carry every row).
+let lastResult = null;
+const RESULT_DISPLAY_CAP = 1000;
+function cellText(v) {
+  if (v === null || v === undefined) return '';
+  return typeof v === 'object' ? JSON.stringify(v) : String(v);
+}
+function resultColumns(results) {
+  const keys = new Set();
+  results.forEach(r => {
+    Object.keys(r).forEach(k => { if (k !== 'properties') keys.add(k); });
+    if (r.properties) Object.keys(r.properties).forEach(k => keys.add(k));
+  });
+  return [...keys];
+}
+function resultMatrix(results, cols) {
+  return results.map(r => cols.map(k => {
+    let v = r[k];
+    if (v === undefined && r.properties) v = r.properties[k];
+    return v === undefined ? null : v;
+  }));
+}
+// Numbers by value, everything else by text with numeric-aware collation; empty cells last.
+function compareCells(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return cellText(a).localeCompare(cellText(b), undefined, {numeric: true});
+}
+function sortedOrder(rows, sort) {
+  const order = rows.map((_, i) => i);
+  if (!sort) return order;
+  return order.sort((x, y) => {
+    const a = rows[x][sort.col], b = rows[y][sort.col];
+    const an = a === null || a === '', bn = b === null || b === '';
+    if (an || bn) return an === bn ? x - y : (an ? 1 : -1);   // empties stay last in both directions
+    const c = compareCells(a, b);
+    return c !== 0 ? (sort.desc ? -c : c) : x - y;
+  });
+}
+function csvCell(v) {
+  let t = cellText(v);
+  // a text cell that a spreadsheet would run as a formula is defused with a leading quote
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
+  return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+}
+function resultsToCsv(cols, rows) {
+  return [cols].concat(rows).map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}
+function tableHtml(cols, rows, order, sort, sortable) {
+  let html = '<table><thead><tr>';
+  cols.forEach((k, i) => {
+    if (!sortable) { html += '<th>'+esc(k)+'</th>'; return; }
+    const dir = sort && sort.col === i ? (sort.desc ? 'descending' : 'ascending') : 'none';
+    const arrow = dir === 'none' ? '' : (dir === 'ascending' ? ' ▲' : ' ▼');
+    html += '<th aria-sort="'+esc(dir)+'"><button class="th-btn" data-click="sortResults" data-col="'+esc(i)+'" data-colname="'+esc(k)+'">'+esc(k)+'<span aria-hidden="true">'+esc(arrow)+'</span></button></th>';
+  });
+  html += '</tr></thead><tbody>';
+  order.slice(0, RESULT_DISPLAY_CAP).forEach(ri => {
+    html += '<tr>';
+    cols.forEach((k, ci) => {
+      const v = rows[ri][ci], t = cellText(v);
+      if (k === 'koid' && t) {
+        html += '<td class="mono"><a href="#" data-koid="'+esc(t)+'" data-click="openInInspector" title="Open '+esc(t)+' in the Inspector" style="color:var(--accent);">'+esc(t.substring(0, 16))+'…</a></td>';
+      } else {
+        html += '<td title="'+esc(t)+'">'+esc(t.length > 80 ? t.substring(0, 80) + '…' : t)+'</td>';
+      }
+    });
+    html += '</tr>';
+  });
+  return html + '</tbody></table>';
+}
+function resultsHtml() {
+  const r = lastResult, order = sortedOrder(r.rows, r.sort);
+  const n = r.rows.length;
+  const html = tableHtml(r.cols, r.rows, order, r.sort, true);
+  let h = '<div class="res-bar">'
+    + '<button class="btn btn-sec btn-sm" data-click="copyResults" data-kind="json">Copy JSON</button>'
+    + '<button class="btn btn-sec btn-sm" data-click="copyResults" data-kind="csv">Copy CSV</button>'
+    + '<button class="btn btn-sec btn-sm" data-click="downloadResults" data-kind="csv">Download CSV</button>'
+    + '<button class="btn btn-sec btn-sm" data-click="downloadResults" data-kind="json">Download JSON</button></div>';
+  h += '<div class="card" style="padding:0;overflow-x:auto;">' + html + '</div>';
+  h += '<div class="res-count">'+esc(n)+' row'+esc(n !== 1 ? 's' : '')+' · '+esc(r.ms)+' ms</div>';
+  if (n > RESULT_DISPLAY_CAP) h += '<div class="res-note">Showing the first '+esc(RESULT_DISPLAY_CAP)+' of '+esc(n)+' rows — copy or download to get all of them.</div>';
+  return h;
+}
+function renderResults(box, results, ms) {
+  const cols = resultColumns(results);
+  lastResult = {cols: cols, rows: resultMatrix(results, cols), raw: results, sort: null, ms: ms};
+  box.innerHTML = resultsHtml();
+}
+function sortResults(el) {
+  if (!lastResult) return;
+  const col = Number(el.dataset.col), s = lastResult.sort;
+  lastResult.sort = !s || s.col !== col ? {col: col, desc: false} : {col: col, desc: !s.desc};
+  document.getElementById('query-results').innerHTML = resultsHtml();
+  const again = document.querySelector('#query-results th button[data-col="' + col + '"]');
+  if (again) again.focus();
+}
+function exportPayload(kind) {
+  const r = lastResult, order = sortedOrder(r.rows, r.sort);
+  return kind === 'csv'
+    ? {text: resultsToCsv(r.cols, order.map(i => r.rows[i])), mime: 'text/csv;charset=utf-8', ext: 'csv', what: 'CSV'}
+    : {text: JSON.stringify(order.map(i => r.raw[i]), null, 2), mime: 'application/json', ext: 'json', what: 'JSON'};
+}
+async function copyResults(el) {
+  if (!lastResult) return;
+  const p = exportPayload(el.dataset.kind);
+  try {
+    await navigator.clipboard.writeText(p.text);
+  } catch (_) {
+    const ta = document.createElement('textarea');
+    ta.value = p.text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.append(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (__) { ok = false; }
+    ta.remove();
+    if (!ok) { toast('error', 'Could not copy — use Download instead.'); return; }
+  }
+  toast('success', 'Copied ' + lastResult.rows.length + ' row' + (lastResult.rows.length !== 1 ? 's' : '') + ' as ' + p.what + '.');
+}
+function downloadResults(el) {
+  if (!lastResult) return;
+  const p = exportPayload(el.dataset.kind);
+  const url = URL.createObjectURL(new Blob([p.text], {type: p.mime}));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'aikoql-results-' + new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '') + '.' + p.ext;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('success', 'Downloaded ' + a.download + '.');
 }
 async function streamQuery() {
   const query = window.__cmGetValue().trim();
@@ -273,36 +504,194 @@ async function streamQuery() {
     }
     let html = '';
     chunks.forEach((chunk, ci) => {
-      html += '<div class="card" style="border-left: 2px solid var(--accent);"><h3>Chunk '+esc(ci+1)+'/'+esc(chunks.length)+' ('+esc(chunk.length)+' rows)</h3>';
-      const keys = new Set();
-      chunk.forEach(r => { Object.keys(r).forEach(k => { if (k !== 'properties') keys.add(k); }); if (r.properties) Object.keys(r.properties).forEach(k => keys.add(k)); });
-      html += '<table><thead><tr>';
-      [...keys].forEach(k => html += '<th>'+esc(k)+'</th>');
-      html += '</tr></thead><tbody>';
-      chunk.forEach(row => {
-        html += '<tr>';
-        [...keys].forEach(k => {
-          let v = row[k]; if (v === undefined && row.properties) v = row.properties[k];
-          html += '<td>'+esc(v !== undefined && v !== null ? String(v).substring(0,60) : '')+'</td>';
-        });
-        html += '</tr>';
-      });
-      html += '</tbody></table></div>';
+      const cols = resultColumns(chunk);
+      const h = tableHtml(cols, resultMatrix(chunk, cols), chunk.map((_, i) => i), null, false);
+      html += '<div class="card" style="border-left: 2px solid var(--accent);"><h3>Chunk '+esc(ci+1)+'/'+esc(chunks.length)+' ('+esc(chunk.length)+' rows)</h3>' + h + '</div>';
     });
     html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">'+esc(all.length)+' total rows in '+esc(chunks.length)+' chunk'+esc(chunks.length!==1?'s':'')+'</div>';
     resDiv.innerHTML = html;
   } catch(e) { resDiv.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
-// Save query on Ctrl+S (CodeMirror auto-saves on change; this is for user feedback)
+// Workspace memory: what a person typed, saved and ran survives a reload. Browser
+// storage can be absent, blocked or full, so every access is guarded and a failed
+// save says so instead of pretending.
+const store = {
+  key(k) { return 'aikoql.studio.' + (currentUser || '') + '.' + k; },
+  get(k, d) { try { const v = localStorage.getItem(store.key(k)); return v === null ? d : JSON.parse(v); } catch (_) { return d; } },
+  set(k, v) { try { localStorage.setItem(store.key(k), JSON.stringify(v)); return true; } catch (_) { return false; } },
+};
+let draftTimer = null, draftWired = false;
+function persistDraft() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => store.set('draft', window.__cmGetValue()), 400);
+}
+function wireDraft() {
+  if (!draftWired) {
+    draftWired = true;
+    const ed = document.getElementById('query-editor');
+    ['keyup', 'input'].forEach(ev => ed.addEventListener(ev, persistDraft));
+    window.addEventListener('pagehide', () => store.set('draft', window.__cmGetValue()));
+  }
+  const d = store.get('draft', '');
+  if (typeof d === 'string' && d && !window.__cmGetValue()) window.__cmSetValue(d);
+  renderLibrary();
+}
+function firstLine(q) {
+  const l = String(q).split('\n').map(x => x.trim()).find(Boolean) || '';
+  return l.length > 90 ? l.slice(0, 87) + '…' : l;
+}
+function pushHistory(q, ok) {
+  const h = store.get('history', []).filter(x => x && x.q !== q);
+  h.unshift({q: q, ok: ok, at: Date.now()});
+  store.set('history', h.slice(0, 50));
+  renderLibrary();
+}
+function renderLibrary() {
+  const saved = store.get('saved', []), hist = store.get('history', []);
+  document.getElementById('query-saved').innerHTML = saved.length
+    ? saved.map((s, i) => '<div class="lib-item"><button class="lib-load" data-click="loadQuery" data-kind="saved" data-index="'+esc(i)+'" title="'+esc(s.q)+'"><b>'+esc(s.name)+'</b> <span class="mono">'+esc(firstLine(s.q))+'</span></button><button class="toast-x" data-click="deleteSaved" data-index="'+esc(i)+'" aria-label="Delete saved query '+esc(s.name)+'">×</button></div>').join('')
+    : '<div class="empty-state">Nothing saved yet — name a query above and press Save.</div>';
+  document.getElementById('query-history').innerHTML = hist.length
+    ? hist.map((h, i) => '<div class="lib-item"><button class="lib-load" data-click="loadQuery" data-kind="history" data-index="'+esc(i)+'" title="'+esc(h.q)+'"><span class="badge '+esc(h.ok ? 'badge-green' : 'badge-red')+'">'+esc(h.ok ? 'ok' : 'error')+'</span> <span class="mono">'+esc(firstLine(h.q))+'</span> <span class="lib-when">'+esc(fmtTime(h.at))+'</span></button></div>').join('')
+    : '<div class="empty-state">Queries you run appear here.</div>';
+}
+function saveQuery() {
+  const q = window.__cmGetValue().trim();
+  if (!q) { toast('error', 'Write a query first.'); return; }
+  const input = document.getElementById('query-save-name');
+  const name = input.value.trim().slice(0, 60);
+  if (!name) { toast('info', 'Give the query a name, then press Save.'); input.focus(); return; }
+  const saved = store.get('saved', []);
+  const at = saved.findIndex(s => s.name === name);
+  const entry = {name: name, q: q, at: Date.now()};
+  if (at >= 0) saved[at] = entry; else saved.unshift(entry);
+  if (!store.set('saved', saved.slice(0, 100))) { toast('error', 'Could not save in this browser (storage is blocked or full).'); return; }
+  input.value = '';
+  renderLibrary();
+  toast('success', (at >= 0 ? 'Updated “' : 'Saved “') + name + '”');
+}
+function loadQuery(el) {
+  const list = store.get(el.dataset.kind === 'saved' ? 'saved' : 'history', []);
+  const entry = list[Number(el.dataset.index)];
+  if (!entry) return;
+  window.__cmSetValue(entry.q);
+  persistDraft();
+}
+function deleteSaved(el) {
+  const saved = store.get('saved', []);
+  saved.splice(Number(el.dataset.index), 1);
+  if (!store.set('saved', saved)) { toast('error', 'Could not update saved queries in this browser.'); return; }
+  renderLibrary();
+}
+function clearHistory() { store.set('history', []); renderLibrary(); }
+// ── Command palette (Ctrl/Cmd+K): jump anywhere, run anything, from the keyboard ──
+let paletteItems = [], paletteIdx = 0, lastFocus = null;
+// Subsequence match, scored: consecutive letters, word starts and a prefix rank higher; -1 = no match.
+function fuzzyScore(q, text) {
+  q = q.toLowerCase().replace(/\s+/g, '');
+  const t = text.toLowerCase();
+  if (!q) return 0;
+  let score = 0, ti = 0, prev = -2;
+  for (let qi = 0; qi < q.length; qi++) {
+    const idx = t.indexOf(q[qi], ti);
+    if (idx === -1) return -1;
+    score += 1;
+    if (idx === prev + 1) score += 3;
+    if (idx === 0 || /[\s_\-:./]/.test(t[idx - 1])) score += 4;
+    prev = idx; ti = idx + 1;
+  }
+  if (t.startsWith(q)) score += 10;
+  return score - (ti - q.length) * 0.05;
+}
+function paletteCommands() {
+  const cmds = [];
+  document.querySelectorAll('#sidebar nav button[data-panel]').forEach(b => {
+    cmds.push({label: 'Go to ' + b.querySelector('.lbl').textContent.trim(), hint: 'Panel', run: () => switchPanel(b.dataset.panel)});
+  });
+  const onQuery = fn => () => { switchPanel('query'); fn(); };
+  cmds.push({label: 'Run query', hint: 'Query', run: onQuery(runQuery)});
+  cmds.push({label: 'Explain query plan', hint: 'Query', run: onQuery(explainQuery)});
+  cmds.push({label: 'Save query', hint: 'Query', run: onQuery(saveQuery)});
+  if (lastResult) {
+    cmds.push({label: 'Copy results as CSV', hint: 'Results', run: () => copyResults({dataset: {kind: 'csv'}})});
+    cmds.push({label: 'Copy results as JSON', hint: 'Results', run: () => copyResults({dataset: {kind: 'json'}})});
+  }
+  document.querySelectorAll('#tenant-context option').forEach(o => {
+    const sel = document.getElementById('tenant-context');
+    cmds.push({label: o.value ? 'Switch tenant: ' + o.value : 'Use each panel’s default tenant', hint: 'Tenant', run: () => { sel.value = o.value; setTenantContext(sel); }});
+  });
+  ['auto', 'light', 'dark'].forEach(m => cmds.push({label: 'Theme: ' + m, hint: 'Appearance', run: () => applyTheme(m)}));
+  cmds.push({label: 'Sign out', hint: 'Session', risky: true, run: logout});
+  const load = q => () => { switchPanel('query'); window.__cmSetValue(q); persistDraft(); };
+  store.get('saved', []).forEach(s => cmds.push({label: 'Load saved: ' + s.name, hint: firstLine(s.q), run: load(s.q)}));
+  store.get('history', []).slice(0, 10).forEach(h => cmds.push({label: 'Recent: ' + firstLine(h.q), hint: h.ok ? 'ok' : 'error', run: load(h.q)}));
+  return cmds;
+}
+function renderPalette() {
+  const q = document.getElementById('palette-input').value;
+  // a command that ends the session needs three typed characters (or an empty query, where it is listed last)
+  const typed = q.replace(/\s+/g, '').length;
+  paletteItems = paletteCommands().map(c => ({c: c, s: fuzzyScore(q, c.label)})).filter(x => x.s >= 0 && (!x.c.risky || typed === 0 || typed >= 3))
+    .map((x, i) => Object.assign(x, {i: i})).sort((a, b) => b.s - a.s || a.i - b.i);
+  paletteIdx = 0;
+  document.getElementById('palette-list').innerHTML = paletteItems.length
+    ? paletteItems.map((x, i) => '<li role="option" id="pal-'+esc(i)+'" aria-selected="'+esc(i === 0)+'" data-click="paletteRun" data-index="'+esc(i)+'"><span>'+esc(x.c.label)+'</span><span class="pal-hint">'+esc(x.c.hint || '')+'</span></li>').join('')
+    : '<li class="pal-empty" role="presentation">No matching commands</li>';
+  document.getElementById('palette-input').setAttribute('aria-activedescendant', paletteItems.length ? 'pal-0' : '');
+}
+function movePalette(to) {
+  if (!paletteItems.length) return;
+  paletteIdx = (to + paletteItems.length) % paletteItems.length;
+  document.querySelectorAll('#palette-list [role=option]').forEach((li, i) => li.setAttribute('aria-selected', i === paletteIdx ? 'true' : 'false'));
+  const li = document.getElementById('pal-' + paletteIdx);
+  document.getElementById('palette-input').setAttribute('aria-activedescendant', 'pal-' + paletteIdx);
+  if (li) li.scrollIntoView({block: 'nearest'});
+}
+function openPalette() {
+  if (!currentUser) return;
+  lastFocus = document.activeElement;
+  document.getElementById('palette-backdrop').hidden = false;
+  document.getElementById('palette').hidden = false;
+  const input = document.getElementById('palette-input');
+  input.value = '';
+  renderPalette();
+  input.focus();
+}
+function closePalette() {
+  document.getElementById('palette').hidden = true;
+  document.getElementById('palette-backdrop').hidden = true;
+  if (lastFocus && document.contains(lastFocus)) lastFocus.focus();
+}
+function runPaletteItem(i) {
+  const item = paletteItems[i];
+  if (!item) return;
+  closePalette();
+  item.c.run();
+}
+function paletteKey(e) {
+  if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(paletteIdx + 1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(paletteIdx - 1); }
+  else if (e.key === 'Enter') { e.preventDefault(); runPaletteItem(paletteIdx); }
+  else if (e.key === 'Tab') { e.preventDefault(); }   // the dialog is one control: focus stays in it
+}
+document.getElementById('palette-input').addEventListener('input', renderPalette);
+document.getElementById('palette-input').addEventListener('keydown', paletteKey);
 document.addEventListener('keydown', e => {
-  if (e.ctrlKey && e.key === 's' && activePanel === 'query') {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    if (!currentUser) return;
     e.preventDefault();
-    const q = window.__cmGetValue().trim();
-    if (!q) return;
-    document.getElementById('status-center').textContent = 'Query auto-saved (' + q.split('\n').length + ' lines)';
-    setTimeout(() => { document.getElementById('status-center').textContent = ''; }, 1500);
+    if (document.getElementById('palette').hidden) openPalette(); else closePalette();
+  }
+}, true);
+// Ctrl/Cmd+S saves the query under the name in the box, or asks for the name.
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's' && activePanel === 'query') {
+    e.preventDefault();
+    saveQuery();
   }
 });
+
 
 // ═══════════════════════════════════════════
 // Panel: Knowledge Graph
@@ -314,8 +703,8 @@ function initGraph() {
   const container = document.getElementById('graph-viz');
   graphNetwork = new vis.Network(container, {nodes:graphNodes, edges:graphEdges}, {
     physics: { solver:'forceAtlas2Based', forceAtlas2Based:{gravitationalConstant:-35,centralGravity:0.008,springLength:160,springConstant:0.03} },
-    edges: { arrows:{to:{enabled:true,scaleFactor:0.5}}, smooth:{type:'continuous',roundness:0.3}, font:{size:9,color:'#888',strokeWidth:0}, width:1.5 },
-    nodes: { shape:'dot', font:{size:11,color:'#d0d0d0',face:'sans-serif',strokeWidth:1,strokeColor:'#13131f'}, borderWidth:1.5, shadow:{enabled:true,size:6} },
+    edges: { arrows:{to:{enabled:true,scaleFactor:0.5}}, smooth:{type:'continuous',roundness:0.3}, font:{size:9,color:cssVar('--muted'),strokeWidth:0}, width:1.5 },
+    nodes: { shape:'dot', font:{size:11,color:cssVar('--text'),face:'sans-serif',strokeWidth:1,strokeColor:cssVar('--panel')}, borderWidth:1.5, shadow:{enabled:true,size:6} },
     interaction: { hover:true, navigationButtons:true, keyboard:true },
   });
   graphNetwork.on('click', p => { if(p.nodes.length>0) inspectNode(p.nodes[0]); });
@@ -358,7 +747,7 @@ async function loadGraph() {
       };
     });
     graphNodes.add(nodes);
-    const edges = (data.edges||[]).map(e => ({from:e.source,to:e.target,label:e.rel_type,arrows:'to',color:{color:'#3a3a5c',highlight:'#6cc7f0'},font:{size:9,color:'#5c5c78'},width:1.2}));
+    const edges = (data.edges||[]).map(e => ({from:e.source,to:e.target,label:e.rel_type,arrows:'to',color:{color:cssVar('--border-strong'),highlight:cssVar('--accent')},font:{size:9,color:cssVar('--muted')},width:1.2}));
     // S-2 (POC-4): supersede-with-retract (B3-3) leaves no SUPERSEDES edge —
     // derive virtual "retracts" edges: the superseded row's successor shares
     // tenant + case_id + kind and asserts valid_from == the predecessor's
@@ -373,7 +762,7 @@ async function loadGraph() {
         const pk=p.properties&&p.properties.kind, sk=s.properties&&s.properties.kind;
         if (pk===undefined||sk===undefined||JSON.stringify(pk)!==JSON.stringify(sk)) return;
         if (!s.extensions || s.extensions.valid_from!==p.extensions.valid_to_asserted) return;
-        edges.push({from:p.koid,to:s.koid,label:'retracts',arrows:'to',dashes:[4,3],color:{color:'#8a7a5c',highlight:'#c9a86a'},font:{size:9,color:'#8a7a5c'},width:1});
+        edges.push({from:p.koid,to:s.koid,label:'retracts',arrows:'to',dashes:[4,3],color:{color:cssVar('--orange'),highlight:cssVar('--yellow')},font:{size:9,color:cssVar('--orange')},width:1});
       });
     });
     graphEdges.add(edges);
@@ -1597,7 +1986,7 @@ function renderSourceCard(s) {
   return '<div class="card" style="margin-bottom:10px;">'
     + '<label style="float:right;font-size:11px;"><input type="checkbox" class="src-pick" data-name="'+esc(s.name)+'"> include in ontology</label>'
     + '<h4>'+esc(s.name)+' <span class="badge badge-cyan">'+esc(s.kind)+'</span> <span style="font-size:11px;color:var(--muted);">'+esc(s.tenant ? '@' + s.tenant : '')+'</span></h4>'
-    + '<div style="font-size:11px;color:var(--muted);margin:4px 0;">'+esc(last ? last.containers + ' containers' + (last.truncated ? ' (list truncated)' : '') + ' · schema ' + String(last.fingerprint).slice(0, 10) : 'not discovered yet')+'</div>'
+    + '<div style="font-size:11px;color:var(--muted);margin:4px 0;">'+esc(last ? last.containers + (last.containers === 1 ? ' container' : ' containers') + (last.truncated ? ' (list truncated)' : '') + ' · schema ' + String(last.fingerprint).slice(0, 10) : 'not discovered yet')+'</div>'
     + '<button class="btn btn-pri btn-sm" data-click="discoverSource" data-name="'+esc(s.name)+'">Discover</button>'
     + '<div style="margin:8px 0;font-size:11px;">'
     + names.map(n => '<label style="display:inline-block;margin-right:12px;"><input type="checkbox" class="imp-pick" data-source="'+esc(s.name)+'" data-name="'+esc(n)+'"> '+esc(n)+'</label>').join('')
@@ -1755,6 +2144,21 @@ document.getElementById('ask-question').addEventListener('keydown', e => { if ((
 // ═══════════════════════════════════════════
 const ACTIONS = Object.assign(Object.create(null), {
   doLogin: el => doLogin(),
+  toggleNav: el => toggleNav(),
+  closeNav: el => closeNav(),
+  cycleTheme: el => cycleTheme(),
+  setTenantContext: el => setTenantContext(el),
+  closePalette: el => closePalette(),
+  paletteRun: el => runPaletteItem(Number(el.dataset.index)),
+  sortResults: el => sortResults(el),
+  copyResults: el => copyResults(el),
+  downloadResults: el => downloadResults(el),
+  saveQuery: el => saveQuery(),
+  loadQuery: el => loadQuery(el),
+  deleteSaved: el => deleteSaved(el),
+  clearHistory: el => clearHistory(),
+  dismissToast: el => el.parentElement.remove(),
+  skipToContent: el => { const c = document.getElementById('panel-content'); c.setAttribute('tabindex', '-1'); c.focus(); },
   logout: el => logout(),
   runQuery: el => runQuery(),
   explainQuery: el => explainQuery(),

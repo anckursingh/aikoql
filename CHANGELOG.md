@@ -23,6 +23,25 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 - Ontology discovery from connector metadata proposes one class per container instead of one per source kind.
 - Robustness: seeded fuzz and adversarial suites (`scripts/fuzz-sources.sh`).
 
+### Studio: a keyboard-first, accessible, routable console (docs/STUDIO-ENHANCEMENTS.md)
+- **Navigation:** panels have addresses (`#/ontology`) — refresh, Back/Forward and pasted links work; grouped,
+  always-labelled navigation (labels appear on keyboard focus on narrow screens), a skip link, a visible focus
+  ring, reduced-motion support, muted-text contrast raised from 2.9:1 to 5.5:1 (WCAG AA).
+- **Command palette** (Ctrl/Cmd+K): jump to any panel, run / explain / save a query, load saved or recent
+  queries, copy results, sign out — with fuzzy ranking.
+- **Results:** one table for every query — sortable columns, Copy / Download as CSV or JSON (spreadsheet-safe),
+  row → Inspector, row count and elapsed time, nested values shown as JSON.
+- **Never lose work:** the query draft survives a reload; named saved queries and a history of what ran;
+  Ctrl/Cmd+S now saves for real (it used to say "auto-saved" and store nothing).
+- **Light theme:** Auto (follows the system) / Light / Dark, applied before first paint; the editor and the
+  graph follow it; every colour is a token, and both palettes are tested for WCAG AA.
+- **Phones and tablets:** the navigation becomes a drawer under 800px, controls are touch-sized, inputs do not
+  trigger a zoom, and no panel scrolls the page sideways at 390px (tables scroll inside the page).
+- **One working tenant** in the header, applied to every panel and remembered; a panel can still be pointed
+  elsewhere without moving where another panel writes.
+- **Feedback:** toast notifications (live region; errors are alerts); one request helper, so a session that
+  expired mid-write returns to sign-in for every verb, not just reads.
+
 ### Data sources: fidelity, suggestions and import for every kind
 - **Neo4j and ClickHouse import** through `POST /api/v1/sources/import` (bounded, idempotent; Neo4j with the
   relationships between the selected labels, ClickHouse as one consistent streamed snapshot, replacing engines

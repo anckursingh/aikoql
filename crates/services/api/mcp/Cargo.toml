@@ -52,7 +52,7 @@ getrandom = "0.2"
 # Enterprise multi-user store (Task 3): rusqlite at the locked version the
 # aikoql-sqlite provider already builds (bundled SQLite) — zero new
 # Cargo.lock entries.
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 # AG-31 cloud KMS install: the AWS SDK implementation of the kernel's
 # KmsOps seam (the serve binary supplies it; the kernel stays SDK-free).
 aws-config = "1"

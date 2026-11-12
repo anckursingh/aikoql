@@ -17,61 +17,148 @@ pub const STUDIO_HTML: &str = r##"<!DOCTYPE html>
 <script src="/studio/assets/vis-network.js"></script>
 <script src="/studio/assets/editor.js"></script>
 <style>
+/* theme:start */
 :root {
   --bg: #0a0a12;
   --panel: #13131f;
   --border: #252538;
+  --border-strong: #3a3a52;
   --text: #c8c8d4;
-  --muted: #5c5c78;
+  --text-strong: #ffffff;
+  --muted: #8a8aa8;
   --accent: #6cc7f0;
+  --accent-hover: #7dd4f5;
+  --on-accent: #0a0a12;
+  --on-danger: #ffffff;
   --green: #5cd89c;
   --red: #f0556a;
   --purple: #b89ae0;
   --orange: #f0a060;
   --yellow: #f0d060;
+  --btn-sec: #2a2a3c;
+  --btn-sec-hover: #35354c;
+  --code-bg: #0d0d1a;
+  --code-gutter: #0a0a18;
+  --accent-rgb: 108, 199, 240;
+  --purple-rgb: 184, 154, 224;
+  --green-rgb: 92, 216, 156;
+  --red-rgb: 240, 85, 106;
+  --orange-rgb: 240, 160, 96;
+  --overlay: rgba(6, 6, 14, 0.97);
+  --scrim: rgba(4, 4, 10, 0.62);
+  --glass: rgba(19, 19, 31, 0.95);
+  color-scheme: dark;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
 }
+:root[data-theme="light"] {
+  --bg: #f4f6fb;
+  --panel: #ffffff;
+  --border: #d5d9e8;
+  --border-strong: #b9bfd6;
+  --text: #1b1f33;
+  --text-strong: #000000;
+  --muted: #565c78;
+  --accent: #0b6ea3;
+  --accent-hover: #095a86;
+  --on-accent: #ffffff;
+  --on-danger: #ffffff;
+  --green: #167a4a;
+  --red: #c22a41;
+  --purple: #6a42c0;
+  --orange: #a84f08;
+  --yellow: #7a6200;
+  --btn-sec: #e6e9f4;
+  --btn-sec-hover: #d9ddec;
+  --code-bg: #fbfcff;
+  --code-gutter: #eef0f8;
+  --accent-rgb: 11, 110, 163;
+  --purple-rgb: 106, 66, 192;
+  --green-rgb: 22, 122, 74;
+  --red-rgb: 194, 42, 65;
+  --orange-rgb: 168, 79, 8;
+  --overlay: rgba(244, 246, 251, 0.97);
+  --scrim: rgba(20, 24, 40, 0.45);
+  --glass: rgba(255, 255, 255, 0.95);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+  --bg: #f4f6fb;
+  --panel: #ffffff;
+  --border: #d5d9e8;
+  --border-strong: #b9bfd6;
+  --text: #1b1f33;
+  --text-strong: #000000;
+  --muted: #565c78;
+  --accent: #0b6ea3;
+  --accent-hover: #095a86;
+  --on-accent: #ffffff;
+  --on-danger: #ffffff;
+  --green: #167a4a;
+  --red: #c22a41;
+  --purple: #6a42c0;
+  --orange: #a84f08;
+  --yellow: #7a6200;
+  --btn-sec: #e6e9f4;
+  --btn-sec-hover: #d9ddec;
+  --code-bg: #fbfcff;
+  --code-gutter: #eef0f8;
+  --accent-rgb: 11, 110, 163;
+  --purple-rgb: 106, 66, 192;
+  --green-rgb: 22, 122, 74;
+  --red-rgb: 194, 42, 65;
+  --orange-rgb: 168, 79, 8;
+  --overlay: rgba(244, 246, 251, 0.97);
+  --scrim: rgba(20, 24, 40, 0.45);
+  --glass: rgba(255, 255, 255, 0.95);
+  color-scheme: light;
+  }
+}
+/* theme:end */
 * { margin: 0; padding: 0; box-sizing: border-box; }
+select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; font: 12px var(--font); }
 body { font-family: var(--font); background: var(--bg); color: var(--text); height: 100vh; display: flex; overflow: hidden; }
 
 /* ── Login ── */
-#login-overlay { position: fixed; inset: 0; background: rgba(6,6,14,0.97); display: flex; align-items: center; justify-content: center; z-index: 200; }
-.login-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 40px 44px; width: 380px; text-align: center; box-shadow: 0 0 80px rgba(108,199,240,0.06); }
+#login-overlay { position: fixed; inset: 0; background: var(--overlay); display: flex; align-items: center; justify-content: center; z-index: 200; }
+.login-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 40px 44px; width: 380px; text-align: center; box-shadow: 0 0 80px rgba(var(--accent-rgb),0.06); }
 .login-card h1 { font-size: 22px; font-weight: 700; color: var(--accent); margin-bottom: 4px; letter-spacing: -0.5px; }
 .login-card .sub { color: var(--muted); font-size: 12px; margin-bottom: 28px; }
 .login-card input { width: 100%; padding: 11px 14px; margin-bottom: 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-size: 13px; font-family: var(--font); }
-.login-card input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(108,199,240,0.12); }
-.login-card button { width: 100%; padding: 11px; background: var(--accent); color: #0a0a12; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; font-family: var(--font); }
-.login-card button:hover { background: #7dd4f5; }
+.login-card input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb),0.12); }
+.login-card button { width: 100%; padding: 11px; background: var(--accent); color: var(--on-accent); border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; font-family: var(--font); }
+.login-card button:hover { background: var(--accent-hover); }
 .login-card .err { color: var(--red); font-size: 12px; margin-top: 10px; min-height: 18px; }
 .login-card .hint { color: var(--muted); font-size: 11px; margin-top: 16px; line-height: 1.6; }
 
 /* ── Layout ── */
 #app { display: none; height: 100vh; width: 100vw; }
 #sidebar { width: 52px; min-width: 52px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding-top: 10px; z-index: 10; overflow: hidden; }
-#sidebar:hover { width: 190px; }
+#sidebar:hover, #sidebar:has(:focus-visible) { width: 200px; }
 #sidebar .logo { font-size: 18px; margin-bottom: 6px; opacity: 0.9; flex-shrink: 0; }
 #sidebar .logo-text { display: none; font-size: 13px; font-weight: 700; color: var(--accent); white-space: nowrap; }
-#sidebar:hover .logo-text { display: inline; margin-left: 10px; }
-#sidebar nav { flex: 1; display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 0 4px; }
+#sidebar:hover .logo-text, #sidebar:has(:focus-visible) .logo-text { display: inline; margin-left: 10px; }
+#sidebar nav { flex: 1; display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 0 4px; overflow-y: auto; min-height: 0; }
 #sidebar nav button { display: flex; align-items: center; width: 100%; padding: 10px 12px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; font-family: var(--font); border-radius: 6px; white-space: nowrap; text-align: left; transition: all 0.1s; }
-#sidebar nav button:hover { background: rgba(108,199,240,0.08); color: var(--text); }
-#sidebar nav button.active { background: rgba(108,199,240,0.14); color: var(--accent); }
+#sidebar nav button:hover { background: rgba(var(--accent-rgb),0.08); color: var(--text); }
+#sidebar nav button.active { background: rgba(var(--accent-rgb),0.14); color: var(--accent); }
 #sidebar nav button .ico { font-size: 16px; width: 24px; text-align: center; flex-shrink: 0; }
 #sidebar nav button .lbl { margin-left: 10px; opacity: 0; transition: opacity 0.12s; }
-#sidebar:hover nav button .lbl { opacity: 1; }
+#sidebar:hover nav button .lbl, #sidebar:has(:focus-visible) nav button .lbl { opacity: 1; }
+#sidebar .nav-group { display: none; font-size: 11px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--muted); padding: 10px 12px 2px; white-space: nowrap; }
+#sidebar:hover .nav-group, #sidebar:has(:focus-visible) .nav-group { display: block; }
 #sidebar .user-area { padding: 10px 0; border-top: 1px solid var(--border); width: 100%; text-align: center; flex-shrink: 0; }
-#sidebar .user-badge { font-size: 10px; color: var(--muted); cursor: pointer; white-space: nowrap; }
-#sidebar:hover .user-badge { font-size: 11px; }
+#sidebar .user-badge { font-size: 11px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+#sidebar:hover .user-badge, #sidebar:has(:focus-visible) .user-badge { font-size: 12px; }
 
 /* ── Main ── */
-#main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+#main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 #panel-header { padding: 10px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; min-height: 44px; background: var(--panel); }
 #panel-header h2 { font-size: 13px; font-weight: 600; color: var(--accent); letter-spacing: -0.3px; }
 #panel-header .breadcrumb { font-size: 11px; color: var(--muted); }
 #panel-content { flex: 1; overflow-y: auto; padding: 16px 20px; }
-#statusbar { padding: 4px 16px; border-top: 1px solid var(--border); font-size: 10px; color: var(--muted); display: flex; justify-content: space-between; background: var(--panel); min-height: 22px; }
+#statusbar { padding: 4px 16px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; background: var(--panel); min-height: 22px; }
 #statusbar span { display: flex; align-items: center; gap: 4px; }
 #statusbar .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 #statusbar .dot.ok { background: var(--green); }
@@ -85,33 +172,33 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); heig
 .input-row input, .input-row select { flex: 1; padding: 7px 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 5px; font-size: 12px; font-family: var(--font); }
 .input-row input:focus, .input-row select:focus { outline: none; border-color: var(--accent); }
 .btn { padding: 7px 14px; border: none; border-radius: 5px; cursor: pointer; font-weight: 600; font-size: 11px; font-family: var(--font); white-space: nowrap; }
-.btn-pri { background: var(--accent); color: #0a0a12; }
-.btn-pri:hover { background: #7dd4f5; }
-.btn-sec { background: #2a2a3c; color: var(--text); }
-.btn-sec:hover { background: #35354c; }
-.btn-danger { background: var(--red); color: #fff; }
-.btn-sm { padding: 4px 10px; font-size: 10px; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; }
-.badge-cyan { background: rgba(108,199,240,0.15); color: var(--accent); }
-.badge-purple { background: rgba(184,154,224,0.15); color: var(--purple); }
-.badge-green { background: rgba(92,216,156,0.15); color: var(--green); }
-.badge-red { background: rgba(240,85,106,0.15); color: var(--red); }
-.badge-orange { background: rgba(240,160,96,0.15); color: var(--orange); }
+.btn-pri { background: var(--accent); color: var(--on-accent); }
+.btn-pri:hover { background: var(--accent-hover); }
+.btn-sec { background: var(--btn-sec); color: var(--text); }
+.btn-sec:hover { background: var(--btn-sec-hover); }
+.btn-danger { background: var(--red); color: var(--on-danger); }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.badge-cyan { background: rgba(var(--accent-rgb),0.15); color: var(--accent); }
+.badge-purple { background: rgba(var(--purple-rgb),0.15); color: var(--purple); }
+.badge-green { background: rgba(var(--green-rgb),0.15); color: var(--green); }
+.badge-red { background: rgba(var(--red-rgb),0.15); color: var(--red); }
+.badge-orange { background: rgba(var(--orange-rgb),0.15); color: var(--orange); }
 .batch-notice { border-color: var(--accent); }
 .batch-notice h4 { margin-bottom: 6px; }
 .progress { height: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin: 8px 0 4px; }
 .progress-bar { height: 100%; background: var(--accent); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 table { width: 100%; border-collapse: collapse; font-size: 11px; }
-th { background: rgba(108,199,240,0.06); color: var(--accent); padding: 6px 10px; text-align: left; font-weight: 600; position: sticky; top: 0; }
+th { background: rgba(var(--accent-rgb),0.06); color: var(--accent); padding: 6px 10px; text-align: left; font-weight: 600; position: sticky; top: 0; }
 td { padding: 5px 10px; border-bottom: 1px solid var(--border); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-tr:hover td { background: rgba(108,199,240,0.03); }
+tr:hover td { background: rgba(var(--accent-rgb),0.03); }
 .empty-state { color: var(--muted); text-align: center; padding: 40px 20px; font-size: 12px; font-style: italic; }
 .loading { color: var(--muted); font-size: 12px; padding: 20px; }
 .error-text { color: var(--red); font-size: 12px; }
 .mono { font-family: var(--mono); font-size: 11px; }
 .pre-box { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 12px; font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; color: var(--text); }
-.kv-row { display: flex; padding: 3px 0; border-bottom: 1px solid rgba(37,37,56,0.5); font-size: 11px; }
+.kv-row { display: flex; padding: 3px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); font-size: 11px; }
 .kv-key { color: var(--muted); width: 100px; flex-shrink: 0; }
 .kv-val { color: var(--text); word-break: break-all; }
 
@@ -119,22 +206,22 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 #graph-area { height: calc(100vh - 130px); position: relative; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
 #graph-viz { width: 100%; height: 100%; }
 .graph-toolbar { position: absolute; top: 8px; left: 8px; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; }
-.graph-toolbar input, .graph-toolbar select { padding: 5px 8px; background: rgba(19,19,31,0.95); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 11px; font-family: var(--font); }
+.graph-toolbar input, .graph-toolbar select { padding: 5px 8px; background: var(--glass); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 11px; font-family: var(--font); }
 .graph-toolbar input { width: 240px; }
 .graph-toolbar input:focus, .graph-toolbar select:focus { outline: none; border-color: var(--accent); }
-.legend-box { position: absolute; bottom: 8px; left: 8px; background: rgba(19,19,31,0.94); padding: 6px 10px; border-radius: 5px; font-size: 10px; max-height: 280px; overflow-y: auto; z-index: 5; }
+.legend-box { position: absolute; bottom: 8px; left: 8px; background: var(--glass); padding: 6px 10px; border-radius: 5px; font-size: 11px; max-height: 280px; overflow-y: auto; z-index: 5; }
 .legend-item { display: flex; align-items: center; margin: 2px 0; gap: 5px; }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
 /* ── Query panel ── */
-.query-editor-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
-#query-editor { border: 1px solid #3a3a52; border-radius: 8px; overflow: hidden; }
-#query-editor:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(108,199,240,0.12); }
-#query-editor .cm-editor { background: #0d0d1a; border-radius: 8px; }
+.query-editor-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+#query-editor { border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+#query-editor:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb),0.12); }
+#query-editor .cm-editor { background: var(--code-bg); border-radius: 8px; }
 #query-editor .cm-editor .cm-scroller { font-family: var(--mono); font-size: 13px; line-height: 1.6; }
 #query-editor .cm-editor .cm-content { padding: 8px 0; }
-#query-editor .cm-editor .cm-gutters { background: #0a0a18; border-right: 1px solid #252540; color: #4a4a60; }
-#query-editor .cm-editor .cm-activeLineGutter { background: rgba(108,199,240,0.06); }
+#query-editor .cm-editor .cm-gutters { background: var(--code-gutter); border-right: 1px solid var(--border); color: var(--muted); }
+#query-editor .cm-editor .cm-activeLineGutter { background: rgba(var(--accent-rgb),0.06); }
 .query-toolbar { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
 #query-results { margin-top: 12px; max-height: 400px; overflow-y: auto; }
 
@@ -142,11 +229,11 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .explorer-layout { display: flex; gap: 12px; height: calc(100vh - 130px); }
 .explorer-tree { width: 280px; min-width: 280px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow-y: auto; padding: 8px 0; }
 .explorer-tree .tree-item { padding: 5px 12px 5px 20px; cursor: pointer; font-size: 11px; color: var(--text); display: flex; align-items: center; gap: 6px; border-left: 2px solid transparent; }
-.explorer-tree .tree-item:hover { background: rgba(108,199,240,0.05); }
-.explorer-tree .tree-item.selected { background: rgba(108,199,240,0.1); border-left-color: var(--accent); color: var(--accent); }
+.explorer-tree .tree-item:hover { background: rgba(var(--accent-rgb),0.05); }
+.explorer-tree .tree-item.selected { background: rgba(var(--accent-rgb),0.1); border-left-color: var(--accent); color: var(--accent); }
 .explorer-tree .tree-item.type-node { font-weight: 600; padding-left: 12px; font-size: 12px; }
-.explorer-tree .tree-item .count { margin-left: auto; color: var(--muted); font-size: 10px; }
-.explorer-tree .tree-header { padding: 6px 12px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.explorer-tree .tree-item .count { margin-left: auto; color: var(--muted); font-size: 11px; }
+.explorer-tree .tree-header { padding: 6px 12px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
 .explorer-tree .filter-bar { padding: 6px 8px; }
 .explorer-tree .filter-bar input { width: 100%; padding: 5px 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 11px; font-family: var(--font); }
 .explorer-tree .filter-bar input:focus { outline: none; border-color: var(--accent); }
@@ -159,7 +246,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .inspector-search input:focus { outline: none; border-color: var(--accent); }
 .inspector-search .suggestions { max-height: 300px; overflow-y: auto; }
 .inspector-search .suggest-item { padding: 6px 10px; cursor: pointer; font-size: 11px; border-radius: 4px; display: flex; justify-content: space-between; }
-.inspector-search .suggest-item:hover { background: rgba(108,199,240,0.08); }
+.inspector-search .suggest-item:hover { background: rgba(var(--accent-rgb),0.08); }
 .inspector-detail { flex: 1; overflow-y: auto; }
 .section-title { font-size: 11px; font-weight: 600; color: var(--accent); margin: 16px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.5px; }
 .section-title:first-child { margin-top: 0; }
@@ -168,9 +255,115 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 .admin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
 .metric-big { font-size: 28px; font-weight: 700; color: var(--accent); }
 .metric-label { font-size: 11px; color: var(--muted); }
+
+/* ── Tenant context ── */
+.header-spacer { flex: 1; }
+.tenant-ctx { font-size: 12px; color: var(--muted); }
+#tenant-context { padding: 5px 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 5px; font-size: 12px; font-family: var(--font); max-width: 200px; }
+
+/* ── Command palette ── */
+#palette-backdrop { position: fixed; inset: 0; background: var(--scrim); z-index: 280; }
+#palette-backdrop[hidden], #palette[hidden] { display: none; }
+#palette { position: fixed; top: 14vh; left: 50%; transform: translateX(-50%); width: min(620px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 24px 80px rgba(0,0,0,0.6); z-index: 290; overflow: hidden; }
+#palette-input { width: 100%; padding: 14px 16px; background: var(--bg); border: none; border-bottom: 1px solid var(--border); color: var(--text); font-size: 15px; font-family: var(--font); }
+#palette-input:focus-visible { outline: none; box-shadow: inset 0 -2px 0 var(--accent); }
+#palette-list { list-style: none; max-height: min(52vh, 420px); overflow-y: auto; padding: 6px; }
+#palette-list li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+#palette-list li[aria-selected="true"] { background: rgba(var(--accent-rgb),0.16); color: var(--text-strong); }
+#palette-list li:hover { background: rgba(var(--accent-rgb),0.09); }
+.pal-hint { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
+#palette-list li.pal-empty { cursor: default; color: var(--muted); justify-content: center; }
+
+/* ── Results ── */
+.res-bar { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.res-count { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.res-note { font-size: 12px; color: var(--orange); margin-top: 4px; }
+.th-btn { all: unset; cursor: pointer; display: inline-flex; gap: 4px; align-items: center; color: inherit; font: inherit; font-weight: 600; }
+.th-btn:hover { text-decoration: underline; }
+th[aria-sort="ascending"], th[aria-sort="descending"] { background: rgba(var(--accent-rgb),0.14); }
+td a { text-decoration: none; }
+td a:hover { text-decoration: underline; }
+
+/* ── Query library ── */
+#query-library summary { cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.lib-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.lib-row input { flex: 1; padding: 7px 10px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 5px; font-size: 13px; font-family: var(--font); }
+.lib-head { justify-content: space-between; margin-top: 14px; }
+.lib-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+.lib-item { display: flex; align-items: center; gap: 4px; }
+.lib-load { flex: 1; text-align: left; padding: 6px 8px; background: none; border: 1px solid transparent; border-radius: 5px; color: var(--text); font-size: 13px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font); }
+.lib-load:hover { background: rgba(var(--accent-rgb),0.08); border-color: var(--border); }
+.lib-when { color: var(--muted); font-size: 11px; margin-left: 8px; }
+
+/* ── Notifications ── */
+#toasts { position: fixed; right: 16px; bottom: 36px; z-index: 250; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); }
+.toast { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,0.4); }
+.toast-success { border-left-color: var(--green); }
+.toast-error { border-left-color: var(--red); }
+.toast span { flex: 1; word-break: break-word; }
+.toast-x { background: none; border: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.toast-x:hover { color: var(--text); }
+
+/* ── Accessibility & orientation ── */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.skip { position: fixed; top: -48px; left: 8px; z-index: 300; padding: 8px 14px; background: var(--accent); color: var(--on-accent); border: none; border-radius: 0 0 6px 6px; font-weight: 600; font-size: 12px; cursor: pointer; }
+.skip:focus { top: 0; }
+#panel-title:focus { outline: none; }
+/* wide screens: the rail is always a labelled sidebar, never icons you must hover to decode */
+@media (min-width: 1100px) {
+  #sidebar { width: 200px; min-width: 200px; align-items: stretch; }
+  #sidebar .logo { padding-left: 14px; }
+  #sidebar .logo-text, #sidebar .nav-group { display: inline-block; margin-left: 10px; }
+  #sidebar .nav-group { display: block; margin-left: 0; }
+  #sidebar nav button .lbl { opacity: 1; }
+  #sidebar .user-badge { font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+/* ── Phones: the navigation is a drawer ── */
+#nav-toggle { display: none; }
+@media (max-width: 799px) {
+  #nav-toggle { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; background: var(--btn-sec); color: var(--text); border: none; border-radius: 6px; font-size: 18px; cursor: pointer; }
+  #sidebar, #sidebar:hover, #sidebar:has(:focus-visible) { position: fixed; left: 0; top: 0; bottom: 0; width: 280px; min-width: 280px; align-items: stretch; transform: translateX(-104%); visibility: hidden; transition: transform 0.18s, visibility 0s 0.18s; z-index: 230; box-shadow: 8px 0 32px rgba(0,0,0,0.45); overflow-y: auto; }
+  #app.nav-open #sidebar { transform: none; visibility: visible; transition: transform 0.18s; }
+  #sidebar .logo { padding-left: 14px; }
+  #sidebar .logo-text { display: inline-block; margin-left: 10px; }
+  #sidebar .nav-group { display: block; margin-left: 0; }
+  #sidebar nav button .lbl { opacity: 1; }
+  #sidebar .user-badge { font-size: 12px; }
+  #nav-backdrop { position: fixed; inset: 0; background: var(--scrim); z-index: 225; }
+  #nav-backdrop[hidden] { display: none; }
+  #main { width: 100%; }
+  #panel-header { flex-wrap: wrap; padding: 8px 12px; gap: 8px; }
+  #panel-content { padding: 12px; }
+  .card { overflow-x: auto; }
+  .input-row, .query-toolbar, .res-bar, .lib-row { flex-wrap: wrap; }
+  .btn { min-height: 40px; }
+  /* !important: panel rules such as .lib-row input are more specific, and a phone zooms into anything under 16px */
+  input, select, textarea { font-size: 16px !important; min-height: 40px; }
+  /* a table wider than the screen scrolls inside the page; it never widens the page */
+  #panel-content table { display: block; max-width: 100%; overflow-x: auto; }
+  #tenant-context { max-width: 150px; }
+  .login-card { width: min(380px, calc(100vw - 32px)); padding: 28px 22px; }
+  #graph-area { height: calc(100dvh - 200px); min-height: 320px; }
+  .graph-toolbar input { width: 150px; }
+  #palette { top: 6vh; }
+  .query-editor-label span + span { display: none; }   /* the keyboard-shortcut hint means nothing on a touch screen */
+  .header-spacer { flex-basis: 100%; height: 0; }
+  #toasts { left: 12px; right: 12px; max-width: none; }
+}
 </style>
 </head>
 <body>
+<button class="skip" data-click="skipToContent">Skip to content</button>
+<div id="toasts" role="region" aria-label="Notifications" aria-live="polite"></div>
+<div id="nav-backdrop" data-click="closeNav" hidden></div>
+<div id="palette-backdrop" data-click="closePalette" hidden></div>
+<div id="palette" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
+  <input id="palette-input" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" aria-label="Type a command" placeholder="Type a command or search…  (↑ ↓ to move · Enter to run · Esc to close)" autocomplete="off" spellcheck="false">
+  <ul id="palette-list" role="listbox" aria-label="Commands"></ul>
+</div>
 
 <!-- ── Login ── -->
 <div id="login-overlay">
@@ -190,7 +383,8 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 <div id="app">
   <div id="sidebar">
     <div class="logo">🧠<span class="logo-text">aikoql</span></div>
-    <nav>
+    <nav aria-label="Main" role="navigation">
+      <div class="nav-group" role="presentation">Work</div>
       <button class="active" data-panel="query" title="Query Editor">
         <span class="ico">⌨</span><span class="lbl">Query Editor</span>
       </button>
@@ -209,15 +403,26 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <button data-panel="ontology" title="Ontology">
         <span class="ico">🦉</span><span class="lbl">Ontology</span>
       </button>
-      <button data-panel="admin" title="Administration">
-        <span class="ico">⚙</span><span class="lbl">Admin</span>
+      <button data-panel="sources" title="Data Sources — discover external schemas">
+        <span class="ico">🗄️</span><span class="lbl">Data Sources</span>
       </button>
+      <button data-panel="documents" title="Document Explorer">
+        <span class="ico">📄</span><span class="lbl">Documents</span>
+      </button>
+      <button data-panel="ask" title="Ask — grounded answers from your knowledge">
+        <span class="ico">💬</span><span class="lbl">Ask</span>
+      </button>
+      <div class="nav-group" role="presentation">Govern</div>
       <button data-panel="timeline" title="Timeline — MVCC time travel">
         <span class="ico">⏳</span><span class="lbl">Timeline</span>
       </button>
       <button data-panel="provenance" title="Provenance — cryptographic audit chain">
         <span class="ico">🔗</span><span class="lbl">Provenance</span>
       </button>
+      <button data-panel="admin" title="Administration">
+        <span class="ico">⚙</span><span class="lbl">Admin</span>
+      </button>
+      <div class="nav-group" role="presentation">Tune</div>
       <button data-panel="debugger" title="Program Debugger">
         <span class="ico">🐛</span><span class="lbl">Debugger</span>
       </button>
@@ -230,14 +435,6 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <button data-panel="providers" title="Provider Manager">
         <span class="ico">🔌</span><span class="lbl">Providers</span>
       </button>
-      <button data-panel="documents" title="Document Explorer">
-        <span class="ico">📄</span><span class="lbl">Documents</span>
-      </button>
-      <button data-panel="sources" title="Data Sources — discover external schemas">
-        <span class="ico">🗄️</span><span class="lbl">Data Sources</span>
-      <button data-panel="ask" title="Ask — grounded answers from your knowledge">
-        <span class="ico">💬</span><span class="lbl">Ask</span>
-      </button>
     </nav>
     <div class="user-area">
       <div class="user-badge" data-click="logout" id="user-badge">―</div>
@@ -245,8 +442,13 @@ tr:hover td { background: rgba(108,199,240,0.03); }
   </div>
   <div id="main">
     <div id="panel-header">
+      <button id="nav-toggle" data-click="toggleNav" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">☰</button>
       <h2 id="panel-title">Query Editor</h2>
       <span class="breadcrumb" id="panel-breadcrumb"></span>
+      <span class="header-spacer"></span>
+      <label class="tenant-ctx" for="tenant-context">Tenant</label>
+      <select id="tenant-context" data-change="setTenantContext" aria-label="Working tenant — applies to every panel"><option value="">Each panel’s default</option></select>
+      <button id="theme-toggle" class="btn btn-sec btn-sm" data-click="cycleTheme" aria-label="Theme: automatic, follows your system. Activate to change.">◐ Auto</button>
     </div>
     <div id="panel-content">
 
@@ -268,6 +470,16 @@ tr:hover td { background: rgba(108,199,240,0.03); }
           </div>
         </div>
         <div id="query-results"></div>
+        <details class="card" id="query-library" open>
+          <summary>Saved &amp; recent queries</summary>
+          <div class="lib-row">
+            <input id="query-save-name" aria-label="Name for the saved query" placeholder="Name this query, then Save (Ctrl/Cmd+S)" maxlength="60" autocomplete="off">
+            <button class="btn btn-sec btn-sm" data-click="saveQuery">Save</button>
+          </div>
+          <div id="query-saved" class="lib-list"></div>
+          <div class="lib-row lib-head"><strong>Recent</strong><button class="btn btn-sec btn-sm" data-click="clearHistory">Clear</button></div>
+          <div id="query-history" class="lib-list"></div>
+        </details>
       </div>
 
       <!-- ── Knowledge Graph ── -->
@@ -1225,6 +1437,597 @@ mod tests {
         assert!(
             page.contains("properties: (s.properties || [])"),
             "applying sends the accepted property alignments"
+        );
+    }
+
+    // ---- E1: accessible, labelled, routable navigation (docs/STUDIO-ENHANCEMENTS.md) ----
+
+    fn css_color(name: &str) -> (f64, f64, f64) {
+        let page = page_for_tests();
+        let i = page
+            .find(&format!("{name}: #"))
+            .unwrap_or_else(|| panic!("no {name}"));
+        let hex = &page[i + name.len() + 3..i + name.len() + 9];
+        let c = |k: usize| f64::from(u8::from_str_radix(&hex[k..k + 2], 16).unwrap()) / 255.0;
+        (c(0), c(2), c(4))
+    }
+
+    fn luminance((r, g, b): (f64, f64, f64)) -> f64 {
+        let f = |c: f64| {
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+    }
+
+    fn contrast(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
+        let (la, lb) = (luminance(a), luminance(b));
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    #[test]
+    fn secondary_text_meets_wcag_aa_on_the_page_and_on_cards() {
+        for bg in ["--bg", "--panel"] {
+            for fg in ["--muted", "--text", "--accent"] {
+                let c = contrast(css_color(fg), css_color(bg));
+                assert!(c >= 4.5, "{fg} on {bg} is {c:.2}:1, below WCAG AA (4.5)");
+            }
+        }
+    }
+
+    #[test]
+    fn navigation_is_a_labelled_landmark_whose_buttons_are_all_closed_and_named() {
+        let page = page_for_tests();
+        assert!(
+            page.contains("<nav aria-label=\"Main\""),
+            "the rail must be a named navigation landmark"
+        );
+        let start = page.find("<nav").unwrap();
+        let nav = &page[start..start + page[start..].find("</nav>").unwrap()];
+        let (open, close) = (
+            nav.matches("<button").count(),
+            nav.matches("</button>").count(),
+        );
+        assert_eq!(
+            open, close,
+            "an unclosed <button> in the navigation (the Data Sources entry was one)"
+        );
+        assert!(open >= 16, "{open} nav buttons");
+        for b in nav.split("<button").skip(1) {
+            assert!(b.contains("data-panel=\""), "{b}");
+            assert!(
+                b.contains("class=\"lbl\""),
+                "every entry has a visible text label, not only an icon: {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_page_is_keyboard_and_motion_friendly() {
+        let page = page_for_tests();
+        assert!(page.contains(":focus-visible"), "a visible focus ring");
+        assert!(
+            page.contains("prefers-reduced-motion"),
+            "reduced motion is honoured"
+        );
+        assert!(
+            page.contains("data-click=\"skipToContent\""),
+            "a skip-to-content control"
+        );
+        assert!(
+            page.contains("#sidebar:has(:focus-visible)"),
+            "labels appear on keyboard focus, not only on hover"
+        );
+    }
+
+    #[test]
+    fn panels_are_routable() {
+        let page = page_for_tests();
+        for needle in ["hashchange", "'#/' +", "aria-current", "document.title"] {
+            assert!(page.contains(needle), "router piece missing: {needle}");
+        }
+        // an SSO hand-off puts #token=... in the hash: the router must leave it alone
+        assert!(
+            page.contains("^#\\/") || page.contains("startsWith('#/')"),
+            "the router must only claim #/panel hashes"
+        );
+    }
+
+    // ---- E3: one request helper; toasts (docs/STUDIO-ENHANCEMENTS.md) ----
+
+    fn js_fn(name: &str) -> String {
+        let page = page_for_tests();
+        let i = page.find(name).unwrap_or_else(|| panic!("no {name}"));
+        let rest = &page[i + name.len()..];
+        let end = rest
+            .find("\nasync function ")
+            .min(rest.find("\nfunction "))
+            .unwrap_or(rest.len());
+        rest[..end].to_string()
+    }
+
+    #[test]
+    fn every_http_verb_shares_one_request_helper_that_handles_session_expiry() {
+        let page = page_for_tests();
+        assert!(page.contains("async function request(method, url, body)"));
+        let request = js_fn("async function request(method, url, body)");
+        assert!(
+            request.contains("res.status === 401") && request.contains("showLogin()"),
+            "401 must return to sign-in for EVERY verb"
+        );
+        assert!(
+            request.contains("X-Aikoql-Csrf") || request.contains("authHeaders("),
+            "CSRF header on every request"
+        );
+        for (name, verb) in [
+            ("async function api(", "GET"),
+            ("async function apiPost(", "POST"),
+            ("async function apiPut(", "PUT"),
+        ] {
+            let body = js_fn(name);
+            assert!(
+                body.contains(&format!("request('{verb}'")),
+                "{name} must delegate to request: {body}"
+            );
+            assert!(
+                !body.contains("fetch("),
+                "{name} must not duplicate the transport"
+            );
+        }
+    }
+
+    #[test]
+    fn notifications_are_a_polite_live_region_with_alerts_for_errors() {
+        let page = page_for_tests();
+        assert!(
+            page.contains("id=\"toasts\"") && page.contains("aria-live=\"polite\""),
+            "a live region"
+        );
+        let toast = js_fn("function toast(kind, text");
+        assert!(
+            toast.contains("'alert'") && toast.contains("'status'"),
+            "errors are alerts, the rest status"
+        );
+        assert!(
+            toast.contains("textContent"),
+            "toast text is set as text, never markup"
+        );
+        assert!(
+            page.contains("\n  dismissToast:"),
+            "dismiss goes through the allowlist"
+        );
+        assert!(page.contains("aria-label"), "the dismiss control is named");
+    }
+
+    // ---- E2/E6: truthful persistence, saved queries and history ----
+
+    #[test]
+    fn nothing_claims_to_save_what_it_does_not_store() {
+        let page = page_for_tests();
+        assert!(
+            !page.contains("auto-saved"),
+            "the old Ctrl+S message claimed a save that stored nothing"
+        );
+        let store = js_fn("const store = ");
+        assert!(
+            store.contains("localStorage") && store.contains("catch"),
+            "storage is guarded: it can throw or be absent"
+        );
+        assert!(
+            page.contains("'aikoql.studio.' + (currentUser"),
+            "stored per signed-in user, not shared across people on one browser"
+        );
+    }
+
+    #[test]
+    fn the_query_panel_has_a_saved_and_recent_library_reachable_through_the_allowlist() {
+        let page = page_for_tests();
+        for id in [
+            "id=\"query-library\"",
+            "id=\"query-save-name\"",
+            "id=\"query-saved\"",
+            "id=\"query-history\"",
+        ] {
+            assert!(page.contains(id), "missing {id}");
+        }
+        for action in ["saveQuery", "loadQuery", "deleteSaved", "clearHistory"] {
+            assert!(
+                page.contains(&format!("\n  {action}:")),
+                "{action} not in ACTIONS"
+            );
+        }
+        assert!(
+            page.contains("aria-label=\"Name for the saved query\""),
+            "the name input has a label, not only a placeholder"
+        );
+        // saving is a keyboard gesture on both platforms
+        assert!(page.contains("(e.ctrlKey || e.metaKey) && e.key === 's'"));
+    }
+
+    // ---- E4: one results table that can be sorted, copied and exported ----
+
+    #[test]
+    fn query_results_use_one_shared_table_component() {
+        let page = page_for_tests();
+        for needle in [
+            "function renderResults(",
+            "function resultsToCsv(",
+            "function cellText(",
+        ] {
+            assert!(page.contains(needle), "missing {needle}");
+        }
+        for action in ["sortResults", "copyResults", "downloadResults"] {
+            assert!(
+                page.contains(&format!("\n  {action}:")),
+                "{action} not in ACTIONS"
+            );
+        }
+        let run = js_fn("async function runQuery()");
+        assert!(
+            run.contains("renderResults("),
+            "runQuery must use the shared component"
+        );
+        assert!(
+            !run.contains("<table>"),
+            "runQuery must not build its own table any more"
+        );
+        let table = js_fn("function tableHtml(");
+        assert!(
+            table.contains("aria-sort"),
+            "sortable headers announce their state"
+        );
+        assert!(
+            table.contains("data-click=\"openInInspector\""),
+            "a row opens its object in the Inspector"
+        );
+    }
+
+    // ---- E5: command palette ----
+
+    #[test]
+    fn the_command_palette_is_a_modal_combobox_with_a_keyboard_contract() {
+        let page = page_for_tests();
+        for needle in [
+            "id=\"palette\"",
+            "role=\"dialog\"",
+            "aria-modal=\"true\"",
+            "role=\"combobox\"",
+            "role=\"listbox\"",
+            "aria-activedescendant",
+            "id=\"palette-backdrop\"",
+        ] {
+            assert!(page.contains(needle), "palette markup missing {needle}");
+        }
+        for action in ["closePalette", "paletteRun"] {
+            assert!(
+                page.contains(&format!("\n  {action}:")),
+                "{action} not in ACTIONS"
+            );
+        }
+        assert!(
+            page.contains("(e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k'"),
+            "Ctrl/Cmd+K opens it"
+        );
+        let keys = js_fn("function paletteKey(");
+        for k in ["'Escape'", "'ArrowDown'", "'ArrowUp'", "'Enter'"] {
+            assert!(keys.contains(k), "palette key {k} unhandled");
+        }
+        let close = js_fn("function closePalette(");
+        assert!(
+            close.contains("lastFocus"),
+            "closing returns focus to where it was"
+        );
+        assert!(
+            keys.contains("closePalette()"),
+            "Escape closes through the one close path"
+        );
+        // the backdrop is a SIBLING that precedes the dialog: a click inside the
+        // dialog must not close it
+        let (backdrop, dialog) = (
+            page.find("id=\"palette-backdrop\"").unwrap(),
+            page.find("id=\"palette\"").unwrap(),
+        );
+        assert!(backdrop < dialog, "backdrop precedes the dialog");
+        let between = &page[backdrop..dialog];
+        assert!(
+            between.contains("</div>"),
+            "the backdrop element is closed before the dialog opens (not nested inside it)"
+        );
+    }
+
+    // ---- P1: one working tenant ----
+
+    #[test]
+    fn one_header_selector_sets_the_tenant_of_every_panel() {
+        let page = page_for_tests();
+        assert!(
+            page.contains("id=\"tenant-context\""),
+            "the header tenant selector"
+        );
+        assert!(
+            page.contains("aria-label=\"Working tenant"),
+            "it has an accessible name"
+        );
+        assert!(
+            page.contains("\n  setTenantContext:"),
+            "reachable through the allowlist"
+        );
+        let apply = js_fn("function applyTenantContext(");
+        for id in [
+            "query-tenant",
+            "ontology-tenant",
+            "sources-tenant",
+            "ask-tenant",
+            "graph-tenant",
+        ] {
+            assert!(page.contains(&format!("id=\"{id}\"")), "{id} still exists");
+            assert!(
+                page.contains(&format!("'{id}'")),
+                "{id} is driven by the context"
+            );
+        }
+        assert!(
+            apply.contains("tenant-context"),
+            "the header selector mirrors the context"
+        );
+        assert!(
+            page.contains("store.set('tenant'"),
+            "the choice is remembered"
+        );
+        // one-way: a panel's own selector must never rewrite the working tenant (a view
+        // filter silently re-pointing another panel's writes)
+        assert!(
+            !page.contains("TENANT_SELECTS.includes(e.target.id)"),
+            "panel selectors must not feed back into the working tenant"
+        );
+    }
+
+    // ---- P1: light theme ----
+
+    /// The CSS between `<style>` and `</style>`.
+    fn studio_css() -> &'static str {
+        let page = page_for_tests();
+        &page[page.find("<style>").unwrap()..page.find("</style>").unwrap()]
+    }
+
+    /// `--name: #rrggbb` tokens declared inside the first `{ ... }` after `selector`.
+    fn tokens_of(selector: &str) -> std::collections::BTreeMap<String, (f64, f64, f64)> {
+        let css = studio_css();
+        let at = css
+            .find(selector)
+            .unwrap_or_else(|| panic!("no {selector}"));
+        let open = at + css[at..].find('{').unwrap() + 1;
+        let block = &css[open..open + css[open..].find('}').unwrap()];
+        let mut out = std::collections::BTreeMap::new();
+        for decl in block.split(';') {
+            if let Some((k, v)) = decl.split_once(':') {
+                let (k, v) = (k.trim(), v.trim());
+                if k.starts_with("--") && v.len() == 7 && v.starts_with('#') {
+                    let c =
+                        |i: usize| f64::from(u8::from_str_radix(&v[i..i + 2], 16).unwrap()) / 255.0;
+                    out.insert(k.to_string(), (c(1), c(3), c(5)));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_light_theme_exists_and_applies_by_system_preference_and_by_choice() {
+        let css = studio_css();
+        assert!(
+            css.contains(":root[data-theme=\"light\"]"),
+            "an explicit light theme"
+        );
+        assert!(
+            css.contains("@media (prefers-color-scheme: light)"),
+            "light follows the system"
+        );
+        assert!(
+            css.contains(":root:not([data-theme=\"dark\"])"),
+            "an explicit dark choice beats a light system"
+        );
+        assert!(
+            css.contains("color-scheme"),
+            "native controls and scrollbars follow the theme"
+        );
+        let page = page_for_tests();
+        assert!(
+            page.contains("id=\"theme-toggle\""),
+            "a visible theme control"
+        );
+        assert!(
+            page.contains("\n  cycleTheme:"),
+            "reachable through the allowlist"
+        );
+        for f in [
+            "function applyTheme(",
+            "function cycleTheme(",
+            "function effectiveDark(",
+        ] {
+            assert!(page.contains(f), "{f}");
+        }
+        // the saved choice is applied before first paint, by the blocking head script
+        assert!(
+            EDITOR_JS.contains("aikoql.studio.theme"),
+            "no dark flash for a light-theme user"
+        );
+        assert!(
+            !EDITOR_JS.contains("aikoql-query-history"),
+            "the editor no longer keeps an unscoped, cross-user query history"
+        );
+    }
+
+    #[test]
+    fn every_color_token_has_a_light_value_and_both_palettes_meet_wcag_aa() {
+        let dark = tokens_of(":root {");
+        let light = tokens_of(":root[data-theme=\"light\"]");
+        assert!(dark.len() >= 10, "dark tokens parsed: {}", dark.len());
+        for k in dark.keys() {
+            assert!(light.contains_key(k), "the light theme does not define {k}");
+        }
+        for (name, palette) in [("dark", &dark), ("light", &light)] {
+            for bg in ["--bg", "--panel"] {
+                for fg in [
+                    "--text", "--muted", "--accent", "--green", "--red", "--purple", "--orange",
+                ] {
+                    let c = contrast(palette[fg], palette[bg]);
+                    assert!(
+                        c >= 4.5,
+                        "{name}: {fg} on {bg} is {c:.2}:1 (WCAG AA needs 4.5)"
+                    );
+                }
+            }
+            // text on the filled accent button
+            let c = contrast(palette["--on-accent"], palette["--accent"]);
+            assert!(c >= 4.5, "{name}: button label on accent is {c:.2}:1");
+        }
+    }
+
+    #[test]
+    fn no_color_is_hard_coded_outside_the_theme_blocks() {
+        // a hard-coded colour is a colour the light theme cannot change
+        let css = studio_css();
+        let (start, end) = (
+            css.find("/* theme:start */").unwrap(),
+            css.find("/* theme:end */").unwrap(),
+        );
+        let outside = format!("{}{}", &css[..start], &css[end..]);
+        let mut offenders = Vec::new();
+        for line in outside.lines() {
+            let t = line.trim();
+            let hex = t.match_indices('#').any(|(i, _)| {
+                let h: String = t[i + 1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_hexdigit())
+                    .collect();
+                matches!(h.len(), 3 | 6 | 8) && !t[..i].ends_with('&')
+            });
+            let rgba = t.contains("rgba(")
+                && !t.contains("rgba(var(--")
+                && !t.contains("rgba(0, 0, 0")
+                && !t.contains("rgba(0,0,0");
+            if hex || rgba {
+                offenders.push(t.chars().take(90).collect::<String>());
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "{} hard-coded colours:\n{}",
+            offenders.len(),
+            offenders.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_system_preference_block_cannot_drift_from_the_explicit_light_theme() {
+        let css = studio_css();
+        let media = css.find("@media (prefers-color-scheme: light)").unwrap();
+        let explicit = tokens_of(":root[data-theme=\"light\"]");
+        let auto = tokens_of(&css[media..][css[media..].find(":root:not").unwrap()..][..60]);
+        assert_eq!(
+            explicit, auto,
+            "the two light blocks must hold the same colours"
+        );
+    }
+
+    // ---- P1: responsive layout ----
+
+    #[test]
+    fn on_a_phone_the_navigation_is_a_drawer_with_a_named_toggle() {
+        let page = page_for_tests();
+        for needle in [
+            "id=\"nav-toggle\"",
+            "aria-controls=\"sidebar\"",
+            "aria-expanded=\"false\"",
+            "id=\"nav-backdrop\"",
+            "@media (max-width: 799px)",
+            "#app.nav-open #sidebar",
+        ] {
+            assert!(page.contains(needle), "missing {needle}");
+        }
+        for action in ["toggleNav", "closeNav"] {
+            assert!(
+                page.contains(&format!("\n  {action}:")),
+                "{action} not in ACTIONS"
+            );
+        }
+        let css = studio_css();
+        let small = &css[css.find("@media (max-width: 799px)").unwrap()..];
+        assert!(
+            small.contains("visibility: hidden"),
+            "a closed drawer must leave the tab order"
+        );
+        assert!(
+            small.contains("min-height: 40px"),
+            "touch targets are at least 40px"
+        );
+        assert!(
+            small.contains("font-size: 16px"),
+            "inputs are 16px so a phone does not zoom on focus"
+        );
+        // a flex child defaults to min-width:auto and would let wide content push the page sideways
+        assert!(
+            css.contains("#main { flex: 1; min-width: 0;") || css.contains("min-width: 0"),
+            "main may shrink"
+        );
+        let close = js_fn("function closeNav(");
+        assert!(
+            close.contains("nav-toggle") && close.contains("focus"),
+            "closing returns focus to the toggle"
+        );
+        assert!(
+            js_fn("function switchPanel(").contains("closeNav"),
+            "choosing a panel closes the drawer"
+        );
+    }
+
+    // ---- polish found by looking at screenshots ----
+
+    #[test]
+    fn the_navigation_scrolls_so_every_entry_is_reachable_on_a_short_window() {
+        let css = studio_css();
+        let at = css.find("#sidebar nav {").expect("the nav rule");
+        let rule = &css[at..at + css[at..].find('}').unwrap()];
+        assert!(
+            rule.contains("overflow-y: auto") && rule.contains("min-height: 0"),
+            "{rule}"
+        );
+    }
+
+    #[test]
+    fn a_destructive_palette_command_needs_more_than_a_letter() {
+        let page = page_for_tests();
+        assert!(page.contains("risky: true"), "Sign out is marked risky");
+        let render = js_fn("function renderPalette(");
+        assert!(
+            render.contains("risky"),
+            "the palette filters risky commands by query length"
+        );
+    }
+
+    #[test]
+    fn plain_form_controls_follow_the_theme_and_long_hints_do_not_collide() {
+        let css = studio_css();
+        assert!(
+            css.contains("\nselect {") || css.contains("\nselect, "),
+            "bare <select>s are styled by the theme"
+        );
+        assert!(
+            css.contains(".query-editor-label { ") && css.contains("flex-wrap: wrap"),
+            "the label row wraps"
+        );
+        let small = &css[css.find("@media (max-width: 799px)").unwrap()..];
+        assert!(
+            small.contains(".query-editor-label span + span { display: none; }"),
+            "the keyboard hint is hidden on touch screens"
+        );
+        assert!(
+            small.contains(".header-spacer { flex-basis: 100%"),
+            "the header breaks into a tidy second row"
         );
     }
 
