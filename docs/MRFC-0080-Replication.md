@@ -630,8 +630,8 @@ R5c limits:
 ## Planned stop — the lease is released (PROD-3) ✅
 
 A leader that dies is detected by silence: the standby waits a full TTL.
-A leader that stops on purpose (SIGTERM, Ctrl-C, the `shutdown` method,
-stdin EOF) says so:
+A leader that stops on purpose (SIGTERM, Ctrl-C, the `shutdown` method
+over stdio, TCP or the native protocol, stdin EOF) says so:
 
 1. the accept loops stop and client writes are fenced in the engine —
    nothing is acknowledged from here on;
