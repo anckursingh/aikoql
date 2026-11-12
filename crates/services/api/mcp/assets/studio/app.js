@@ -740,7 +740,8 @@ async function renderGraphBanner(data) {
   }
   const sel = document.getElementById('graph-document');
   try {
-    const docs = ((await api('/api/v1/list-documents')).documents || []).filter(d => d.graph && d.graph.status === 'saved');
+    const listed = await api('/api/v1/list-documents');
+    const docs = (listed.documents || (listed.data || {}).documents || []).filter(d => d.graph && d.graph.status === 'saved');
     let o = '<option value="">All objects (documents hidden)</option>';
     docs.forEach(d => { o += '<option value="'+esc(d.koid)+'"'+esc(graphDocView && graphDocView.koid === d.koid ? ' selected' : '')+'>'+esc(d.filename)+'</option>'; });
     sel.innerHTML = o;
@@ -768,6 +769,11 @@ async function loadGraph() {
     graphRawData = data;
     typeColors={}; colorIdx=0;
     graphNodes.clear(); graphEdges.clear();
+    // a dense view (a saved document's page) is drawn small, labelled on its hubs only, without edge labels:
+    // everything is still in the tooltip, the Inspector and Browse all
+    const dense = data.nodes.length > 80;
+    const degrees = data.nodes.map(n => n.edge_count || 0).sort((a, b) => b - a);
+    const labelMin = dense ? (degrees[Math.min(24, degrees.length - 1)] || 0) : 0;
     const nodes = data.nodes.map(n => {
       // S-1 (POC-4): retracted rows keep lifecycle.state "draft" — style from
       // the epistemic extension: superseded → dashed hollow circle + muted
@@ -775,19 +781,19 @@ async function loadGraph() {
       const es = n.extensions&&n.extensions.epistemic_status;
       const superseded = es==='superseded';
       return {
-        id: n.koid, label: (n.label||n.type_name)+(n.tenant?'\n@'+n.tenant:''),
+        id: n.koid, label: (dense && (n.edge_count || 0) < labelMin && n.type_name !== 'aikoql:document') ? '' : (n.label||n.type_name)+(n.tenant?'\n@'+n.tenant:''),
         title: nodeTip(n, es),
         color: superseded
           ? {background:'#3d3d4a',border:'#8a8a99',highlight:{background:'#4a4a58',border:'#fff'}}
           : {background:colorFor(n.type_name),border:(n.tenant?'#b89ae0':'#252538'),highlight:{background:colorFor(n.type_name),border:'#fff'}},
         shape: superseded?'circle':'dot',
         shapeProperties: superseded?{borderDashes:[4,3]}:{},
-        size: n.size||20, borderWidth: superseded?2.5:(n.tenant?2.5:(n.edge_count>2?3:1.5)),
+        size: dense ? (n.type_name === 'aikoql:document' ? 24 : Math.min(16, 5 + (n.edge_count || 0) / 5)) : (n.size||20), borderWidth: superseded?2.5:(n.tenant?2.5:(n.edge_count>2?3:1.5)),
         font: {size:Math.max(9,Math.min(13,(n.size||20)/2+3))},
       };
     });
     graphNodes.add(nodes);
-    const edges = (data.edges||[]).map(e => ({from:e.source,to:e.target,label:e.rel_type,arrows:'to',color:{color:cssVar('--border-strong'),highlight:cssVar('--accent')},font:{size:9,color:cssVar('--muted')},width:1.2}));
+    const edges = (data.edges||[]).map(e => ({from:e.source,to:e.target,label:((data.edges||[]).length > 150 ? undefined : e.rel_type),arrows:'to',color:{color:cssVar('--border-strong'),highlight:cssVar('--accent')},font:{size:9,color:cssVar('--muted')},width:((data.edges||[]).length > 150 ? 0.5 : 1.2)}));
     // S-2 (POC-4): supersede-with-retract (B3-3) leaves no SUPERSEDES edge —
     // derive virtual "retracts" edges: the superseded row's successor shares
     // tenant + case_id + kind and asserts valid_from == the predecessor's
@@ -1833,6 +1839,7 @@ function kbCell(doc) {
     else h += '<span class="badge badge-orange">incomplete</span>';
     h += '<div class="mono" style="font-size:10px;margin-top:3px;max-width:340px;">'+esc(kbCounts(m))+'</div>';
     (m.gaps || []).forEach(gap => { h += '<div style="font-size:10px;color:var(--orange);">'+esc(gap)+'</div>'; });
+    if ((m.supplemented_pages || []).length) h += '<div style="font-size:10px;color:var(--muted);">The compiler made no chunk for page '+esc(m.supplemented_pages.join(', '))+' (image text); one was added so its text is searchable.</div>';
     h += '<div style="margin-top:4px;">'
       + '<button class="btn btn-sec btn-sm" data-click="viewDocumentGraph" data-koid="'+esc(doc.koid)+'">View graph</button> '
       + '<button class="btn btn-sec btn-sm" data-click="browseDocument" data-koid="'+esc(doc.koid)+'">Browse all</button> '

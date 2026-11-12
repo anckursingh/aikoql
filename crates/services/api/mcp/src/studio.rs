@@ -208,6 +208,8 @@ tr:hover td { background: rgba(var(--accent-rgb),0.03); }
 .graph-toolbar { position: absolute; top: 8px; left: 8px; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; }
 .graph-toolbar input, .graph-toolbar select { padding: 5px 8px; background: var(--glass); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 11px; font-family: var(--font); }
 .graph-toolbar input { width: 240px; }
+/* below the toolbar, over the canvas: it states what the drawing is a page of */
+#graph-banner { position: absolute; top: 44px; left: 8px; right: 8px; z-index: 4; padding: 8px; font-size: 12px; background: var(--glass); backdrop-filter: blur(4px); max-height: 38%; overflow: auto; }
 .graph-toolbar input:focus, .graph-toolbar select:focus { outline: none; border-color: var(--accent); }
 .legend-box { position: absolute; bottom: 8px; left: 8px; background: var(--glass); padding: 6px 10px; border-radius: 5px; font-size: 11px; max-height: 280px; overflow-y: auto; z-index: 5; }
 .legend-item { display: flex; align-items: center; margin: 2px 0; gap: 5px; }
@@ -490,9 +492,9 @@ td a:hover { text-decoration: underline; }
             <select id="graph-tenant" data-change="loadGraph"><option value="">All tenants</option></select>
             <button class="btn btn-pri btn-sm" data-click="loadGraph">Search</button>
             <button class="btn btn-sec btn-sm" data-click="loadGraphAll">View All</button>
+            <select id="graph-document" data-change="graphPickDocument" aria-label="Show one saved document" style="display:none;"></select>
           </div>
-          <div class="card" id="graph-banner" style="display:none;margin:6px 0;padding:8px;font-size:12px;" role="status"></div>
-          <select id="graph-document" data-change="graphPickDocument" aria-label="Show one saved document" style="display:none;margin:0 0 6px 0;"></select>
+          <div class="card" id="graph-banner" style="display:none;" role="status"></div>
           <div id="graph-viz"></div>
           <div class="legend-box" id="legend"></div>
         </div>

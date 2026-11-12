@@ -52,6 +52,7 @@ struct Plan {
     facts: usize,
     relations: usize,
     pages_without_chunks: usize,
+    supplemented_pages: Vec<u32>,
     merged: J,
 }
 
@@ -293,6 +294,42 @@ fn plan_objects(
             edges,
         });
     }
+    // A page with text that no chunk covers (an OCR'd image page, say) would be stored but could never
+    // be found by a chunk search: give it a chunk of its own, and say so in the manifest.
+    let mut supplemented: Vec<u32> = Vec::new();
+    for (i, p) in doc.pages.iter().enumerate() {
+        if p.text.chars().all(char::is_whitespace) || covered.contains(&p.page_number) {
+            continue;
+        }
+        let n = cr.embedded_chunks.len() + supplemented.len();
+        let koid = id("chunk", &format!("page-text:{i}:{}", p.page_number));
+        let mut props = BTreeMap::new();
+        base(&mut props, n);
+        props.insert(
+            "chunk_id".into(),
+            text(&format!("page-text/{}", p.page_number)),
+        );
+        props.insert("chunk_index".into(), int(n));
+        props.insert("start_page".into(), int(p.page_number as usize));
+        props.insert("end_page".into(), int(p.page_number as usize));
+        props.insert("char_offset".into(), int(0));
+        props.insert("text".into(), text(&p.text));
+        props.insert("char_count".into(), int(p.text.chars().count()));
+        props.insert("heading_path".into(), text(""));
+        props.insert("source_type".into(), text("page-text"));
+        let mut edges = vec![("part_of".to_string(), doc_koid)];
+        if let Some(pg) = page_ids.get(&p.page_number) {
+            edges.push(("on_page".into(), *pg));
+        }
+        objects.push(Obj {
+            ty: T_CHUNK,
+            koid,
+            props,
+            edges,
+        });
+        supplemented.push(p.page_number);
+        covered.insert(p.page_number);
+    }
     let pages_without_chunks = doc
         .pages
         .iter()
@@ -394,12 +431,13 @@ fn plan_objects(
     Plan {
         pages: doc.pages.len(),
         page_chars,
-        chunks: cr.embedded_chunks.len(),
+        chunks: cr.embedded_chunks.len() + supplemented.len(),
         fragments: cr.fragments.len(),
         entities: planned_entities,
         facts: cr.ir.facts.len(),
         relations,
         pages_without_chunks,
+        supplemented_pages: supplemented,
         merged,
         objects,
     }
@@ -565,6 +603,7 @@ pub(crate) fn commit_knowledge(
         "kinds": kinds.iter().map(|(n, p, s)| (n.to_string(), json!({"planned": p, "stored": s}))).collect::<serde_json::Map<_, _>>(),
         "page_chars": {"planned": plan.page_chars, "stored": stored_page_chars},
         "pages_without_chunks": plan.pages_without_chunks,
+        "supplemented_pages": plan.supplemented_pages,
         "failed_batches": failed_batches,
         "merged": plan.merged,
         "written": written,
@@ -1440,5 +1479,38 @@ mod tests {
             "{v}"
         );
         assert_eq!(v["manifest"]["complete"], true);
+    }
+
+    #[test]
+    fn a_page_the_compiler_left_out_of_every_chunk_gets_one_so_no_text_is_unreachable() {
+        let (k, doc) = (kernel(), document());
+        let mut cr = compiled(&doc);
+        // the compiler produced no chunk for page 5 (as happens for OCR'd image pages)
+        cr.embedded_chunks
+            .retain(|c| !(c.chunk.position.start_page <= 5 && c.chunk.position.end_page >= 5));
+        let ko = ingest(&k, None, "d6");
+        let m = save(&k, &ko, &doc, &cr);
+        assert_eq!(m["complete"], true, "{m}");
+        assert_eq!(
+            m["supplemented_pages"],
+            json!([5]),
+            "the gap is named, not hidden: {m}"
+        );
+        assert_eq!(m["pages_without_chunks"], 0, "{m}");
+        let chunk = live(&k, T_CHUNK, None)
+            .into_iter()
+            .find(|c| c.properties.get("source_type") == Some(&Value::Text("page-text".into())))
+            .expect("a supplemental chunk exists");
+        assert!(
+            matches!(chunk.properties.get("text"), Some(Value::Text(t)) if t.contains("Page 5.")),
+            "it carries the page's text"
+        );
+        assert_eq!(chunk.properties.get("start_page"), Some(&Value::Int(5)));
+        assert_eq!(
+            m["kinds"]["chunks"]["planned"], m["kinds"]["chunks"]["stored"],
+            "{m}"
+        );
+        // saving again is still a no-op
+        assert_eq!(save(&k, &ko, &doc, &cr)["written"], 0);
     }
 }
