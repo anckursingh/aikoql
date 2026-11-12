@@ -587,8 +587,8 @@ fn cbo010_plan_equivalence_oracle_green_over_cbo_scenarios() {
         q("MATCH Person WHERE name == \"P042\" RETURN *"), // index-assisted
         q("MATCH Person WHERE dept == \"Eng\" RETURN *"),  // full scan
         q("MATCH Person RETURN *"),                        // no filter
-        q("MATCH Person WHERE dept == \"Eng\" RETURN name, dept ORDER BY name LIMIT 10"),
-        q("MATCH Person WHERE dept == \"Eng\" RETURN dept GROUP BY dept"),
+        q("MATCH Person WHERE dept == \"Eng\" ORDER BY name LIMIT 10 RETURN name, dept"),
+        q("MATCH Person WHERE dept == \"Eng\" GROUP BY dept RETURN dept"),
         q("MATCH Person AS_OF 15000 RETURN *"),
     ];
     let report = run_costed(&k, &entries);

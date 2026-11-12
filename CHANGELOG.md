@@ -34,6 +34,16 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 - **Studio ontology workbench**: accept keys and links, declare source authority, and reconcile a class from the
   UI; the Ontology panel shows keys, links and authority per mapping and lists contradictions with the rule that
   decided them. The raw definition editor moved under *Advanced*.
+- **Query fix (silent filter drop):** anything written after `RETURN` was ignored, so
+  `MATCH DocumentPage RETURN * WHERE page == 1446` returned every page as if it were the answer. A statement
+  must now end at its `RETURN` (one trailing `;` is allowed); a clause after it is an error that says it belongs
+  before `RETURN`. Two test suites that had misordered `ORDER BY` / `GROUP BY` / `LIMIT` scenarios (never applied)
+  were corrected.
+- **Documents in the knowledge base:** `document_commit` / `document_uncommit` / `document_objects` and Studio's
+  "Save to knowledge base": every page (the text itself), fragment, chunk, entity, relation and fact is stored and
+  then read back and compared with the plan (`complete` only when every count matches; a page no chunk covers gets a
+  supplemental chunk and is named). The Graph tab draws one saved document a page at a time with exact totals; Browse
+  all lists every saved object. Compile is labelled a preview.
 - **Ingestion fix:** a PDF of 10 or more pages that needed OCR could never be OCR'd (`pdftoppm` pads page
   numbers, the image was looked up unpadded); the cover page of a 1,446-page book failed with `ocr_partial`. OCR
   failures now carry tesseract's own message (`ocr_stats.failures`, the ingest response, Studio, the log).

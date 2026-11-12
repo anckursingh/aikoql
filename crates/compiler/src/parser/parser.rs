@@ -163,7 +163,7 @@ impl Parser {
     }
 
     pub fn parse_statement(&mut self) -> Result<Statement, ParseError> {
-        match &self.current {
+        let statement = match &self.current {
             Token::Match => self.parse_match().map(Statement::Match),
             Token::Create => self.parse_create().map(Statement::Create),
             Token::Update => self.parse_update().map(Statement::Update),
@@ -171,7 +171,37 @@ impl Parser {
             Token::Ingest => self.parse_ingest().map(Statement::Ingest),
             _ => Err(unexpected(&self.current, self.line, self.col)
                 .with_hint("try MATCH, CREATE, UPDATE, DELETE, or INGEST")),
+        }?;
+        // Nothing may follow a statement. Silently ignoring a tail drops filters: a query written
+        // `MATCH T RETURN * WHERE a == 1` used to return every row of T as if it were the answer.
+        if matches!(&self.current, Token::Error(m) if m == "unexpected character ';'") {
+            self.advance(); // one trailing semicolon is habit, not an error
         }
+        if self.current != Token::Eof {
+            let clause = matches!(
+                self.current,
+                Token::Where
+                    | Token::Similar
+                    | Token::Traverse
+                    | Token::AsOf
+                    | Token::Between
+                    | Token::Historical
+                    | Token::Changeset
+                    | Token::Epistemic
+                    | Token::Source
+                    | Token::Limit
+                    | Token::Order
+                    | Token::Group
+                    | Token::Join
+            );
+            let hint = if clause {
+                "clauses must come before RETURN: MATCH <type> WHERE ... RETURN *"
+            } else {
+                "nothing may follow the end of a statement"
+            };
+            return Err(unexpected(&self.current, self.line, self.col).with_hint(hint));
+        }
+        Ok(statement)
     }
 
     fn parse_match(&mut self) -> Result<MatchStatement, ParseError> {
@@ -1135,6 +1165,74 @@ mod tests {
         match Parser::new(source).parse_statement().unwrap() {
             Statement::Match(m) => m,
             other => panic!("expected Match, got {:?}", other),
+        }
+    }
+
+    // ---- nothing may follow a statement: a dropped filter must never look like an answer ----
+
+    #[test]
+    fn a_clause_written_after_return_is_an_error_not_a_dropped_filter() {
+        let e = Parser::new("MATCH DocumentPage RETURN * WHERE page == 1446")
+            .parse_statement()
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("WHERE"), "names the stray clause: {e}");
+        assert!(
+            e.to_lowercase().contains("before return"),
+            "says where it belongs: {e}"
+        );
+        for tail in ["LIMIT 5", "ORDER BY x", "TRAVERSE r", "HISTORICAL"] {
+            let q = format!("MATCH T RETURN * {tail}");
+            assert!(
+                Parser::new(&q).parse_statement().is_err(),
+                "{q} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn nonsense_after_the_statement_is_an_error() {
+        for q in [
+            "MATCH T RETURN * BANANA nonsense 123",
+            "MATCH T WHERE a == 1 RETURN * extra",
+            "MATCH T RETURN a, b stray",
+        ] {
+            assert!(
+                Parser::new(q).parse_statement().is_err(),
+                "{q} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn one_trailing_semicolon_is_allowed_but_a_second_statement_is_not() {
+        Parser::new("MATCH T RETURN *;")
+            .parse_statement()
+            .expect("a trailing semicolon is habit, not an error");
+        Parser::new("MATCH T WHERE a == 1 RETURN * ;  ")
+            .parse_statement()
+            .expect("with whitespace");
+        assert!(
+            Parser::new("MATCH T RETURN *; MATCH U RETURN *")
+                .parse_statement()
+                .is_err(),
+            "one statement per request"
+        );
+        assert!(Parser::new("MATCH T RETURN *;;").parse_statement().is_err());
+    }
+
+    #[test]
+    fn every_well_formed_statement_still_parses() {
+        for q in [
+            "MATCH T RETURN *",
+            "MATCH T WHERE a == 1 RETURN *",
+            "MATCH T WHERE a == 1 AND b == \"x\" LIMIT 5 RETURN *",
+            "MATCH T RETURN a, b",
+            "MATCH T WHERE a == 1 RETURN *   ",
+        ] {
+            Parser::new(q)
+                .parse_statement()
+                .unwrap_or_else(|e| panic!("{q}: {e}"));
         }
     }
 
