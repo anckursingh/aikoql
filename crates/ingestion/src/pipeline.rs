@@ -388,6 +388,7 @@ pub fn compile_document_with_detector(
         existing_kos,
         asset_dir,
         &crate::ProcessingPolicy::default(),
+        None,
     )
 }
 
@@ -398,6 +399,20 @@ pub fn compile_document_mock_with_policy(
     existing_kos: &[KnowledgeBaseEntry],
     asset_dir: Option<&str>,
     policy: &crate::ProcessingPolicy,
+) -> CompilationResult {
+    compile_document_mock_with_policy_for(doc, existing_kos, asset_dir, policy, None)
+}
+
+/// [`compile_document_mock_with_policy`] for a document with an identity (its KOID, a hash, a path):
+/// chunk ids read `<id>/chunk-0005`, fragment ids carry it, and the IR and the evidence trail say
+/// which document they came from. Without one every chunk is `unknown/chunk-N` and, with two
+/// documents in the knowledge base, ambiguous.
+pub fn compile_document_mock_with_policy_for(
+    doc: &DocumentModel,
+    existing_kos: &[KnowledgeBaseEntry],
+    asset_dir: Option<&str>,
+    policy: &crate::ProcessingPolicy,
+    document_id: Option<&str>,
 ) -> CompilationResult {
     compile_with_policy(
         doc,
@@ -410,6 +425,7 @@ pub fn compile_document_mock_with_policy(
         existing_kos,
         asset_dir,
         policy,
+        document_id,
     )
 }
 
@@ -425,6 +441,7 @@ fn compile_with_policy(
     existing_kos: &[KnowledgeBaseEntry],
     asset_dir: Option<&str>,
     policy: &crate::ProcessingPolicy,
+    document_id: Option<&str>,
 ) -> CompilationResult {
     let t0 = time_now();
 
@@ -432,6 +449,8 @@ fn compile_with_policy(
     // extracted images get payloads, captioned figures re-typed).
     let t_ast = time_now();
     let mut ast = document_model_to_ast(doc);
+    // the document's identity: fragment ids derive their prefix from it (boundary detector)
+    ast.document_id = document_id.map(str::to_string);
     // PR-F: extracted images get payloads, captioned figures re-typed.
     // With an asset dir, Screenshot/ScannedText images also get an OCR
     // fill (HLD §33: OCR only if needed — provider gates itself).
@@ -472,7 +491,12 @@ fn compile_with_policy(
     // fragment stream (HLD §57). Analyzers fall back to the AST when the
     // boundary stream is empty (degraded detection).
     let t_ir = time_now();
-    let raw_ir = analyzer.analyze(&ast, &fragments);
+    let mut raw_ir = analyzer.analyze(&ast, &fragments);
+    // an analyzer that does not name the document inherits the AST's identity, so the chunker,
+    // the evidence trail and the commit plan all know where they came from
+    if raw_ir.document_id.is_none() {
+        raw_ir.document_id = ast.document_id.clone();
+    }
     let dt_ir = time_now() - t_ir;
 
     // R8: scan and redact secrets/PII before IR flows into commit planning
@@ -1002,6 +1026,49 @@ mod tests {
             total_chars: 230,
             ocr_stats: None,
         }
+    }
+
+    #[test]
+    fn a_document_id_names_chunks_fragments_and_evidence_after_the_document() {
+        let id = "0123456789abcdef0123456789abcdef";
+        let named = compile_document_mock_with_policy_for(
+            &test_doc(),
+            &[],
+            None,
+            &crate::ProcessingPolicy::default(),
+            Some(id),
+        );
+        assert!(!named.embedded_chunks.is_empty() && !named.fragments.is_empty());
+        for (i, c) in named.embedded_chunks.iter().enumerate() {
+            assert_eq!(c.chunk.chunk_id, format!("{id}/chunk-{i:04}"), "chunk {i}");
+        }
+        assert!(
+            named
+                .fragments
+                .iter()
+                .all(|f| f.fragment_id.starts_with(&format!("frag-{}-", &id[..8]))),
+            "fragment ids carry the document's prefix: {:?}",
+            named
+                .fragments
+                .iter()
+                .map(|f| &f.fragment_id)
+                .take(3)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(named.ir.document_id.as_deref(), Some(id));
+        assert_eq!(named.evidence_trail.document_id.as_deref(), Some(id));
+        // without an id nothing changes: the old, id-less behaviour stays available
+        let plain = compile_document_mock_with_policy(
+            &test_doc(),
+            &[],
+            None,
+            &crate::ProcessingPolicy::default(),
+        );
+        assert!(plain.embedded_chunks[0]
+            .chunk
+            .chunk_id
+            .starts_with("unknown/chunk-"));
+        assert_eq!(plain.ir.document_id, None);
     }
 
     fn sample_kb() -> Vec<KnowledgeBaseEntry> {
