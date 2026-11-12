@@ -426,6 +426,9 @@ async function main() {
     const banner = await page.innerText('#graph-banner');
     ok('the document graph states completeness and which page it draws', /complete in the knowledge base/.test(banner) && /Drawing 1–\d+ of \d+ entities/.test(banner) && /Browse all as a table/.test(banner), banner);
     ok('the graph offers a picker of saved documents, with this one selected', await page.evaluate(() => { const sel = document.getElementById('graph-document'); return sel.style.display !== 'none' && [...sel.options].some(o => /story[.]txt/.test(o.text) && o.selected); }));
+    // "Browse all as a table" on the graph must take the user to the table (it lives on the Documents page)
+    await page.click('#graph-banner [data-click="browseDocument"]'); await page.waitForTimeout(1500);
+    ok('Browse all from the graph opens the Documents page with the table showing', await page.evaluate(() => document.getElementById('panel-documents').classList.contains('active') && /Everything saved for this document/.test(document.getElementById('doc-browse').innerText)), await page.evaluate(() => location.hash));
     await page.click('button[data-panel="documents"]'); await page.waitForTimeout(800);
     await storyRow().locator('[data-click="browseDocument"]').click(); await page.waitForTimeout(1500);
     await page.click('#doc-browse [data-click="browseKind"][data-kind="chunk"]'); await page.waitForTimeout(1200);

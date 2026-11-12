@@ -1914,7 +1914,14 @@ async function removeDocumentKnowledge(koid) {
 const browse = { koid: null, kind: 'entity', q: '', offset: 0, size: 50 };
 const BROWSE_KINDS = ['entity', 'chunk', 'page', 'fact', 'fragment'];
 const KIND_LABEL = {entity: 'entities', chunk: 'chunks', page: 'pages', fact: 'facts', fragment: 'fragments'};
-function browseDocument(koid) { Object.assign(browse, {koid: koid, kind: 'entity', q: '', offset: 0}); return renderBrowse(); }
+// The table lives on the Documents page: from anywhere else (the graph's "Browse all as a table"), go there first.
+async function browseDocument(koid) {
+  Object.assign(browse, {koid: koid, kind: 'entity', q: '', offset: 0});
+  if (!document.getElementById('panel-documents').classList.contains('active')) switchPanel('documents');
+  await renderBrowse();
+  const el = document.getElementById('doc-browse');
+  if (el && el.scrollIntoView) el.scrollIntoView({block: 'start'});
+}
 async function renderBrowse() {
   const el = document.getElementById('doc-browse');
   if (!browse.koid) { el.innerHTML = ''; return; }

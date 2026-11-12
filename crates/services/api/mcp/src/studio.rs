@@ -1270,6 +1270,15 @@ mod tests {
     }
 
     #[test]
+    fn browse_all_from_the_graph_goes_to_the_documents_page_where_the_table_lives() {
+        let page = page_for_tests();
+        let b = page.find("async function browseDocument(").expect("browseDocument");
+        let body: String = page[b..].chars().take(500).collect();
+        assert!(body.contains("switchPanel('documents')"), "the table is in the Documents panel: {body}");
+        assert!(page.contains("id=\"doc-browse\""), "the table's container exists");
+    }
+
+    #[test]
     fn compile_asks_for_a_view_a_browser_can_hold() {
         // a 1,446-page book compiles to 83 MB; the page must never request that
         let page = page_for_tests();
