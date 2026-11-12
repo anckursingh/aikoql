@@ -594,17 +594,28 @@ pub(crate) fn commit_knowledge(
         }
     }
     progress(total, total);
-    // what an earlier save wrote and this one no longer contains
-    let doc_hex = doc_ko.koid.to_hex();
-    let mine = |ko: &KnowledgeObject| {
-        ko.metadata.tenant.as_deref() == tenant.as_deref() && belongs(ko, &tag, &doc_hex)
-    };
-    let mut pruned = 0;
+    // what an earlier save wrote and this one no longer contains, or a leftover that names this
+    // document: removed as the writer. One the writer may not remove does not fail the save: it is
+    // counted and named in the manifest (it is still stored, so the n-of-n will not match).
+    let ctx = KnowledgeContext::from(writer.clone());
+    let (mut pruned, mut unremovable) = (0usize, 0usize);
     for ty in DOC_TYPES {
-        let none = HashSet::new();
-        pruned += sink
-            .prune_missing_where(ty, present.get(ty).unwrap_or(&none), mine)
-            .map_err(|e| e.to_string())?;
+        let keep = present.get(ty);
+        for ko in saved(k, ty, doc_ko) {
+            if keep.is_some_and(|set| set.contains(&ko.koid)) {
+                continue;
+            }
+            match k.forget(
+                ctx.clone(),
+                &ko.koid,
+                ForgetMode::Tombstone,
+                None,
+                Some("no longer part of the saved document".into()),
+            ) {
+                Ok(_) => pruned += 1,
+                Err(_) => unremovable += 1,
+            }
+        }
     }
 
     // read it all back: a count is only believed when the kernel gives the objects back
@@ -635,7 +646,13 @@ pub(crate) fn commit_knowledge(
     let mut gaps: Vec<String> = kinds
         .iter()
         .filter(|(_, p, s)| p != s)
-        .map(|(n, p, s)| format!("{n}: {s} stored of {p} planned"))
+        .map(|(n, p, s)| {
+            if s > p {
+                format!("{n}: {s} stored, {p} planned: {} leftover object(s) naming this document could not be removed with your permissions", s - p)
+            } else {
+                format!("{n}: {s} stored of {p} planned")
+            }
+        })
         .collect();
     if stored_page_chars != plan.page_chars {
         gaps.push(format!(
@@ -665,6 +682,7 @@ pub(crate) fn commit_knowledge(
         "merged": plan.merged,
         "written": written,
         "pruned": pruned,
+        "unremovable": unremovable,
     }))
 }
 
@@ -1014,7 +1032,7 @@ pub(crate) fn tool_document_commit(k: &Kernel, args: &J, db_path: &str) -> Resul
                 &mime,
                 &artifact,
                 batches_total,
-                &koid.to_hex(),
+                &sha, // the content hash: unambiguous across documents (a KOID minted a minute apart shares its first characters)
             )?;
             let failed =
                 batches.map_or(0, |b| b.iter().filter(|x| x["status"] == "failed").count());
@@ -1427,6 +1445,7 @@ mod tests {
         )
         .unwrap();
         let koid = r["koid"].as_str().unwrap().to_string();
+        let sha_hex = r["sha256"].as_str().unwrap().to_string();
         let started =
             tool_document_commit(&k, &json!({"koid": koid}), db.to_str().unwrap()).unwrap();
         assert_eq!(started["graph"]["status"], "saving");
@@ -1462,7 +1481,7 @@ mod tests {
         );
         let first_chunk = live(&k, T_CHUNK, None).into_iter().next().unwrap();
         assert!(
-            matches!(first_chunk.properties.get("chunk_id"), Some(Value::Text(t)) if t.starts_with(&koid)),
+            matches!(first_chunk.properties.get("chunk_id"), Some(Value::Text(t)) if t.starts_with(&sha_hex)),
             "chunks are named after the document: {:?}",
             first_chunk.properties.get("chunk_id")
         );
@@ -1704,7 +1723,7 @@ mod tests {
             &[],
             None,
             &Default::default(),
-            Some(&ko.koid.to_hex()),
+            Some(&sha_of(&ko).unwrap()),
         );
         save(&k, &ko, &doc, &named);
         assert_eq!(
@@ -1716,7 +1735,7 @@ mod tests {
         assert!(
             live(&k, T_CHUNK, None).iter().all(|c| matches!(
                 c.properties.get("chunk_id"),
-                Some(Value::Text(t)) if t.starts_with(&ko.koid.to_hex())
+                Some(Value::Text(t)) if t.starts_with(&sha_of(&ko).unwrap())
             )),
             "and the stored chunk ids now name the document"
         );
@@ -1769,5 +1788,58 @@ mod tests {
         // and removal takes everything that names the document
         let again = save(&k, &ko, &doc, &cr);
         assert_eq!(again["written"], 0, "{again}");
+    }
+
+    #[test]
+    fn a_leftover_the_writer_may_not_remove_is_reported_not_a_failed_save() {
+        let (k, doc) = (kernel(), document());
+        let cr = compiled(&doc);
+        let ko = ingest(&k, None, "foreign");
+        // a non-admin writer: the document's own owner, no admin role
+        let owner = crate::Subject::new(&ko.security.owner);
+        // a leftover naming the document, owned by someone else
+        let mut foreign = ko.security.clone();
+        foreign.owner = "someone-else".into();
+        let stray = KnowledgeObject {
+            koid: crate::derived_ids::identity_koid("test", "foreign", &["1".into()]),
+            version: 0,
+            commit_ts: 0,
+            metadata: crate::Metadata {
+                type_name: T_CHUNK.into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: [("document".to_string(), Value::Text(ko.koid.to_hex()))].into(),
+            semantic: None,
+            relationships: vec![],
+            event_refs: vec![],
+            security: foreign,
+            lifecycle: crate::Lifecycle {
+                state: crate::LifecycleState::Draft,
+                origin: crate::Origin::Human,
+            },
+            extensions: crate::ExtensionMap::new(),
+        };
+        crate::imports::ImportSink::new(
+            &k,
+            "t".into(),
+            crate::Subject::with_roles("sys", &["admin"]),
+            vec![],
+        )
+        .put(stray, "t", "stray")
+        .unwrap();
+        let m = commit_knowledge(&k, &ko, &doc, &cr, 0, &owner, &|_, _| {})
+            .expect("a leftover that cannot be removed must not fail the save");
+        assert_eq!(m["complete"], false, "{m}");
+        assert!(
+            m["gaps"].to_string().contains("could not be removed"),
+            "named, not hidden: {m}"
+        );
+        assert_eq!(
+            live(&k, T_PAGE, None).len(),
+            PAGES,
+            "everything else was saved: {m}"
+        );
     }
 }

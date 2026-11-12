@@ -1029,6 +1029,35 @@ mod tests {
     }
 
     #[test]
+    fn two_documents_never_share_fragment_ids_when_their_ids_are_content_hashes() {
+        // fragment ids use the first 8 characters of the document id, so the id must be a hash:
+        // time-ordered ids (a KOID minted a minute apart) share that prefix
+        let (a, b) = (
+            "bd55de441b84e203152668c51fea1c038e838859f8d4f1b0138bca970774749a",
+            "a3f19c0e7b2d4a6e91c5d8f03b7e2a4c6d1f8e9b0a2c4e6f8091a3b5c7d9e1f3",
+        );
+        let ids = |id: &str| -> Vec<String> {
+            compile_document_mock_with_policy_for(
+                &test_doc(),
+                &[],
+                None,
+                &crate::ProcessingPolicy::default(),
+                Some(id),
+            )
+            .fragments
+            .into_iter()
+            .map(|f| f.fragment_id)
+            .collect()
+        };
+        let (fa, fb) = (ids(a), ids(b));
+        assert!(!fa.is_empty() && fa.len() == fb.len());
+        assert!(
+            fa.iter().zip(&fb).all(|(x, y)| x != y),
+            "same page and block, different document: {fa:?} {fb:?}"
+        );
+    }
+
+    #[test]
     fn a_document_id_names_chunks_fragments_and_evidence_after_the_document() {
         let id = "0123456789abcdef0123456789abcdef";
         let named = compile_document_mock_with_policy_for(

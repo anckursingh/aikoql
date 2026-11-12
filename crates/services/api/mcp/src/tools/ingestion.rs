@@ -983,8 +983,14 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
             "total_candidates": ir.total_candidates()
         })
     } else {
-        let (doc, cr, batches) =
-            compile_document_pipeline(db_path, &sha256, &mime_type, &artifact_path, total, hex)?;
+        let (doc, cr, batches) = compile_document_pipeline(
+            db_path,
+            &sha256,
+            &mime_type,
+            &artifact_path,
+            total,
+            &sha256,
+        )?;
         let mut v = serde_json::to_value(&cr).map_err(|e| format!("serialize: {}", e))?;
         // lets a client say why a compile came back empty (e.g. no OCR tool)
         v["extraction_status"] = json!(doc.ocr_stats.as_ref().map_or("extracted", |s| s.status()));
