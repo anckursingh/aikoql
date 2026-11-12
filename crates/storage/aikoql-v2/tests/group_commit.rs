@@ -373,3 +373,43 @@ fn exact_fit_carry_over_holds_at_the_bytes_boundary() {
         "three 200-byte batches against cap 250: carry-over leads every group"
     );
 }
+
+/// PROD-9 (failure matrix row 12, the group-commit path): a group whose
+/// WAL append fails is not acknowledged and takes no seq — the same rule
+/// PROD-6 gave the Sync path. A consumed seq with no frame behind it is a
+/// hole: `last_seq` names writes that do not exist, and the next group's
+/// frames skip seqs no follower can apply.
+#[test]
+fn a_failed_group_append_takes_no_seq_and_the_next_group_is_contiguous() {
+    let d = dir("gc-walfail");
+    let before = {
+        let mut cfg = gc_config(d.clone());
+        cfg.wal_fail_next = true;
+        let db = Db::open(cfg).unwrap();
+        let before = db.last_seq();
+        assert!(
+            db.put(b"lost", b"never acked").is_err(),
+            "the injected WAL failure must surface"
+        );
+        assert_eq!(
+            db.last_seq(),
+            before,
+            "a group that was never durable must not take a seq"
+        );
+        assert_eq!(db.get(b"lost").unwrap(), None, "nor be readable");
+        assert_eq!(
+            db.put(b"kept", b"acked").unwrap(),
+            before + 1,
+            "the next write takes the next seq"
+        );
+        before
+    };
+    let db = Db::open(gc_config(d)).unwrap();
+    assert_eq!(
+        db.last_seq(),
+        before + 1,
+        "replay agrees: no hole, no extra"
+    );
+    assert_eq!(db.get(b"kept").unwrap(), Some(b"acked".to_vec()));
+    assert_eq!(db.get(b"lost").unwrap(), None);
+}

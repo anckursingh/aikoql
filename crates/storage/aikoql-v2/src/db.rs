@@ -3398,6 +3398,9 @@ fn committer_loop(
     // Hoisted across groups: the running counters replace the per-iteration
     // O(g²) fold (P1-02), the seqs buffer is cleared and reused (P1-03).
     let mut seqs: Vec<u64> = Vec::new();
+    // PR6-R2-003 test hook, group-commit side: one-shot, consumed by the
+    // first frame this committer appends (production configs never arm it).
+    let mut fail_next = config.wal_fail_next;
     loop {
         let first = match carry.take().or_else(|| rx.recv().ok()) {
             Some(b) => b,
@@ -3439,6 +3442,7 @@ fn committer_loop(
             &stats,
             &wstats,
             &mut seqs,
+            &mut fail_next,
         );
     }
 }
@@ -3463,6 +3467,7 @@ fn commit_group(
     stats: &Arc<Stats>,
     wstats: &Arc<WriteStats>,
     seqs: &mut Vec<u64>,
+    fail_next: &mut bool,
 ) {
     // P3-M2 — group shape (design §21): batches per group, ops per group,
     // the widest group so far.
@@ -3495,6 +3500,12 @@ fn commit_group(
                     break;
                 }
             };
+            if std::mem::take(fail_next) {
+                outcome = Err(FormatError::Io(
+                    "injected WAL append failure (wal_fail_next)".into(),
+                ));
+                break;
+            }
             let appended = wal
                 .seek(SeekFrom::End(0))
                 .and_then(|_| wal.write_all(&frame));
