@@ -122,6 +122,12 @@ virtualised tables for more than 5k rows, visual-regression screenshots in the C
 - **CI-only suites.** The SDK contract tests (Python, Go, TypeScript, Java, Rust) and the 5-language fuzz smoke run
   only in CI; a parser or protocol change must be checked against them before merging.
 
+- **Unexplained, cause unknown (2026-11-12).** While a document was re-saved on the live server, `GET
+  /api/v1/documents/<koid>/status` once answered `NOT_FOUND` for a document that `list-documents` still listed, and
+  two untagged objects with kernel-minted (not deterministic) ids had appeared in the document's types. Not
+  reproduced. To investigate on the real storage engine: one thread rewriting a KO's properties in a loop while
+  another reads it and counts NOT_FOUND, and what `remember(expected_version: Some(0))` does on an existing id.
+
 ## 7. Process lessons (keep)
 
 - Stage explicit paths; never `git add -A` in a working tree that holds the owner's untracked files (two such

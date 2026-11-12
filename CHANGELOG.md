@@ -44,6 +44,17 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   then read back and compared with the plan (`complete` only when every count matches; a page no chunk covers gets a
   supplemental chunk and is named). The Graph tab draws one saved document a page at a time with exact totals; Browse
   all lists every saved object. Compile is labelled a preview.
+- **Saving a document also counts and prunes leftovers that name it:** an object of a document type that carries
+  the document in its `document` property but lost its tag used to be invisible
+  to the n-of-n, to pruning and to Remove, so a query could return objects the manifest never counted. The selection
+  is now by tag or by `document` property. A leftover the saving user may not remove no longer fails the save: it is
+  reported in the manifest (`unremovable`, and a named gap) and the save is not marked complete.
+- **Readable ids and names for saved documents:** chunk ids read `<document sha-256>/chunk-0005` instead of
+  `unknown/chunk-0005` (fragment ids and the evidence trail name their document too), and every saved page, chunk,
+  fragment and fact has a `name` ("Page 5", "Chunk 6 · page 5: Alice Johnson works at…") that the graph and Explorer
+  show. Chunk and fragment ids are derived from the document's content hash, so they are unambiguous across documents.
+  Object ids change **once**: a document saved by the previous build gets new ids for chunks and fragments on its first
+  re-save (the old ones are pruned); after that, saving again updates in place.
 - **Ingestion fix:** a PDF of 10 or more pages that needed OCR could never be OCR'd (`pdftoppm` pads page
   numbers, the image was looked up unpadded); the cover page of a 1,446-page book failed with `ocr_partial`. OCR
   failures now carry tesseract's own message (`ocr_stats.failures`, the ingest response, Studio, the log).
