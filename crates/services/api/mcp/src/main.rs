@@ -1274,6 +1274,11 @@ fn main() {
             );
         }
     }
+    // PROD-9: whichever surface `serve` was running has ended on purpose
+    // (the TCP or native accept loop saw the `shutdown` method). Settle
+    // here too — idempotent after the stdio path's own call — so every
+    // planned exit fences and hands the lease over, not only a signal.
+    stop.settle("serve ended");
 }
 
 /// P5-M22 (P1-15): resume from `ckpt_dir` when a COMPLETE checkpoint is
