@@ -507,13 +507,23 @@ fn admin(tenant: Option<&str>) -> Subject {
 }
 
 /// The saved objects of `ty` that belong to this document and tenant (live ones only).
-fn saved(k: &Kernel, ty: &str, tag: &str, tenant: Option<&str>) -> Vec<KnowledgeObject> {
-    k.scan_by_type(&admin(tenant), ty)
+/// Does `o` belong to this document? It carries the document's tag, or it names the document in its
+/// `document` property. The second test matters: a leftover of an earlier save that lost its tag would
+/// otherwise be invisible to the count, to pruning and to removal.
+fn belongs(o: &KnowledgeObject, tag: &str, doc_hex: &str) -> bool {
+    o.metadata.tags.iter().any(|t| t == tag)
+        || matches!(o.properties.get("document"), Some(Value::Text(d)) if d == doc_hex)
+}
+
+/// The saved objects of `ty` that belong to this document and tenant (live ones only).
+fn saved(k: &Kernel, ty: &str, doc_ko: &KnowledgeObject) -> Vec<KnowledgeObject> {
+    let tenant = tenant_of(doc_ko);
+    let tag = sha_of(doc_ko).map(|s| doc_tag(&s)).unwrap_or_default();
+    let hex = doc_ko.koid.to_hex();
+    k.scan_by_type(&admin(tenant.as_deref()), ty)
         .unwrap_or_default()
         .into_iter()
-        .filter(|o| {
-            o.metadata.tenant.as_deref() == tenant && o.metadata.tags.iter().any(|t| t == tag)
-        })
+        .filter(|o| o.metadata.tenant.as_deref() == tenant.as_deref() && belongs(o, &tag, &hex))
         .collect()
 }
 
@@ -585,8 +595,9 @@ pub(crate) fn commit_knowledge(
     }
     progress(total, total);
     // what an earlier save wrote and this one no longer contains
+    let doc_hex = doc_ko.koid.to_hex();
     let mine = |ko: &KnowledgeObject| {
-        ko.metadata.tenant.as_deref() == tenant.as_deref() && ko.metadata.tags.contains(&tag)
+        ko.metadata.tenant.as_deref() == tenant.as_deref() && belongs(ko, &tag, &doc_hex)
     };
     let mut pruned = 0;
     for ty in DOC_TYPES {
@@ -599,7 +610,7 @@ pub(crate) fn commit_knowledge(
     // read it all back: a count is only believed when the kernel gives the objects back
     let by_type: HashMap<&str, Vec<KnowledgeObject>> = DOC_TYPES
         .iter()
-        .map(|ty| (*ty, saved(k, ty, &tag, tenant.as_deref())))
+        .map(|ty| (*ty, saved(k, ty, doc_ko)))
         .collect();
     let stored_page_chars: usize = by_type[T_PAGE]
         .iter()
@@ -659,12 +670,11 @@ pub(crate) fn commit_knowledge(
 
 /// Tombstone everything saved for this document.
 pub(crate) fn remove_knowledge(k: &Kernel, doc_ko: &KnowledgeObject) -> Result<J, String> {
-    let tag = doc_tag(&sha_of(doc_ko)?);
     let tenant = tenant_of(doc_ko);
     let ctx = KnowledgeContext::from(admin(tenant.as_deref()));
     let mut removed = 0usize;
     for ty in DOC_TYPES {
-        for ko in saved(k, ty, &tag, tenant.as_deref()) {
+        for ko in saved(k, ty, doc_ko) {
             k.forget(
                 ctx.clone(),
                 &ko.koid,
@@ -713,8 +723,7 @@ pub(crate) fn list_objects(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(J::as_str)
         .map(str::to_lowercase)
         .filter(|q| !q.is_empty());
-    let tag = doc_tag(&sha_of(&doc_ko)?);
-    let mut all = saved(k, ty, &tag, tenant_of(&doc_ko).as_deref());
+    let mut all = saved(k, ty, &doc_ko);
     let get = |o: &KnowledgeObject, p: &str| match o.properties.get(p) {
         Some(Value::Text(t)) => t.clone(),
         Some(Value::Int(n)) => n.to_string(),
@@ -771,7 +780,6 @@ pub(crate) fn document_graph(
     let koid = KOID::from_hex(doc_hex).map_err(|e| format!("bad koid: {e}"))?;
     let ctx = KnowledgeContext::from(subject.clone());
     let doc_ko = k.get(ctx, &koid).map_err(|e| e.to_string())?;
-    let tag = doc_tag(&sha_of(&doc_ko)?);
     let tenant = tenant_of(&doc_ko);
     let ty = match kind {
         "page" => T_PAGE,
@@ -788,7 +796,7 @@ pub(crate) fn document_graph(
     let limit = limit.clamp(1, 2000);
     let by_ty: Vec<(&str, Vec<KnowledgeObject>)> = DOC_TYPES
         .iter()
-        .map(|t| (*t, saved(k, t, &tag, tenant.as_deref())))
+        .map(|t| (*t, saved(k, t, &doc_ko)))
         .collect();
     let totals: serde_json::Map<String, J> = [
         ("page", T_PAGE),
@@ -1712,5 +1720,54 @@ mod tests {
             )),
             "and the stored chunk ids now name the document"
         );
+    }
+
+    #[test]
+    fn an_untagged_leftover_that_points_at_the_document_is_counted_and_pruned() {
+        let (k, doc) = (kernel(), document());
+        let cr = compiled(&doc);
+        let ko = ingest(&k, None, "stray");
+        let writer = writer_for(&ko);
+        // a leftover of some earlier save: it names the document but carries no tag
+        let stray = KnowledgeObject {
+            koid: crate::derived_ids::identity_koid("test", "stray", &["1".into()]),
+            version: 0,
+            commit_ts: 0,
+            metadata: crate::Metadata {
+                type_name: T_CHUNK.into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: [
+                ("document".to_string(), Value::Text(ko.koid.to_hex())),
+                ("text".to_string(), Value::Text("left behind".into())),
+            ]
+            .into(),
+            semantic: None,
+            relationships: vec![],
+            event_refs: vec![],
+            security: ko.security.clone(),
+            lifecycle: crate::Lifecycle {
+                state: crate::LifecycleState::Draft,
+                origin: crate::Origin::Human,
+            },
+            extensions: crate::ExtensionMap::new(),
+        };
+        crate::imports::ImportSink::new(&k, "t".into(), writer, vec![])
+            .put(stray, "t", "stray")
+            .unwrap();
+        assert_eq!(live(&k, T_CHUNK, None).len(), 1, "the leftover exists");
+        let m = save(&k, &ko, &doc, &cr);
+        assert_eq!(
+            live(&k, T_CHUNK, None).len(),
+            cr.embedded_chunks.len(),
+            "the leftover is gone: {m}"
+        );
+        assert!(m["pruned"].as_u64().unwrap() >= 1, "{m}");
+        assert_eq!(m["complete"], true, "{m}");
+        // and removal takes everything that names the document
+        let again = save(&k, &ko, &doc, &cr);
+        assert_eq!(again["written"], 0, "{again}");
     }
 }
