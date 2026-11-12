@@ -11,7 +11,7 @@ use crate::derived_ids::{identity_koid, live_koid};
 use crate::imports::{fresh_run_id, ImportSink};
 use crate::{
     json, ExtensionMap, ForgetMode, Kernel, KnowledgeContext, Lifecycle, LifecycleState, Metadata,
-    Origin, RelationshipRef, SecurityDescriptor, Subject, J,
+    Origin, RelationshipRef, Subject, J,
 };
 use aikoql_ingestion::{CommitAction, CompilationResult, DocumentModel, FragmentContent};
 use aikoql_kernel::{Direction, KnowledgeObject, Value, KOID};
@@ -480,6 +480,7 @@ pub(crate) fn commit_knowledge(
     doc: &DocumentModel,
     cr: &CompilationResult,
     failed_batches: usize,
+    writer: &Subject,
     progress: &dyn Fn(usize, usize),
 ) -> Result<J, String> {
     let sha = sha_of(doc_ko)?;
@@ -487,11 +488,8 @@ pub(crate) fn commit_knowledge(
     let tag = doc_tag(&sha);
     let plan = plan_objects(k, doc, cr, doc_ko.koid, &sha, tenant.as_deref());
 
-    let mut subject = Subject::new("document-graph");
-    if let Some(t) = &tenant {
-        subject = subject.in_tenant(t);
-    }
-    let sink = ImportSink::new(k, fresh_run_id(), subject, vec![]);
+    // written as the caller: the kernel authorizes every object, not a privileged system identity
+    let sink = ImportSink::new(k, fresh_run_id(), writer.clone(), vec![]);
     let total = plan.objects.len();
     let (mut written, mut present): (usize, BTreeMap<&str, HashSet<KOID>>) = (0, BTreeMap::new());
     for (n, o) in plan.objects.iter().enumerate() {
@@ -517,11 +515,8 @@ pub(crate) fn commit_knowledge(
                 })
                 .collect(),
             event_refs: vec![],
-            security: SecurityDescriptor {
-                owner: "document-graph".into(),
-                acl: vec![],
-                classification: None,
-            },
+            // whoever may read the document may read what was read out of it, and no one else
+            security: doc_ko.security.clone(),
             lifecycle: Lifecycle {
                 state: LifecycleState::Draft,
                 origin: Origin::Human,
@@ -858,12 +853,25 @@ pub(crate) fn graph_info(ko: &KnowledgeObject) -> J {
     })
 }
 
-fn set_graph(k: &Kernel, koid: &KOID, subject: &Subject, pairs: &[(&str, Value)]) {
+/// Record status on the document as `subject`. The kernel authorizes this write, so succeeding is the
+/// proof that the caller may change the document: saving and removing do it before any system write.
+fn set_graph_checked(
+    k: &Kernel,
+    koid: &KOID,
+    subject: &Subject,
+    pairs: &[(&str, Value)],
+) -> Result<(), String> {
     let props: BTreeMap<String, Value> = pairs
         .iter()
         .map(|(a, b)| (a.to_string(), b.clone()))
         .collect();
-    if let Err(e) = k.set_document_properties(koid, props, subject) {
+    k.set_document_properties(koid, props, subject)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn set_graph(k: &Kernel, koid: &KOID, subject: &Subject, pairs: &[(&str, Value)]) {
+    if let Err(e) = set_graph_checked(k, koid, subject, pairs) {
         tracing::warn!(
             "document {}: could not record its knowledge-base status: {e}",
             koid.to_hex()
@@ -887,6 +895,9 @@ pub(crate) fn tool_document_commit(k: &Kernel, args: &J, db_path: &str) -> Resul
         Some(Value::Text(t)) => t.clone(),
         _ => String::new(),
     };
+    if status == "partial" {
+        return Err("some batches of this document failed, so it is missing pages: upload the file again to finish it before saving it (a document is only saved whole)".into());
+    }
     if status == "processing" || status == "interrupted" {
         return Err(format!("the document is {status}: wait for ingestion to finish (or upload it again) before saving it"));
     }
@@ -916,7 +927,8 @@ pub(crate) fn tool_document_commit(k: &Kernel, args: &J, db_path: &str) -> Resul
         r.push(hex.to_string());
     }
     let guard = Saving(hex.to_string());
-    set_graph(
+    // the caller must be able to change this document (the kernel checks) before anything is written for it
+    set_graph_checked(
         k,
         &koid,
         &subject,
@@ -928,7 +940,7 @@ pub(crate) fn tool_document_commit(k: &Kernel, args: &J, db_path: &str) -> Resul
             ("graph_message", text("")),
             ("graph_manifest", text("")),
         ],
-    );
+    )?;
     let batches_total = match ko.properties.get("batches_total") {
         Some(Value::Int(n)) => *n,
         _ => 0,
@@ -946,11 +958,15 @@ pub(crate) fn tool_document_commit(k: &Kernel, args: &J, db_path: &str) -> Resul
             )?;
             let failed =
                 batches.map_or(0, |b| b.iter().filter(|x| x["status"] == "failed").count());
+            if failed > 0 {
+                // a document is only ever saved whole: a partial one must not look like saved knowledge
+                return Err(format!("{failed} batch(es) of this document failed, so pages are missing: upload the file again to finish it, then save it"));
+            }
             let ko = k2
                 .get(KnowledgeContext::from(subject.clone()), &koid)
                 .map_err(|e| e.to_string())?;
             set_graph(&k2, &koid, &subject, &[("graph_phase", text("writing"))]);
-            commit_knowledge(&k2, &ko, &doc, &cr, failed, &|done, total| {
+            commit_knowledge(&k2, &ko, &doc, &cr, failed, &subject, &|done, total| {
                 set_graph(
                     &k2,
                     &koid,
@@ -1020,6 +1036,8 @@ pub(crate) fn tool_document_uncommit(k: &Kernel, args: &J) -> Result<J, String> 
             "this document is being saved: wait for it to finish before removing it".into(),
         );
     }
+    // the caller must be able to change this document (the kernel checks) before anything is removed
+    set_graph_checked(k, &koid, &subject, &[("graph_message", text(""))])?;
     let r = remove_knowledge(k, &ko)?;
     set_graph(
         k,
@@ -1118,13 +1136,22 @@ mod tests {
             .collect()
     }
 
+    /// The caller that saves: an admin in the document's tenant.
+    fn writer_for(ko: &KnowledgeObject) -> crate::Subject {
+        let s = crate::Subject::with_roles("t", &["admin"]);
+        match &ko.metadata.tenant {
+            Some(t) => s.in_tenant(t),
+            None => s,
+        }
+    }
+
     fn save(
         k: &Arc<Kernel>,
         ko: &KnowledgeObject,
         doc: &DocumentModel,
         cr: &CompilationResult,
     ) -> J {
-        commit_knowledge(k, ko, doc, cr, 0, &|_, _| {}).unwrap()
+        commit_knowledge(k, ko, doc, cr, 0, &writer_for(ko), &|_, _| {}).unwrap()
     }
 
     #[test]
@@ -1275,7 +1302,7 @@ mod tests {
         let (k, doc) = (kernel(), document());
         let cr = compiled(&doc);
         let ko = ingest(&k, None, "d4");
-        let m = commit_knowledge(&k, &ko, &doc, &cr, 2, &|_, _| {}).unwrap();
+        let m = commit_knowledge(&k, &ko, &doc, &cr, 2, &writer_for(&ko), &|_, _| {}).unwrap();
         assert_eq!(m["complete"], false, "{m}");
         assert!(
             m["gaps"].to_string().contains("2 batch"),
@@ -1512,5 +1539,47 @@ mod tests {
         );
         // saving again is still a no-op
         assert_eq!(save(&k, &ko, &doc, &cr)["written"], 0);
+    }
+
+    #[test]
+    fn saved_objects_carry_the_documents_own_ownership_and_acl() {
+        let (k, doc) = (kernel(), document());
+        let cr = compiled(&doc);
+        let ko = ingest(&k, None, "sec");
+        save(&k, &ko, &doc, &cr);
+        for ty in DOC_TYPES {
+            let objs = live(&k, ty, None);
+            assert!(ty == T_FACT || !objs.is_empty(), "{ty}"); // this fixture has no facts
+            assert!(
+                objs.iter().all(|o| o.security == ko.security),
+                "{ty}: whoever may read the document may read its knowledge, and no one else"
+            );
+        }
+    }
+
+    #[test]
+    fn a_document_with_failed_batches_is_refused_not_saved_as_partial_knowledge() {
+        use base64::Engine;
+        let k = kernel();
+        let db = tmp_db("partial");
+        let r = tool_document_ingest(
+            &k,
+            &json!({"filename": "p.txt", "mime_type": "text/plain",
+                "content_base64": base64::engine::general_purpose::STANDARD.encode("some text of a document")}),
+            db.to_str().unwrap(),
+        )
+        .unwrap();
+        let koid = aikoql_kernel::KOID::from_hex(r["koid"].as_str().unwrap()).unwrap();
+        let s = crate::Subject::with_roles("t", &["admin"]);
+        k.set_document_properties(
+            &koid,
+            [("status".to_string(), Value::Text("partial".into()))].into(),
+            &s,
+        )
+        .unwrap();
+        let e = tool_document_commit(&k, &json!({"koid": koid.to_hex()}), db.to_str().unwrap())
+            .unwrap_err();
+        assert!(e.contains("missing pages"), "{e}");
+        assert!(live(&k, T_PAGE, None).is_empty(), "nothing was written");
     }
 }

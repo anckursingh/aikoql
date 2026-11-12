@@ -17,6 +17,7 @@ const READ_TOOLS: &[&str] = &[
     "compliance_report",
     "constraint_diagnostics",
     "document_list",
+    "document_objects",
     "document_status",
     "eval_contradictions",
     "eval_recall",

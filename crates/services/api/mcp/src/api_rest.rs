@@ -827,6 +827,8 @@ fn is_write_route(path: &str, body: &str) -> bool {
             | "/api/v1/approve-job"
             | "/api/v1/documents"
             | "/api/v1/documents/compile"
+            | "/api/v1/documents/commit"
+            | "/api/v1/documents/uncommit"
             | "/api/v1/agent/memory-store"
             | "/api/v1/agent/memory-update"
             | "/api/v1/agent/memory-delete"
