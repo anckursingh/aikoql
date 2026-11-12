@@ -723,6 +723,7 @@ pub(crate) fn compile_document_pipeline(
     mime_type: &str,
     artifact_path: &str,
     batches_total: i64,
+    document_id: &str,
 ) -> Result<
     (
         aikoql_ingestion::DocumentModel,
@@ -764,8 +765,14 @@ pub(crate) fn compile_document_pipeline(
         )
         .map_err(|e| format!("extract for compile: {}", e))?,
     };
-    let cr =
-        aikoql_ingestion::compile_document_mock_with_policy(&doc, &[], Some(&asset_dir), &policy);
+    // the document's identity names its chunks and fragments (otherwise every chunk is `unknown/chunk-N`)
+    let cr = aikoql_ingestion::compile_document_mock_with_policy_for(
+        &doc,
+        &[],
+        Some(&asset_dir),
+        &policy,
+        Some(document_id),
+    );
     Ok((doc, cr, batches))
 }
 
@@ -977,7 +984,7 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
         })
     } else {
         let (doc, cr, batches) =
-            compile_document_pipeline(db_path, &sha256, &mime_type, &artifact_path, total)?;
+            compile_document_pipeline(db_path, &sha256, &mime_type, &artifact_path, total, hex)?;
         let mut v = serde_json::to_value(&cr).map_err(|e| format!("serialize: {}", e))?;
         // lets a client say why a compile came back empty (e.g. no OCR tool)
         v["extraction_status"] = json!(doc.ocr_stats.as_ref().map_or("extracted", |s| s.status()));

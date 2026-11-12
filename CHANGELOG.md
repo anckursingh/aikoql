@@ -44,6 +44,10 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   then read back and compared with the plan (`complete` only when every count matches; a page no chunk covers gets a
   supplemental chunk and is named). The Graph tab draws one saved document a page at a time with exact totals; Browse
   all lists every saved object. Compile is labelled a preview.
+- **Readable ids and names for saved documents:** chunk ids read `<document koid>/chunk-0005` instead of
+  `unknown/chunk-0005` (fragment ids and the evidence trail name their document too), and every saved page, chunk,
+  fragment and fact has a `name` ("Page 5", "Chunk 6 · page 5: Alice Johnson works at…") that the graph and Explorer
+  show. Saved objects keep their ids, so saving again updates in place.
 - **Ingestion fix:** a PDF of 10 or more pages that needed OCR could never be OCR'd (`pdftoppm` pads page
   numbers, the image was looked up unpadded); the cover page of a 1,446-page book failed with `ocr_partial`. OCR
   failures now carry tesseract's own message (`ocr_stats.failures`, the ingest response, Studio, the log).
