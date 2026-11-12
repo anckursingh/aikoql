@@ -750,7 +750,7 @@ fn o011_scopes_bound_what_a_token_may_do() {
             json!({"name": "n", "description": "d", "content": "c"}),
         ),
         ("forget", json!({"koid": koid})),
-        ("aikoql", json!({"query": "CREATE note {body: \"x\"}"})),
+        ("aikoql", json!({"query": "CREATE note body == \"x\""})),
     ] {
         let r = call(srv.port, &reader, tool, args);
         assert!(
