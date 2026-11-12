@@ -491,6 +491,8 @@ td a:hover { text-decoration: underline; }
             <button class="btn btn-pri btn-sm" data-click="loadGraph">Search</button>
             <button class="btn btn-sec btn-sm" data-click="loadGraphAll">View All</button>
           </div>
+          <div class="card" id="graph-banner" style="display:none;margin:6px 0;padding:8px;font-size:12px;" role="status"></div>
+          <select id="graph-document" data-change="graphPickDocument" aria-label="Show one saved document" style="display:none;margin:0 0 6px 0;"></select>
           <div id="graph-viz"></div>
           <div class="legend-box" id="legend"></div>
         </div>
@@ -624,6 +626,7 @@ td a:hover { text-decoration: underline; }
           <div id="doc-ingest-result" style="margin-top:8px;"></div>
         </div>
         <div id="documents-list"><div class="loading">Loading documents...</div></div>
+        <div id="doc-browse" style="margin-top:12px;"></div>
         <div id="doc-compile-result" style="margin-top:12px;"></div>
       </div>
 

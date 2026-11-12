@@ -712,7 +712,43 @@ function initGraph() {
   graphNetwork.on('hoverNode', p => showGraphTooltip(p.node));
   graphNetwork.on('blurNode', () => { const tt = document.getElementById('graph-tooltip'); if(tt) tt.style.display='none'; });
 }
-function loadGraphAll() { document.getElementById('graph-search').value=''; document.getElementById('graph-tenant').value=''; loadGraph(); }
+function loadGraphAll() { graphDocView = null; document.getElementById('graph-search').value=''; document.getElementById('graph-tenant').value=''; loadGraph(); }
+// One saved document drawn a page at a time (the knowledge base holds all of it; a browser draws a page).
+let graphDocView = null;
+function viewDocumentGraph(koid) {
+  graphDocView = {koid: koid, kind: 'entity', offset: 0, size: 200};
+  switchPanel('graph');
+  return loadGraph();
+}
+function graphKind(kind) { if (graphDocView) { graphDocView.kind = kind; graphDocView.offset = 0; return loadGraph(); } }
+function graphPage(dir) { if (graphDocView) { graphDocView.offset = Math.max(0, graphDocView.offset + dir * graphDocView.size); return loadGraph(); } }
+async function graphPickDocument(koid) { if (!koid) { graphDocView = null; return loadGraph(); } return viewDocumentGraph(koid); }
+async function renderGraphBanner(data) {
+  const el = document.getElementById('graph-banner');
+  let h = '';
+  if (data.view) {
+    const v = data.view, m = data.manifest || {};
+    h += '<b>'+esc((data.nodes.find(n => n.koid === data.document) || {}).label || 'Document')+'</b> — ';
+    if (m.complete) h += '<span class="badge badge-green">✓ complete in the knowledge base</span> ';
+    else h += '<span class="badge badge-orange">saved incompletely — see the Documents tab</span> ';
+    h += '<span class="mono" style="font-size:10px;">'+esc(kbCounts(m))+'</span>';
+    h += '<div style="margin-top:4px;">Drawing <b>'+esc(v.total ? v.offset + 1 : 0)+'–'+esc(v.offset + v.shown)+' of '+esc(v.total)+'</b> '+esc(KIND_LABEL[v.kind])+' (most connected first) — the graph draws a page because a browser cannot draw them all; the rest are stored and one click away. ';
+    BROWSE_KINDS.forEach(k => { h += '<button class="btn '+esc(k === v.kind ? 'btn-pri' : 'btn-sec')+' btn-sm" data-click="graphKind" data-kind="'+esc(k)+'">'+esc(KIND_LABEL[k])+' ('+esc((v.totals || {})[k])+')</button> '; });
+    h += '<button class="btn btn-sec btn-sm" data-click="graphPage" data-dir="-1" '+esc(v.offset > 0 ? '' : 'disabled')+'>Previous page</button> <button class="btn btn-sec btn-sm" data-click="graphPage" data-dir="1" '+esc(v.next_offset !== null && v.next_offset !== undefined ? '' : 'disabled')+'>Next page</button> <button class="btn btn-sec btn-sm" data-click="browseDocument" data-koid="'+esc(data.document)+'">Browse all as a table</button></div>';
+  } else if (data.hidden && data.hidden.document_objects > 0) {
+    h += esc(data.hidden.document_objects.toLocaleString())+' saved document objects are in the knowledge base but are not drawn here (they would bury everything else). Pick a document to see its graph: ';
+  }
+  const sel = document.getElementById('graph-document');
+  try {
+    const docs = ((await api('/api/v1/list-documents')).documents || []).filter(d => d.graph && d.graph.status === 'saved');
+    let o = '<option value="">All objects (documents hidden)</option>';
+    docs.forEach(d => { o += '<option value="'+esc(d.koid)+'"'+esc(graphDocView && graphDocView.koid === d.koid ? ' selected' : '')+'>'+esc(d.filename)+'</option>'; });
+    sel.innerHTML = o;
+    sel.style.display = docs.length ? '' : 'none';
+  } catch(_) {}
+  el.innerHTML = h;
+  el.style.display = h ? '' : 'none';
+}
 async function loadGraph() {
   initGraph();
   const koid = document.getElementById('graph-search').value.trim();
@@ -720,8 +756,12 @@ async function loadGraph() {
   let url = '/api/graph';
   let params = [];
   params.push('detail=1'); // S-1/S-2 (POC-4): extensions drive epistemic styling + virtual retraction edges
-  if (koid) params.push('koid='+encodeURIComponent(koid));
-  if (tenant) params.push('tenant='+encodeURIComponent(tenant));
+  if (graphDocView) {
+    params.push('document='+encodeURIComponent(graphDocView.koid), 'kind='+encodeURIComponent(graphDocView.kind), 'offset='+graphDocView.offset, 'limit='+graphDocView.size);
+  } else {
+    if (koid) params.push('koid='+encodeURIComponent(koid));
+    if (tenant) params.push('tenant='+encodeURIComponent(tenant));
+  }
   if (params.length) url += '?'+params.join('&');
   try {
     const data = await api(url);
@@ -771,6 +811,7 @@ async function loadGraph() {
     for (const [t,c] of Object.entries(typeColors)) { const cnt = data.nodes.filter(n=>n.type_name===t).length; lh += '<div class="legend-item"><div class="legend-dot" style="background:'+esc(c)+'"></div>'+esc(t)+' ('+esc(cnt)+')</div>'; }
     document.getElementById('legend').innerHTML = lh||'<div style="color:var(--muted)">No types</div>';
     document.getElementById('status-center').textContent = data.nodes.length+' objects, '+edges.length+' relationships';
+    renderGraphBanner(data);
     setTimeout(() => { if(graphNetwork&&nodes.length>0) graphNetwork.fit({animation:{duration:400}}); }, 200);
   } catch(e) { document.getElementById('status-center').textContent = 'Error: '+e.message; }
 }
@@ -1772,25 +1813,149 @@ async function deployConnector() {
 // ═══════════════════════════════════════════
 // Document Explorer (MRFC-0050 Phase D0)
 // ═══════════════════════════════════════════
+// ── Saving a document into the knowledge base (docs/ONTOLOGY… document knowledge graph) ──────────
+// Compile is only a preview. Saving stores every page, fragment, chunk, entity, relation and fact, then
+// reads them back and shows planned-vs-stored per kind, so completeness is shown, never assumed.
+let saveWatch = null;
+function kbCounts(m) {
+  return Object.entries(m.kinds || {}).map(([k, v]) => k + ' ' + v.stored + '/' + v.planned).join(' · ');
+}
+function kbCell(doc) {
+  const g = doc.graph || {status: 'not_saved'};
+  let h = '';
+  const busy = doc.status === 'processing' || doc.status === 'interrupted';
+  if (g.status === 'saving') {
+    h += '<div>Saving… '+esc(g.phase || '')+'</div>';
+    if (g.total) h += '<div class="mono" style="font-size:10px;">'+esc(g.progress)+'/'+esc(g.total)+' objects</div>';
+  } else if (g.status === 'saved' && g.manifest) {
+    const m = g.manifest;
+    if (m.complete) h += '<span class="badge badge-green">✓ complete</span>';
+    else h += '<span class="badge badge-orange">incomplete</span>';
+    h += '<div class="mono" style="font-size:10px;margin-top:3px;max-width:340px;">'+esc(kbCounts(m))+'</div>';
+    (m.gaps || []).forEach(gap => { h += '<div style="font-size:10px;color:var(--orange);">'+esc(gap)+'</div>'; });
+    h += '<div style="margin-top:4px;">'
+      + '<button class="btn btn-sec btn-sm" data-click="viewDocumentGraph" data-koid="'+esc(doc.koid)+'">View graph</button> '
+      + '<button class="btn btn-sec btn-sm" data-click="browseDocument" data-koid="'+esc(doc.koid)+'">Browse all</button> '
+      + '<button class="btn btn-sec btn-sm" data-click="removeDocumentKnowledge" data-koid="'+esc(doc.koid)+'" title="Remove its knowledge from the knowledge base (the document stays ingested)">Remove</button></div>';
+  } else if (g.status === 'failed' || g.status === 'interrupted') {
+    h += '<div style="color:var(--red);font-size:11px;">'+esc(g.status === 'interrupted' ? 'Saving was interrupted by a server restart.' : (g.message || 'Saving failed.'))+'</div>';
+    h += '<button class="btn btn-pri btn-sm" data-click="saveDocument" data-koid="'+esc(doc.koid)+'">Save again</button>';
+  } else {
+    h += '<span style="color:var(--muted);font-size:11px;">not saved</span> ';
+    if (!busy) h += '<button class="btn btn-pri btn-sm" data-click="saveDocument" data-koid="'+esc(doc.koid)+'" title="Store this document in the knowledge base: every page, chunk, entity and relation">Save to knowledge base</button>';
+  }
+  return h;
+}
+async function saveDocument(koid) {
+  if (!window.confirm('Save this document into the knowledge base?\n\nIt is read in full and every page, chunk, fragment, entity, relation and fact is stored. A large book can take several minutes; you can leave this page.')) return;
+  const msg = document.getElementById('doc-ingest-result');
+  try {
+    await apiPost('/api/v1/documents/commit', {koid});
+    toast('success', 'Saving the document into the knowledge base…');
+    watchSaving(koid);
+    loadDocuments();
+  } catch(e) { msg.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
+}
+function watchSaving(koid) {
+  if (saveWatch) clearTimeout(saveWatch.timer);
+  const me = saveWatch = { koid, timer: null };
+  const msg = document.getElementById('doc-ingest-result');
+  const tick = async () => {
+    if (saveWatch !== me) return;
+    if (!document.getElementById('panel-documents').classList.contains('active')) { saveWatch = null; return; }
+    let d;
+    try { const r = await api('/api/v1/documents/'+encodeURIComponent(koid)+'/status'); d = r.data || r; }
+    catch(e) { saveWatch = null; msg.innerHTML = '<div class="error-text">Could not read the saving status: '+esc(e.message)+'</div>'; return; }
+    if (saveWatch !== me) return;
+    const g = d.graph || {};
+    if (g.status === 'saving') {
+      msg.innerHTML = '<div class="card"><b>Saving to the knowledge base…</b> '+esc(g.phase || '')+esc(g.total ? ' — '+g.progress+' of '+g.total+' objects written' : '')+'<div style="font-size:11px;color:var(--muted);margin-top:4px;">Compiling a large book takes minutes. You can leave this page; the result is shown in the Knowledge base column.</div></div>';
+      loadDocumentsQuiet();
+      me.timer = setTimeout(tick, 2000);
+      return;
+    }
+    saveWatch = null;
+    if (g.status === 'saved' && g.manifest) {
+      const m = g.manifest;
+      let h = '<div class="card">';
+      if (m.complete) h += '<b style="color:var(--green);">✓ Saved — complete.</b> ';
+      else h += '<b style="color:var(--orange);">Saved, but incomplete.</b> ';
+      h += '<span class="mono" style="font-size:11px;">'+esc(kbCounts(m))+'</span>';
+      h += '<div style="font-size:11px;color:var(--muted);margin-top:4px;">Stored counts were read back from the knowledge base and compared with what was planned. Page text: '+esc(m.page_chars.stored)+' of '+esc(m.page_chars.planned)+' characters.</div>';
+      (m.gaps || []).forEach(gap => { h += '<div style="color:var(--orange);font-size:12px;">'+esc(gap)+'</div>'; });
+      h += '</div>';
+      msg.innerHTML = h;
+    } else {
+      msg.innerHTML = '<div class="error-text">'+esc(g.message || 'Saving did not finish.')+'</div>';
+    }
+    loadDocuments();
+  };
+  tick();
+}
+async function loadDocumentsQuiet() { try { await loadDocuments(); } catch(_) {} }
+async function removeDocumentKnowledge(koid) {
+  if (!window.confirm('Remove this document from the knowledge base?\n\nIts pages, chunks, entities and relations are removed from queries and the graph. The ingested document itself stays and can be saved again.')) return;
+  const msg = document.getElementById('doc-ingest-result');
+  try {
+    const r = (await apiPost('/api/v1/documents/uncommit', {koid})).data;
+    msg.innerHTML = '<div class="card">Removed '+esc((r || {}).removed)+' objects from the knowledge base.</div>';
+    loadDocuments();
+  } catch(e) { msg.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
+}
+
+// ── Browse every saved object, paged (the complete listing; the graph only draws a page) ─────────
+const browse = { koid: null, kind: 'entity', q: '', offset: 0, size: 50 };
+const BROWSE_KINDS = ['entity', 'chunk', 'page', 'fact', 'fragment'];
+const KIND_LABEL = {entity: 'entities', chunk: 'chunks', page: 'pages', fact: 'facts', fragment: 'fragments'};
+function browseDocument(koid) { Object.assign(browse, {koid: koid, kind: 'entity', q: '', offset: 0}); return renderBrowse(); }
+async function renderBrowse() {
+  const el = document.getElementById('doc-browse');
+  if (!browse.koid) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const url = '/api/v1/documents/objects?koid='+encodeURIComponent(browse.koid)+'&kind='+encodeURIComponent(browse.kind)+'&offset='+browse.offset+'&limit='+browse.size+(browse.q ? '&q='+encodeURIComponent(browse.q) : '');
+    const r = (await api(url)).data || {};
+    const rows = r.rows || [];
+    let h = '<div class="card"><h4>Everything saved for this document</h4>';
+    h += '<div style="margin:6px 0;">';
+    BROWSE_KINDS.forEach(k => { h += '<button class="btn '+esc(k === browse.kind ? 'btn-pri' : 'btn-sec')+' btn-sm" data-click="browseKind" data-kind="'+esc(k)+'">'+esc(KIND_LABEL[k])+'</button> '; });
+    h += '<input id="browse-q" placeholder="Search text…" value="'+esc(browse.q)+'" aria-label="Search saved text" style="margin-left:8px;"> <button class="btn btn-sec btn-sm" data-click="browseSearch">Search</button>';
+    h += ' <button class="btn btn-sec btn-sm" data-click="browseClose">Close</button></div>';
+    const from = rows.length ? r.offset + 1 : 0;
+    h += '<div style="font-size:12px;margin-bottom:6px;"><b>'+esc(from)+'–'+esc(r.offset + rows.length)+' of '+esc(r.total)+'</b> '+esc(KIND_LABEL[browse.kind])+esc(browse.q ? ' matching “'+browse.q+'”' : '')+' — every one is reachable with Next.</div>';
+    h += '<table class="data-table"><thead><tr><th>#</th><th>Page</th><th>Text / name</th><th>Type</th><th>Links</th><th></th></tr></thead><tbody>';
+    rows.forEach(x => { h += '<tr><td>'+esc(x.ordinal)+'</td><td>'+esc(x.page)+'</td><td style="max-width:640px;">'+esc(x.label)+'</td><td>'+esc(x.entity_type)+'</td><td>'+esc(x.links)+'</td><td><button class="btn btn-sec btn-sm" data-click="openInInspector" data-koid="'+esc(x.koid)+'">Inspect</button></td></tr>'; });
+    h += '</tbody></table>';
+    h += '<div style="margin-top:6px;"><button class="btn btn-sec btn-sm" data-click="browsePage" data-dir="-1" '+esc(browse.offset > 0 ? '' : 'disabled')+'>Previous</button> <button class="btn btn-sec btn-sm" data-click="browsePage" data-dir="1" '+esc(r.next_offset !== null && r.next_offset !== undefined ? '' : 'disabled')+'>Next</button></div></div>';
+    el.innerHTML = h;
+  } catch(e) { el.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
+}
+function browseKind(kind) { Object.assign(browse, {kind: kind, offset: 0}); return renderBrowse(); }
+function browseSearch() { browse.q = (document.getElementById('browse-q').value || '').trim(); browse.offset = 0; return renderBrowse(); }
+function browsePage(dir) { browse.offset = Math.max(0, browse.offset + dir * browse.size); return renderBrowse(); }
+
 async function loadDocuments() {
   const el = document.getElementById('documents-list');
   try {
     const d = await api('/api/v1/list-documents');
     const docs = (d.documents || d.data?.documents || []);
     if (!docs.length) { el.innerHTML = '<div class="empty-state">No documents ingested yet. Upload one above.</div>'; return; }
-    let html = '<table class="data-table"><thead><tr><th>KOID</th><th>Filename</th><th>Type</th><th>Size</th><th>Status</th><th>SHA-256</th><th>Actions</th></tr></thead><tbody>';
+    let html = '<table class="data-table"><thead><tr><th>KOID</th><th>Filename</th><th>Type</th><th>Size</th><th>Status</th><th>Knowledge base</th><th>SHA-256</th><th>Actions</th></tr></thead><tbody>';
     for (const doc of docs) {
       const sz = doc.size_bytes < 1024 ? doc.size_bytes+' B' : doc.size_bytes < 1048576 ? (doc.size_bytes/1024).toFixed(1)+' KB' : (doc.size_bytes/1048576).toFixed(1)+' MB';
       const busy = doc.status === 'processing' || doc.status === 'interrupted';
+      const hp = kbCell(doc);
       const shown = doc.status === 'processing' ? doc.status+' '+(doc.batches_done||0)+'/'+(doc.batches_total||0) : doc.status;
       const compileTip = doc.status === 'processing' ? 'Still processing in batches — Compile is available once every batch has finished.' : 'Processing was interrupted — upload the file again to finish it.';
-      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td><span class="badge '+esc(doc.status === 'extracted' || doc.status === 'ocr_complete' ? 'badge-green' : doc.status === 'ocr_unavailable' || doc.status === 'ocr_partial' || doc.status === 'ocr_disabled' || doc.status === 'partial' ? 'badge-orange' : doc.status === 'limit_exceeded' || doc.status === 'interrupted' ? 'badge-red' : doc.status === 'processing' ? 'badge-cyan' : '')+'" title="'+esc(doc.message || ocrNotice(doc.status, doc.char_count))+'">'+esc(shown)+'</span></td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" data-click="compileDocument" '+esc(busy ? 'disabled' : '')+' title="'+esc(busy ? compileTip : 'Run the document compiler')+'">Compile</button></td></tr>';
+      html += '<tr><td class="mono"><a href="#" data-koid="'+esc(doc.koid)+'" data-click="openInInspector" style="color:var(--accent);">'+esc(doc.koid.substring(0,16))+'...</a></td><td>'+esc(doc.filename)+'</td><td>'+esc(doc.mime_type)+'</td><td>'+esc(sz)+'</td><td><span class="badge '+esc(doc.status === 'extracted' || doc.status === 'ocr_complete' ? 'badge-green' : doc.status === 'ocr_unavailable' || doc.status === 'ocr_partial' || doc.status === 'ocr_disabled' || doc.status === 'partial' ? 'badge-orange' : doc.status === 'limit_exceeded' || doc.status === 'interrupted' ? 'badge-red' : doc.status === 'processing' ? 'badge-cyan' : '')+'" title="'+esc(doc.message || ocrNotice(doc.status, doc.char_count))+'">'+esc(shown)+'</span></td><td>'+hp+'</td><td class="mono" style="font-size:9px;">'+esc(doc.sha256.substring(0,12))+'...</td><td><button class="btn btn-pri btn-sm" data-koid="'+esc(doc.koid)+'" data-click="compileDocument" '+esc(busy ? 'disabled' : '')+' title="'+esc(busy ? compileTip : 'Run the document compiler')+'">Compile</button></td></tr>';
     }
     html += '</tbody></table>';
     el.innerHTML = html;
     // back on the panel with a document still in batches: keep watching it
     const running = docs.find(d => d.status === 'processing');
     if (running && !batchWatch) watchBatches(running.koid);
+    const saving = docs.find(d => d.graph && d.graph.status === 'saving');
+    if (saving && !saveWatch) watchSaving(saving.koid);
   } catch(e) { el.innerHTML = '<div class="error-text">'+esc(e.message)+'</div>'; }
 }
 
@@ -1913,6 +2078,9 @@ async function compileDocument(koid) {
     };
 
     let html = '<div class="card" style="margin-bottom:12px;"><h4>🔬 Compilation Results</h4>';
+    // Compile is a dry run: nothing is stored until the document is saved
+    html += '<div style="margin-bottom:8px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px;"><b>Preview — nothing is stored.</b> To make this document part of the knowledge base (and its graph), save it: every page, chunk, entity and relation is stored and verified. '
+      + '<button class="btn btn-pri btn-sm" data-click="saveDocument" data-koid="'+esc(koid)+'">Save to knowledge base</button></div>';
     if (r.extraction_status && !r.total_chars) {
       html += '<div style="margin-bottom:8px;color:var(--orange);">'+esc(ocrNotice(r.extraction_status, 0) || 'No text was extracted from this document.')+'</div>';
     }
@@ -2347,7 +2515,7 @@ const ACTIONS = Object.assign(Object.create(null), {
   runQuery: el => runQuery(),
   explainQuery: el => explainQuery(),
   streamQuery: el => streamQuery(),
-  loadGraph: el => loadGraph(),
+  loadGraph: el => { graphDocView = null; return loadGraph(); },
   loadGraphAll: el => loadGraphAll(),
   renderExplorerTree: el => renderExplorerTree(),
   saveOntology: el => saveOntology(),
@@ -2382,6 +2550,17 @@ const ACTIONS = Object.assign(Object.create(null), {
   loadProgramDeps: el => loadProgramDeps(el.dataset.koid),
   runBenchmark: el => runBenchmark(el.dataset.koid),
   compileDocument: el => compileDocument(el.dataset.koid),
+  saveDocument: el => saveDocument(el.dataset.koid),
+  removeDocumentKnowledge: el => removeDocumentKnowledge(el.dataset.koid),
+  viewDocumentGraph: el => viewDocumentGraph(el.dataset.koid),
+  graphKind: el => graphKind(el.dataset.kind),
+  graphPage: el => graphPage(Number(el.dataset.dir)),
+  graphPickDocument: el => graphPickDocument(el.value),
+  browseDocument: el => browseDocument(el.dataset.koid),
+  browseKind: el => browseKind(el.dataset.kind),
+  browseSearch: el => browseSearch(),
+  browsePage: el => browsePage(Number(el.dataset.dir)),
+  browseClose: el => { browse.koid = null; return renderBrowse(); },
   loadSourcesPanel: el => loadSourcesPanel(),
   discoverSource: el => discoverSource(el.dataset.name),
   previewSourceOntology: el => previewSources(),
