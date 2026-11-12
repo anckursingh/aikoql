@@ -3431,7 +3431,7 @@ fn committer_loop(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        commit_group(
+        if !commit_group(
             &group,
             &wal,
             &state,
@@ -3443,7 +3443,13 @@ fn committer_loop(
             &wstats,
             &mut seqs,
             &mut fail_next,
-        );
+        ) {
+            // PROD-9: the WAL holds a tail this committer could neither
+            // make durable nor cut back. Stop: with the queue's receiver
+            // gone every later write fails at submit instead of landing
+            // behind a torn frame, where replay would never reach it.
+            return;
+        }
     }
 }
 
@@ -3468,7 +3474,7 @@ fn commit_group(
     wstats: &Arc<WriteStats>,
     seqs: &mut Vec<u64>,
     fail_next: &mut bool,
-) {
+) -> bool {
     // P3-M2 — group shape (design §21): batches per group, ops per group,
     // the widest group so far.
     let group_ops: u64 = group.iter().map(|b| b.0.len() as u64).sum();
@@ -3487,8 +3493,13 @@ fn commit_group(
     // P5-M38 — hoisted: the apply-if captures it under the lock, the
     // flush (outside the lock) consumes it.
     let mut need_flush = false;
+    // PROD-9: what the WAL phase must give back if the group is not made
+    // durable — its seqs, and every byte it appended.
+    let first_seq = st.next_seq;
+    let mut wal_usable = true;
     {
         let mut wal = wal.lock().unwrap();
+        let group_start = wal.seek(SeekFrom::End(0));
         for (ops, _) in group {
             let seq = st.next_seq;
             st.next_seq += 1;
@@ -3526,6 +3537,16 @@ fn commit_group(
                 ),
                 Err(e) => outcome = Err(FormatError::Io(format!("WAL sync: {e}"))),
             }
+        }
+        if outcome.is_err() {
+            // PROD-9: nothing of this group is durable, so nothing of it
+            // may stay — the same rule as the Sync path (PROD-6). The
+            // seqs go back (`last_seq` never names a write that does not
+            // exist, and the next group's frames are contiguous), and the
+            // tail is cut back to where the group began: a torn frame left
+            // in place would hide every later acked frame from replay.
+            st.next_seq = first_seq;
+            wal_usable = group_start.and_then(|at| wal.set_len(at)).is_ok();
         }
     }
     if outcome.is_ok() {
@@ -3638,6 +3659,7 @@ fn commit_group(
         let _ = ack_tx.send(outcome.clone().map(|()| *seq));
     }
     crash_park("AIKOQL_V2_GROUP_PARK", &config.dir, "after_ack");
+    wal_usable
 }
 
 /// SEGMENT-*.seg files the manifest does not reference. Reported and
