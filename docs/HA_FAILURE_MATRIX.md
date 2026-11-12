@@ -52,6 +52,17 @@ neighbouring test exists but not this fault. **none** — no test found.
   append consumed its seq, leaving a hole in the replication log; the
   seq is now taken only once the frame is durable, and a failed append
   cuts the WAL's tail back (PROD-6).
+- **Same shape, not fixed:** the group-commit write path
+  (`DurabilityMode::GroupCommit`, the committer loop in `db.rs`) also
+  takes each seq before its frame is appended and does not cut the tail
+  back on a failed append. The server opens the engine in the default
+  `Sync` mode, so it does not run that path; anything that turns group
+  commit on inherits the row-12 defect until it gets the same fix and
+  test.
+- **A planned stop over TCP does not release the lease:** PROD-3 settles
+  on a signal and when the stdio loop ends, not when the TCP accept loop
+  ends after the `shutdown` method. That exit falls back to the TTL —
+  safe, slower.
 - **No test at all:** interrupted bootstrap (9), clock skew (15).
 - **Tested next door, not on the fault:** a held partition (5), a crash
   during a checkpoint (8), certificate expiry and rotation (14).
