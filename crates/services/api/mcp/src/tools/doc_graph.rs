@@ -99,6 +99,25 @@ fn cut(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+/// The first `n` characters of `s` on one line, with an ellipsis when cut: what a person sees as a name.
+fn excerpt(s: &str, n: usize) -> String {
+    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() > n {
+        format!("{}…", cut(&one_line, n))
+    } else {
+        one_line
+    }
+}
+
+/// "page 5" or "pages 12–13".
+fn page_range(start: u32, end: u32) -> String {
+    if end <= start {
+        format!("page {start}")
+    } else {
+        format!("pages {start}–{end}")
+    }
+}
+
 /// entity name -> (ontology class, attributes) from the compiler's commit plan
 type ClassOf = HashMap<String, (Option<String>, Vec<(String, String)>)>;
 
@@ -201,6 +220,7 @@ fn plan_objects(
         let mut props = BTreeMap::new();
         base(&mut props, i);
         props.insert("page".into(), int(p.page_number as usize));
+        props.insert("name".into(), text(&format!("Page {}", p.page_number)));
         props.insert("text".into(), text(&p.text));
         props.insert("char_count".into(), int(p.text.chars().count()));
         props.insert("source".into(), text(&p.source));
@@ -258,9 +278,18 @@ fn plan_objects(
     let mut covered: BTreeSet<u32> = BTreeSet::new();
     for (i, ec) in cr.embedded_chunks.iter().enumerate() {
         let c = &ec.chunk;
-        let koid = id("chunk", &format!("{i}:{}", c.chunk_id));
+        let koid = id("chunk", &i.to_string());
         let mut props = BTreeMap::new();
         base(&mut props, i);
+        props.insert(
+            "name".into(),
+            text(&format!(
+                "Chunk {} · {}: {}",
+                i + 1,
+                page_range(c.position.start_page, c.position.end_page),
+                excerpt(&c.text, 60)
+            )),
+        );
         props.insert("chunk_id".into(), text(&c.chunk_id));
         props.insert("chunk_index".into(), int(c.position.chunk_index));
         props.insert("start_page".into(), int(c.position.start_page as usize));
@@ -306,6 +335,14 @@ fn plan_objects(
         let mut props = BTreeMap::new();
         base(&mut props, n);
         props.insert(
+            "name".into(),
+            text(&format!(
+                "Chunk · page {}: {}",
+                p.page_number,
+                excerpt(&p.text, 60)
+            )),
+        );
+        props.insert(
             "chunk_id".into(),
             text(&format!("page-text/{}", p.page_number)),
         );
@@ -338,9 +375,22 @@ fn plan_objects(
 
     // fragments: the compiler's canonical segmentation, tables and images included
     for (i, f) in cr.fragments.iter().enumerate() {
-        let koid = id("fragment", &format!("{i}:{}", f.fragment_id));
+        let koid = id("fragment", &i.to_string());
         let mut props = BTreeMap::new();
         base(&mut props, i);
+        let frag_page = f.context.page.or_else(|| f.source.as_ref().map(|s| s.page));
+        let frag_what = match &f.content {
+            FragmentContent::Text(t) | FragmentContent::Code(t) => excerpt(t, 60),
+            _ => "(non-text content)".to_string(),
+        };
+        props.insert(
+            "name".into(),
+            text(&format!(
+                "{:?} fragment{}: {frag_what}",
+                f.modality,
+                frag_page.map_or(String::new(), |p| format!(" · page {p}"))
+            )),
+        );
         props.insert("fragment_id".into(), text(&f.fragment_id));
         props.insert("modality".into(), text(&format!("{:?}", f.modality)));
         props.insert("confidence".into(), Value::Float(f64::from(f.confidence)));
@@ -394,6 +444,7 @@ fn plan_objects(
         let koid = id("fact", &i.to_string());
         let mut props = BTreeMap::new();
         base(&mut props, i);
+        props.insert("name".into(), text(&excerpt(&f.statement, 80)));
         props.insert("statement".into(), text(&f.statement));
         props.insert("confidence".into(), Value::Float(f64::from(f.confidence)));
         props.insert("entities".into(), text(&f.entities.join("; ")));
@@ -687,7 +738,7 @@ pub(crate) fn list_objects(k: &Kernel, args: &J) -> Result<J, String> {
         .skip(offset)
         .take(limit)
         .map(|o| {
-            let label = ["name", "statement", "text", "content"]
+            let label = ["statement", "text", "content", "name"]
                 .iter()
                 .map(|p| get(o, p))
                 .find(|v| !v.is_empty())
@@ -955,6 +1006,7 @@ pub(crate) fn tool_document_commit(k: &Kernel, args: &J, db_path: &str) -> Resul
                 &mime,
                 &artifact,
                 batches_total,
+                &koid.to_hex(),
             )?;
             let failed =
                 batches.map_or(0, |b| b.iter().filter(|x| x["status"] == "failed").count());
@@ -1400,6 +1452,12 @@ mod tests {
                 >= 1,
             "{info}"
         );
+        let first_chunk = live(&k, T_CHUNK, None).into_iter().next().unwrap();
+        assert!(
+            matches!(first_chunk.properties.get("chunk_id"), Some(Value::Text(t)) if t.starts_with(&koid)),
+            "chunks are named after the document: {:?}",
+            first_chunk.properties.get("chunk_id")
+        );
         // removal takes it all out and says so
         let gone = tool_document_uncommit(&k, &json!({"koid": koid})).unwrap();
         assert!(gone["removed"].as_u64().unwrap() > 0, "{gone}");
@@ -1581,5 +1639,78 @@ mod tests {
             .unwrap_err();
         assert!(e.contains("missing pages"), "{e}");
         assert!(live(&k, T_PAGE, None).is_empty(), "nothing was written");
+    }
+
+    #[test]
+    fn every_saved_object_has_a_readable_name_not_just_an_id() {
+        let (k, doc) = (kernel(), document());
+        let cr = compiled(&doc);
+        let ko = ingest(&k, None, "names");
+        save(&k, &ko, &doc, &cr);
+        for ty in DOC_TYPES {
+            for o in live(&k, ty, None) {
+                match o.properties.get("name") {
+                    Some(Value::Text(n)) if !n.trim().is_empty() => {}
+                    other => panic!("{ty} object has no readable name: {other:?}"),
+                }
+            }
+        }
+        let name_of = |ty: &str, want_page: i64| {
+            live(&k, ty, None)
+                .into_iter()
+                .find(|o| {
+                    o.properties.get("page") == Some(&Value::Int(want_page))
+                        || o.properties.get("start_page") == Some(&Value::Int(want_page))
+                })
+                .and_then(|o| match o.properties.get("name") {
+                    Some(Value::Text(n)) => Some(n.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(name_of(T_PAGE, 5), "Page 5");
+        let chunk = name_of(T_CHUNK, 5);
+        assert!(
+            chunk.contains("page 5") && chunk.contains("Alice"),
+            "a chunk is named by its pages and its first words: {chunk}"
+        );
+        // the graph's label for a node is its name, not an identifier
+        let c = live(&k, T_CHUNK, None).into_iter().next().unwrap();
+        let label = crate::http::node_label(&c, 80);
+        assert!(!label.contains("unknown/"), "{label}");
+    }
+
+    #[test]
+    fn object_ids_do_not_depend_on_the_compilers_chunk_ids() {
+        let (k, doc) = (kernel(), document());
+        let ko = ingest(&k, None, "stable");
+        let plain = compiled(&doc); // chunk ids read unknown/chunk-N
+        save(&k, &ko, &doc, &plain);
+        let ids = |t: &str| -> std::collections::BTreeSet<_> {
+            live(&k, t, None).into_iter().map(|o| o.koid).collect()
+        };
+        let (chunks, frags) = (ids(T_CHUNK), ids(T_FRAGMENT));
+        // the same document compiled with its identity: new chunk and fragment ids, same objects
+        let named = aikoql_ingestion::compile_document_mock_with_policy_for(
+            &doc,
+            &[],
+            None,
+            &Default::default(),
+            Some(&ko.koid.to_hex()),
+        );
+        save(&k, &ko, &doc, &named);
+        assert_eq!(
+            ids(T_CHUNK),
+            chunks,
+            "re-saving after the id change updates in place"
+        );
+        assert_eq!(ids(T_FRAGMENT), frags);
+        assert!(
+            live(&k, T_CHUNK, None).iter().all(|c| matches!(
+                c.properties.get("chunk_id"),
+                Some(Value::Text(t)) if t.starts_with(&ko.koid.to_hex())
+            )),
+            "and the stored chunk ids now name the document"
+        );
     }
 }
