@@ -23,6 +23,27 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 - Ontology discovery from connector metadata proposes one class per container instead of one per source kind.
 - Robustness: seeded fuzz and adversarial suites (`scripts/fuzz-sources.sh`).
 
+### Ontology in practice: identity keys and links (docs/ONTOLOGY-IN-PRACTICE.md)
+- **Identity keys** (`identities` on `POST /api/v1/sources/ontology`, proposed in the preview with evidence):
+  a re-imported row updates in place and builds a version history even for a view; vanished rows are
+  retired; an ambiguous or missing key is refused instead of collapsing rows.
+- **Links** (`relationships`): "this column references that container's key", across sources, materialized
+  as relationships at import and walked with `TRAVERSE`; unresolved references are reported, never guessed.
+- **Assertions + `POST /api/v1/sources/resolve`**: rows of several sources become claims about one canonical
+  entity; disagreements are `aikoql:contradiction` objects decided by a declared source rank.
+- **Studio ontology workbench**: accept keys and links, declare source authority, and reconcile a class from the
+  UI; the Ontology panel shows keys, links and authority per mapping and lists contradictions with the rule that
+  decided them. The raw definition editor moved under *Advanced*.
+- **Ingestion fix:** a PDF of 10 or more pages that needed OCR could never be OCR'd (`pdftoppm` pads page
+  numbers, the image was looked up unpadded); the cover page of a 1,446-page book failed with `ocr_partial`. OCR
+  failures now carry tesseract's own message (`ocr_stats.failures`, the ingest response, Studio, the log).
+- **`document_compile` is bounded** (`limit`, `max_text`; `truncated` reports every cut): a large book returned
+  83 MB, more than a browser can hold. See docs/LOGGING.md.
+- **Persistent server log**: `<db>.server.log`, size-rotated, appended across restarts, panics included;
+  `[logging] file` / `AIKOQL_LOG_FILE` / `off`. See docs/LOGGING.md.
+- A later publish now carries a key or link declared after the first publish (it silently ignored them).
+- ClickHouse's "primary key" is a sort prefix, not an identity.
+
 ### Studio: a keyboard-first, accessible, routable console (docs/STUDIO-ENHANCEMENTS.md)
 - **Navigation:** panels have addresses (`#/ontology`) — refresh, Back/Forward and pasted links work; grouped,
   always-labelled navigation (labels appear on keyboard focus on narrow screens), a skip link, a visible focus

@@ -4,6 +4,7 @@
 pub(crate) mod import;
 pub(crate) mod introspect;
 pub(crate) mod ontology;
+pub(crate) mod resolve;
 pub(crate) mod service;
 pub(crate) mod store;
 #[cfg(test)]

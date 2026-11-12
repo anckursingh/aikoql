@@ -1499,3 +1499,452 @@ fn clickhouse_expression_and_oddly_named_sorting_keys_import() {
     assert_eq!(weird, [1, 2, 9]);
     exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
 }
+
+/// Case study (docs/ONTOLOGY-IN-PRACTICE.md, Phase A): a per-device aggregate VIEW in
+/// ClickHouse has no key of its own. The preview proposes `visitor_id` with its
+/// evidence, the owner declares it, and re-imports then keep ONE object per device
+/// with a version history — instead of a new object per change.
+#[test]
+fn a_declared_key_gives_a_clickhouse_view_one_object_per_device_and_a_history() {
+    let Some(ch) = connectors::Live::clickhouse() else {
+        return;
+    };
+    let db = format!("md_idk_{}", std::process::id());
+    let exec = |stmts: &[String]| {
+        let refs: Vec<&str> = stmts.iter().map(String::as_str).collect();
+        connectors::clickhouse_exec(&ch.clickhouse_url, "default", &refs);
+    };
+    exec(&[
+        format!("DROP DATABASE IF EXISTS {db}"),
+        format!("CREATE DATABASE {db}"),
+        format!("CREATE TABLE {db}.devices (visitor_id String, updated_at DateTime, risk Float32) ENGINE = ReplacingMergeTree(updated_at) ORDER BY visitor_id"),
+        format!("INSERT INTO {db}.devices SELECT concat('v', toString(number)), now(), 0.1 FROM numbers(20)"),
+        format!("CREATE TABLE {db}.visits (visitor_id String, ts DateTime, ip String) ENGINE = MergeTree ORDER BY (visitor_id, ts)"),
+        format!("INSERT INTO {db}.visits SELECT concat('v', toString(number % 20)), now() - number, '203.0.113.1' FROM numbers(200)"),
+        format!("CREATE VIEW {db}.device_activity AS SELECT visitor_id, count() AS visit_count, uniqExact(ip) AS ips FROM {db}.visits GROUP BY visitor_id"),
+    ]);
+    let l = Live::start(
+        "idkey",
+        &format!("[[sources]]\nname = \"olap\"\nkind = \"clickhouse\"\nurl_env = \"MD_CH\"\ndatabase = \"{db}\"\n"),
+        &[("MD_CH", &ch.clickhouse_url)],
+        &["aikoql-dev-only"],
+    );
+    l.post(
+        "/api/v1/sources/discover",
+        serde_json::json!({"source": "olap"}),
+    );
+    let p = l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["olap"], "preview": true}),
+    );
+    let sug = |c: &str| {
+        p["identities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["container"] == c)
+            .cloned()
+            .unwrap_or_else(|| panic!("no suggestion for {c}: {}", p["identities"]))
+    };
+    let devices = sug("olap.devices");
+    assert_eq!(
+        (devices["declared"].clone(), devices["columns"].clone()),
+        (true.into(), serde_json::json!(["visitor_id"])),
+        "{devices}"
+    );
+    let activity = sug("olap.device_activity");
+    assert_eq!(
+        (activity["declared"].clone(), activity["columns"].clone()),
+        (false.into(), serde_json::json!(["visitor_id"])),
+        "{activity}"
+    );
+    assert!(
+        activity["evidence"].to_string().contains("Device"),
+        "{activity}"
+    );
+    assert_eq!(
+        sug("olap.visits")["columns"],
+        serde_json::json!([]),
+        "a table of events gets no guessed key"
+    );
+
+    // the owner accepts the proposal; it is recorded in the published mapping
+    l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["olap"], "preview": false, "fingerprints": p["fingerprints"],
+                           "identities": {"olap.device_activity": ["visitor_id"]}}),
+    );
+    let onto = data(&l.call("GET", "/api/v1/ontology", serde_json::json!({})));
+    let mapping = |t: &str| {
+        onto["properties"]["mappings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["physical_type"] == t)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        mapping("device_activity")["identity"],
+        serde_json::json!(["visitor_id"])
+    );
+    assert_eq!(
+        mapping("devices")["identity"],
+        serde_json::json!(["visitor_id"]),
+        "a replacing key is recorded as the identity"
+    );
+
+    let first = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["device_activity", "devices"]}),
+    );
+    assert_eq!(
+        (
+            first["imported"]["device_activity"].clone(),
+            first["imported"]["devices"].clone()
+        ),
+        (20.into(), 20.into()),
+        "{first}"
+    );
+    // one more visit for one device, then the same import again
+    exec(&[format!(
+        "INSERT INTO {db}.visits VALUES ('v3', now(), '198.51.100.7')"
+    )]);
+    let again = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["device_activity"]}),
+    );
+    assert_eq!(
+        (
+            again["imported"]["device_activity"].clone(),
+            again["unchanged"]["device_activity"].clone()
+        ),
+        (1.into(), 19.into()),
+        "{again}"
+    );
+    assert_eq!(again["pruned"]["device_activity"], 0, "{again}");
+    let all = query(&l, "MATCH device_activity RETURN *");
+    assert_eq!(
+        all["results"].as_array().unwrap().len(),
+        20,
+        "one object per device, not 21: {all}"
+    );
+    let hist = query(
+        &l,
+        "MATCH device_activity WHERE visitor_id == \"v3\" HISTORICAL RETURN *",
+    );
+    let counts: Vec<i64> = hist["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["properties"]["visit_count"].as_i64().unwrap())
+        .collect();
+    assert_eq!(
+        counts.len(),
+        2,
+        "device v3 has a history of two versions: {hist}"
+    );
+    assert!(counts[1] > counts[0], "the aggregate grew: {counts:?}");
+    l.assert_no_secret_anywhere();
+    exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
+}
+
+/// Case study (docs/ONTOLOGY-IN-PRACTICE.md, Phase B): which accounts share a device?
+/// ClickHouse has no foreign keys and the accounts live in Postgres. The preview proposes
+/// the links from the keys, the owner accepts them, import materializes them as
+/// relationships across both databases, and TRAVERSE walks them in both directions.
+#[test]
+fn accounts_sharing_a_device_are_a_traversal_across_clickhouse_and_postgres() {
+    let (Some(ch), Some(pg)) = (connectors::Live::clickhouse(), connectors::Live::pg()) else {
+        return;
+    };
+    let pid = std::process::id();
+    let db = format!("md_lnk_{pid}");
+    let exec = |stmts: &[String]| {
+        let refs: Vec<&str> = stmts.iter().map(String::as_str).collect();
+        connectors::clickhouse_exec(&ch.clickhouse_url, "default", &refs);
+    };
+    exec(&[
+        format!("DROP DATABASE IF EXISTS {db}"),
+        format!("CREATE DATABASE {db}"),
+        format!("CREATE TABLE {db}.devices (visitor_id String, updated_at DateTime, risk Float32) ENGINE = ReplacingMergeTree(updated_at) ORDER BY visitor_id"),
+        format!("INSERT INTO {db}.devices VALUES ('v1', now(), 0.1), ('v7', now(), 0.9)"),
+        format!("CREATE TABLE {db}.visits (visitor_id String, account_id String, ts DateTime) ENGINE = MergeTree ORDER BY (visitor_id, ts)"),
+        // v7 is used by five accounts, v1 by one
+        format!("INSERT INTO {db}.visits SELECT 'v7', concat('a', toString(number % 5 + 1)), now() - number FROM numbers(50)"),
+        format!("INSERT INTO {db}.visits SELECT 'v1', 'a1', now() - number FROM numbers(10)"),
+        format!("CREATE VIEW {db}.device_accounts AS SELECT visitor_id, account_id, count() AS visit_count FROM {db}.visits GROUP BY visitor_id, account_id"),
+    ]);
+    let dsn = connectors::pg_private_db(&pg.dsn, &format!("cert_multidb_lnk_{pid}"));
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT NOT NULL, status TEXT NOT NULL)",
+            "INSERT INTO accounts SELECT 'a' || g, 'user' || g || '@example.test', 'active' FROM generate_series(1, 6) g",
+        ],
+    );
+    let l = Live::start(
+        "links",
+        &format!("[[sources]]\nname = \"olap\"\nkind = \"clickhouse\"\nurl_env = \"MD_CH\"\ndatabase = \"{db}\"\n\n[[sources]]\nname = \"crm\"\nkind = \"postgres\"\nurl_env = \"MD_PG\"\n"),
+        &[("MD_CH", &ch.clickhouse_url), ("MD_PG", &dsn)],
+        &["aikoql-dev-only"],
+    );
+    for s in ["olap", "crm"] {
+        l.post("/api/v1/sources/discover", serde_json::json!({"source": s}));
+    }
+    let key = serde_json::json!({"olap.device_accounts": ["visitor_id", "account_id"]});
+    let p = l.post(
+        "/api/v1/sources/ontology",
+        serde_json::json!({"sources": ["olap", "crm"], "preview": true, "identities": key}),
+    );
+    let sug = |from: &str| {
+        p["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["from"] == from)
+            .cloned()
+            .unwrap_or_else(|| panic!("no link from {from}: {}", p["links"]))
+    };
+    let dev = sug("olap.device_accounts.visitor_id");
+    assert_eq!(
+        (dev["name"].as_str(), dev["to"].as_str()),
+        (Some("for_device"), Some("olap.devices.visitor_id")),
+        "{dev}"
+    );
+    let acct = sug("olap.device_accounts.account_id");
+    assert_eq!(
+        (acct["name"].as_str(), acct["to"].as_str()),
+        (Some("for_account"), Some("crm.accounts.id")),
+        "across sources: {acct}"
+    );
+
+    // the owner accepts both proposals
+    let relationships: Vec<serde_json::Value> = [&dev, &acct]
+        .iter()
+        .map(|s| serde_json::json!({"name": s["name"], "from": s["from"], "to": s["to"]}))
+        .collect();
+    let applied = l.post("/api/v1/sources/ontology", serde_json::json!({"sources": ["olap", "crm"], "preview": true, "identities": key, "relationships": relationships}));
+    assert!(
+        applied["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| !s["from"]
+                .as_str()
+                .unwrap()
+                .starts_with("olap.device_accounts.")),
+        "accepted links are not offered again: {}",
+        applied["links"]
+    );
+    let published = l.post("/api/v1/sources/ontology", serde_json::json!({"sources": ["olap", "crm"], "preview": false, "fingerprints": applied["fingerprints"], "identities": key, "relationships": relationships}));
+    assert_eq!(published["saved"], true, "{published}");
+
+    // targets first, then the link table
+    l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["devices"]}),
+    );
+    l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "crm", "containers": ["accounts"]}),
+    );
+    let i = l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["device_accounts"]}),
+    );
+    assert_eq!(
+        i["imported"]["device_accounts"], 6,
+        "(v7 x 5 accounts) + (v1 x 1): {i}"
+    );
+    let stats = &i["links"]["device_accounts"];
+    assert_eq!(
+        (
+            stats["for_device"]["linked"].clone(),
+            stats["for_account"]["linked"].clone()
+        ),
+        (6.into(), 6.into()),
+        "{i}"
+    );
+    assert_eq!(stats["for_account"]["dangling"], 0, "{i}");
+
+    // a traversal returns objects by id (hydrating properties is Phase E): name them via their rows
+    let name_of = |ty: &str, col: &str| -> std::collections::BTreeMap<String, String> {
+        query(&l, &format!("MATCH {ty} RETURN *"))["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["koid"].as_str().unwrap().to_string(),
+                    r["properties"][col].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    let (account_ids, device_ids) = (name_of("accounts", "id"), name_of("devices", "visitor_id"));
+    let reached = |q: &str, names: &std::collections::BTreeMap<String, String>| -> Vec<String> {
+        let r = query(&l, q);
+        let mut out: Vec<String> = r["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| names[x["koid"].as_str().unwrap()].clone())
+            .collect();
+        out.sort();
+        out
+    };
+    // which accounts share device v7? one hop from its link rows
+    assert_eq!(
+        reached(
+            "MATCH device_accounts WHERE visitor_id == \"v7\" TRAVERSE for_account RETURN *",
+            &account_ids
+        ),
+        ["a1", "a2", "a3", "a4", "a5"]
+    );
+    // and the other way: which devices does a1 use?
+    assert_eq!(
+        reached(
+            "MATCH device_accounts WHERE account_id == \"a1\" TRAVERSE for_device RETURN *",
+            &device_ids
+        ),
+        ["v1", "v7"]
+    );
+    l.assert_no_secret_anywhere();
+    exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
+}
+
+/// Case study question 4 (docs/ONTOLOGY-IN-PRACTICE.md, Phase C): the risk engine says
+/// *block*, the CRM says *active* — which wins, and why? Two databases, one account.
+#[test]
+fn a_crm_and_a_risk_engine_that_disagree_leave_a_contradiction_with_the_rule_that_decides() {
+    let (Some(ch), Some(pg)) = (connectors::Live::clickhouse(), connectors::Live::pg()) else {
+        return;
+    };
+    let pid = std::process::id();
+    let db = format!("md_res_{pid}");
+    let exec = |stmts: &[String]| {
+        let refs: Vec<&str> = stmts.iter().map(String::as_str).collect();
+        connectors::clickhouse_exec(&ch.clickhouse_url, "default", &refs);
+    };
+    exec(&[
+        format!("DROP DATABASE IF EXISTS {db}"),
+        format!("CREATE DATABASE {db}"),
+        format!("CREATE TABLE {db}.risk_decisions (account_id String, decision String, ts DateTime) ENGINE = MergeTree ORDER BY (account_id, ts)"),
+        // acct_0077 was allowed, challenged, allowed, then blocked; acct_0078 is allowed throughout
+        format!("INSERT INTO {db}.risk_decisions VALUES ('acct_0077','allow','2026-01-01 00:00:00'),('acct_0077','challenge','2026-01-02 00:00:00'),('acct_0077','allow','2026-01-03 00:00:00'),('acct_0077','block','2026-01-04 00:00:00'),('acct_0078','allow','2026-01-01 00:00:00')"),
+        // the latest decision per account: one claim per account
+        format!("CREATE VIEW {db}.account_risk AS SELECT account_id, argMax(decision, ts) AS decision FROM {db}.risk_decisions GROUP BY account_id"),
+    ]);
+    let dsn = connectors::pg_private_db(&pg.dsn, &format!("cert_multidb_res_{pid}"));
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT NOT NULL, status TEXT NOT NULL)",
+            "INSERT INTO accounts VALUES ('acct_0077','a@example.test','active'),('acct_0078','b@example.test','allow'),('acct_0079','c@example.test','active')",
+        ],
+    );
+    let l = Live::start(
+        "resolve",
+        &format!("[[sources]]\nname = \"olap\"\nkind = \"clickhouse\"\nurl_env = \"MD_CH\"\ndatabase = \"{db}\"\n\n[[sources]]\nname = \"crm\"\nkind = \"postgres\"\nurl_env = \"MD_PG\"\n"),
+        &[("MD_CH", &ch.clickhouse_url), ("MD_PG", &dsn)],
+        &["aikoql-dev-only"],
+    );
+    for s in ["olap", "crm"] {
+        l.post("/api/v1/sources/discover", serde_json::json!({"source": s}));
+    }
+    // both sources assert the account's `status`; the risk engine outranks the CRM
+    let assertions = serde_json::json!([
+        {"from": "crm.accounts.id", "class": "Account", "properties": {"status": "status"}, "rank": 20},
+        {"from": "olap.account_risk.account_id", "class": "Account", "properties": {"decision": "status"}, "rank": 5},
+    ]);
+    let identities = serde_json::json!({"olap.account_risk": ["account_id"]});
+    let body = |preview: bool, fp: &serde_json::Value| serde_json::json!({"sources": ["olap", "crm"], "preview": preview, "fingerprints": fp, "identities": identities, "assertions": assertions});
+    let p = l.post(
+        "/api/v1/sources/ontology",
+        body(true, &serde_json::json!({})),
+    );
+    let published = l.post("/api/v1/sources/ontology", body(false, &p["fingerprints"]));
+    assert_eq!(published["saved"], true, "{published}");
+    assert!(
+        !published["warnings"]
+            .to_string()
+            .contains("assertion ignored"),
+        "{published}"
+    );
+
+    l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "crm", "containers": ["accounts"]}),
+    );
+    l.post(
+        "/api/v1/sources/import",
+        serde_json::json!({"source": "olap", "containers": ["account_risk"]}),
+    );
+    let r = l.post(
+        "/api/v1/sources/resolve",
+        serde_json::json!({"class": "Account"}),
+    );
+    assert_eq!(
+        (r["entities"].clone(), r["claims"].clone()),
+        (3.into(), 5.into()), // 3 CRM accounts + 2 risk accounts
+        "{r}"
+    );
+    assert_eq!(
+        (
+            r["contradictions"]["resolved"].clone(),
+            r["contradictions"]["open"].clone()
+        ),
+        (1.into(), 0.into()),
+        "{r}"
+    );
+
+    // the disagreement is a queryable object that names both sides, the rule and the winner
+    let found = query(&l, "MATCH aikoql:contradiction RETURN *");
+    let rows = found["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{found}");
+    let c = &rows[0]["properties"];
+    assert_eq!(
+        (
+            c["key"].as_str(),
+            c["property"].as_str(),
+            c["status"].as_str()
+        ),
+        (Some("acct_0077"), Some("status"), Some("resolved")),
+        "{c}"
+    );
+    assert_eq!(c["winner"], "clickhouse.account_risk", "{c}");
+    assert!(c["rule"].as_str().unwrap().contains("rank 5"), "{c}");
+    let mut sides: Vec<(String, String)> = c["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            (
+                v["source"].as_str().unwrap().into(),
+                v["value"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    sides.sort();
+    assert_eq!(
+        sides,
+        [
+            ("clickhouse.account_risk".into(), "block".into()),
+            ("postgres.accounts".into(), "active".into())
+        ],
+        "{c}"
+    );
+
+    // the canonical account carries the winning value (acct_0078 agrees in both: no contradiction)
+    let canon = query(
+        &l,
+        "MATCH aikoql:canonical WHERE key == \"acct_0077\" RETURN *",
+    );
+    assert_eq!(
+        canon["results"][0]["properties"]["values"]["status"], "block",
+        "{canon}"
+    );
+    l.assert_no_secret_anywhere();
+    exec(&[format!("DROP DATABASE IF EXISTS {db}")]);
+}

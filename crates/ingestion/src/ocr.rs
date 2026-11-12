@@ -81,9 +81,24 @@ pub struct OcrStats {
     /// OCR was needed but `ProcessingPolicy.enable_ocr` is off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ocr_disabled: bool,
+    /// Why pages failed (the first few: "page N: <reason>"), so a failure can be diagnosed
+    /// without server logs. Omitted when there were none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<String>,
 }
 
 impl OcrStats {
+    /// Reasons kept per document; every failure is still counted.
+    pub const MAX_FAILURES: usize = 5;
+
+    /// Count a failed page and keep the reason (the first few only).
+    pub fn note_failure(&mut self, page: u32, reason: &str) {
+        self.pages_ocr_failed += 1;
+        if self.failures.len() < Self::MAX_FAILURES {
+            self.failures.push(format!("page {page}: {reason}"));
+        }
+    }
+
     /// Derive the document-level status from OCR statistics.
     pub fn status(&self) -> &'static str {
         if self.ocr_disabled {
@@ -184,6 +199,10 @@ impl OcrProvider for TesseractCli {
         let txt_path = format!("{}.txt", output_base);
         let tsv_path = format!("{}.tsv", output_base);
 
+        // tesseract's own words are the only clue to why it failed: keep them in a file in the
+        // work dir (a file cannot fill up and stall the child the way an unread pipe can).
+        let err_path = format!("{}/ocr_err.txt", work_dir);
+        let err_file = std::fs::File::create(&err_path).map(std::process::Stdio::from);
         // Run tesseract: produce both plain text and TSV.
         let mut child = self
             .tesseract_cmd()
@@ -194,7 +213,7 @@ impl OcrProvider for TesseractCli {
             .arg("txt")
             .arg("tsv")
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(err_file.unwrap_or_else(|_| std::process::Stdio::null()))
             .spawn()
             .map_err(|e| format!("tesseract not found: {}", e))?;
         // A hung tesseract must not hold an ingest request forever.
@@ -214,7 +233,19 @@ impl OcrProvider for TesseractCli {
         };
 
         if !status.success() {
-            return Err("tesseract exited with error".into());
+            let said = std::fs::read_to_string(&err_path).unwrap_or_default();
+            let said: String = said
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(300)
+                .collect();
+            return Err(if said.is_empty() {
+                format!("tesseract exited with {status}")
+            } else {
+                format!("tesseract exited with {status}: {said}")
+            });
         }
 
         let text =
@@ -407,7 +438,10 @@ fn rasterize_with(
     output_dir: &str,
 ) -> Result<String, String> {
     let output_prefix = format!("{}/page-{}", output_dir, page_num);
-    let expected_png = format!("{}-{}.png", output_prefix, page_num);
+    // -singlefile: the image is `<prefix>.png`. Without it pdftoppm pads the page number to the
+    // width of the page count ("-0001" for 1446 pages), so any PDF of 10+ pages had its image
+    // looked up under a name that does not exist and could never be OCR'd.
+    let expected_png = format!("{}.png", output_prefix);
 
     let status = cli
         .pdftoppm_cmd()
@@ -416,6 +450,7 @@ fn rasterize_with(
         .arg("-l")
         .arg(page_num.to_string())
         .arg("-png")
+        .arg("-singlefile")
         .arg("-r")
         .arg("300")
         .arg(pdf_path)
@@ -429,7 +464,26 @@ fn rasterize_with(
         return Err("pdftoppm exited with error".into());
     }
 
-    Ok(expected_png)
+    if std::path::Path::new(&expected_png).exists() {
+        return Ok(expected_png);
+    }
+    // A pdftoppm without -singlefile pads the page number to the width of the page count;
+    // take the one image it wrote for this page rather than guessing the padding.
+    let stem = format!("page-{page_num}-");
+    let found: Vec<std::path::PathBuf> = std::fs::read_dir(output_dir)
+        .map_err(|e| format!("pdftoppm output dir: {e}"))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(&stem) && n.ends_with(".png"))
+        })
+        .collect();
+    match found.as_slice() {
+        [one] => Ok(one.to_string_lossy().into_owned()),
+        [] => Err(format!("pdftoppm wrote no image for page {page_num}")),
+        _ => Err(format!("pdftoppm wrote several images for page {page_num}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -543,7 +597,7 @@ fn ocr_pdf_pages_inner(
                         "rasterize failed for page {}: {} — keeping native text",
                         page.page_number, e
                     );
-                    stats.pages_ocr_failed += 1;
+                    stats.note_failure(page.page_number, &e);
                     merged.push(PageModel {
                         page_number: page.page_number,
                         text: page.text.clone(),
@@ -608,7 +662,7 @@ fn ocr_pdf_pages_inner(
                         "OCR failed for page {}: {} — keeping native text",
                         page.page_number, e
                     );
-                    stats.pages_ocr_failed += 1;
+                    stats.note_failure(page.page_number, &e);
                     merged.push(PageModel {
                         page_number: page.page_number,
                         text: page.text.clone(),
@@ -668,6 +722,112 @@ fn ocr_pdf_pages_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_tesseract_says_why_in_the_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ocr-why-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("tesseract");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\necho 'Error opening data file /x/eng.traineddata' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let t = TesseractCli {
+            tesseract_path: Some(fake.to_str().unwrap().into()),
+            ..TesseractCli::new()
+        };
+        let e = t
+            .recognize("img.png", "eng", dir.to_str().unwrap())
+            .unwrap_err();
+        assert!(e.contains("Error opening data file"), "{e}");
+        assert!(e.contains("exit"), "the exit status is named too: {e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_page_image_is_found_however_pdftoppm_pads_its_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ocr-pad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // like the real tool: the page number is padded to the width of the page count
+        // ("-0001" for a 1446-page file) unless -singlefile is given
+        let fake = dir.join("pdftoppm");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nsingle=0; for a in \"$@\"; do [ \"$a\" = -singlefile ] && single=1; last=$a; done\n\
+             if [ $single = 1 ]; then : > \"$last.png\"; else : > \"$last-0001.png\"; fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cli = TesseractCli {
+            pdftoppm_path: Some(fake.to_str().unwrap().into()),
+            ..TesseractCli::new()
+        };
+        let png = rasterize_with(&cli, "doc.pdf", 1, dir.to_str().unwrap()).unwrap();
+        assert!(
+            std::path::Path::new(&png).exists(),
+            "the image {png} must exist"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failure_reasons_are_kept_capped_and_absent_when_there_are_none() {
+        let mut stats = OcrStats::default();
+        assert!(
+            !serde_json::to_string(&stats).unwrap().contains("failures"),
+            "old payloads are unchanged"
+        );
+        for page in 1..=9 {
+            stats.note_failure(
+                page,
+                "tesseract exited with exit status: 1: cannot read input file",
+            );
+        }
+        assert_eq!(stats.pages_ocr_failed, 9, "every failure is counted");
+        assert_eq!(
+            stats.failures.len(),
+            OcrStats::MAX_FAILURES,
+            "but only a few reasons are kept"
+        );
+        assert!(
+            stats.failures[0].starts_with("page 1: tesseract exited"),
+            "{:?}",
+            stats.failures
+        );
+        let back: OcrStats = serde_json::from_str(&serde_json::to_string(&stats).unwrap()).unwrap();
+        assert_eq!(back.failures, stats.failures);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pdftoppm_that_ignores_singlefile_is_still_found() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ocr-nosingle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("pdftoppm");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nfor a in \"$@\"; do last=$a; done\n: > \"$last-0007.png\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cli = TesseractCli {
+            pdftoppm_path: Some(fake.to_str().unwrap().into()),
+            ..TesseractCli::new()
+        };
+        let png = rasterize_with(&cli, "doc.pdf", 7, dir.to_str().unwrap()).unwrap();
+        assert!(
+            png.ends_with("page-7-0007.png") && std::path::Path::new(&png).exists(),
+            "{png}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // -- Threshold tests --
 

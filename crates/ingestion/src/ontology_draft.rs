@@ -174,7 +174,115 @@ fn align_property(
     aligned.insert((b.key.clone(), fb.to_string()), canon);
 }
 
+/// The key a source itself declares for a container's rows, in column order:
+/// its primary key; failing that its first unique group; failing that, for a
+/// replacing / collapsing ClickHouse table, its sorting key (that engine keeps
+/// the latest row per sorting key, so the key IS the identity). A plain
+/// MergeTree sorting key is not unique and is never claimed. Empty: none.
+pub fn declared_identity(c: &ContainerInfo) -> Vec<String> {
+    declared_identity_why(c).0
+}
+
+/// The declared key and the reason it counts as one ("" when there is none).
+pub(crate) fn declared_identity_why(c: &ContainerInfo) -> (Vec<String>, &'static str) {
+    // a ClickHouse container carries its engine: there the "primary key" is only the
+    // sort prefix and no constraint enforces uniqueness, so only a replacing /
+    // collapsing engine's sorting key is an identity
+    let enforces_uniqueness = !c.properties.contains_key("engine");
+    let pk: Vec<String> = c
+        .fields
+        .iter()
+        .filter(|f| f.is_primary_key)
+        .map(|f| f.name.clone())
+        .collect();
+    if enforces_uniqueness && !pk.is_empty() {
+        return (pk, "primary key");
+    }
+    if let Some(g) = c.unique_groups.iter().find(|g| !g.is_empty()) {
+        return (g.clone(), "unique constraint");
+    }
+    let engine = c.properties.get("engine").map_or("", String::as_str);
+    if engine.contains("Replacing") || engine.contains("Collapsing") {
+        let cols: Vec<String> = c
+            .properties
+            .get("sorting_key")
+            .map(|k| {
+                k.split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        // an expression key (toDate(ts)) is not a column: no claim
+        if !cols.is_empty() && cols.iter().all(|k| c.fields.iter().any(|f| &f.name == k)) {
+            return (cols, "replacing engine sorting key");
+        }
+    }
+    (Vec::new(), "")
+}
+
 pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -> DefinitionDraft {
+    definition_from_sources_keyed(sources, merges, &BTreeMap::new())
+}
+
+/// Like [`definition_from_sources`], with identity keys the owner declared:
+/// `"<source>.<container>"` -> physical columns. A declared key must name
+/// existing columns (else it is refused whole, with a warning, and the source's
+/// own key stays); it replaces the derived key.
+pub fn definition_from_sources_keyed(
+    sources: &[SourceInput],
+    merges: &[ClassMerge],
+    identities: &BTreeMap<String, Vec<String>>,
+) -> DefinitionDraft {
+    definition_from_sources_with(sources, merges, identities, &[])
+}
+
+/// A relationship the owner declares by column values: `from` and `to` are
+/// `"<source>.<container>.<column>"`. Rows of `from`'s container get a
+/// relationship `name` to the row of `to`'s container whose column equals theirs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkSpec {
+    pub name: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// `"src.container.column"` -> (`"src.container"`, `"column"`).
+fn split_ref(r: &str) -> Option<(&str, &str)> {
+    let (container, column) = r.rsplit_once('.')?;
+    (container.contains('.') && !column.is_empty()).then_some((container, column))
+}
+
+/// The full draft: classes, mappings, identity keys and declared links.
+pub fn definition_from_sources_with(
+    sources: &[SourceInput],
+    merges: &[ClassMerge],
+    identities: &BTreeMap<String, Vec<String>>,
+    links: &[LinkSpec],
+) -> DefinitionDraft {
+    definition_from_sources_all(sources, merges, identities, links, &[])
+}
+
+/// "Rows of `from`'s container assert these canonical properties of the `class`
+/// entity whose key is in `from`'s column" (`from` is `source.container.column`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssertSpec {
+    pub from: String,
+    pub class: String,
+    /// Physical column -> canonical property.
+    pub properties: BTreeMap<String, String>,
+    /// Source authority: the lowest rank wins a disagreement.
+    pub rank: u32,
+}
+
+/// The full draft: classes, mappings, identity keys, declared links and assertions.
+pub fn definition_from_sources_all(
+    sources: &[SourceInput],
+    merges: &[ClassMerge],
+    identities: &BTreeMap<String, Vec<String>>,
+    links: &[LinkSpec],
+    asserts: &[AssertSpec],
+) -> DefinitionDraft {
     let mut warnings: Vec<String> = Vec::new();
     let entries: Vec<Entry> = sources
         .iter()
@@ -342,13 +450,32 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
                     (e.kind.to_string(), e.container.name.clone()),
                     e.source.to_string(),
                 );
-                mappings.push(json!({
+                let mut mapping = json!({
                     "source": e.kind,
                     "physical_type": e.container.name,
                     "class": class_of_entry(i),
                     "property_map": property_map,
-                }));
+                });
+                let declared = identities.get(&e.key).filter(|cols| {
+                    let missing = cols.iter().find(|c| !e.container.fields.iter().any(|f| &&f.name == c));
+                    if let Some(c) = missing {
+                        warnings.push(format!("identity ignored: {} has no column {c}", e.key));
+                    }
+                    missing.is_none() && !cols.is_empty()
+                });
+                let identity = declared.cloned().unwrap_or_else(|| declared_identity(e.container));
+                if !identity.is_empty() {
+                    mapping["identity"] = json!(identity);
+                }
+                mappings.push(mapping);
             }
+        }
+    }
+    for key in identities.keys() {
+        if !entries.iter().any(|e| &e.key == key) {
+            warnings.push(format!(
+                "identity ignored: {key} is not a discovered container"
+            ));
         }
     }
     for s in sources {
@@ -429,6 +556,164 @@ pub fn definition_from_sources(sources: &[SourceInput], merges: &[ClassMerge]) -
                     json!({"name": name, "domain": domain, "range": range}),
                 );
             }
+        }
+    }
+
+    // Declared links: validated whole, or ignored with the reason.
+    for l in links {
+        let ignore =
+            |why: String, warnings: &mut Vec<String>| warnings.push(format!("link ignored: {why}"));
+        if l.name.trim().is_empty() {
+            ignore("a link needs a name".into(), &mut warnings);
+            continue;
+        }
+        let (Some((from_key, from_col)), Some((to_key, to_col))) =
+            (split_ref(&l.from), split_ref(&l.to))
+        else {
+            ignore(
+                format!(
+                    "{}: references must look like source.container.column",
+                    l.name
+                ),
+                &mut warnings,
+            );
+            continue;
+        };
+        let find = |key: &str| entries.iter().position(|e| e.key == key);
+        let (Some(fi), Some(ti)) = (find(from_key), find(to_key)) else {
+            let missing = if find(from_key).is_none() {
+                from_key
+            } else {
+                to_key
+            };
+            ignore(
+                format!("{}: {missing} is not a discovered container", l.name),
+                &mut warnings,
+            );
+            continue;
+        };
+        let has = |i: usize, col: &str| entries[i].container.fields.iter().any(|f| f.name == col);
+        if let Some((key, col)) = [(from_key, from_col, fi), (to_key, to_col, ti)]
+            .iter()
+            .find(|(_, c, i)| !has(*i, c))
+            .map(|(k, c, _)| (*k, *c))
+        {
+            ignore(
+                format!("{}: {key} has no column {col}", l.name),
+                &mut warnings,
+            );
+            continue;
+        }
+        let (from, to) = (&entries[fi], &entries[ti]);
+        let Some(m) = mappings.iter_mut().find(|m| {
+            m["source"] == from.kind && m["physical_type"] == from.container.name.as_str()
+        }) else {
+            ignore(format!("{}: {from_key} is not mapped (its physical type is already mapped by another source)", l.name), &mut warnings);
+            continue;
+        };
+        if m["links"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|x| x["name"] == l.name.as_str()))
+        {
+            ignore(
+                format!("{}: already a link on {from_key}", l.name),
+                &mut warnings,
+            );
+            continue;
+        }
+        let entry = json!({"name": l.name, "column": from_col, "target_source": to.kind,
+                           "target_type": to.container.name, "target_column": to_col});
+        match m["links"].as_array_mut() {
+            Some(a) => a.push(entry),
+            None => m["links"] = json!([entry]),
+        }
+        let (domain, range) = (class_of_entry(fi).clone(), class_of_entry(ti).clone());
+        match rels.get(&l.name) {
+            None => {
+                rels.insert(l.name.clone(), json!({"name": l.name, "domain": domain, "range": range}));
+            }
+            Some(e) if e["domain"] == json!(domain) && e["range"] == json!(range) => {}
+            Some(_) => warnings.push(format!(
+                "link {}: a relationship of that name already connects other classes; the link is kept, the class relationship is not changed",
+                l.name
+            )),
+        }
+    }
+
+    // Declared assertions: validated whole, or ignored with the reason.
+    for a in asserts {
+        let ignore = |why: String, warnings: &mut Vec<String>| {
+            warnings.push(format!("assertion ignored: {why}"))
+        };
+        if a.class.trim().is_empty() {
+            ignore("an assertion needs a class".into(), &mut warnings);
+            continue;
+        }
+        let Some((key, key_col)) = split_ref(&a.from) else {
+            ignore(
+                format!(
+                    "{}: reference must look like source.container.column",
+                    a.class
+                ),
+                &mut warnings,
+            );
+            continue;
+        };
+        let Some(ei) = entries.iter().position(|e| e.key == key) else {
+            ignore(
+                format!("{}: {key} is not a discovered container", a.class),
+                &mut warnings,
+            );
+            continue;
+        };
+        if a.properties.is_empty()
+            || a.properties.len() > 64
+            || a.properties
+                .iter()
+                .any(|(p, c)| p.is_empty() || c.trim().is_empty())
+        {
+            ignore(
+                format!(
+                    "{}: {key} asserts no properties (or an unnamed one)",
+                    a.class
+                ),
+                &mut warnings,
+            );
+            continue;
+        }
+        let has = |col: &str| entries[ei].container.fields.iter().any(|f| f.name == col);
+        if let Some(col) = std::iter::once(key_col)
+            .chain(a.properties.keys().map(String::as_str))
+            .find(|c| !has(c))
+        {
+            ignore(
+                format!("{}: {key} has no column {col}", a.class),
+                &mut warnings,
+            );
+            continue;
+        }
+        let e = &entries[ei];
+        let Some(m) = mappings
+            .iter_mut()
+            .find(|m| m["source"] == e.kind && m["physical_type"] == e.container.name.as_str())
+        else {
+            ignore(format!("{}: {key} is not mapped", a.class), &mut warnings);
+            continue;
+        };
+        if m["asserts"]
+            .as_array()
+            .is_some_and(|v| v.iter().any(|x| x["class"] == a.class.as_str()))
+        {
+            ignore(
+                format!("{}: already asserted by {key}", a.class),
+                &mut warnings,
+            );
+            continue;
+        }
+        let entry = json!({"class": a.class, "key_column": key_col, "properties": a.properties, "rank": a.rank});
+        match m["asserts"].as_array_mut() {
+            Some(v) => v.push(entry),
+            None => m["asserts"] = json!([entry]),
         }
     }
 
@@ -1125,6 +1410,576 @@ mod tests {
             3,
             "every relationship has its own name: {names:?}"
         );
+    }
+
+    // ---- identity keys (docs/ONTOLOGY-IN-PRACTICE.md, Phase A) ----
+
+    fn identity_of(d: &DefinitionDraft, physical: &str) -> Vec<String> {
+        list(d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == physical)
+            .and_then(|m| m["identity"].as_array())
+            .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    fn one(name: &str, kind: &str, m: &ConnectorMetadata) -> DefinitionDraft {
+        definition_from_sources(
+            &[SourceInput {
+                name,
+                kind,
+                meta: m,
+            }],
+            &[],
+        )
+    }
+
+    #[test]
+    fn the_key_a_source_declares_becomes_the_mapping_identity() {
+        // primary key (composite keeps column order), then a unique group, then a replacing engine's sorting key
+        let mut m = meta(
+            "postgres",
+            "crm",
+            &[
+                (
+                    "orders",
+                    &[
+                        ("tenant", "text", true, false, true),
+                        ("id", "integer", true, false, true),
+                        ("note", "text", false, true, false),
+                    ],
+                ),
+                (
+                    "people",
+                    &[
+                        ("email", "text", false, false, false),
+                        ("name", "text", false, true, false),
+                    ],
+                ),
+            ],
+            &[],
+        );
+        m.containers[1].unique_groups = vec![vec!["email".into()]];
+        let d = one("crm", "postgres", &m);
+        assert_eq!(identity_of(&d, "orders"), ["tenant", "id"]);
+        assert_eq!(
+            identity_of(&d, "people"),
+            ["email"],
+            "a unique group is a key when there is no primary key"
+        );
+
+        let mut ch = meta(
+            "clickhouse",
+            "olap",
+            &[
+                (
+                    "devices",
+                    &[
+                        ("visitor_id", "String", false, false, false),
+                        ("risk", "Float32", false, false, false),
+                    ],
+                ),
+                (
+                    "visits",
+                    &[
+                        ("visitor_id", "String", false, false, false),
+                        ("ts", "DateTime", false, false, false),
+                    ],
+                ),
+            ],
+            &[],
+        );
+        ch.containers[0]
+            .properties
+            .insert("engine".into(), "ReplacingMergeTree".into());
+        ch.containers[0]
+            .properties
+            .insert("sorting_key".into(), "visitor_id".into());
+        ch.containers[1]
+            .properties
+            .insert("engine".into(), "MergeTree".into());
+        ch.containers[1]
+            .properties
+            .insert("sorting_key".into(), "visitor_id, ts".into());
+        let d = one("olap", "clickhouse", &ch);
+        assert_eq!(
+            identity_of(&d, "devices"),
+            ["visitor_id"],
+            "a replacing engine's sorting key IS its identity"
+        );
+        assert!(
+            identity_of(&d, "visits").is_empty(),
+            "a plain MergeTree sorting key is not unique: no claim"
+        );
+    }
+
+    // ---- links (docs/ONTOLOGY-IN-PRACTICE.md, Phase B) ----
+
+    fn two_sources() -> (ConnectorMetadata, ConnectorMetadata) {
+        (
+            meta(
+                "clickhouse",
+                "olap",
+                &[
+                    (
+                        "device_accounts",
+                        &[
+                            ("visitor_id", "String", false, false, false),
+                            ("account_id", "String", false, false, false),
+                        ],
+                    ),
+                    ("devices", &[("visitor_id", "String", false, false, false)]),
+                ],
+                &[],
+            ),
+            meta(
+                "postgres",
+                "crm",
+                &[(
+                    "accounts",
+                    &[
+                        ("id", "text", true, false, true),
+                        ("email", "text", false, false, false),
+                    ],
+                )],
+                &[],
+            ),
+        )
+    }
+
+    fn link(name: &str, from: &str, to: &str) -> LinkSpec {
+        LinkSpec {
+            name: name.into(),
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    fn with_links(links: &[LinkSpec]) -> DefinitionDraft {
+        let (a, b) = two_sources();
+        definition_from_sources_with(
+            &[
+                SourceInput {
+                    name: "olap",
+                    kind: "clickhouse",
+                    meta: &a,
+                },
+                SourceInput {
+                    name: "crm",
+                    kind: "postgres",
+                    meta: &b,
+                },
+            ],
+            &[],
+            &BTreeMap::new(),
+            links,
+        )
+    }
+
+    #[test]
+    fn a_link_becomes_a_mapping_link_and_a_class_relationship_even_across_sources() {
+        let d = with_links(&[
+            link(
+                "for_account",
+                "olap.device_accounts.account_id",
+                "crm.accounts.id",
+            ),
+            link(
+                "for_device",
+                "olap.device_accounts.visitor_id",
+                "olap.devices.visitor_id",
+            ),
+        ]);
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "device_accounts")
+            .unwrap();
+        let links = m["links"]
+            .as_array()
+            .expect("links on the from-container's mapping");
+        let acct = links.iter().find(|l| l["name"] == "for_account").unwrap();
+        assert_eq!(
+            (
+                acct["column"].as_str(),
+                acct["target_source"].as_str(),
+                acct["target_type"].as_str(),
+                acct["target_column"].as_str()
+            ),
+            (
+                Some("account_id"),
+                Some("postgres"),
+                Some("accounts"),
+                Some("id")
+            ),
+            "the target is named by its source KIND and physical type"
+        );
+        let dev = links.iter().find(|l| l["name"] == "for_device").unwrap();
+        assert_eq!(dev["target_source"], "clickhouse");
+        // the class model says the same thing
+        let rels = list(&d, "relationships");
+        let r = rels.iter().find(|r| r["name"] == "for_account").unwrap();
+        assert_eq!(
+            (r["domain"].as_str(), r["range"].as_str()),
+            (Some("DeviceAccount"), Some("Account")),
+            "{r}"
+        );
+        assert!(
+            d.warnings.iter().all(|w| !w.contains("link ignored")),
+            "{:?}",
+            d.warnings
+        );
+        // a container with no link writes none
+        let plain = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "accounts")
+            .unwrap();
+        assert!(plain.get("links").is_none());
+    }
+
+    // ---- assertions (Phase C) ----
+
+    fn assertion(from: &str, class: &str, props: &[(&str, &str)], rank: u32) -> AssertSpec {
+        AssertSpec {
+            from: from.into(),
+            class: class.into(),
+            properties: props
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            rank,
+        }
+    }
+
+    fn with_asserts(asserts: &[AssertSpec]) -> DefinitionDraft {
+        let (a, b) = two_sources();
+        definition_from_sources_all(
+            &[
+                SourceInput {
+                    name: "olap",
+                    kind: "clickhouse",
+                    meta: &a,
+                },
+                SourceInput {
+                    name: "crm",
+                    kind: "postgres",
+                    meta: &b,
+                },
+            ],
+            &[],
+            &BTreeMap::new(),
+            &[],
+            asserts,
+        )
+    }
+
+    #[test]
+    fn an_assertion_lands_on_the_mapping_of_the_container_it_names() {
+        let d = with_asserts(&[
+            assertion("crm.accounts.id", "Account", &[("email", "email")], 10),
+            assertion(
+                "olap.device_accounts.account_id",
+                "Account",
+                &[("visitor_id", "last_device")],
+                20,
+            ),
+        ]);
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "accounts")
+            .unwrap();
+        let a = &m["asserts"][0];
+        assert_eq!(
+            (
+                a["class"].as_str(),
+                a["key_column"].as_str(),
+                a["rank"].as_u64()
+            ),
+            (Some("Account"), Some("id"), Some(10)),
+            "{a}"
+        );
+        assert_eq!(a["properties"]["email"], "email");
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "device_accounts")
+            .unwrap();
+        assert_eq!(m["asserts"][0]["rank"], 20);
+        assert!(
+            d.warnings.iter().all(|w| !w.contains("assertion ignored")),
+            "{:?}",
+            d.warnings
+        );
+        // untouched containers write nothing
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "devices")
+            .unwrap();
+        assert!(m.get("asserts").is_none());
+    }
+
+    #[test]
+    fn an_assertion_that_cannot_be_honoured_is_ignored_with_a_reason() {
+        for (a, why) in [
+            (
+                assertion("crm.accounts.nope", "Account", &[("email", "email")], 1),
+                "no column nope",
+            ),
+            (
+                assertion("crm.accounts.id", "Account", &[("nope", "email")], 1),
+                "no column nope",
+            ),
+            (
+                assertion("crm.ghost.id", "Account", &[("email", "email")], 1),
+                "not a discovered container",
+            ),
+            (
+                assertion("no-dots", "Account", &[("email", "email")], 1),
+                "source.container.column",
+            ),
+            (
+                assertion("crm.accounts.id", "", &[("email", "email")], 1),
+                "needs a class",
+            ),
+            (
+                assertion("crm.accounts.id", "Account", &[], 1),
+                "asserts no properties",
+            ),
+            (
+                assertion("crm.accounts.id", "Account", &[("email", "")], 1),
+                "asserts no properties",
+            ),
+        ] {
+            let d = with_asserts(std::slice::from_ref(&a));
+            assert!(
+                d.warnings
+                    .iter()
+                    .any(|w| w.contains("assertion ignored") && w.contains(why)),
+                "{a:?}: {:?}",
+                d.warnings
+            );
+            assert!(
+                list(&d, "mappings")
+                    .iter()
+                    .all(|m| m.get("asserts").is_none()),
+                "{a:?}"
+            );
+        }
+        // one class twice on one container: the second is refused
+        let d = with_asserts(&[
+            assertion("crm.accounts.id", "Account", &[("email", "email")], 1),
+            assertion("crm.accounts.id", "Account", &[("email", "mail")], 2),
+        ]);
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "accounts")
+            .unwrap();
+        assert_eq!(m["asserts"].as_array().unwrap().len(), 1);
+        assert!(
+            d.warnings
+                .iter()
+                .any(|w| w.contains("assertion ignored") && w.contains("already")),
+            "{:?}",
+            d.warnings
+        );
+    }
+
+    #[test]
+    fn a_link_that_cannot_be_honoured_is_ignored_with_a_reason() {
+        for (l, why) in [
+            (
+                link("x", "olap.device_accounts.nope", "crm.accounts.id"),
+                "no column nope",
+            ),
+            (
+                link("x", "olap.device_accounts.account_id", "crm.accounts.nope"),
+                "no column nope",
+            ),
+            (
+                link("x", "olap.ghost.account_id", "crm.accounts.id"),
+                "not a discovered container",
+            ),
+            (
+                link("x", "crm.accounts.id", "elsewhere.t.id"),
+                "not a discovered container",
+            ),
+            (
+                link("x", "no-dots", "crm.accounts.id"),
+                "source.container.column",
+            ),
+            (
+                link("", "olap.device_accounts.account_id", "crm.accounts.id"),
+                "needs a name",
+            ),
+        ] {
+            let d = with_links(std::slice::from_ref(&l));
+            assert!(
+                d.warnings
+                    .iter()
+                    .any(|w| w.contains("link ignored") && w.contains(why)),
+                "{l:?}: {:?}",
+                d.warnings
+            );
+            assert!(
+                list(&d, "mappings")
+                    .iter()
+                    .all(|m| m.get("links").is_none()),
+                "{l:?}"
+            );
+        }
+        // two links with one name on one container: the second is refused, the first stands
+        let d = with_links(&[
+            link(
+                "for_x",
+                "olap.device_accounts.account_id",
+                "crm.accounts.id",
+            ),
+            link(
+                "for_x",
+                "olap.device_accounts.visitor_id",
+                "olap.devices.visitor_id",
+            ),
+        ]);
+        let m = list(&d, "mappings")
+            .iter()
+            .find(|m| m["physical_type"] == "device_accounts")
+            .unwrap();
+        assert_eq!(m["links"].as_array().unwrap().len(), 1);
+        assert!(
+            d.warnings
+                .iter()
+                .any(|w| w.contains("link ignored") && w.contains("already")),
+            "{:?}",
+            d.warnings
+        );
+    }
+
+    #[test]
+    fn a_clickhouse_primary_key_is_a_sort_prefix_not_an_identity() {
+        // ClickHouse marks the sorting-key columns "primary key", but nothing enforces
+        // uniqueness: claiming it would collapse rows or refuse the import
+        let mut ch = meta(
+            "clickhouse",
+            "olap",
+            &[
+                (
+                    "visits",
+                    &[
+                        ("visitor_id", "String", true, false, false),
+                        ("ts", "DateTime", true, false, false),
+                        ("ip", "String", false, false, false),
+                    ],
+                ),
+                (
+                    "devices",
+                    &[
+                        ("visitor_id", "String", true, false, false),
+                        ("risk", "Float32", false, false, false),
+                    ],
+                ),
+            ],
+            &[],
+        );
+        ch.containers[0]
+            .properties
+            .insert("engine".into(), "MergeTree".into());
+        ch.containers[0]
+            .properties
+            .insert("sorting_key".into(), "visitor_id, ts".into());
+        ch.containers[1]
+            .properties
+            .insert("engine".into(), "ReplacingMergeTree".into());
+        ch.containers[1]
+            .properties
+            .insert("sorting_key".into(), "visitor_id".into());
+        let d = one("olap", "clickhouse", &ch);
+        assert!(
+            identity_of(&d, "visits").is_empty(),
+            "a MergeTree 'primary key' is not unique"
+        );
+        assert_eq!(
+            identity_of(&d, "devices"),
+            ["visitor_id"],
+            "a replacing table is keyed by its sorting key"
+        );
+    }
+
+    #[test]
+    fn a_declared_identity_wins_is_validated_and_an_empty_one_writes_nothing() {
+        let m = meta(
+            "clickhouse",
+            "olap",
+            &[(
+                "device_activity",
+                &[
+                    ("visitor_id", "String", false, false, false),
+                    ("visit_count", "UInt64", false, false, false),
+                ],
+            )],
+            &[],
+        );
+        // nothing declared and nothing derivable: no identity key at all
+        let none = one("olap", "clickhouse", &m);
+        assert!(identity_of(&none, "device_activity").is_empty());
+        assert!(
+            list(&none, "mappings")[0].get("identity").is_none(),
+            "no empty list is written"
+        );
+        // the owner declares it
+        let ids: std::collections::BTreeMap<String, Vec<String>> = [(
+            "olap.device_activity".to_string(),
+            vec!["visitor_id".to_string()],
+        )]
+        .into();
+        let d = definition_from_sources_keyed(
+            &[SourceInput {
+                name: "olap",
+                kind: "clickhouse",
+                meta: &m,
+            }],
+            &[],
+            &ids,
+        );
+        assert_eq!(identity_of(&d, "device_activity"), ["visitor_id"]);
+        // a column that does not exist is ignored with a warning, never silently half-applied
+        let bad: std::collections::BTreeMap<String, Vec<String>> = [(
+            "olap.device_activity".to_string(),
+            vec!["visitor_id".to_string(), "nope".to_string()],
+        )]
+        .into();
+        let d = definition_from_sources_keyed(
+            &[SourceInput {
+                name: "olap",
+                kind: "clickhouse",
+                meta: &m,
+            }],
+            &[],
+            &bad,
+        );
+        assert!(
+            identity_of(&d, "device_activity").is_empty(),
+            "a key with a missing column is refused whole"
+        );
+        assert!(
+            d.warnings
+                .iter()
+                .any(|w| w.contains("identity ignored") && w.contains("nope")),
+            "{:?}",
+            d.warnings
+        );
+        // an unknown container is a warning too
+        let unk: std::collections::BTreeMap<String, Vec<String>> =
+            [("olap.ghost".to_string(), vec!["x".to_string()])].into();
+        assert!(definition_from_sources_keyed(
+            &[SourceInput {
+                name: "olap",
+                kind: "clickhouse",
+                meta: &m
+            }],
+            &[],
+            &unk
+        )
+        .warnings
+        .iter()
+        .any(|w| w.contains("ghost")));
     }
 
     #[test]

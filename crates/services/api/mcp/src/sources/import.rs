@@ -7,7 +7,7 @@ use super::{
 };
 use crate::imports::{fresh_run_id, ImportSink};
 use crate::{json, Kernel, Subject, J};
-use aikoql_kernel::{KnowledgeObject, RelationshipRef, Value, KOID};
+use aikoql_kernel::{Direction, KnowledgeObject, LinkDef, RelationshipRef, Value, KOID};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Rows of one container, capped; `true` = the container had more.
@@ -122,6 +122,200 @@ fn fetch_neo4j(
     Ok(by_label)
 }
 
+/// The identity key the published ontology declares for each container of this
+/// source kind, where it differs from what the importer already derives (the
+/// source's own key): only those need their objects re-keyed. An empty map when
+/// no ontology is active or none declares a key.
+fn declared_keys(
+    k: &Kernel,
+    src: &super::SourceConfig,
+    snapshot: &aikoql_ingestion::ConnectorMetadata,
+) -> BTreeMap<String, Vec<String>> {
+    active_mappings(k, src)
+        .into_iter()
+        .filter(|m| !m.identity.is_empty())
+        .filter(|m| {
+            snapshot
+                .containers
+                .iter()
+                .find(|c| c.name == m.physical_type)
+                .is_some_and(|c| aikoql_ingestion::declared_identity(c) != m.identity)
+        })
+        .map(|m| (m.physical_type, m.identity))
+        .collect()
+}
+
+/// The mappings of the active ontology that belong to this source's kind.
+fn active_mappings(k: &Kernel, src: &super::SourceConfig) -> Vec<aikoql_kernel::MappingEntry> {
+    let Some((ko, _)) = crate::http::active_ontology_for(k, src.tenant.as_deref()) else {
+        return Vec::new();
+    };
+    let Ok(def) = aikoql_kernel::OntologyDef::from_property_map(&ko.properties) else {
+        return Vec::new();
+    };
+    def.mappings
+        .into_iter()
+        .filter(|m| m.source == src.kind.as_str())
+        .collect()
+}
+
+/// Target rows by the text of their key column: `value -> every live row with it`.
+type TargetIndex = std::collections::HashMap<String, Vec<KOID>>;
+
+fn target_index(k: &Kernel, tenant: Option<&str>, d: &LinkDef) -> TargetIndex {
+    // the importer's own subject may not see another source's objects: read as the system
+    let subject = crate::Subject::with_roles("system", &["admin"]);
+    let subject = match tenant {
+        Some(t) => subject.in_tenant(t),
+        None => subject,
+    };
+    let mut index = TargetIndex::new();
+    for ko in k.scan_by_type(&subject, &d.target_type).unwrap_or_default() {
+        if ko.metadata.tenant.as_deref() != tenant {
+            continue;
+        }
+        if let Some(v) = ko
+            .properties
+            .get(&d.target_column)
+            .filter(|v| !matches!(v, Value::Null))
+        {
+            index.entry(key_text(v)).or_default().push(ko.koid);
+        }
+    }
+    index
+}
+
+/// Give each object a relationship `d.name` to the one target row whose key equals its
+/// column. A reference to no row (dangling), to a NULL (no_value) or to a value more
+/// than one row has (ambiguous) gets no edge: an edge is never guessed. Edges are
+/// rebuilt from the fresh row each import, so a changed reference moves its edge.
+fn link_objects(objects: &mut [KnowledgeObject], d: &LinkDef, index: &TargetIndex) -> J {
+    let (mut linked, mut dangling, mut ambiguous, mut no_value) = (0u64, 0u64, 0u64, 0u64);
+    for ko in objects.iter_mut() {
+        let Some(v) = ko
+            .properties
+            .get(&d.column)
+            .filter(|v| !matches!(v, Value::Null))
+        else {
+            no_value += 1;
+            continue;
+        };
+        match index.get(&key_text(v)).map(Vec::as_slice) {
+            None | Some([]) => dangling += 1,
+            Some([target]) => {
+                let already = ko
+                    .relationships
+                    .iter()
+                    .any(|r| r.rel_type == d.name && r.target == *target);
+                if !already {
+                    ko.relationships.push(RelationshipRef {
+                        rel_type: d.name.clone(),
+                        target: *target,
+                        direction: Direction::Outbound,
+                    });
+                }
+                linked += 1;
+            }
+            Some(_) => ambiguous += 1,
+        }
+    }
+    json!({"linked": linked, "dangling": dangling, "ambiguous": ambiguous, "no_value": no_value})
+}
+
+/// A stable text for a key value (what identifies the row, not how it prints).
+pub(super) fn key_text(v: &Value) -> String {
+    match v {
+        Value::Text(s) => s.clone(),
+        Value::Int(n) => n.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Bool(b) => b.to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+/// 128 bits from two independent FNV-1a passes over (source, container, key values).
+pub(super) fn identity_koid(source: &str, container: &str, parts: &[String]) -> KOID {
+    let text = format!("{source}\u{1f}{container}\u{1f}{}", parts.join("\u{1e}"));
+    let fnv = |seed: u64| {
+        text.bytes().fold(seed, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    };
+    let mut koid = [0u8; 16];
+    koid[..8].copy_from_slice(&fnv(0xcbf2_9ce4_8422_2325).to_be_bytes());
+    koid[8..].copy_from_slice(&fnv(0x8422_2325_cbf2_9ce4).to_be_bytes());
+    KOID(koid)
+}
+
+/// The first id of `id_of(0), id_of(1), ...` that is not a tombstone. The kernel never
+/// revives a tombstoned id (a write to it stays deleted), so a row that was retired and
+/// then comes back takes the next generation of its id: still deterministic for a given
+/// history, and what an earlier version said stays under the old id.
+pub(super) fn live_koid(k: &Kernel, id_of: impl Fn(u32) -> KOID) -> KOID {
+    let reader = crate::KnowledgeContext::from(Subject::with_roles("system", &["admin"]));
+    let dead = |id: &KOID| {
+        k.get(reader.clone(), id)
+            .is_ok_and(|h| h.lifecycle.state == crate::LifecycleState::Deleted)
+    };
+    // 1000 generations is far past any real history: a loop bound, not a limit anyone meets
+    (0..1000)
+        .map(&id_of)
+        .find(|id| !dead(id))
+        .unwrap_or_else(|| id_of(1000))
+}
+
+/// Every object's id is scoped to its tenant (the same table imported into two tenants must
+/// give two independent sets of objects), and an object that was retired and now returns gets
+/// a fresh generation of its id. The global scope keeps the ids it has always had.
+fn scope_koids(k: &Kernel, tenant: Option<&str>, objects: &mut [KnowledgeObject]) {
+    for ko in objects {
+        let base = match tenant {
+            Some(t) => identity_koid("tenant", t, &[ko.koid.to_hex()]),
+            None => ko.koid,
+        };
+        ko.koid = live_koid(k, |g| {
+            if g == 0 {
+                base
+            } else {
+                identity_koid("revived", &base.to_hex(), &[g.to_string()])
+            }
+        });
+    }
+}
+
+/// Give every object the identity its key columns say it has. A key that does not
+/// identify is refused whole - collapsing two rows into one object would lose data
+/// without a word - so the caller writes nothing for the container.
+fn rekey(
+    objects: &mut [KnowledgeObject],
+    source: &str,
+    container: &str,
+    cols: &[String],
+) -> Result<(), String> {
+    let mut seen: HashSet<KOID> = HashSet::new();
+    for ko in objects.iter_mut() {
+        let mut parts = Vec::with_capacity(cols.len());
+        for c in cols {
+            match ko.properties.get(c) {
+                None | Some(Value::Null) => {
+                    return Err(format!("a row has no value for the identity column {c}"))
+                }
+                Some(v) => parts.push(key_text(v)),
+            }
+        }
+        let koid = identity_koid(source, container, &parts);
+        if !seen.insert(koid) {
+            return Err(format!(
+                "the identity key ({}) is not unique: more than one row has {}",
+                cols.join(", "),
+                parts.join(", ")
+            ));
+        }
+        ko.koid = koid;
+    }
+    Ok(())
+}
+
 /// `POST /api/v1/sources/import {source, containers, tenant?}`.
 pub(crate) fn tool_sources_import(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let result = run(k, args);
@@ -193,6 +387,14 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             ));
         }
     }
+    let keys = declared_keys(k, &src, &snapshot);
+    let mut links: BTreeMap<String, Vec<LinkDef>> = BTreeMap::new();
+    for m in active_mappings(k, &src) {
+        if !m.links.is_empty() {
+            links.insert(m.physical_type, m.links);
+        }
+    }
+    let mut link_report: BTreeMap<String, BTreeMap<String, J>> = BTreeMap::new();
     let conn = src.connection()?;
     let mut subject = Subject::new(importer);
     if let Some(t) = &src.tenant {
@@ -203,6 +405,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     let tag = format!("src:{}", src.name);
     let (mut imported, mut unchanged) = (BTreeMap::new(), BTreeMap::new());
     let (mut truncated, mut skipped) = (Vec::new(), Vec::new());
+    let mut pruned: BTreeMap<String, usize> = BTreeMap::new();
     let skip = |c: &str, why: String| json!({"container": c, "reason": why});
 
     // Objects are keyed by (container, primary key): never overwrite another source's.
@@ -273,13 +476,33 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
                 })
             }
         };
-        let (objects, cut) = match fetched {
+        let (mut objects, cut) = match fetched {
             Ok(v) => v,
             Err(e) => {
                 skipped.push(skip(c, scrub(&e, &conn)));
                 continue;
             }
         };
+        // an identity key the owner declared decides what "the same row" means
+        let keyed = keys.get(c.as_str());
+        if let Some(cols) = keyed {
+            if let Err(why) = rekey(&mut objects, &src.name, c, cols) {
+                skipped.push(skip(c, why));
+                continue;
+            }
+        }
+        // relationships the ontology declares by column values
+        if let Some(defs) = links.get(c.as_str()) {
+            for d in defs {
+                let index = target_index(k, src.tenant.as_deref(), d);
+                link_report
+                    .entry(c.clone())
+                    .or_default()
+                    .insert(d.name.clone(), link_objects(&mut objects, d, &index));
+            }
+        }
+        scope_koids(k, src.tenant.as_deref(), &mut objects);
+        let present: HashSet<KOID> = objects.iter().map(|o| o.koid).collect();
         let (mut wrote, mut same) = (0u64, 0u64);
         let mut failure = None;
         for mut ko in objects {
@@ -297,6 +520,26 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             skipped.push(skip(c, format!("failed after {} rows: {e}", wrote + same)));
             continue;
         }
+        // a complete import of a keyed container is the whole picture of the source:
+        // what is no longer there is retired (this also retires the content-keyed
+        // twins an earlier import left behind)
+        if keyed.is_some() && !cut {
+            match sink.prune_missing(c, &present) {
+                Ok(n) => {
+                    pruned.insert(c.clone(), n);
+                }
+                Err(e) => {
+                    skipped.push(skip(
+                        c,
+                        format!(
+                            "could not retire vanished rows: {}",
+                            scrub(&e.to_string(), &conn)
+                        ),
+                    ));
+                    continue;
+                }
+            }
+        }
         imported.insert(c.clone(), wrote);
         unchanged.insert(c.clone(), same);
         if cut {
@@ -305,7 +548,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
     }
     Ok(json!({
         "run_id": run_id, "imported": imported, "unchanged": unchanged,
-        "truncated": truncated, "skipped": skipped,
+        "pruned": pruned, "links": link_report, "truncated": truncated, "skipped": skipped,
     }))
 }
 
@@ -574,6 +817,316 @@ mod tests {
                     .any(|t| t == "src:crm"));
             },
         );
+    }
+
+    // ---- declared identity keys (docs/ONTOLOGY-IN-PRACTICE.md, Phase A) ----
+
+    fn publish_with_identity(k: &Kernel, key: &str, cols: &[&str]) {
+        let p = crate::sources::ontology::tool_sources_ontology(
+            k,
+            &json!({"sources": ["crm"], "preview": true}),
+            "x",
+        )
+        .unwrap();
+        let r = crate::sources::ontology::tool_sources_ontology(
+            k,
+            &json!({"sources": ["crm"], "preview": false, "fingerprints": p["fingerprints"],
+                    "identities": {key: cols}}),
+            "x",
+        )
+        .unwrap();
+        assert_eq!(r["saved"], true, "{r}");
+    }
+
+    fn visits_of(k: &Kernel, who: &str) -> Option<(i64, u64)> {
+        live(k, "activity", None)
+            .into_iter()
+            .find(|ko| ko.properties.get("visitor") == Some(&Value::Text(who.into())))
+            .and_then(|ko| match ko.properties.get("visits") {
+                Some(Value::Int(n)) => Some((*n, ko.version)),
+                _ => None,
+            })
+    }
+
+    #[test]
+    fn a_declared_identity_key_makes_a_re_import_update_in_place_and_prunes_what_vanished() {
+        let (k, db) = (kernel(), tmp_db("idkey"));
+        // no primary key, no unique constraint: the source says nothing about identity
+        make(
+            &db,
+            "CREATE TABLE activity (visitor TEXT, visits INTEGER);
+             INSERT INTO activity VALUES ('a', 1), ('b', 2);",
+        );
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            publish_with_identity(&k, "crm.activity", &["visitor"]);
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(r["imported"]["activity"], 2, "{r}");
+            assert_eq!(live(&k, "activity", None).len(), 2, "two rows, two objects");
+
+            // the source changes one row: the SAME object gets a second version
+            make(&db, "UPDATE activity SET visits = 5 WHERE visitor = 'a';");
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(
+                (
+                    r["imported"]["activity"].clone(),
+                    r["unchanged"]["activity"].clone()
+                ),
+                (json!(1), json!(1)),
+                "{r}"
+            );
+            assert_eq!(live(&k, "activity", None).len(), 2, "no duplicate object");
+            assert_eq!(
+                visits_of(&k, "a"),
+                Some((5, 2)),
+                "version 2 of the same object"
+            );
+
+            // a row that vanished from a complete import is retired, not left as a stale twin
+            make(&db, "DELETE FROM activity WHERE visitor = 'b';");
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(r["pruned"]["activity"], 1, "{r}");
+            assert!(visits_of(&k, "b").is_none(), "b is no longer live");
+            assert_eq!(visits_of(&k, "a"), Some((5, 2)));
+
+            // an ambiguous key is refused loudly: collapsing two rows would silently lose one
+            make(&db, "INSERT INTO activity VALUES ('a', 9);");
+            let before = head(&k);
+            let r = import(&k, &["activity"]).unwrap();
+            let why = r["skipped"][0]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            assert!(why.contains("not unique") && why.contains("visitor"), "{r}");
+            assert_eq!(
+                head(&k),
+                before,
+                "nothing was written for the refused container"
+            );
+            // ...and so is a row with no value for the key
+            make(
+                &db,
+                "DELETE FROM activity WHERE visits = 9; INSERT INTO activity VALUES (NULL, 3);",
+            );
+            let r = import(&k, &["activity"]).unwrap();
+            let why = r["skipped"][0]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            assert!(why.contains("no value") && why.contains("visitor"), "{r}");
+        });
+    }
+
+    #[test]
+    fn declaring_a_key_after_the_first_publish_retires_the_twins_an_earlier_import_left() {
+        let (k, db) = (kernel(), tmp_db("latekey"));
+        make(&db, "CREATE TABLE activity (visitor TEXT, visits INTEGER); INSERT INTO activity VALUES ('a', 1), ('b', 2);");
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            // first publish and import: no key declared, content decides identity
+            let p = crate::sources::ontology::tool_sources_ontology(
+                &k,
+                &json!({"sources": ["crm"], "preview": true}),
+                "x",
+            )
+            .unwrap();
+            crate::sources::ontology::tool_sources_ontology(
+                &k,
+                &json!({"sources": ["crm"], "preview": false, "fingerprints": p["fingerprints"]}),
+                "x",
+            )
+            .unwrap();
+            import(&k, &["activity"]).unwrap();
+            make(&db, "UPDATE activity SET visits = 5 WHERE visitor = 'a';");
+            import(&k, &["activity"]).unwrap();
+            assert_eq!(
+                live(&k, "activity", None).len(),
+                3,
+                "the old way: a change makes a twin"
+            );
+            // the owner now declares the key and publishes again over the existing ontology
+            let p = crate::sources::ontology::tool_sources_ontology(
+                &k,
+                &json!({"sources": ["crm"], "preview": true, "identities": {"crm.activity": ["visitor"]}}),
+                "x",
+            )
+            .unwrap();
+            let r = crate::sources::ontology::tool_sources_ontology(
+                &k,
+                &json!({"sources": ["crm"], "preview": false, "fingerprints": p["fingerprints"],
+                        "identities": {"crm.activity": ["visitor"]}, "expected_version": p["active_version"]}),
+                "x",
+            )
+            .unwrap();
+            assert_eq!(r["saved"], true, "a later key is a change: {r}");
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(
+                r["pruned"]["activity"], 3,
+                "every content-keyed object is retired and replaced: {r}"
+            );
+            assert_eq!(
+                live(&k, "activity", None).len(),
+                2,
+                "one object per visitor"
+            );
+            assert_eq!(visits_of(&k, "a").map(|v| v.0), Some(5));
+        });
+    }
+
+    // ---- links: relationships declared by column values (Phase B) ----
+
+    fn publish_with_link(k: &Kernel) {
+        let args = json!({"sources": ["crm"], "preview": true, "relationships":
+            [{"name": "placed_by", "from": "crm.orders.customer_ref", "to": "crm.customers.id"}]});
+        let p = crate::sources::ontology::tool_sources_ontology(k, &args, "x").unwrap();
+        let mut apply = args.clone();
+        apply["preview"] = json!(false);
+        apply["fingerprints"] = p["fingerprints"].clone();
+        let r = crate::sources::ontology::tool_sources_ontology(k, &apply, "x").unwrap();
+        assert_eq!(r["saved"], true, "{r}");
+        assert!(
+            r["warnings"].to_string().find("link ignored").is_none(),
+            "{r}"
+        );
+    }
+
+    fn edges_of(k: &Kernel, order_id: i64) -> Vec<(String, aikoql_kernel::KOID)> {
+        live(k, "orders", None)
+            .into_iter()
+            .find(|ko| ko.properties.get("id") == Some(&Value::Int(order_id)))
+            .map(|ko| {
+                ko.relationships
+                    .iter()
+                    .map(|r| (r.rel_type.clone(), r.target))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_declared_link_becomes_a_relationship_to_the_row_it_names() {
+        let (k, db) = (kernel(), tmp_db("link"));
+        // no foreign key anywhere: the reference is only a column of text
+        make(
+            &db,
+            "CREATE TABLE customers (id TEXT PRIMARY KEY, name TEXT);
+             CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_ref TEXT);
+             INSERT INTO customers VALUES ('c1', 'Ann'), ('c2', 'Bob');
+             INSERT INTO orders VALUES (1, 'c1'), (2, 'c2'), (3, 'nobody'), (4, NULL);",
+        );
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            publish_with_link(&k);
+            // targets first: the edges exist at once
+            import(&k, &["customers"]).unwrap();
+            let r = import(&k, &["orders"]).unwrap();
+            let stats = &r["links"]["orders"]["placed_by"];
+            assert_eq!(
+                (
+                    stats["linked"].clone(),
+                    stats["dangling"].clone(),
+                    stats["no_value"].clone()
+                ),
+                (json!(2), json!(1), json!(1)),
+                "{r}"
+            );
+            let ann = live(&k, "customers", None)
+                .into_iter()
+                .find(|c| c.properties.get("id") == Some(&Value::Text("c1".into())))
+                .unwrap();
+            assert_eq!(
+                edges_of(&k, 1),
+                vec![("placed_by".to_string(), ann.koid)],
+                "order 1 points at Ann"
+            );
+            assert!(
+                edges_of(&k, 3).is_empty(),
+                "a reference to a row that does not exist is not an edge"
+            );
+            assert!(
+                edges_of(&k, 4).is_empty(),
+                "a NULL reference is not an edge"
+            );
+
+            // the missing customer arrives later: re-importing the orders links the dangling one
+            make(&db, "INSERT INTO customers VALUES ('nobody', 'Late');");
+            import(&k, &["customers"]).unwrap();
+            let r = import(&k, &["orders"]).unwrap();
+            assert_eq!(
+                r["imported"]["orders"], 1,
+                "only the order that gained an edge changed: {r}"
+            );
+            assert_eq!(edges_of(&k, 3).len(), 1);
+            assert_eq!(edges_of(&k, 1).len(), 1, "the others keep theirs");
+        });
+    }
+
+    #[test]
+    fn an_ambiguous_target_is_never_guessed() {
+        let (k, db) = (kernel(), tmp_db("linkamb"));
+        // two customers share the code a row refers to: no honest edge exists
+        make(
+            &db,
+            "CREATE TABLE customers (id INTEGER PRIMARY KEY, code TEXT);
+             CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_ref TEXT);
+             INSERT INTO customers VALUES (1, 'X'), (2, 'X'), (3, 'Y');
+             INSERT INTO orders VALUES (1, 'X'), (2, 'Y');",
+        );
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            let args = json!({"sources": ["crm"], "preview": true, "relationships":
+                [{"name": "placed_by", "from": "crm.orders.customer_ref", "to": "crm.customers.code"}]});
+            let p = crate::sources::ontology::tool_sources_ontology(&k, &args, "x").unwrap();
+            let mut apply = args.clone();
+            apply["preview"] = json!(false);
+            apply["fingerprints"] = p["fingerprints"].clone();
+            crate::sources::ontology::tool_sources_ontology(&k, &apply, "x").unwrap();
+            import(&k, &["customers"]).unwrap();
+            let r = import(&k, &["orders"]).unwrap();
+            let stats = &r["links"]["orders"]["placed_by"];
+            assert_eq!(
+                (stats["linked"].clone(), stats["ambiguous"].clone()),
+                (json!(1), json!(1)),
+                "{r}"
+            );
+            assert!(
+                edges_of(&k, 1).is_empty(),
+                "code X names two customers: no edge"
+            );
+            assert_eq!(edges_of(&k, 2).len(), 1);
+        });
+    }
+
+    #[test]
+    fn a_row_deleted_at_the_source_and_later_inserted_again_is_visible_again() {
+        let (k, db) = (kernel(), tmp_db("revive"));
+        make(
+            &db,
+            "CREATE TABLE activity (visitor TEXT, visits INTEGER);
+             INSERT INTO activity VALUES ('a', 1), ('b', 2);",
+        );
+        run(sqlite_source("crm", None), &db, || {
+            tool_sources_discover(&k, &json!({"source": "crm"}), "x").unwrap();
+            publish_with_identity(&k, "crm.activity", &["visitor"]);
+            import(&k, &["activity"]).unwrap();
+            make(&db, "DELETE FROM activity WHERE visitor = 'b';");
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(r["pruned"]["activity"], 1, "{r}");
+            assert_eq!(live(&k, "activity", None).len(), 1);
+            // 'b' returns: its id was tombstoned, and the kernel never revives a tombstone
+            make(&db, "INSERT INTO activity VALUES ('b', 9);");
+            import(&k, &["activity"]).unwrap();
+            assert_eq!(
+                visits_of(&k, "b").map(|v| v.0),
+                Some(9),
+                "the returning row must be visible"
+            );
+            assert_eq!(live(&k, "activity", None).len(), 2);
+            // and a quiet re-import changes nothing
+            let r = import(&k, &["activity"]).unwrap();
+            assert_eq!(r["imported"]["activity"], 0, "{r}");
+            assert_eq!(live(&k, "activity", None).len(), 2);
+        });
     }
 
     #[test]

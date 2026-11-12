@@ -602,13 +602,23 @@ pub(crate) fn extract_for_ingest_with(
                 Some(stats) => stats.status(),
                 None => "extracted",
             };
+            // the reasons go to the server log and the response, not only to a stderr nobody keeps
+            if let Some(s) = &doc.ocr_stats {
+                for why in &s.failures {
+                    tracing::warn!("OCR failed for {filename}, {why}");
+                }
+            }
             let ocr_stats = doc.ocr_stats.as_ref().map(|s| {
-                json!({
+                let mut v = json!({
                     "pages_ocr_attempted": s.pages_ocr_attempted,
                     "pages_ocr_succeeded": s.pages_ocr_succeeded,
                     "pages_ocr_failed": s.pages_ocr_failed,
                     "average_confidence": s.average_confidence,
-                })
+                });
+                if !s.failures.is_empty() {
+                    v["failures"] = json!(s.failures);
+                }
+                v
             });
             Extracted {
                 pages: doc.page_count as i64,
@@ -702,7 +712,118 @@ pub(crate) fn tool_document_status(k: &Kernel, args: &J, db_path: &str) -> Resul
     Ok(out)
 }
 
+/// Items kept per list in a compile result unless the caller asks for another `limit`.
+const COMPILE_LIST_DEFAULT: usize = 500;
+
+/// The request's `limit` (1..=1_000_000, default 500).
+fn compile_limit(args: &J) -> Result<usize, String> {
+    match args.get("limit") {
+        None | Some(J::Null) => Ok(COMPILE_LIST_DEFAULT),
+        Some(v) => v
+            .as_u64()
+            .filter(|n| (1..=1_000_000).contains(n))
+            .map(|n| n as usize)
+            .ok_or_else(|| {
+                "invalid request: limit must be a whole number from 1 to 1000000".into()
+            }),
+    }
+}
+
+/// Characters kept per text field in a compile result unless the caller asks for another `max_text`.
+const COMPILE_TEXT_DEFAULT: usize = 2000;
+
+/// The request's `max_text` (100..=100_000_000, default 2000).
+fn compile_max_text(args: &J) -> Result<usize, String> {
+    match args.get("max_text") {
+        None | Some(J::Null) => Ok(COMPILE_TEXT_DEFAULT),
+        Some(v) => v
+            .as_u64()
+            .filter(|n| (100..=100_000_000).contains(n))
+            .map(|n| n as usize)
+            .ok_or_else(|| {
+                "invalid request: max_text must be a whole number from 100 to 100000000".into()
+            }),
+    }
+}
+
+/// Entity mentions of a book hold whole chapters (twenty entities weighed 11 MB): any string
+/// longer than `max_chars` is cut on a character boundary and says how much was dropped.
+/// `truncated.long_text` counts the fields cut. The compiler's numbers are not touched.
+fn bound_compile_text(result: &mut J, max_chars: usize) {
+    fn walk(v: &mut J, max: usize, cut: &mut usize) {
+        match v {
+            J::String(s) => {
+                if let Some((at, _)) = s.char_indices().nth(max) {
+                    let more = s[at..].chars().count();
+                    s.truncate(at);
+                    s.push_str(&format!("… [{more} more characters]"));
+                    *cut += 1;
+                }
+            }
+            J::Array(a) => a.iter_mut().for_each(|x| walk(x, max, cut)),
+            J::Object(o) => o.values_mut().for_each(|x| walk(x, max, cut)),
+            _ => {}
+        }
+    }
+    let mut cut = 0;
+    walk(result, max_chars, &mut cut);
+    if cut > 0 {
+        if !result["truncated"].is_object() {
+            result["truncated"] = json!({});
+        }
+        result["truncated"]["long_text"] = json!({"fields": cut, "max_chars": max_chars});
+    }
+}
+
+/// A 1,446-page book compiles to 83 MB (50,878 plan actions, 48,578 relations, ...): more than a
+/// browser or a client can hold. Every list is cut to its first `limit` items and `truncated`
+/// records exactly what was cut, so nothing is dropped silently. The compiler's own counts
+/// (`commit_plan.stats`, `total_chars`, ...) are not touched.
+fn bound_compile_result(result: &mut J, limit: usize) {
+    use std::collections::BTreeMap;
+    // every list at every depth (evidence lists nest inside entities and ontology items), except
+    // arrays of plain numbers: an embedding vector is one value, and cutting it would corrupt it
+    fn walk(v: &mut J, path: &str, limit: usize, cut: &mut BTreeMap<String, usize>) {
+        match v {
+            J::Array(a) => {
+                if !a.is_empty() && a.iter().all(J::is_number) {
+                    return;
+                }
+                if a.len() > limit {
+                    let total = a.len();
+                    a.truncate(limit);
+                    let seen = cut.entry(path.to_string()).or_insert(0);
+                    *seen = (*seen).max(total);
+                }
+                a.iter_mut().for_each(|x| walk(x, path, limit, cut));
+            }
+            J::Object(o) => {
+                for (k, x) in o.iter_mut() {
+                    let p = if path.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{path}.{k}")
+                    };
+                    walk(x, &p, limit, cut);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut cut = BTreeMap::new();
+    walk(result, "", limit, &mut cut);
+    if !cut.is_empty() {
+        let note: serde_json::Map<String, J> = cut
+            .into_iter()
+            .map(|(p, total)| (p, json!({"shown": limit, "total": total})))
+            .collect();
+        result["truncated"] = J::Object(note);
+    }
+}
+
 pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let limit = compile_limit(args)?;
+    let max_text = compile_max_text(args)?;
     let hex = args
         .get("koid")
         .and_then(|v| v.as_str())
@@ -853,8 +974,169 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
         obj.insert("koid".into(), serde_json::Value::String(hex.to_string()));
         obj.insert("mime_type".into(), serde_json::Value::String(mime_type));
     }
+    bound_compile_result(&mut result, limit);
+    bound_compile_text(&mut result, max_text);
 
     Ok(result)
 }
 
 // ---- Context Compiler (MRFC-0070 Phase A6) ---------------------------
+
+#[cfg(test)]
+mod compile_bound_tests {
+    use super::*;
+
+    fn big(n: usize) -> J {
+        let list = |k: &str| (0..n).map(|i| json!({k: i})).collect::<Vec<_>>();
+        json!({
+            "ir": {"entities": list("e"), "relations": list("r"), "facts": list("f"), "temporal": {"x": 1}},
+            "commit_plan": {"actions": list("a"), "stats": {"total_actions": n}},
+            "embedded_chunks": list("c"), "fragments": list("g"),
+            "evidence_trail": {"nodes": list("n")},
+            "ontology": {"classes": list("k")},
+            "resolution": {"matched": list("m"), "stats": {"total_entities": n}},
+            "secret_findings": [], "total_chars": 7,
+        })
+    }
+
+    #[test]
+    fn a_compile_result_is_bounded_and_says_exactly_what_was_cut() {
+        let mut r = big(1200);
+        bound_compile_result(&mut r, 500);
+        assert_eq!(r["ir"]["entities"].as_array().unwrap().len(), 500);
+        assert_eq!(r["commit_plan"]["actions"].as_array().unwrap().len(), 500);
+        assert_eq!(r["embedded_chunks"].as_array().unwrap().len(), 500);
+        assert_eq!(r["evidence_trail"]["nodes"].as_array().unwrap().len(), 500);
+        // the first items are kept, in order
+        assert_eq!(r["ir"]["entities"][0]["e"], 0);
+        assert_eq!(r["ir"]["entities"][499]["e"], 499);
+        // exact totals, so a client can say "showing 500 of 1200"
+        assert_eq!(
+            r["truncated"]["ir.entities"],
+            json!({"shown": 500, "total": 1200})
+        );
+        assert_eq!(r["truncated"]["commit_plan.actions"]["total"], 1200);
+        // counts the compiler computed are not touched
+        assert_eq!(r["commit_plan"]["stats"]["total_actions"], 1200);
+        assert_eq!(r["total_chars"], 7);
+    }
+
+    #[test]
+    fn markdown_and_rust_compile_results_are_bounded_too() {
+        for root in ["markdown_ir", "code_ir"] {
+            let list = |k: &str| (0..900).map(|i| json!({k: i})).collect::<Vec<_>>();
+            let mut r = json!({root: {"entities": list("e"), "facts": list("f"), "relations": list("r"), "extra": list("x")},
+                               "method": "m", "entities": 900});
+            bound_compile_result(&mut r, 500);
+            for k in ["entities", "facts", "relations", "extra"] {
+                assert_eq!(r[root][k].as_array().unwrap().len(), 500, "{root}.{k}");
+            }
+            assert_eq!(
+                r["truncated"][format!("{root}.entities")],
+                json!({"shown": 500, "total": 900})
+            );
+            assert_eq!(
+                r["entities"], 900,
+                "the compiler's own count is not touched"
+            );
+        }
+    }
+
+    #[test]
+    fn lists_nested_inside_items_are_bounded_but_number_vectors_are_not() {
+        let evidence: Vec<J> = (0..900).map(|i| json!({"page": i})).collect();
+        let vector: Vec<J> = (0..384).map(|i| json!(i as f64 * 0.5)).collect();
+        let mut r = json!({
+            "ontology": {"relationships": [{"name": "r", "evidence": evidence}]},
+            "embedded_chunks": [{"embedding": vector.clone()}],
+        });
+        bound_compile_result(&mut r, 50);
+        assert_eq!(
+            r["ontology"]["relationships"][0]["evidence"]
+                .as_array()
+                .unwrap()
+                .len(),
+            50
+        );
+        assert_eq!(
+            r["truncated"]["ontology.relationships.evidence"],
+            json!({"shown": 50, "total": 900})
+        );
+        // an embedding vector is one value, not a list of items: cutting it would corrupt it
+        assert_eq!(
+            r["embedded_chunks"][0]["embedding"]
+                .as_array()
+                .unwrap()
+                .len(),
+            384
+        );
+        assert!(r["truncated"].get("embedded_chunks.embedding").is_none());
+    }
+
+    #[test]
+    fn very_long_text_fields_are_cut_and_counted() {
+        let long = "é".repeat(5000); // multi-byte: the cut must land on a character boundary
+        let mut r = json!({
+            "ir": {"entities": [{"name": "short", "mentions": [long.clone(), "ok"]}]},
+            "ontology": {"relationships": [{"name": long.clone()}]},
+            "total_chars": 5000,
+        });
+        bound_compile_text(&mut r, 100);
+        let m = r["ir"]["entities"][0]["mentions"][0].as_str().unwrap();
+        assert!(
+            m.starts_with(&"é".repeat(100)) && m.contains("4900 more characters"),
+            "{m}"
+        );
+        assert_eq!(
+            r["ir"]["entities"][0]["mentions"][1], "ok",
+            "short text is untouched"
+        );
+        assert_eq!(r["ir"]["entities"][0]["name"], "short");
+        assert_eq!(
+            r["truncated"]["long_text"],
+            json!({"fields": 2, "max_chars": 100})
+        );
+        assert_eq!(r["total_chars"], 5000, "numbers are untouched");
+        // nothing long: nothing changes, no note
+        let mut small = json!({"a": ["x", "y"]});
+        bound_compile_text(&mut small, 100);
+        assert_eq!(small, json!({"a": ["x", "y"]}));
+    }
+
+    #[test]
+    fn the_text_limit_argument_is_validated() {
+        assert_eq!(compile_max_text(&json!({})).unwrap(), 2000);
+        assert_eq!(compile_max_text(&json!({"max_text": 500})).unwrap(), 500);
+        for bad in [
+            json!({"max_text": 0}),
+            json!({"max_text": 99}),
+            json!({"max_text": "x"}),
+            json!({"max_text": 100000001}),
+        ] {
+            assert!(compile_max_text(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_small_result_is_returned_whole_with_no_truncation_note() {
+        let mut r = big(10);
+        let before = r.clone();
+        bound_compile_result(&mut r, 500);
+        assert_eq!(r, before, "nothing to cut: nothing changes");
+        assert!(r.get("truncated").is_none());
+    }
+
+    #[test]
+    fn the_limit_argument_is_validated() {
+        assert_eq!(compile_limit(&json!({})).unwrap(), 500);
+        assert_eq!(compile_limit(&json!({"limit": 25})).unwrap(), 25);
+        for bad in [
+            json!({"limit": 0}),
+            json!({"limit": -1}),
+            json!({"limit": "x"}),
+            json!({"limit": 1000001}),
+        ] {
+            assert!(compile_limit(&bad).is_err(), "{bad}");
+        }
+    }
+}

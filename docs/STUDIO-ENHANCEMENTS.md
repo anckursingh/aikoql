@@ -118,6 +118,10 @@ light theme (Auto/Light/Dark, system-following, no flash, editor and graph follo
 for AA) · responsive layout (drawer under 800px, 40px touch targets, 16px inputs, no sideways scroll on
 any of the 16 panels at 390px). Real-Chrome checks: 151.
 
+**Ontology workbench (docs/ONTOLOGY-IN-PRACTICE.md, Phase D, first slice):** keys, links and authority are
+authored in Data Sources → Preview and reviewed in the Ontology panel (class cards, mapping table, Reconcile
+sources, raw JSON demoted to *Advanced*). Real-Chrome checks: 169.
+
 **Parked (decided with the product owner):**
 - *Empty-source guidance.* A source that discovers 0 containers prints only the counts; it should say
   "this database has no tables — check the database name or credentials" with the likely causes.

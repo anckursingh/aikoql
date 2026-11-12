@@ -65,31 +65,31 @@ evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 472
+line = 630
 text = "/// Audit counter: one increment per physical-type resolution. Pins O(1):"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 599
+line = 757
 text = "/// TDD-COMP-001 (P4-M7): O(1) via the `by_physical_type` index — one hash"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 614
+line = 772
 text = "/// for O(1) average resolution."
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 1468
+line = 1635
 text = "// TDD-COMP-001 (P4-M7): physical-type index — O(1) resolution"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 
 [[claim]]
 file = "crates/kernel/src/knowledge/ontology.rs"
-line = 1473
+line = 1640
 text = "// The probe counter pins O(1) average: each lookup costs exactly ONE"
 evidence = "comp001_physical_type_index_answers_in_one_probe"
 

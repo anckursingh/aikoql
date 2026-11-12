@@ -7,7 +7,8 @@ use super::{
 use crate::helpers::value_to_json;
 use crate::{json, Kernel, J};
 use aikoql_ingestion::{
-    definition_from_sources, suggest_merges, ClassMerge, ClassStatus, SourceInput,
+    definition_from_sources_all, suggest_identities, suggest_links, suggest_merges, AssertSpec,
+    ClassMerge, ClassStatus, LinkSpec, SourceInput,
 };
 use std::collections::BTreeMap;
 
@@ -26,6 +27,55 @@ struct Merged {
 /// Was this class written by discovery? The description alone is not proof, since a
 /// human can type the same words: it must also name containers ("<source>.<container>")
 /// that the ontology's mappings tie to this very class, which only discovery writes.
+/// What the ontology already holds, in the terms the preview speaks (`source.container`):
+/// keys, links and assertions of the mappings, so the page can tell a declaration that is
+/// pending from one that is published (and so cannot be removed from the preview).
+fn published_view(existing: Option<&J>, inputs: &[SourceInput]) -> J {
+    let empty = Vec::new();
+    let mappings = existing
+        .and_then(|o| o["mappings"].as_array())
+        .unwrap_or(&empty);
+    let key_of = |kind: &str, ty: &str| {
+        inputs
+            .iter()
+            .find(|s| s.kind == kind && s.meta.containers.iter().any(|c| c.name == ty))
+            .map(|s| format!("{}.{}", s.name, ty))
+    };
+    let (mut identities, mut links, mut assertions) =
+        (serde_json::Map::new(), Vec::new(), Vec::new());
+    for s in inputs {
+        for c in &s.meta.containers {
+            let Some(m) = mappings
+                .iter()
+                .find(|m| m["source"] == s.kind && m["physical_type"] == c.name.as_str())
+            else {
+                continue;
+            };
+            let here = format!("{}.{}", s.name, c.name);
+            if m["identity"].as_array().is_some_and(|i| !i.is_empty()) {
+                identities.insert(here.clone(), m["identity"].clone());
+            }
+            for l in m["links"].as_array().unwrap_or(&empty) {
+                let to = key_of(
+                    l["target_source"].as_str().unwrap_or(""),
+                    l["target_type"].as_str().unwrap_or(""),
+                );
+                if let (Some(to), Some(col)) = (to, l["column"].as_str()) {
+                    links.push(json!({"name": l["name"], "from": format!("{here}.{col}"),
+                                      "to": format!("{to}.{}", l["target_column"].as_str().unwrap_or(""))}));
+                }
+            }
+            for a in m["asserts"].as_array().unwrap_or(&empty) {
+                if let Some(col) = a["key_column"].as_str() {
+                    assertions.push(json!({"from": format!("{here}.{col}"), "class": a["class"],
+                                           "properties": a["properties"], "rank": a["rank"]}));
+                }
+            }
+        }
+    }
+    json!({"identities": identities, "links": links, "assertions": assertions})
+}
+
 fn written_by_discovery(class: &J, mappings: &[J]) -> bool {
     let Some(keys) = class["description"]
         .as_str()
@@ -130,7 +180,7 @@ fn merge(existing: Option<&J>, draft: &J) -> Merged {
         match maps.iter().find(|e| key(e) == key(&m)) {
             None => {
                 added_maps.push(m.clone());
-                maps.push(m);
+                maps.push(m.clone());
             }
             Some(e) if e["class"] != m["class"] => warnings.push(format!(
                 "{} {} is already mapped to {}; the discovered mapping to {} was skipped",
@@ -140,6 +190,80 @@ fn merge(existing: Option<&J>, draft: &J) -> Merged {
                 m["class"]
             )),
             Some(_) => {}
+        }
+        // the identity key is not an alias a human may have tuned by hand: a key the
+        // owner declares later fills a mapping that has none, and corrects one on a
+        // class discovery itself wrote; a key a human wrote on their own class stays
+        let want = m["identity"].clone();
+        if want.as_array().is_some_and(|a| !a.is_empty()) {
+            if let Some(i) = maps.iter().position(|e| {
+                e["source"] == m["source"]
+                    && e["physical_type"] == m["physical_type"]
+                    && e["class"] == m["class"]
+            }) {
+                if maps[i]["identity"] != want {
+                    let had = maps[i]["identity"]
+                        .as_array()
+                        .is_some_and(|a| !a.is_empty());
+                    let ours = classes
+                        .iter()
+                        .find(|c| c["name"] == maps[i]["class"])
+                        .is_some_and(|c| written_by_discovery(c, &maps));
+                    if !had || ours {
+                        maps[i]["identity"] = want;
+                    } else {
+                        warnings.push(format!(
+                            "{} {} already has an identity key written by hand; kept as is",
+                            m["source"].as_str().unwrap_or(""),
+                            m["physical_type"].as_str().unwrap_or("")
+                        ));
+                    }
+                }
+            }
+        }
+        // links (by name) and assertions (by class): one not yet on the mapping is added; the
+        // same one pointing elsewhere is corrected on a class discovery wrote and kept (with
+        // a warning) on a human's; a draft that says nothing about them never removes any
+        for (field, id) in [("links", "name"), ("asserts", "class")] {
+            let Some(wanted) = m[field].as_array().filter(|a| !a.is_empty()) else {
+                continue;
+            };
+            let Some(i) = maps.iter().position(|e| {
+                e["source"] == m["source"]
+                    && e["physical_type"] == m["physical_type"]
+                    && e["class"] == m["class"]
+            }) else {
+                continue;
+            };
+            let ours = classes
+                .iter()
+                .find(|c| c["name"] == maps[i]["class"])
+                .is_some_and(|c| written_by_discovery(c, &maps));
+            let mut have = maps[i][field].as_array().cloned().unwrap_or_default();
+            let mut changed = false;
+            for l in wanted {
+                match have.iter().position(|e| e[id] == l[id]) {
+                    None => {
+                        have.push(l.clone());
+                        changed = true;
+                    }
+                    Some(j) if have[j] == *l => {}
+                    Some(j) if ours => {
+                        have[j] = l.clone();
+                        changed = true;
+                    }
+                    Some(_) => warnings.push(format!(
+                        "{} {}: {} {} already points elsewhere and was written by hand; kept as is",
+                        m["source"].as_str().unwrap_or(""),
+                        m["physical_type"].as_str().unwrap_or(""),
+                        &field[..field.len() - 1],
+                        l[id].as_str().unwrap_or("")
+                    )),
+                }
+            }
+            if changed {
+                maps[i][field] = J::Array(have);
+            }
         }
     }
     let untouched = classes
@@ -257,6 +381,95 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
         }
         _ => return Err(format!("{INVALID}merges must be a list of merges")),
     };
+    // identity keys the owner declares: {"source.container": ["column", ...]}
+    let identities: BTreeMap<String, Vec<String>> = match o.get("identities") {
+        None | Some(J::Null) => BTreeMap::new(),
+        Some(J::Object(m)) if m.len() <= 1_000 => m
+            .iter()
+            .map(|(k, v)| match v.as_array() {
+                Some(cols)
+                    if k.len() <= 512
+                        && (1..=32).contains(&cols.len())
+                        && cols.iter().all(|c| c.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 256)) =>
+                {
+                    Ok((k.clone(), cols.iter().filter_map(|c| c.as_str().map(str::to_string)).collect()))
+                }
+                _ => Err(format!(
+                    "{INVALID}identities must map \"source.container\" to a list of 1-32 column names"
+                )),
+            })
+            .collect::<Result<_, _>>()?,
+        _ => return Err(format!("{INVALID}identities must be an object")),
+    };
+    // links the owner declares: [{"name", "from": "source.container.column", "to": "..."}]
+    let links: Vec<LinkSpec> = match o.get("relationships") {
+        None | Some(J::Null) => Vec::new(),
+        Some(J::Array(a)) if a.len() <= 200 => a
+            .iter()
+            .map(|r| {
+                let bad = || format!("{INVALID}relationships must be objects {{name, from, to}} of source.container.column references");
+                let o = r.as_object().ok_or_else(bad)?;
+                if o.keys().any(|k| !matches!(k.as_str(), "name" | "from" | "to")) {
+                    return Err(bad());
+                }
+                let text = |k: &str| o.get(k).and_then(J::as_str).filter(|s| s.len() <= 512).map(str::to_string);
+                Ok(LinkSpec { name: text("name").ok_or_else(bad)?, from: text("from").ok_or_else(bad)?, to: text("to").ok_or_else(bad)? })
+            })
+            .collect::<Result<_, String>>()?,
+        _ => return Err(format!("{INVALID}relationships must be a list of at most 200")),
+    };
+    // assertions: [{"from": "source.container.column", "class", "properties": {physical: canonical}, "rank"?}]
+    let asserts: Vec<AssertSpec> = match o.get("assertions") {
+        None | Some(J::Null) => Vec::new(),
+        Some(J::Array(a)) if a.len() <= 100 => a
+            .iter()
+            .map(|r| {
+                let bad = || {
+                    format!(
+                        "{INVALID}assertions must be objects {{from, class, properties, rank?}}"
+                    )
+                };
+                let o = r.as_object().ok_or_else(bad)?;
+                if o.keys()
+                    .any(|k| !matches!(k.as_str(), "from" | "class" | "properties" | "rank"))
+                {
+                    return Err(bad());
+                }
+                let text = |k: &str| {
+                    o.get(k)
+                        .and_then(J::as_str)
+                        .filter(|s| s.len() <= 512)
+                        .map(str::to_string)
+                };
+                let properties = match o.get("properties") {
+                    Some(J::Object(p)) if p.len() <= 64 => p
+                        .iter()
+                        .map(|(k, v)| {
+                            v.as_str()
+                                .filter(|s| s.len() <= 128)
+                                .map(|v| (k.clone(), v.to_string()))
+                                .ok_or_else(bad)
+                        })
+                        .collect::<Result<_, _>>()?,
+                    _ => return Err(bad()),
+                };
+                let rank = match o.get("rank") {
+                    None => aikoql_kernel::AssertDef::DEFAULT_RANK,
+                    Some(v) => v
+                        .as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(bad)?,
+                };
+                Ok(AssertSpec {
+                    from: text("from").ok_or_else(bad)?,
+                    class: text("class").ok_or_else(bad)?,
+                    properties,
+                    rank,
+                })
+            })
+            .collect::<Result<_, String>>()?,
+        _ => return Err(format!("{INVALID}assertions must be a list of at most 100")),
+    };
     let given: BTreeMap<String, String> = match o.get("fingerprints") {
         None | Some(J::Null) => BTreeMap::new(),
         Some(J::Object(m)) => m
@@ -296,7 +509,7 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             meta: m,
         })
         .collect();
-    let draft = definition_from_sources(&inputs, &merges);
+    let draft = definition_from_sources_all(&inputs, &merges, &identities, &links, &asserts);
     if !draft.publishable() {
         return Err(format!("{NOTHING}: no containers were discovered"));
     }
@@ -350,7 +563,44 @@ fn run(k: &Kernel, args: &J) -> Result<J, String> {
             })
         })
         .collect();
+    // keys: what each source declares, and the best guess (with evidence) for the rest
+    let identity_suggestions: Vec<J> = suggest_identities(&inputs)
+        .into_iter()
+        .map(|s| {
+            json!({"container": s.container, "columns": s.columns, "confidence": s.confidence,
+                   "evidence": s.evidence, "declared": s.declared})
+        })
+        .collect();
+    // links: proposed from the keys; one already declared is not offered again
+    let link_suggestions: Vec<J> = suggest_links(&inputs, &identities)
+        .into_iter()
+        .filter(|s| !links.iter().any(|l| l.from == s.from && l.name == s.name))
+        .map(|s| json!({"name": s.name, "from": s.from, "to": s.to, "confidence": s.confidence, "evidence": s.evidence}))
+        .collect();
+    let published = published_view(existing_json.as_ref(), &inputs);
+    // a key the ontology already holds is marked, a link it already holds is not proposed again
+    let identity_suggestions: Vec<J> = identity_suggestions
+        .into_iter()
+        .map(|mut s| {
+            let held =
+                published["identities"][s["container"].as_str().unwrap_or("")] == s["columns"];
+            s["published"] = json!(held);
+            s
+        })
+        .collect();
+    let link_suggestions: Vec<J> = link_suggestions
+        .into_iter()
+        .filter(|s| {
+            !published["links"].as_array().is_some_and(|l| {
+                l.iter()
+                    .any(|p| p["name"] == s["name"] && p["from"] == s["from"])
+            })
+        })
+        .collect();
     let summary = json!({
+        "published": published,
+        "links": link_suggestions,
+        "identities": identity_suggestions,
         "classes": classes, "adds": merged.adds, "refreshed": merged.refreshed,
         "untouched": merged.untouched, "mappings": merged.mappings, "warnings": warnings,
         "fingerprints": fingerprints, "active_version": active_version, "base": base,
@@ -525,6 +775,210 @@ mod tests {
                 .iter()
                 .all(|s| { !(s["a"] == "crm.customers" && s["b"] == "shop.clients") }));
         });
+    }
+
+    // ---- an identity key declared AFTER the first publish (found on the case study) ----
+
+    fn onto(class_desc: &str, identity: Option<Vec<&str>>) -> J {
+        let mut m =
+            json!({"source": "clickhouse", "physical_type": "t", "class": "T", "property_map": {}});
+        if let Some(cols) = identity {
+            m["identity"] = json!(cols);
+        }
+        json!({"namespace": "sources", "version": "1.0", "relationships": [], "property_defs": [],
+               "classes": [{"name": "T", "description": class_desc, "properties": []}],
+               "mappings": [m]})
+    }
+
+    fn draft_with(identity: Option<Vec<&str>>) -> J {
+        let mut d = onto("Discovered from s.t", identity);
+        d["mappings"][0]["property_map"] = json!({});
+        d
+    }
+
+    fn identity_of(m: &Merged) -> J {
+        m.definition["mappings"][0]["identity"].clone()
+    }
+
+    // ---- links published after the first publish ----
+
+    fn lk(name: &str, col: &str) -> J {
+        json!({"name": name, "column": col, "target_source": "postgres", "target_type": "accounts", "target_column": "id"})
+    }
+
+    fn with_links(mut o: J, links: Vec<J>) -> J {
+        o["mappings"][0]["links"] = J::Array(links);
+        o
+    }
+
+    fn links_of(m: &Merged) -> Vec<J> {
+        m.definition["mappings"][0]["links"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn links_declared_later_are_added_and_a_humans_are_kept() {
+        // added to a mapping that had none, and alongside existing ones
+        let plain = onto("Discovered from s.t", None);
+        let m = merge(
+            Some(&plain),
+            &with_links(draft_with(None), vec![lk("for_account", "account_id")]),
+        );
+        assert_eq!(links_of(&m), vec![lk("for_account", "account_id")]);
+        let have = with_links(
+            onto("Discovered from s.t", None),
+            vec![lk("for_account", "account_id")],
+        );
+        let m = merge(
+            Some(&have),
+            &with_links(draft_with(None), vec![lk("for_owner", "owner_id")]),
+        );
+        assert_eq!(
+            links_of(&m).len(),
+            2,
+            "a new link name is added, the old one stays"
+        );
+        // a draft that says nothing about links never removes any
+        assert_eq!(
+            links_of(&merge(Some(&have), &draft_with(None))),
+            vec![lk("for_account", "account_id")]
+        );
+        // the same link again is not a change
+        let same = merge(
+            Some(&have),
+            &with_links(draft_with(None), vec![lk("for_account", "account_id")]),
+        );
+        assert_eq!(same.definition, have);
+        // the same name pointing elsewhere: corrected on discovery's class, kept (with a warning) on a human's
+        let ours = merge(
+            Some(&have),
+            &with_links(draft_with(None), vec![lk("for_account", "acct")]),
+        );
+        assert_eq!(links_of(&ours), vec![lk("for_account", "acct")]);
+        let theirs_base = with_links(
+            onto("our own T", None),
+            vec![lk("for_account", "account_id")],
+        );
+        let theirs = merge(
+            Some(&theirs_base),
+            &with_links(draft_with(None), vec![lk("for_account", "acct")]),
+        );
+        assert_eq!(links_of(&theirs), vec![lk("for_account", "account_id")]);
+        assert!(
+            theirs
+                .warnings
+                .iter()
+                .any(|w| w.contains("link") && w.contains("kept")),
+            "{:?}",
+            theirs.warnings
+        );
+    }
+
+    fn asrt(class: &str, col: &str, rank: u64) -> J {
+        json!({"class": class, "key_column": col, "properties": {"status": "status"}, "rank": rank})
+    }
+
+    fn asserts_of(m: &Merged) -> Vec<J> {
+        m.definition["mappings"][0]["asserts"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn assertions_declared_later_are_added_and_a_humans_are_kept() {
+        let with = |mut o: J, a: Vec<J>| {
+            o["mappings"][0]["asserts"] = J::Array(a);
+            o
+        };
+        let m = merge(
+            Some(&onto("Discovered from s.t", None)),
+            &with(draft_with(None), vec![asrt("Account", "id", 10)]),
+        );
+        assert_eq!(asserts_of(&m), vec![asrt("Account", "id", 10)]);
+        let have = with(
+            onto("Discovered from s.t", None),
+            vec![asrt("Account", "id", 10)],
+        );
+        // another class is added alongside
+        let m = merge(
+            Some(&have),
+            &with(draft_with(None), vec![asrt("Person", "id", 10)]),
+        );
+        assert_eq!(asserts_of(&m).len(), 2);
+        // silence removes nothing; the same assertion again is no change
+        assert_eq!(
+            asserts_of(&merge(Some(&have), &draft_with(None))),
+            vec![asrt("Account", "id", 10)]
+        );
+        assert_eq!(
+            merge(
+                Some(&have),
+                &with(draft_with(None), vec![asrt("Account", "id", 10)])
+            )
+            .definition,
+            have
+        );
+        // a new rank: corrected on discovery's class, kept (with a warning) on a human's
+        let ours = merge(
+            Some(&have),
+            &with(draft_with(None), vec![asrt("Account", "id", 5)]),
+        );
+        assert_eq!(asserts_of(&ours), vec![asrt("Account", "id", 5)]);
+        let human = with(onto("our own T", None), vec![asrt("Account", "id", 10)]);
+        let theirs = merge(
+            Some(&human),
+            &with(draft_with(None), vec![asrt("Account", "id", 5)]),
+        );
+        assert_eq!(asserts_of(&theirs), vec![asrt("Account", "id", 10)]);
+        assert!(
+            theirs
+                .warnings
+                .iter()
+                .any(|w| w.contains("assert") && w.contains("kept")),
+            "{:?}",
+            theirs.warnings
+        );
+    }
+
+    #[test]
+    fn a_key_declared_later_fills_a_mapping_that_had_none() {
+        let existing = onto("Discovered from s.t", None);
+        let m = merge(Some(&existing), &draft_with(Some(vec!["visitor_id"])));
+        assert_eq!(identity_of(&m), json!(["visitor_id"]), "{}", m.definition);
+        assert_ne!(
+            m.definition, existing,
+            "the publish must register as a change"
+        );
+    }
+
+    #[test]
+    fn a_key_may_be_corrected_on_a_class_discovery_wrote_but_never_over_a_humans() {
+        // discovery's own class: the new declaration replaces the old
+        let ours = onto("Discovered from s.t", Some(vec!["a"]));
+        assert_eq!(
+            identity_of(&merge(Some(&ours), &draft_with(Some(vec!["b"])))),
+            json!(["b"])
+        );
+        // a hand-written class keeps its key, and says so
+        let theirs = onto("our own T", Some(vec!["a"]));
+        let m = merge(Some(&theirs), &draft_with(Some(vec!["b"])));
+        assert_eq!(identity_of(&m), json!(["a"]));
+        assert!(
+            m.warnings
+                .iter()
+                .any(|w| w.contains("identity") && w.contains("kept")),
+            "{:?}",
+            m.warnings
+        );
+        // a draft with no key never erases one
+        let kept = merge(Some(&ours), &draft_with(None));
+        assert_eq!(identity_of(&kept), json!(["a"]));
+        // and an unchanged key is not a change
+        let same = merge(Some(&ours), &draft_with(Some(vec!["a"])));
+        assert_eq!(same.definition, ours);
     }
 
     #[test]

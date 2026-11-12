@@ -151,7 +151,7 @@ pub use knowledge::kom::{
     TESTED_BY,
 };
 pub use knowledge::ontology::{
-    Cardinality, ClassDef, MappingEntry, OntologyDef, OntologyRegistry, RelDef,
+    AssertDef, Cardinality, ClassDef, LinkDef, MappingEntry, OntologyDef, OntologyRegistry, RelDef,
 };
 pub use knowledge::scope::{Scope, ScopeResolver};
 pub use statistics::Statistics;
