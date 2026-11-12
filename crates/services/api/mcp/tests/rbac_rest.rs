@@ -426,6 +426,49 @@ fn viewer_cannot_post_rest_write() {
 }
 
 #[test]
+fn a_viewer_cannot_save_or_remove_a_documents_knowledge_but_can_read_it() {
+    let (srv, mcp_port) = serve("docsave", &["ttok:acme:admin", "vtok:acme:viewer"]);
+    set_roles(&srv.db, "admin", &["viewer"]);
+    let token = admin_token(srv.port);
+    let koid = "00000000000000000000000000000001";
+    // REST: saving and removing are writes (a viewer would otherwise delete a book's 12k objects)
+    for route in ["commit", "uncommit"] {
+        let r = http(
+            srv.port,
+            "POST",
+            &format!("/api/v1/documents/{route}?token={token}"),
+            &format!(r#"{{"koid":"{koid}"}}"#),
+        );
+        assert_eq!(
+            r.status, 403,
+            "viewer must not POST documents/{route}: {} {}",
+            r.status, r.body
+        );
+    }
+    // reading a saved document's objects is not blocked by the role gate (the koid is unknown: 4xx/5xx, not 403)
+    let r = http(
+        srv.port,
+        "GET",
+        &format!("/api/v1/documents/objects?koid={koid}&token={token}"),
+        "",
+    );
+    assert_ne!(r.status, 403, "viewer may read saved objects: {}", r.body);
+    // MCP: a viewer is refused the write tools, and the read tool is classified as a read
+    for tool in ["document_commit", "document_uncommit"] {
+        let resp = mcp_call(mcp_port, "vtok", tool, &json!({"koid": koid}));
+        assert_eq!(
+            resp["error"]["code"], -32001,
+            "viewer must not call {tool}: {resp}"
+        );
+    }
+    let resp = mcp_call(mcp_port, "vtok", "document_objects", &json!({"koid": koid}));
+    assert_ne!(
+        resp["error"]["code"], -32001,
+        "document_objects is a read: {resp}"
+    );
+}
+
+#[test]
 fn admin_passes_all_gates() {
     let (srv, mcp_port) = serve("admin", &["atok:acme:admin"]);
     // REST write

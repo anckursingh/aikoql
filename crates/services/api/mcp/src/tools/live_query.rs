@@ -226,7 +226,7 @@ mod tests {
         let err = live_query_stream(
             &k,
             "ag40w",
-            "CREATE OtherThing {x: 1}",
+            "CREATE OtherThing x == 1",
             "mcp-agent",
             &[],
             None,

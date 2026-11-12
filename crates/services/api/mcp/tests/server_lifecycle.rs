@@ -362,7 +362,7 @@ fn node_count(k: &Kernel) -> usize {
 fn create_node(c: &mut Client, i: i64) -> J {
     let r = c.call(
         "koql/execute",
-        json!({"query": format!("CREATE Node {{i: {i}}}")}),
+        json!({"query": format!("CREATE Node i == {i}")}),
     );
     let res = result_of(&r);
     assert_eq!(res.get("version"), Some(&json!(1)), "create lost: {r}");

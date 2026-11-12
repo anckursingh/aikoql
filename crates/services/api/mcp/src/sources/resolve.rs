@@ -10,8 +10,9 @@
 //! sources disagree about, with the rule that decides). Ids are deterministic, so a
 //! repeat run changes nothing and the order the sources were imported in is irrelevant.
 
-use super::import::{identity_koid, key_text, live_koid};
+use super::import::key_text;
 use super::{args_obj, audit, tenant_arg, INVALID};
+use crate::derived_ids::{identity_koid, live_koid};
 use crate::imports::{fresh_run_id, ImportSink};
 use crate::{
     json, ExtensionMap, Kernel, Lifecycle, LifecycleState, Metadata, Origin, RelationshipRef,

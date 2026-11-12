@@ -457,7 +457,7 @@ fn cl03a_status() {
 #[test]
 fn cl03b_query() {
     let db = tmp_db("cl03b");
-    let (st, out, err) = run_verb(&db, &["query", "CREATE Node {i: 1}"]);
+    let (st, out, err) = run_verb(&db, &["query", "CREATE Node i == 1"]);
     assert!(st.success(), "query CREATE must exit 0: {st}\n{err}");
     assert!(
         out.contains("\"koid\""),
@@ -484,7 +484,7 @@ fn cl03b_query() {
 #[test]
 fn cl03c_explain() {
     let db = tmp_db("cl03c");
-    let (st, out, err) = run_verb(&db, &["query", "CREATE Node {i: 2}"]);
+    let (st, out, err) = run_verb(&db, &["query", "CREATE Node i == 2"]);
     assert!(st.success(), "seed CREATE must exit 0: {st}\n{err}");
     let koid = extract_koid(&out);
 
@@ -500,7 +500,7 @@ fn cl03c_explain() {
 #[test]
 fn cl03d_schema() {
     let db = tmp_db("cl03d");
-    let (st, _, err) = run_verb(&db, &["query", "CREATE Node {i: 3}"]);
+    let (st, _, err) = run_verb(&db, &["query", "CREATE Node i == 3"]);
     assert!(st.success(), "seed CREATE must exit 0: {st}\n{err}");
 
     let (st, out, err) = run_verb(&db, &["schema"]);
@@ -515,7 +515,7 @@ fn cl03d_schema() {
 #[test]
 fn cl03e_index() {
     let db = tmp_db("cl03e");
-    let (st, _, err) = run_verb(&db, &["query", "CREATE Node {i: 4}"]);
+    let (st, _, err) = run_verb(&db, &["query", "CREATE Node i == 4"]);
     assert!(st.success(), "seed CREATE must exit 0: {st}\n{err}");
 
     let (st, out, err) = run_verb(&db, &["index"]);

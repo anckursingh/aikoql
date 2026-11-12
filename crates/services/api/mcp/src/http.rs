@@ -283,6 +283,13 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
     let mut center_koid: Option<KOID> = None;
     let mut detail = false;
     let mut type_filter: Option<String> = None;
+    // `?document=<koid>&kind=entity&offset=0&limit=200`: one saved document's objects, paged
+    let (mut document, mut doc_kind, mut doc_offset, mut doc_limit): (
+        Option<String>,
+        String,
+        usize,
+        usize,
+    ) = (None, "entity".into(), 0, 200);
 
     // Parse query string (ponytail: manual parsing, no url crate dep).
     if let Some(qs) = path.split_once('?').map(|(_, q)| q) {
@@ -296,6 +303,10 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
                     "detail" => {
                         detail = v == "1" || v == "true";
                     }
+                    "document" => document = Some(url_decode(v)),
+                    "kind" => doc_kind = url_decode(v),
+                    "offset" => doc_offset = v.parse().unwrap_or(0),
+                    "limit" => doc_limit = v.parse().unwrap_or(200),
                     "type" => {
                         type_filter = Some(url_decode(v));
                     }
@@ -308,6 +319,11 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
     // P3-M1 (auth006): the caller's session subject — never a hardcoded
     // admin. The tenant claim confines every kernel read/write.
     let browser_ctx = KnowledgeContext::from(subject.clone());
+    if let Some(doc) = &document {
+        return crate::tools::doc_graph::document_graph(
+            k, subject, doc, &doc_kind, doc_offset, doc_limit,
+        );
+    }
 
     // Parse tenant filter from query string.
     let tenant_filter: Option<String> = path.split_once('?').and_then(|(_, qs)| {
@@ -326,6 +342,7 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
 
     // Collect all heads (non-deleted), optionally filtered by tenant and type.
     let mut head_koids: Vec<KOID> = Vec::new();
+    let mut hidden_document_objects = 0usize;
     for (koid, _ver, _ts, state) in &heads {
         if *state == LifecycleState::Deleted {
             continue;
@@ -338,6 +355,13 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
             if ko.metadata.tenant.as_deref() != Some(tf.as_str()) {
                 continue;
             }
+        }
+        // saved document objects are drawn per document (`?document=`), never all at once here
+        if type_filter.is_none()
+            && crate::tools::doc_graph::DOC_TYPES.contains(&ko.metadata.type_name.as_str())
+        {
+            hidden_document_objects += 1;
+            continue;
         }
         if let Some(ref tf) = type_filter {
             if ko.metadata.type_name != *tf {
@@ -416,6 +440,7 @@ pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<Str
         "edges": edges,
         "tenants": tenants,
         "tenant_filter": tenant_filter,
+        "hidden": {"document_objects": hidden_document_objects},
     })
     .to_string())
 }

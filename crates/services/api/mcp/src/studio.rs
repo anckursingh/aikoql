@@ -208,6 +208,8 @@ tr:hover td { background: rgba(var(--accent-rgb),0.03); }
 .graph-toolbar { position: absolute; top: 8px; left: 8px; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; }
 .graph-toolbar input, .graph-toolbar select { padding: 5px 8px; background: var(--glass); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 11px; font-family: var(--font); }
 .graph-toolbar input { width: 240px; }
+/* below the toolbar, over the canvas: it states what the drawing is a page of */
+#graph-banner { position: absolute; top: 44px; left: 8px; right: 8px; z-index: 4; padding: 8px; font-size: 12px; background: var(--glass); backdrop-filter: blur(4px); max-height: 38%; overflow: auto; }
 .graph-toolbar input:focus, .graph-toolbar select:focus { outline: none; border-color: var(--accent); }
 .legend-box { position: absolute; bottom: 8px; left: 8px; background: var(--glass); padding: 6px 10px; border-radius: 5px; font-size: 11px; max-height: 280px; overflow-y: auto; z-index: 5; }
 .legend-item { display: flex; align-items: center; margin: 2px 0; gap: 5px; }
@@ -490,7 +492,9 @@ td a:hover { text-decoration: underline; }
             <select id="graph-tenant" data-change="loadGraph"><option value="">All tenants</option></select>
             <button class="btn btn-pri btn-sm" data-click="loadGraph">Search</button>
             <button class="btn btn-sec btn-sm" data-click="loadGraphAll">View All</button>
+            <select id="graph-document" data-change="graphPickDocument" aria-label="Show one saved document" style="display:none;"></select>
           </div>
+          <div class="card" id="graph-banner" style="display:none;" role="status"></div>
           <div id="graph-viz"></div>
           <div class="legend-box" id="legend"></div>
         </div>
@@ -624,6 +628,7 @@ td a:hover { text-decoration: underline; }
           <div id="doc-ingest-result" style="margin-top:8px;"></div>
         </div>
         <div id="documents-list"><div class="loading">Loading documents...</div></div>
+        <div id="doc-browse" style="margin-top:12px;"></div>
         <div id="doc-compile-result" style="margin-top:12px;"></div>
       </div>
 
@@ -1262,6 +1267,23 @@ mod tests {
                 "{a} is in the closed ACTIONS table"
             );
         }
+    }
+
+    #[test]
+    fn browse_all_from_the_graph_goes_to_the_documents_page_where_the_table_lives() {
+        let page = page_for_tests();
+        let b = page
+            .find("async function browseDocument(")
+            .expect("browseDocument");
+        let body: String = page[b..].chars().take(500).collect();
+        assert!(
+            body.contains("switchPanel('documents')"),
+            "the table is in the Documents panel: {body}"
+        );
+        assert!(
+            page.contains("id=\"doc-browse\""),
+            "the table's container exists"
+        );
     }
 
     #[test]

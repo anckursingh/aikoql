@@ -20,6 +20,7 @@ mod aws_kms;
 mod chat;
 mod cli;
 mod config;
+mod derived_ids;
 mod dispatcher;
 mod engine;
 mod error_codes;

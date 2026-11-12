@@ -365,7 +365,7 @@ async function main() {
 
     // ---- sweep: every delegated control, in every panel, must REACT -------
     // downloads stall page.click (a file save is not a DOM change); downloadResults has its own explicit check
-    const SKIP = new Set(['logout', 'adminRestoreBackup', 'signInSso', 'downloadAuditExport', 'downloadResults']);
+    const SKIP = new Set(['logout', 'adminRestoreBackup', 'signInSso', 'downloadAuditExport', 'downloadResults', 'saveDocument', 'removeDocumentKnowledge']); // the last two write/delete data: explicit checks below
     const panels = await page.$$eval('#sidebar nav button[data-panel]', b => b.map(x => x.dataset.panel));
     const reactions = [], unclickable = [];
     for (const name of panels) {
@@ -402,6 +402,50 @@ async function main() {
     const compiled = await page.textContent('#doc-compile-result');
     ok('an uploaded image compiles', /Compilation Results/.test(compiled) && !/Compile failed/.test(compiled), compiled);
     ok(hasTess ? 'the OCR text reaches the compiled result' : 'the compiled result says OCR is unavailable', hasTess ? /Utrecht/.test(compiled) : /OCR is not available/.test(compiled), compiled);
+
+    // ---- saving a document into the knowledge base: whole, verified n-of-n, browsable, removable ---
+    page.removeAllListeners('dialog'); page.on('dialog', d => { dialogs++; d.accept().catch(() => {}); });
+    const story = Array.from({ length: 60 }, (_, i) => `Chapter ${i + 1}. Alice Johnson met Bob Smith at Acme Corporation in Paris. They discussed the Beta Labs merger. `).join('');
+    await page.setInputFiles('#doc-file-input', { name: 'story.txt', mimeType: 'text/plain', buffer: Buffer.from(story) });
+    await page.click('[data-click="ingestDocument"]'); await page.waitForTimeout(2000);
+    const storyRow = () => page.locator('#documents-list tr', { hasText: 'story.txt' });
+    ok('an ingested document says it is not saved and offers Save', /not saved/.test(await storyRow().innerText()) && await storyRow().locator('[data-click="saveDocument"]').count() === 1, await storyRow().innerText());
+    await page.click('[data-click="compileDocument"]'); await page.waitForTimeout(2500);
+    ok('Compile says it is a preview and that nothing is stored', /Preview — nothing is stored/.test(await page.textContent('#doc-compile-result')));
+    await storyRow().locator('[data-click="saveDocument"]').click();
+    for (let i = 0; i < 80 && !/complete|incomplete/.test(await storyRow().innerText()); i++) await sleep(500);
+    const savedText = await storyRow().innerText();
+    const pairs = [...savedText.matchAll(/(\w+) (\d+)\/(\d+)/g)].map(m => [m[1], +m[2], +m[3]]);
+    ok('Save stores the document and shows a verified, complete n-of-n for every kind', /✓ complete/.test(savedText) && pairs.length >= 5 && pairs.every(p => p[1] === p[2]) && ['pages', 'chunks', 'fragments', 'entities'].every(k => pairs.some(p => p[0] === k && p[2] > 0)), savedText.replace(/\\s+/g, ' '));
+    // the global graph does not draw the document's objects, and says they exist
+    await page.click('button[data-panel="graph"]'); await page.waitForTimeout(600);
+    await page.click('[data-click="loadGraphAll"]'); await page.waitForTimeout(1500);
+    ok('the global graph hides saved document objects and says how many', /saved document objects are in the knowledge base/.test(await page.innerText('#graph-banner')), await page.innerText('#graph-banner').catch(() => 'no banner'));
+    await page.click('button[data-panel="documents"]'); await page.waitForTimeout(800);
+    await storyRow().locator('[data-click="viewDocumentGraph"]').click(); await page.waitForTimeout(2000);
+    const banner = await page.innerText('#graph-banner');
+    ok('the document graph states completeness and which page it draws', /complete in the knowledge base/.test(banner) && /Drawing 1–\d+ of \d+ entities/.test(banner) && /Browse all as a table/.test(banner), banner);
+    ok('the graph offers a picker of saved documents, with this one selected', await page.evaluate(() => { const sel = document.getElementById('graph-document'); return sel.style.display !== 'none' && [...sel.options].some(o => /story[.]txt/.test(o.text) && o.selected); }));
+    // "Browse all as a table" on the graph must take the user to the table (it lives on the Documents page)
+    await page.click('#graph-banner [data-click="browseDocument"]'); await page.waitForTimeout(1500);
+    ok('Browse all from the graph opens the Documents page with the table showing', await page.evaluate(() => document.getElementById('panel-documents').classList.contains('active') && /Everything saved for this document/.test(document.getElementById('doc-browse').innerText)), await page.evaluate(() => location.hash));
+    await page.click('button[data-panel="documents"]'); await page.waitForTimeout(800);
+    await storyRow().locator('[data-click="browseDocument"]').click(); await page.waitForTimeout(1500);
+    await page.click('#doc-browse [data-click="browseKind"][data-kind="chunk"]'); await page.waitForTimeout(1200);
+    const totalChunks = +/of (\d+) chunks/.exec(await page.innerText('#doc-browse'))[1];
+    let counted = 0, rowsOnPage = 0;
+    for (let guard = 0; guard < 400; guard++) {
+      rowsOnPage = (await page.$$('#doc-browse tbody tr')).length; counted += rowsOnPage;
+      if (await page.locator('#doc-browse [data-click="browsePage"][data-dir="1"]').isDisabled()) break;
+      await page.click('#doc-browse [data-click="browsePage"][data-dir="1"]'); await page.waitForTimeout(500);
+    }
+    ok('Browse all pages through every saved chunk exactly once', totalChunks >= 1 && counted === totalChunks, `${counted} rows of ${totalChunks}`);
+    await page.fill('#browse-q', 'Chapter 60'); await page.click('#doc-browse [data-click="browseSearch"]'); await page.waitForTimeout(1000);
+    ok('Browse search finds the last chapter of the document', /Chapter 60/.test(await page.innerText('#doc-browse')) && /matching/.test(await page.innerText('#doc-browse')), (await page.innerText('#doc-browse')).slice(0, 200));
+    await page.click('#doc-browse [data-click="browseClose"]');
+    await storyRow().locator('[data-click="removeDocumentKnowledge"]').click(); await page.waitForTimeout(1500);
+    ok('Remove takes the knowledge out and the row says not saved again', /not saved/.test(await storyRow().innerText()) && /Removed \d+ objects/.test(await page.innerText('#doc-ingest-result')), await storyRow().innerText());
+    page.removeAllListeners('dialog'); page.on('dialog', d => { dialogs++; d.dismiss().catch(() => {}); });
 
     await page.setInputFiles('#doc-file-input', { name: 'IMG_0001.heic', mimeType: 'image/heic', buffer: Buffer.from('ftypheic') });
     await page.click('[data-click="ingestDocument"]'); await page.waitForTimeout(1200);
