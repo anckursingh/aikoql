@@ -147,7 +147,6 @@ impl NodeState {
 /// renews and the archive it uploads to. Written by their loops (one
 /// atomic store each), read by `/status` and the scrape. A dependency
 /// that was never started reports nothing.
-#[derive(Default)]
 pub(crate) struct Deps {
     lease_on: AtomicBool,
     lease_last_renew_ms: AtomicU64,
@@ -161,29 +160,29 @@ pub(crate) struct Deps {
 }
 
 /// The serving process's dependencies (tests build their own `Deps`).
-pub(crate) static DEPS: Deps = Deps {
-    lease_on: AtomicBool::new(false),
-    lease_last_renew_ms: AtomicU64::new(0),
-    lease_renew_failures: AtomicU64::new(0),
-    archive_on: AtomicBool::new(false),
-    archive_last_success_ms: AtomicU64::new(0),
-    archive_uploaded_seq: AtomicU64::new(0),
-    archive_last_snapshot_ms: AtomicU64::new(0),
-    archive_snapshot_seq: AtomicU64::new(0),
-    archive_failures: AtomicU64::new(0),
-};
-
-fn unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
-}
+pub(crate) static DEPS: Deps = Deps::new();
 
 impl Deps {
+    /// Nothing started, nothing counted.
+    pub(crate) const fn new() -> Self {
+        Deps {
+            lease_on: AtomicBool::new(false),
+            lease_last_renew_ms: AtomicU64::new(0),
+            lease_renew_failures: AtomicU64::new(0),
+            archive_on: AtomicBool::new(false),
+            archive_last_success_ms: AtomicU64::new(0),
+            archive_uploaded_seq: AtomicU64::new(0),
+            archive_last_snapshot_ms: AtomicU64::new(0),
+            archive_snapshot_seq: AtomicU64::new(0),
+            archive_failures: AtomicU64::new(0),
+        }
+    }
+
     /// A lease write landed (the win, the resume, every renewal).
     pub(crate) fn lease_renewed(&self) {
         self.lease_on.store(true, Ordering::SeqCst);
-        self.lease_last_renew_ms.store(unix_ms(), Ordering::SeqCst);
+        self.lease_last_renew_ms
+            .store(crate::archive::now_ms(), Ordering::SeqCst);
     }
 
     /// A renewal could not be written (the store did not answer).
@@ -202,14 +201,14 @@ impl Deps {
     pub(crate) fn archive_passed(&self, seq: u64) {
         self.archive_uploaded_seq.store(seq, Ordering::SeqCst);
         self.archive_last_success_ms
-            .store(unix_ms(), Ordering::SeqCst);
+            .store(crate::archive::now_ms(), Ordering::SeqCst);
     }
 
     /// A snapshot at `seq` is in the archive.
     pub(crate) fn archive_snapshotted(&self, seq: u64) {
         self.archive_snapshot_seq.store(seq, Ordering::SeqCst);
         self.archive_last_snapshot_ms
-            .store(unix_ms(), Ordering::SeqCst);
+            .store(crate::archive::now_ms(), Ordering::SeqCst);
     }
 
     /// A pass, a snapshot or a prune failed.
@@ -418,7 +417,7 @@ mod tests {
     /// the status JSON and as series.
     #[test]
     fn dependencies_report_only_once_started() {
-        let deps = Deps::default();
+        let deps = Deps::new();
         let node = at(NodeRole::Leader, false);
         assert_eq!(deps.lease_json(), J::Null);
         assert_eq!(deps.archive_json(10), J::Null);
