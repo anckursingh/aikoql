@@ -1272,10 +1272,18 @@ mod tests {
     #[test]
     fn browse_all_from_the_graph_goes_to_the_documents_page_where_the_table_lives() {
         let page = page_for_tests();
-        let b = page.find("async function browseDocument(").expect("browseDocument");
+        let b = page
+            .find("async function browseDocument(")
+            .expect("browseDocument");
         let body: String = page[b..].chars().take(500).collect();
-        assert!(body.contains("switchPanel('documents')"), "the table is in the Documents panel: {body}");
-        assert!(page.contains("id=\"doc-browse\""), "the table's container exists");
+        assert!(
+            body.contains("switchPanel('documents')"),
+            "the table is in the Documents panel: {body}"
+        );
+        assert!(
+            page.contains("id=\"doc-browse\""),
+            "the table's container exists"
+        );
     }
 
     #[test]
