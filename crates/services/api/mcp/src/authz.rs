@@ -62,10 +62,10 @@ pub(crate) fn check_scope(
     args: &serde_json::Value,
 ) -> Result<(), (i64, String)> {
     let read_scoped = roles.iter().any(|r| r == READ_SCOPE_ROLE);
-    // Enterprise (Task 6): the viewer role is read-only through `aikoql`
-    // too (only a MATCH reads). Community mode (no user store) leaves the
-    // role name uninterpreted — v0.4.0 behavior byte-for-byte.
-    let viewer = crate::session::users().is_some() && roles.iter().any(|r| r == "viewer");
+    // Task 6 / MEM-VIEWER: the viewer role is read-only through `aikoql`
+    // too (only a MATCH reads) — in every mode: a read-only memory token
+    // handed to an agent must not write, licence or not.
+    let viewer = roles.iter().any(|r| r == "viewer");
     if !read_scoped && !viewer {
         return Ok(());
     }
@@ -156,14 +156,10 @@ pub(crate) fn check_capability(
         }
     }
 
-    // Enterprise (Task 6): the viewer role reaches read tools only — the
-    // same READ_TOOLS allowlist an mcp:read token carries (fail-closed).
-    // Community mode (no user store) leaves the role name uninterpreted,
-    // so v0.4.0 behavior is byte-for-byte unchanged.
-    if crate::session::users().is_some()
-        && roles.iter().any(|r| r == "viewer")
-        && !READ_TOOLS.contains(&tool)
-    {
+    // Task 6 / MEM-VIEWER: the viewer role reaches read tools only — the
+    // same READ_TOOLS allowlist an mcp:read token carries (fail-closed), in
+    // every mode (community mode used to leave the role uninterpreted).
+    if roles.iter().any(|r| r == "viewer") && !READ_TOOLS.contains(&tool) {
         return Err((
             -32001,
             format!("capability denied: viewer role is read-only — tool '{tool}' writes"),
