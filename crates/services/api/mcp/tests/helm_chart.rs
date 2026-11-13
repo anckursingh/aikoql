@@ -279,6 +279,23 @@ fn prod7_alert_rules_link_real_runbooks_and_read_real_series() {
         );
     }
 
+    // Review of #43: `sum` over a series that is gone returns nothing, so a
+    // total outage (every pod down or unscraped) never fires AikoqlNoWriter.
+    // An `absent()` rule covers it; and a leader whose engine refuses writes
+    // looks healthy by role, so its own series has an alert.
+    assert!(
+        rules.contains("absent(aikoql_node_role"),
+        "no rule fires when every node's series vanish"
+    );
+    assert!(
+        alerts.contains(&"AikoqlNoNodesReporting") && alerts.contains(&"AikoqlWriteFenced"),
+        "the total-outage and write-fenced alerts exist: {alerts:?}"
+    );
+    assert!(
+        rules.contains("aikoql_node_engine_fenced"),
+        "an engine that cannot write is alertable"
+    );
+
     let mut series: Vec<&str> = rules
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .filter(|t| t.starts_with("aikoql_"))

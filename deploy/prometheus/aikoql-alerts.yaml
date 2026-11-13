@@ -25,6 +25,31 @@ groups:
         annotations:
           summary: No aikoql node is accepting writes
           runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlnowriter
+      # `sum` over series that no longer exist returns nothing, so
+      # AikoqlNoWriter is silent when EVERY pod is down or unscraped. This
+      # is that outage. Scope it to your job (`absent(aikoql_node_role{job="aikoql"})`)
+      # if the Prometheus scrapes other targets that do not export it.
+      - alert: AikoqlNoNodesReporting
+        expr: absent(aikoql_node_role)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: No aikoql node is reporting — all pods are down or unscraped
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlnonodesreporting
+      - alert: AikoqlWriteFenced
+        # a standby's engine is fenced on purpose, so only a node that is
+        # meant to write (leader or standalone) and is not stopping counts
+        expr: |
+          aikoql_node_engine_fenced == 1
+          and on (instance) (aikoql_node_role{role=~"leader|standalone"} == 1)
+          and on (instance) (aikoql_node_stopping == 0)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A node's storage engine refuses writes (disk fault or deposed) though it is not stopping
+          runbook_url: https://github.com/anckursingh/aikoql/blob/main/docs/RUNBOOKS.md#aikoqlwritefenced
       - alert: AikoqlMultipleWriters
         expr: sum by (job) (aikoql_node_role{role="leader"}) > 1
         for: 30s
