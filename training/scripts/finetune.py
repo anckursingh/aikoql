@@ -110,8 +110,11 @@ def _load_tokenizer():
 def _encode_rows(tokenizer, rows: List[Tuple[str, str]], max_len: int):
     encs = []
     for prompt, completion in rows:
+        # the reply ends in EOS, labelled: the model learns where to stop
+        # (without it a served reply ran on past its JSON object)
         full = tokenizer(prompt + completion, truncation=True,
-                         max_length=max_len)["input_ids"]
+                         max_length=max_len - 1)["input_ids"]
+        full = full + [tokenizer.eos_token_id]
         n_prompt = len(tokenizer(prompt, truncation=True,
                                  max_length=max_len)["input_ids"])
         # ponytail: a BPE merge across the boundary mislabels one token
