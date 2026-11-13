@@ -456,6 +456,17 @@ fn takeover_due(rec: &Lease, unchanged: Duration, ttl: Duration) -> bool {
     rec.released || unchanged >= ttl
 }
 
+/// A standby leads only from a log that holds every write the lease's
+/// holder had: the lease names its final seq, so a standby behind it must
+/// not lead — it would lose acknowledged writes. A release stamps the
+/// holder's ACTUAL final seq, so after a planned stop whose ack wait timed
+/// out a lagging standby is stuck until the old node returns (the
+/// RUNBOOKS "planned stop, then no writer" entry). That is the chosen
+/// trade: a stuck cluster over a silently shorter one.
+fn caught_up(last: u64, rec: &Lease) -> bool {
+    last >= rec.seq
+}
+
 /// Where `begin` leaves this node.
 pub(crate) enum Begun {
     /// It holds the lease: the directory is claimed at the lease's term and
@@ -550,7 +561,7 @@ pub(crate) fn stand_by(cfg: Arc<HaConfig>, replica: Arc<dyn StorageAdminApi>) {
                     .is_some_and(|(_, at)| takeover_due(&rec, at.elapsed(), cfg.ttl));
                 if stale {
                     let last = replica.last_seq();
-                    if last >= rec.seq {
+                    if caught_up(last, &rec) {
                         let next = term.max(rec.term) + 1;
                         // logged BEFORE the CAS: an operator (and the R5c
                         // cert) can order it against the old leader's
@@ -826,6 +837,20 @@ mod tests {
             seq: 0,
             beat,
         }
+    }
+
+    /// PROD-3 review: a released lease carries the final seq, so a standby
+    /// that is behind it — the ack wait timed out — does NOT take over; one
+    /// caught up does. Pinned so the consequence is a decision, not drift.
+    #[test]
+    fn a_lagging_standby_does_not_lead_from_a_released_lease() {
+        let mut rec = lease("old-leader", 3, 0);
+        rec.released = true;
+        rec.seq = 10;
+        assert!(takeover_due(&rec, Duration::ZERO, Duration::from_secs(5)));
+        assert!(!caught_up(9, &rec), "one frame behind must refuse");
+        assert!(caught_up(10, &rec));
+        assert!(caught_up(11, &rec));
     }
 
     /// The whole safety argument rests on this: a write lands only when
