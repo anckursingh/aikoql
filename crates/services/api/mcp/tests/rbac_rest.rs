@@ -418,8 +418,8 @@ fn viewer_cannot_post_rest_write() {
 #[test]
 fn a_viewer_cannot_save_or_remove_a_documents_knowledge_but_can_read_it() {
     let (srv, mcp_port) = serve("docsave", &["ttok:acme:admin", "vtok:acme:viewer"]);
-    set_roles(&srv.db, "admin", &["viewer"]);
     let token = admin_token(srv.port);
+    demote_admin(srv.port);
     let koid = "00000000000000000000000000000001";
     // REST: saving and removing are writes (a viewer would otherwise delete a book's 12k objects)
     for route in ["commit", "uncommit"] {
