@@ -413,3 +413,27 @@ fn a_failed_group_append_takes_no_seq_and_the_next_group_is_contiguous() {
     assert_eq!(db.get(b"kept").unwrap(), Some(b"acked".to_vec()));
     assert_eq!(db.get(b"lost").unwrap(), None);
 }
+
+/// PROD-9 review (#45): the group committer treats a failed fsync like the
+/// Sync path does (PROD-6) — after an fsync error the kernel may have
+/// dropped the dirty pages, so the engine stops taking client writes and
+/// `fence_reason` says why. The failed group took no seq and nothing
+/// acknowledged is touched.
+#[test]
+fn a_failed_group_sync_fences_the_engine_with_the_reason() {
+    let mut cfg = gc_config(dir("gc-syncfail"));
+    cfg.wal_sync_fail_next = true;
+    let db = Db::open(cfg).unwrap();
+    let before = db.last_seq();
+
+    assert!(db.put(b"lost", b"never acked").is_err());
+    assert_eq!(db.last_seq(), before, "the failed group takes no seq");
+    let why = db.fence_reason().expect("an fsync error fences");
+    assert!(why.contains("sync"), "the reason names the fsync: {why}");
+    let refused = db.put(b"after", b"x").unwrap_err().to_string();
+    assert!(
+        refused.contains("not leader"),
+        "later writes are refused: {refused}"
+    );
+    assert_eq!(db.get(b"lost").unwrap(), None);
+}
