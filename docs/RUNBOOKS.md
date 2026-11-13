@@ -37,6 +37,11 @@ No node reports `leader` or `standalone`.
   or `starting`: read the last log lines before the restart.
 - **Safe:** restart the node the lease names (`holder`); it resumes its
   own lease. Wait one TTL after it is back before judging.
+- **Planned stop, then no writer:** a leader stopped on purpose releases
+  its lease at its final seq. If its standby had not received that final
+  seq within the 5 s ack wait, the standby does NOT take over (it would
+  lose acknowledged writes) and the cluster has no writer until the old
+  node is started again. Restart the stopped node; do not delete the lease.
 - **Data-loss risk:** forcing a standby that is behind to lead (by
   deleting the lease) discards every write it never received. Do it only
   when the old leader's disk is gone for good, and say so in the
@@ -44,6 +49,42 @@ No node reports `leader` or `standalone`.
 - **Escalate:** the old leader's volume is lost and the standby is
   behind — that is a restore decision (`pitr` from the archive), not a
   restart.
+
+## AikoqlNoNodesReporting
+
+No `aikoql_node_role` series exists at all — every pod is down, not
+scraped, or the scrape target changed. `AikoqlNoWriter` cannot fire here:
+a `sum` of nothing is no result.
+
+- **Diagnose:** is Prometheus scraping the targets (`up{job=...}`)? Are
+  the pods running (`kubectl get pods`), and does `/livez` answer? A
+  rename of the job or a NetworkPolicy change looks identical.
+- **Safe:** restore scraping, or start the pods; start the node the lease
+  names (`holder`) first, then the other. Nothing here changes data.
+- **Data-loss risk:** none from this alert itself; a total outage with
+  one volume lost is the `AikoqlNoWriter` data-loss case.
+- **Escalate:** all pods are up and scraped, and the series is still
+  absent — the metrics endpoint is failing (`AikoqlMetricsError`).
+
+## AikoqlWriteFenced
+
+A leader (or standalone node) whose storage engine refuses client writes
+although no planned stop is under way. (A standby's engine is fenced on
+purpose; the alert excludes it.) `/status` names the reason in `node.write_fence`: a WAL tail
+that could not be rolled back, an fsync error, a dead group committer, or
+a newer term that deposed it. The process is alive and, under
+`--ha-lease`, a leader in this state stops renewing and exits so its
+supervisor restarts it; without HA nothing fails over by itself.
+
+- **Diagnose:** `/status` `node.write_fence`; the node's log for the I/O
+  error behind it; the data volume (`AikoqlDiskSpaceLow`).
+- **Safe:** free or repair the disk, then restart the node. Acknowledged
+  writes are intact: a failed append is never acknowledged and takes no
+  seq.
+- **Data-loss risk:** none for acknowledged writes. Unacknowledged ones
+  from the failing period were refused to their callers.
+- **Escalate:** the error repeats after a restart on a healthy disk, or an
+  fsync error recurs (suspect the volume; restore from the archive).
 
 ## AikoqlMultipleWriters
 
