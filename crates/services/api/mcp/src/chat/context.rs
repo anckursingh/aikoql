@@ -489,6 +489,35 @@ mod tests {
         (k, ids[0].clone(), ids[1].clone())
     }
 
+    /// The fallback is the server's hybrid search: the question is embedded
+    /// for the vector leg, not only tokenised for BM25. It passed `vector:
+    /// None`, so on the Vedas test every retrieval was keyword-only — the
+    /// top two scores were 1/61 and 1/62, rank fusion over a single list.
+    #[test]
+    fn fallback_embeds_the_question_for_the_vector_leg() {
+        struct Probe(std::sync::atomic::AtomicUsize);
+        impl aikoql_kernel::embedding::EmbeddingProvider for Probe {
+            fn embed(&self, _text: &str, _model: Option<&str>) -> aikoql_kernel::KResult<Vec<f32>> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec![1.0, 0.0, 0.0])
+            }
+        }
+        let probe = Arc::new(Probe(std::sync::atomic::AtomicUsize::new(0)));
+        let k = Kernel::open(
+            Arc::new(MemoryEngine::new()),
+            Arc::new(ManualClock::new(10_000)),
+            0xBEEF,
+        )
+        .unwrap()
+        .with_embedding_provider(probe.clone());
+        let _ = retrieve_fallback(&k, "alice", &[], None, "How many heads does Purusa have?");
+        assert_eq!(
+            probe.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the question is embedded once for the vector leg"
+        );
+    }
+
     #[test]
     fn fallback_finds_a_tenant_fact_and_never_another_tenants() {
         let (k, acme, globex) = mk();
