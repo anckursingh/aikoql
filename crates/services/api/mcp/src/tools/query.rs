@@ -330,6 +330,59 @@ pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
     }))
 }
 
+/// MEM-RYW — the semantic-led search `recall` and `memory_search` run when
+/// the question embeds. Embedded memories are ranked by the vector leg alone
+/// (on natural-language questions the lexical leg mostly matches stopwords —
+/// the measured reason recall is vector-led). A memory with no vector yet —
+/// written a moment ago (`embed` attaches it asynchronously) or stored
+/// without `embed` — is in no vector list, so it competes by its text rank
+/// instead: both lists contribute `1/(61 + rank)`, the vector list only for
+/// embedded memories, the text list only for the rest. An agent always
+/// reads its own writes.
+pub(crate) fn vector_led(
+    k: &Kernel,
+    q: SimilarityQuery,
+) -> aikoql_kernel::KResult<Vec<crate::ScoredKO>> {
+    let want = q.k;
+    let vector_hits = k.find_similar(SimilarityQuery {
+        fusion: crate::Fusion::VectorOnly,
+        ..q.clone()
+    })?;
+    let text_hits = k.find_similar(SimilarityQuery {
+        vector: None,
+        fusion: crate::Fusion::TextOnly,
+        ..q
+    })?;
+    let has_vector = |h: &crate::ScoredKO| {
+        h.ko.semantic
+            .as_ref()
+            .is_some_and(|s| s.embedding.is_some())
+    };
+    let rank = |i: usize| 1.0 / (61.0 + i as f32);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ranked: Vec<(f32, crate::ScoredKO)> = Vec::new();
+    for (i, h) in vector_hits
+        .into_iter()
+        .filter(|h| h.score > 0.0)
+        .enumerate()
+    {
+        if seen.insert(h.ko.koid) {
+            ranked.push((rank(i), h));
+        }
+    }
+    let pending = text_hits
+        .into_iter()
+        .filter(|h| h.score > 0.0 && !has_vector(h));
+    for (j, h) in pending.enumerate() {
+        if seen.insert(h.ko.koid) {
+            ranked.push((rank(j), h));
+        }
+    }
+    // stable: on a tie the vector hit keeps its place ahead
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    Ok(ranked.into_iter().take(want).map(|(_, h)| h).collect())
+}
+
 /// The query's embedding, or why there is none. The model fails fast while
 /// background enrichment holds it (T-44); a deliberate retrieval waits a
 /// little before falling back to text-only — and says so.
@@ -372,26 +425,30 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
     let subject = subject_of(args);
     let (vector, semantic_note) = embed_query(k, query);
     let semantic = vector.is_some();
-    let hits = k
-        .find_similar(SimilarityQuery {
-            context: subject.clone().into(),
-            filter: None,
-            text: Some(query.to_string()),
-            vector,
-            embedding_model: None,
-            // headroom for the system records and statuses filtered below
-            k: k_req * 2,
-            // semantic-led by default: on natural-language questions the
-            // lexical leg mostly matches stopwords (6 no-shared-word
-            // questions: vector 5/6 top-1, rrf 3/6, text 2/6); an explicit
-            // fusion (e.g. rrf for an exact identifier) wins
-            fusion: match (args.get("fusion"), semantic) {
-                (Some(_), _) => parse_fusion(args),
-                (None, true) => crate::Fusion::VectorOnly,
-                (None, false) => crate::Fusion::TextOnly,
-            },
-        })
-        .map_err(|e| e.to_string())?;
+    let q = SimilarityQuery {
+        context: subject.clone().into(),
+        filter: None,
+        text: Some(query.to_string()),
+        vector,
+        embedding_model: None,
+        // headroom for the system records and statuses filtered below
+        k: k_req * 2,
+        fusion: crate::Fusion::TextOnly,
+    };
+    // semantic-led by default: on natural-language questions the lexical
+    // leg mostly matches stopwords (6 no-shared-word questions: vector 5/6
+    // top-1, rrf 3/6, text 2/6) — with memories not yet embedded ranked by
+    // text (`vector_led`); an explicit fusion (e.g. rrf for an exact
+    // identifier) wins
+    let hits = match (args.get("fusion"), semantic) {
+        (Some(_), _) => k.find_similar(SimilarityQuery {
+            fusion: parse_fusion(args),
+            ..q
+        }),
+        (None, true) => vector_led(k, q),
+        (None, false) => k.find_similar(q),
+    }
+    .map_err(|e| e.to_string())?;
     // shortcut: open conflicts by a scan of the conflict records (no claim →
     // conflict index), add one when conflicts number in the thousands
     let open: Vec<(String, String, String)> = k
