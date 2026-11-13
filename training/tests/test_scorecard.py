@@ -363,3 +363,30 @@ def test_finetune_script_targets_a_05b_class_model_with_lora():
 
 # (T-20: the marker-parse pins moved to tests/test_protocol.py —
 # the JSON protocol replaced the QUERY:/ANSWER: prose contract.)
+
+
+def test_training_rows_teach_the_model_to_stop():
+    """Every completion ends in the tokenizer's EOS, labelled. Without it
+    the LoRA never learned where a reply ends: served through Ollama it ran
+    past its JSON object ("{...} }", a second object) and the server's
+    one-object parser rejected the reply as malformed."""
+    import importlib.util
+
+    root = Path(__file__).parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "finetune", root / "training" / "scripts" / "finetune.py")
+    finetune = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(finetune)
+
+    class CharTokenizer:
+        eos_token_id = 0
+
+        def __call__(self, text, truncation=True, max_length=None):
+            ids = [ord(c) for c in text][:max_length]
+            return {"input_ids": ids}
+
+    [row] = finetune._encode_rows(CharTokenizer(), [("Q:", '{"a":1}')], 64)
+    assert row["input_ids"][-1] == CharTokenizer.eos_token_id
+    assert row["labels"][-1] == CharTokenizer.eos_token_id, "EOS is trained"
+    assert row["labels"][:2] == [-100, -100], "the prompt stays unlabelled"
+    assert len(row["attention_mask"]) == len(row["input_ids"])
