@@ -447,7 +447,7 @@ pub struct Db {
     wal_sync_fail_next: AtomicBool,
     /// MRFC-0080 R4 — set once a newer replication term deposed this
     /// node: client writes are refused, replicated frames still apply.
-    fenced: RwLock<Option<String>>,
+    fenced: Arc<RwLock<Option<String>>>,
     /// Admission: a client write holds it shared from the fenced check to
     /// its ack; `fence()` takes it exclusively, so it returns only once
     /// every write that passed the check is acknowledged — `last_seq()`
@@ -897,6 +897,9 @@ impl Db {
         // P5-M38 — the flush pipe (see the Db field): one per store, shared
         // with the committer so its group flushes serialize with the rest.
         let flush_pipe = Arc::new(Mutex::new(()));
+        // shared with the committer: it fences the engine when it can no
+        // longer write (an fsync error, a tail it cannot cut back)
+        let fenced: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
         let (queue_tx, committer) = if config.durability == DurabilityMode::GroupCommit {
             let (tx, rx) = mpsc::channel();
             let handle = {
@@ -908,9 +911,10 @@ impl Db {
                 let stats = Arc::clone(&stats);
                 let wstats = Arc::clone(&wstats);
                 let flush_pipe = Arc::clone(&flush_pipe);
+                let fenced = Arc::clone(&fenced);
                 std::thread::spawn(move || {
                     committer_loop(
-                        rx, wal, state, flush_pipe, config, fsyncs, cache, stats, wstats,
+                        rx, wal, state, flush_pipe, config, fsyncs, cache, stats, wstats, fenced,
                     )
                 })
             };
@@ -960,7 +964,7 @@ impl Db {
             control: ControlStats::default(),
             wal_fail_next: AtomicBool::new(wal_fail_next_armed),
             wal_sync_fail_next: AtomicBool::new(wal_sync_fail_next_armed),
-            fenced: RwLock::new(None),
+            fenced,
             admit: RwLock::new(()),
             commit_gate: std::sync::OnceLock::new(),
         })
@@ -3392,6 +3396,7 @@ fn committer_loop(
     cache: Option<Arc<BlockCache>>,
     stats: Arc<Stats>,
     wstats: Arc<WriteStats>,
+    fenced: Arc<RwLock<Option<String>>>,
 ) {
     let wait = config.max_wait_duration;
     let mut carry: Option<Batch> = None;
@@ -3401,6 +3406,7 @@ fn committer_loop(
     // PR6-R2-003 test hook, group-commit side: one-shot, consumed by the
     // first frame this committer appends (production configs never arm it).
     let mut fail_next = config.wal_fail_next;
+    let mut sync_fail_next = config.wal_sync_fail_next;
     loop {
         let first = match carry.take().or_else(|| rx.recv().ok()) {
             Some(b) => b,
@@ -3443,6 +3449,8 @@ fn committer_loop(
             &wstats,
             &mut seqs,
             &mut fail_next,
+            &mut sync_fail_next,
+            &fenced,
         ) {
             // PROD-9: the WAL holds a tail this committer could neither
             // make durable nor cut back. Stop: with the queue's receiver
@@ -3474,6 +3482,8 @@ fn commit_group(
     wstats: &Arc<WriteStats>,
     seqs: &mut Vec<u64>,
     fail_next: &mut bool,
+    sync_fail_next: &mut bool,
+    fenced: &Arc<RwLock<Option<String>>>,
 ) -> bool {
     // P3-M2 — group shape (design §21): batches per group, ops per group,
     // the widest group so far.
@@ -3530,7 +3540,12 @@ fn commit_group(
         }
         if outcome.is_ok() {
             let t = Instant::now();
-            match wal.sync_all() {
+            let synced = if std::mem::take(sync_fail_next) {
+                Err("injected failure (wal_sync_fail_next)".to_string())
+            } else {
+                wal.sync_all().map_err(|e| e.to_string())
+            };
+            match synced {
                 Ok(()) => record_latency_us(
                     &wstats.fsync_latency_us_buckets,
                     t.elapsed().as_micros() as u64,
@@ -3547,6 +3562,28 @@ fn commit_group(
             // in place would hide every later acked frame from replay.
             st.next_seq = first_seq;
             wal_usable = group_start.and_then(|at| wal.set_len(at)).is_ok();
+            // Say why the engine stops taking writes, so `/readyz/write` and
+            // the lease renewer see a committer that can no longer commit
+            // instead of an opaque submit error on every later write.
+            let reason = if !wal_usable {
+                Some("the WAL could not be rolled back after a failed group, so the group committer stopped".to_string())
+            } else if matches!(&outcome, Err(e) if is_sync_failure(e)) {
+                // fsync error: the page cache past here is untrusted (PROD-6)
+                Some(format!(
+                    "the WAL could not be synced ({})",
+                    outcome
+                        .as_ref()
+                        .err()
+                        .map(|e| e.to_string())
+                        .unwrap_or_default()
+                ))
+            } else {
+                None
+            };
+            if let Some(why) = reason {
+                // justified: RwLock poison is unrecoverable
+                *fenced.write().unwrap() = Some(why);
+            }
         }
     }
     if outcome.is_ok() {
