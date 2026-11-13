@@ -33,9 +33,18 @@ helm install aikoql deploy/helm/aikoql
 - Readiness: `/readyz` — the node serves reads. Both the leader and the
   standby are ready; a fenced or stopping node is not. The body names the
   role (`leader`, `standby`, `fenced`, `standalone`) and the term.
-- `/readyz/write` is 200 on the lease holder only. The chart does not
-  probe it (the standby must stay Ready); point a write-only Service or
-  load-balancer health check at it if you route by traffic class.
+- `/readyz/write` is 200 on the lease holder only, and not while its
+  engine refuses writes (a disk fault fences it; a leader in that state
+  also stops renewing the lease and exits for the supervisor). The chart
+  does not probe it — the standby must stay Ready for reads.
+- **The chart's Service does not route writes to the leader.** Kubernetes
+  readiness is per pod and has no second probe, so the in-cluster default
+  sends roughly half of all writes to the standby, which refuses them
+  (503 naming the leader). For a working write endpoint use one of: a
+  load balancer, ingress or gateway whose active health check is
+  `GET /readyz/write`; or a client that follows the leader named in the
+  refusal or the lease. Labelling the leader's own pod (so a Service can
+  select it) needs a small RBAC grant and is not implemented.
 - A terminating pod gets `terminationGracePeriodSeconds` (default 30)
   for its planned stop: writes are fenced, the leader waits at most 5 s
   for the standby to hold its final seq, releases the lease and exits 0.

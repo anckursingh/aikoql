@@ -633,6 +633,10 @@ fn main() {
         // a metrics listener.
         crate::session::set_users(Arc::new(Mutex::new(store)));
     }
+    if let Some(a) = &admin {
+        let a = a.clone();
+        node::watch_engine(Box::new(move || a.fence_reason())); // PROD-4 review
+    }
     if let (Some(held), Some(a)) = (&ha_held, &admin) {
         let _ = held.admin.set(a.clone()); // the renewer can now fence writes
     }
