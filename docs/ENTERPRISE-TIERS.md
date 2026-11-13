@@ -80,7 +80,9 @@ override credentials on later starts.
   replicate, are covered by the archive, and are encrypted at rest when
   the database is (PROD-2). A pre-PROD-2 `users.db` (SQLite, in the data
   dir) is imported on the first start and set aside as
-  `users.db.migrated`. Users are auto-provisioned on first OIDC login from
+  `users.db.migrated` (skipped with a logged warning if the store already
+  has users; an older binary does not see users created after the
+  migration). Users are auto-provisioned on first OIDC login from
   `id_token.sub`; roles come from the mapped claim.
 - Startup refuses (exit 2) if `multi-user` is on and no admin can be seeded
   or claimed.

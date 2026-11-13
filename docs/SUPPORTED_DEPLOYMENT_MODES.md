@@ -48,7 +48,13 @@ What holds across a promotion, and what does not:
   starts from the new leader's own.
 
 A pre-PROD-2 single-node deployment keeps its users: the first start
-imports `{db}/users.db` into the store and sets the file aside.
+imports `{db}/users.db` into the store and sets the file aside. If the
+store already holds users the file is not read: the start logs a warning
+naming it and its row count, and its rows are not imported.
+
+Rollback: after the migration an older (pre-PROD-2) binary opens a fresh
+`users.db` and does not see users created since. Restore `users.db.migrated`
+to `users.db` only if no user was added or changed after the upgrade.
 
 ## 3. Sessions and clients
 

@@ -302,7 +302,23 @@ impl UserStore {
     /// store is the authority once it has a row. Ok(n) = rows imported.
     #[allow(dead_code)] // serve's startup path — unused by the test crate
     pub(crate) fn import_legacy(&self, path: &Path) -> UserResult<usize> {
-        if !path.exists() || !self.all()?.is_empty() {
+        if !path.exists() {
+            return Ok(0);
+        }
+        if !self.all()?.is_empty() {
+            // The store is the authority, so the file is left alone — but
+            // its users are dropped, and silently dropping them is the one
+            // thing an operator cannot recover from by reading the log.
+            let held = read_legacy(path).map_or_else(
+                |e| format!("unreadable: {e}"),
+                |rows| format!("{} rows", rows.len()),
+            );
+            tracing::warn!(
+                file = %path.display(),
+                legacy = %held,
+                "legacy users.db skipped: the store already holds users, so its rows \
+                 are NOT imported; merge them by hand (admin API) or remove the file"
+            );
             return Ok(0);
         }
         let rows = read_legacy(path)
