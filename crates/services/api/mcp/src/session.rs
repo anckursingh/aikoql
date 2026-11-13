@@ -422,6 +422,25 @@ mod tests {
     }
 
     #[test]
+    fn tcp_token_agent_entry_is_not_a_role() {
+        // MEM-AGENT: `agent=NAME` names the agent; it is never a role
+        let t = TcpAuthTable::parse(&specs(&["tok:acme:editor,agent=alice"])).unwrap();
+        assert_eq!(t.lookup("tok").unwrap().roles, vec!["editor".to_string()]);
+        // a role with a colon is still one role
+        let t = TcpAuthTable::parse(&specs(&["r:acme:scope:read"])).unwrap();
+        assert_eq!(t.lookup("r").unwrap().roles, vec!["scope:read".to_string()]);
+        // fail-closed: an agent but no role, an empty or repeated agent, a bad name
+        for bad in [
+            "tok:acme:agent=alice",
+            "tok:acme:editor,agent=",
+            "tok:acme:editor,agent=a,agent=b",
+            "tok:acme:editor,agent=a b",
+        ] {
+            assert!(TcpAuthTable::parse(&specs(&[bad])).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn forced_injection_overrides_identity() {
         let mut s = McpSession {
             trust_mode: TrustMode::Tcp,
@@ -431,9 +450,15 @@ mod tests {
             roles: vec!["viewer".into()],
             ..Default::default()
         };
-        let args = json!({"subject": "mallory", "roles": ["admin"], "tenant": "other", "x": 1});
+        let args = json!({"subject": "mallory", "roles": ["admin"], "tenant": "other", "x": 1,
+                          "agent_id": "mallory"});
         let f = inject_session_forced(&args, &s);
         assert_eq!(f["subject"], "tcp-agent");
+        // MEM-AGENT: an agent-scoped call cannot name another agent
+        assert_eq!(f["agent_id"], "tcp-agent");
+        assert!(inject_session_forced(&json!({}), &s)
+            .get("agent_id")
+            .is_none());
         assert_eq!(f["roles"], json!(["viewer"]));
         assert_eq!(f["tenant"], "acme");
         assert_eq!(f["x"], 1);

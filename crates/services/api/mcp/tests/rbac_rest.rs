@@ -621,3 +621,124 @@ fn a_community_viewer_login_cannot_write_over_rest() {
         write.body
     );
 }
+
+/// The JSON payload of a tools/call response (its first text block).
+fn payload(resp: &J) -> J {
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no tool result: {resp}"));
+    serde_json::from_str(text).unwrap_or_else(|_| json!(text))
+}
+
+/// MEM-AGENT (C6 PERS-005): a token names its agent (`agent=NAME` in the
+/// role list), so two agents in one tenant are two principals. Before,
+/// every TCP token was the one agent `tcp-agent`, and a "private" memory
+/// was shared by every agent of the tenant. Also: over TCP `agent_memory`
+/// takes `agent_id` from the token, not the call, so one agent cannot write
+/// or read another's agent memory by naming it.
+#[test]
+fn two_agents_in_one_tenant_keep_their_memories_apart() {
+    let tag = "agents";
+    let db = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-db-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&db);
+    common::register_temp_path(&db);
+    let log = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-{}.log", std::process::id()));
+    common::register_temp_path(&log);
+    let mcp_port = common::free_port();
+    let mcp_addr = format!("127.0.0.1:{mcp_port}");
+    let extra = [
+        "--listen",
+        mcp_addr.as_str(),
+        "--tcp-token",
+        "atok:acme:editor,agent=alice",
+        "--tcp-token",
+        "btok:acme:editor,agent=bob",
+    ];
+    let srv = common::spawn_server(&db, &log, &[], &extra);
+    let health = common::wait_health(srv.port, Instant::now() + Duration::from_secs(60));
+    assert!(health.contains(" 200 "), "health: {health}");
+
+    let me = payload(&mcp_call(
+        mcp_port,
+        "atok",
+        "session_init",
+        &json!({"run_id": "r1"}),
+    ));
+    assert_eq!(me["session"]["agent_id"], "alice", "{me}");
+    assert_eq!(me["session"]["roles"], json!(["editor"]), "{me}");
+
+    let stored = payload(&mcp_call(
+        mcp_port,
+        "atok",
+        "memory_store",
+        &json!({"name": "alice-pin", "description": "alice-pin", "trust": "user",
+                "content": "alice's locker code is 4417"}),
+    ));
+    let koid = stored["koid"]
+        .as_str()
+        .unwrap_or_else(|| panic!("memory_store: {stored}"))
+        .to_string();
+    let own = payload(&mcp_call(
+        mcp_port,
+        "atok",
+        "memory_search",
+        &json!({"query": "locker code"}),
+    ));
+    assert!(
+        own.to_string().contains("alice-pin"),
+        "the writer finds it: {own}"
+    );
+
+    for (tool, args) in [
+        ("memory_search", json!({"query": "locker code"})),
+        (
+            "recall",
+            json!({"query": "locker code", "wait_for_freshness_ms": 3000}),
+        ),
+        ("get", json!({"koid": koid})),
+        ("aikoql", json!({"query": "MATCH Memory RETURN content"})),
+    ] {
+        let seen = mcp_call(mcp_port, "btok", tool, &args);
+        assert!(
+            !seen.to_string().contains("4417"),
+            "bob reads alice's private memory via {tool}: {seen}"
+        );
+    }
+
+    mcp_call(
+        mcp_port,
+        "atok",
+        "agent_memory",
+        &json!({"agent_id": "alice", "key": "env", "value": "AWS-alice", "ttl": 3600}),
+    );
+    let forged_read = mcp_call(
+        mcp_port,
+        "btok",
+        "agent_memory",
+        &json!({"agent_id": "alice"}),
+    );
+    assert!(
+        !forged_read.to_string().contains("AWS-alice"),
+        "bob names alice and reads her agent memory: {forged_read}"
+    );
+    mcp_call(
+        mcp_port,
+        "btok",
+        "agent_memory",
+        &json!({"agent_id": "alice", "key": "env2", "value": "forged-by-bob", "ttl": 3600}),
+    );
+    let alice_reads = mcp_call(
+        mcp_port,
+        "atok",
+        "agent_memory",
+        &json!({"agent_id": "alice"}),
+    );
+    assert!(
+        alice_reads.to_string().contains("AWS-alice"),
+        "{alice_reads}"
+    );
+    assert!(
+        !alice_reads.to_string().contains("forged-by-bob"),
+        "bob wrote into alice's agent memory: {alice_reads}"
+    );
+}
