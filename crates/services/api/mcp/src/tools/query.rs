@@ -780,6 +780,81 @@ mod tests {
         );
     }
 
+    /// MEM-RYW — an agent recalls right after it remembers. `embed: true`
+    /// attaches the vector asynchronously, and the default recall goes
+    /// vector-only once the question embeds: a memory not yet embedded was
+    /// invisible (found by the C1-C8 harness: 1 miss in 20 store-then-recall
+    /// pairs, the only one with the semantic leg on). A memory the text
+    /// index already holds must come back.
+    #[test]
+    fn recall_returns_a_memory_whose_vector_has_not_landed() {
+        struct Fixed;
+        impl aikoql_kernel::embedding::EmbeddingProvider for Fixed {
+            fn embed(&self, _t: &str, _m: Option<&str>) -> aikoql_kernel::KResult<Vec<f32>> {
+                Ok(vec![1.0, 0.0, 0.0])
+            }
+        }
+        let k = Arc::new(
+            Kernel::open(
+                Arc::new(MemoryEngine::new()),
+                Arc::new(ManualClock::new(10_000)),
+                0xBEEF,
+            )
+            .unwrap()
+            .with_embedding_provider(Arc::new(Fixed)),
+        );
+        let m = aikoql_scheduler::IndexMaintainer::start(
+            &k,
+            Arc::new(BruteForceVectorIndex::new()),
+            Arc::new(TokenTextIndex::default()),
+        )
+        .unwrap();
+        k.attach_indexes(m.clone());
+        let mut props = PropertyMap::new();
+        props.insert(
+            "text".into(),
+            Value::Text("Alice saw a quokka at the zoo".into()),
+        );
+        let r = k
+            .remember(RememberRequest {
+                context: subject_of(&json!({"subject": "alice"})).into(),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: None,
+                metadata: Metadata {
+                    type_name: "Note".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: None, // the vector has not landed yet
+                relationships: vec![],
+                security: None,
+                extensions: ExtensionMap::new(),
+                origin: Origin::Human,
+                note: None,
+                referential_policy: ReferentialPolicy::default(),
+            })
+            .unwrap();
+        let res = tool_recall(
+            &k,
+            &json!({"subject": "alice", "query": "What did Alice see? quokka", "wait_for_freshness_ms": 2000}),
+        )
+        .unwrap();
+        assert_eq!(res["semantic"], true, "the question embedded: {res}");
+        let koids: Vec<_> = res["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["koid"].as_str())
+            .collect();
+        assert!(
+            koids.contains(&r.koid.to_hex().as_str()),
+            "the memory written a moment ago is recalled: {res}"
+        );
+    }
+
     /// P5-M27 (IDX-P1-02) — RED: the default find_similar blocks ~2s behind
     /// a lagging maintainer; the explicit opt-in must be the client's
     /// bound. Fails on the elapsed-time assertion with the current code.
