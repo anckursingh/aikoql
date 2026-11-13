@@ -188,11 +188,19 @@ impl ApiError {
 
 /// Task 6: the REST write gate. `admin` always passes; `admin_only`
 /// requires admin; otherwise any non-viewer passes (a viewer may read but
-/// never write). Community mode (no user store) has no gate — v0.4.0
-/// behavior byte-for-byte.
+/// never write). MEM-VIEWER: in community mode (no user store) the viewer
+/// half holds too — a viewer never writes, licence or not — while
+/// admin-only routes keep their v0.4.0 community behavior.
 pub(crate) fn check_rest(roles: &[String], admin_only: bool) -> Result<(), ApiError> {
-    if crate::session::users().is_none() || roles.iter().any(|r| r == "admin") {
+    if roles.iter().any(|r| r == "admin") {
         return Ok(());
+    }
+    if crate::session::users().is_none() {
+        return if roles.iter().any(|r| r == "viewer") {
+            Err(ApiError::Forbidden("viewer role is read-only"))
+        } else {
+            Ok(())
+        };
     }
     if admin_only {
         return Err(ApiError::Forbidden("admin role required"));
