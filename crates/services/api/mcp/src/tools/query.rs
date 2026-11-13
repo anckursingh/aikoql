@@ -380,7 +380,18 @@ pub(crate) fn vector_led(
     }
     // stable: on a tie the vector hit keeps its place ahead
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
-    Ok(ranked.into_iter().take(want).map(|(_, h)| h).collect())
+    // One scale for the caller: the two lists score differently (cosine
+    // ≤ 1, BM25 unbounded), and memory_search's MMR divides by the top
+    // score. Each hit's score becomes its fused rank score scaled so the
+    // best is 1.0 — monotone in this order.
+    Ok(ranked
+        .into_iter()
+        .take(want)
+        .map(|(r, mut h)| {
+            h.score = r * 61.0;
+            h
+        })
+        .collect())
 }
 
 /// The query's embedding, or why there is none. The model fails fast while
