@@ -12,7 +12,9 @@ changes unless a `[chat]` table is configured; without it the route answers
    `MATCH` query (or decline). The query runs read-only, as the caller, confined
    to the selected tenant. A `CREATE`/`UPDATE`/`DELETE`/`INGEST` is never run.
 2. **Fallback.** If the model declines, the query does not compile or returns
-   nothing, the server retrieves with its own hybrid search over the same
+   nothing, the server retrieves with its own hybrid search (the question is
+   embedded for the vector leg when a model is loaded, and tokenised for BM25)
+   over the same
    tenant. If that finds nothing too, the answer is a refusal and the model is
    not asked again.
 3. **Answer skill.** The model gets the question and at most **8 facts /

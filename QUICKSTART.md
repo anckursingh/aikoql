@@ -39,7 +39,7 @@ SE2-M41. Legacy `.redb` files and v1 WALs are no longer readable: opening
 one fails closed with an explicit error.
 
 ### TCP Mode
-Accepts multiple MCP client connections over TCP. Requires a token — `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]]` (repeatable; also `AIKOQL_TCP_TOKEN` env, `AIKOQL_TCP_TOKEN_FILE`, or `tcp_tokens` in `aikoql.toml`). Refuses to start without one — and a bare `TOKEN` (no roles) exits 2, roles are mandatory.
+Accepts multiple MCP client connections over TCP. Requires a token — `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]]` (repeatable; also `AIKOQL_TCP_TOKEN` env, `AIKOQL_TCP_TOKEN_FILE`, or `tcp_tokens` in `aikoql.toml`). Refuses to start without one — and a bare `TOKEN` (no roles) exits 2, roles are mandatory. A `viewer` token is read-only (read tools, and only `MATCH` through `aikoql`). Every TCP token is the same agent identity (`tcp-agent`), told apart only by tenant and roles, so per-agent private memory is not expressible over TCP.
 
 ```
 aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin [database_path]
