@@ -419,3 +419,53 @@ def test_rows_longer_than_the_window_are_dropped_not_cut():
     encs = finetune._encode_rows(CharTokenizer(), rows, 12)
     assert len(encs) == 1, "only the row that fits whole is kept"
     assert encs[0]["input_ids"][-1] == 0
+
+
+def test_predict_sends_the_whole_prompt_to_the_models_device():
+    """predict cut every prompt at 256 tokens — the answer prompt (median
+    373 on the AcmePay corpus) lost its end, where the reply format is
+    spelled out — and left the inputs on the CPU, so --device cuda crashed
+    ("index is on cpu, different from other tensors on cuda:0")."""
+    import importlib.util
+
+    root = Path(__file__).parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "finetune", root / "training" / "scripts" / "finetune.py")
+    finetune = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(finetune)
+    torch = __import__("pytest").importorskip("torch")
+
+    seen = {}
+
+    class Enc(dict):
+        def to(self, device):
+            seen["moved_to"] = device
+            return self
+
+    class Tok:
+        pad_token_id = 0
+        padding_side = "right"
+
+        def __call__(self, texts, padding=True, truncation=False, max_length=None,
+                     return_tensors=None):
+            ids = [[ord(c) for c in t] for t in texts]
+            if truncation and max_length:
+                ids = [i[:max_length] for i in ids]
+            seen["lengths"] = [len(i) for i in ids]
+            n = max(len(i) for i in ids)
+            return Enc(input_ids=torch.tensor([[0] * (n - len(i)) + i for i in ids]),
+                       attention_mask=torch.tensor([[0] * (n - len(i)) + [1] * len(i) for i in ids]))
+
+        def batch_decode(self, seqs, skip_special_tokens=True):
+            return ["" for _ in seqs]
+
+    class Model:
+        device = "meta-device"
+
+        def generate(self, input_ids=None, attention_mask=None, **kw):
+            return input_ids
+
+    long_prompt = "x" * 900
+    finetune._generate(Model(), Tok(), [long_prompt], 1, 8)
+    assert seen["lengths"] == [900], "the prompt reaches the model whole"
+    assert seen.get("moved_to") == "meta-device", "the inputs go to the model's device"
