@@ -855,6 +855,88 @@ mod tests {
         );
     }
 
+    /// The same law when the vector leg is full: ten embedded memories match
+    /// the question's vector, one fresh memory has only its text indexed. A
+    /// vector-only list of the top five would never reach it; it competes by
+    /// its text rank instead — as the top lexical match, it makes the five.
+    #[test]
+    fn a_fresh_memory_is_not_crowded_out_by_embedded_ones() {
+        struct Fixed;
+        impl aikoql_kernel::embedding::EmbeddingProvider for Fixed {
+            fn embed(&self, _t: &str, _m: Option<&str>) -> aikoql_kernel::KResult<Vec<f32>> {
+                Ok(vec![1.0, 0.0, 0.0])
+            }
+        }
+        let k = Arc::new(
+            Kernel::open(
+                Arc::new(MemoryEngine::new()),
+                Arc::new(ManualClock::new(10_000)),
+                0xBEEF,
+            )
+            .unwrap()
+            .with_embedding_provider(Arc::new(Fixed)),
+        );
+        let m = aikoql_scheduler::IndexMaintainer::start(
+            &k,
+            Arc::new(BruteForceVectorIndex::new()),
+            Arc::new(TokenTextIndex::default()),
+        )
+        .unwrap();
+        k.attach_indexes(m.clone());
+        let note = |text: &str, embedded: bool| {
+            let mut props = PropertyMap::new();
+            props.insert("text".into(), Value::Text(text.into()));
+            k.remember(RememberRequest {
+                context: subject_of(&json!({"subject": "alice"})).into(),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: None,
+                metadata: Metadata {
+                    type_name: "Note".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: embedded.then(|| aikoql_kernel::SemanticBlock {
+                    embedding_model: Some("fixed".into()),
+                    embedding: Some(vec![1.0, 0.0, 0.0]),
+                    confidence: None,
+                    source: None,
+                    summary: None,
+                }),
+                relationships: vec![],
+                security: None,
+                extensions: ExtensionMap::new(),
+                origin: Origin::Human,
+                note: None,
+                referential_policy: ReferentialPolicy::default(),
+            })
+            .unwrap()
+            .koid
+            .to_hex()
+        };
+        for i in 0..10 {
+            note(&format!("Alice's weekly status update number {i}"), true);
+        }
+        let fresh = note("Alice saw a quokka at the zoo", false);
+        let res = tool_recall(
+            &k,
+            &json!({"subject": "alice", "query": "What did Alice see? quokka", "k": 5, "wait_for_freshness_ms": 2000}),
+        )
+        .unwrap();
+        let koids: Vec<_> = res["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["koid"].as_str())
+            .collect();
+        assert!(
+            koids.contains(&fresh.as_str()),
+            "the fresh memory makes the top five: {res}"
+        );
+    }
+
     /// P5-M27 (IDX-P1-02) — RED: the default find_similar blocks ~2s behind
     /// a lagging maintainer; the explicit opt-in must be the client's
     /// bound. Fails on the elapsed-time assertion with the current code.
