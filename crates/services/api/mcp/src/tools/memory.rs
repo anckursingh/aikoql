@@ -27,6 +27,14 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
             json_to_value(mem_val).unwrap_or(Value::Null),
         );
         props.insert("ttl".into(), Value::Int(ttl));
+        // MEM-TENANT: the memory belongs to the caller's tenant (the
+        // session's, as `remember`): stored tenantless, a tenant-scoped
+        // reader — the writer itself — could never read it back. The
+        // kernel scopes the idempotency key by that tenant (T-52).
+        let tenant = args
+            .get("tenant")
+            .and_then(|t| t.as_str())
+            .map(String::from);
         let r = kernel
             .remember(RememberRequest {
                 context: subject_of(args).into(),
@@ -35,7 +43,7 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
                 idempotency_key: Some(format!("agent-mem-{}-{}", agent_id, mem_key)),
                 metadata: Metadata {
                     type_name: "aikoql:memory".into(),
-                    tenant: None,
+                    tenant,
                     schema_version: 1,
                     tags: vec!["agent-memory".into()],
                 },
