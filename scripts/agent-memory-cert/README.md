@@ -50,8 +50,9 @@ each with a test that fails first:
 |---|---|---|
 | CHAT-MEM-005 | `agent_memory` stored a memory tenantless, so a tenant-scoped agent could not read back its own write; another tenant writing the same key got the first tenant's object back | the memory carries the caller's tenant |
 | PROC-CHAT-001, FORGET-001 | the default `recall` (and `memory_search`) goes vector-only once the question embeds, so a memory whose vector had not landed yet was invisible (1 miss in 20 store-then-recall pairs) | a memory with no vector competes by its text rank |
-| AUTH-001 | a `viewer` token could write and delete memory unless the enterprise licence was active | the viewer role is read-only in every mode |
+| AUTH-001 | a `viewer` token could write and delete memory unless the enterprise licence was active | the viewer role is read-only in every mode: MCP, native protocol and REST writes |
 | SENS-001 | `recall` returned a stored AWS key verbatim | `recall` and `memory_search` return `[REDACTED:<KIND>]` |
+| (fix review) | `vector_led` mixed BM25 and cosine scores, and `memory_search`'s MMR divides by the top score | one score scale, `61/(61+rank)` |
 
 The two gaps are product decisions still to make:
 
@@ -61,8 +62,9 @@ The two gaps are product decisions still to make:
   shared by all of them. The token spec (`TOKEN:TENANT:ROLES`) has no field
   for the agent's name.
 - **POLICY-001, policies are advisory.** `evaluate_policies` answers
-  "denied", but the denied `forget` still succeeds: deny policies do not gate
-  tool calls.
+  "denied" for the real caller (`tcp-agent`), but the denied `forget` still
+  succeeds. In the code, only the `evaluate_policies` tool reads policies; no
+  write path consults them.
 
 ## Read the numbers with care
 
@@ -75,5 +77,12 @@ The two gaps are product decisions still to make:
 - **Document memory has no vectors.** The document pipeline embeds chunks
   with a mock provider, and saving a document keeps none of those vectors.
   Search over an ingested document is therefore keyword-only.
+- Almost every check runs as the tenant's admin token, so ownership and ACL
+  paths are mostly untested. PERS-002 passes on any provenance text.
+- Redaction covers API keys, bearer and JWT tokens, AWS and private keys,
+  passwords, emails, card numbers, SSNs and connection strings. A profile
+  memory holding an email address therefore comes back redacted from
+  `recall`. `aikoql`, `get`, `find_experiences` and `agent_memory` still
+  return stored values as they are.
 - A pass means the store did what the check asks. It does not measure answer
   quality: that depends on the model reading the memory.
