@@ -36,7 +36,7 @@ fn facts_from_model_query(
     }
     let rows = crate::tools::query::execute_readonly(k, &query, subject, roles, tenant);
     let facts = rows
-        .map(|r| context::facts_from_rows(&r))
+        .map(|r| context::facts_from_rows(&r, question))
         .unwrap_or_default();
     Ok((Some(query), facts))
 }
