@@ -203,7 +203,7 @@ fn render(row: &serde_json::Value, terms: &BTreeSet<String>) -> Option<(String, 
     Some((collapse(&statement), None))
 }
 
-/// Text/vector search over what the caller may see, confined to `tenant`
+/// Hybrid (vector + BM25) search over what the caller may see, confined to `tenant`
 /// (None = unscoped, as `execute_readonly`). The kernel search is not
 /// tenant-aware, so hits are over-fetched and filtered here.
 pub(crate) fn retrieve_fallback(
@@ -215,11 +215,14 @@ pub(crate) fn retrieve_fallback(
 ) -> Vec<Fact> {
     let ctx =
         crate::session::subject_of(&json!({"subject": subject, "roles": roles, "tenant": tenant}));
+    // hybrid, as `recall` and `memory_search`: the question's embedding
+    // feeds the vector leg (text-only when no model is loaded)
+    let (vector, _) = crate::tools::query::embed_query(k, question);
     let hits = k.find_similar(crate::SimilarityQuery {
         context: ctx.into(),
         filter: None,
         text: Some(question.to_string()),
-        vector: None,
+        vector,
         embedding_model: None,
         k: MAX_FACTS * 4,
         fusion: crate::helpers::parse_fusion(&json!({})),
