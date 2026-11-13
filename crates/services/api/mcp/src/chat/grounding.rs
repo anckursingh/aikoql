@@ -180,6 +180,34 @@ mod tests {
     /// The quote path stays strict: whole words in their order, no
     /// paraphrase, no stitching, no word cut in half, and never fewer than
     /// four words (a bare "a thousand" grounds nothing).
+    /// PDF text splits words ("voic e", "Br ahmans"): a faithful quote of the
+    /// sentence spells them whole. On the Vedas test llama3.1 quoted the
+    /// Frogs hymn exactly and was rejected for it. A quote may join what the
+    /// extraction split, but still starts and ends on a word boundary.
+    #[test]
+    fn a_quote_reads_through_words_the_pdf_split() {
+        let f = [fact(
+            "k1",
+            "HYMN CIII. Frogs. 1. THEY who lay quiet for a year, the Br ahmans who \
+             fulfil their vows, The Frogs have lifted up their voic e, the voice \
+             Parjanya hath inspired.",
+        )];
+        let good = "The Frogs have lifted up their voice, the voice Parjanya hath inspired.";
+        let claims = verify(&reply(vec![(good, vec![])]), &f).expect("a faithful quote");
+        assert_eq!(claims[0].evidence_ids, vec!["k1".to_string()]);
+        assert!(verify(
+            &reply(vec![("the Brahmans who fulfil their vows", vec![])]),
+            &f
+        )
+        .is_ok());
+        for bad in [
+            "rogs have lifted up their",
+            "The Frogs have lifted up their voi",
+        ] {
+            assert!(verify(&reply(vec![(bad, vec![])]), &f).is_err(), "{bad:?}");
+        }
+    }
+
     #[test]
     fn a_quote_must_be_a_run_of_at_least_four_whole_words() {
         let f = [fact(
