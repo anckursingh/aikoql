@@ -17,11 +17,20 @@ changes unless a `[chat]` table is configured; without it the route answers
    not asked again.
 3. **Answer skill.** The model gets the question and at most **8 facts /
    2000 characters** (each value capped at 200 characters; ingestion bookkeeping
-   such as `confidence` and `evidence_*` is left out). Secrets are redacted
-   (`[REDACTED:<KIND>]`) *before* the facts leave the server.
-4. **Grounding check, by the server.** Every claim must quote a retrieved fact
-   (case/whitespace-insensitive; no paraphrase). Otherwise the answer is
-   downgraded to `UNKNOWN: answer not supported by the retrieved facts`. The
+   such as `confidence` and `evidence_*` is left out). A passage — a document
+   page, chunk or fragment — is shown as at most 480 characters centred on the
+   question's words, with its spacing collapsed, and a passage already shown
+   for the same document is skipped, so several passages fit. Secrets are
+   redacted (`[REDACTED:<KIND>]`) *before* the facts leave the server.
+4. **Grounding check, by the server.** Every claim must quote a retrieved fact:
+   either the whole fact, or a run of at least four of its whole words in their
+   order (case, spacing and edge punctuation aside; no paraphrase, no stitching
+   two runs together, no word cut in half). Otherwise the answer is
+   downgraded to `UNKNOWN: answer not supported by the retrieved facts`.
+   A quote is checked word for word, not for meaning: it can leave out a
+   qualifier ("not", "only") that sits outside the quoted words, and the
+   `answer` text itself is not matched. Treat a grounded answer as "these
+   words appear in the source", not as a proof of the answer. The
    model's `grounded` flag and its `evidence_ids` are not trusted: it is shown
    statements, not koids, so the server attaches each claim's evidence from the
    fact it matched.
@@ -65,7 +74,18 @@ a 2-second TCP probe of the endpoint).
 `Qwen/Qwen2.5-0.5B-Instruct` with a LoRA adapter on this exact protocol. Merge
 the adapter, convert to GGUF and serve it with llama.cpp's `llama-server` or
 Ollama, both of which expose an OpenAI-compatible endpoint; point `[chat] url`
-at it. The adapter/GGUF is a separate download and is not in this repo or the
+at it.
+
+Serving it through Ollama, two things matter:
+
+- **Import with the base model's tokenizer and config.** A merged model saved
+  by transformers 5.x imports cleanly but answers one token forever (`@@@@`).
+  Copy `tokenizer.json`, `vocab.json`, `merges.txt`, `tokenizer_config.json`
+  and `config.json` from the base model's snapshot into the merged directory
+  before `ollama create`.
+- **Pass the prompt through untemplated.** The adapter was trained on raw
+  prompt → completion text, so the Modelfile needs `TEMPLATE "{{ .Prompt }}"`,
+  `PARAMETER temperature 0` and stops on `<|endoftext|>` and `<|im_end|>`. The adapter/GGUF is a separate download and is not in this repo or the
 binary. "Free" means no licence fee: you supply the compute. Check the base
 model's licence (Qwen2.5-0.5B is published under Apache-2.0) before shipping it.
 
