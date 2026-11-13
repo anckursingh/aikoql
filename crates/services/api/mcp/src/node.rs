@@ -278,6 +278,12 @@ impl Deps {
             u8::from(node.stopping).to_string(),
         );
         gauge(
+            "aikoql_node_engine_fenced",
+            "gauge",
+            "1 while the storage engine refuses client writes (a fault fence, a deposed term, a planned stop).",
+            u8::from(node.engine_fenced).to_string(),
+        );
+        gauge(
             "aikoql_replication_term",
             "gauge",
             "The replication term this node serves at.",
@@ -426,6 +432,16 @@ mod tests {
             "{quiet}"
         );
         assert!(quiet.contains("aikoql_replication_term 3"), "{quiet}");
+        assert!(quiet.contains("aikoql_node_engine_fenced 0"), "{quiet}");
+        let faulted = NodeState {
+            engine_fenced: true,
+            ..node
+        };
+        assert!(
+            deps.metrics(faulted)
+                .contains("aikoql_node_engine_fenced 1"),
+            "an engine that refuses writes is a series an alert can read"
+        );
         assert!(!quiet.contains("aikoql_archive_"), "{quiet}");
         assert!(!quiet.contains("aikoql_ha_lease_"), "{quiet}");
 
