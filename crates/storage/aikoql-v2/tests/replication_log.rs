@@ -192,6 +192,30 @@ fn a_failed_wal_append_takes_no_seq_and_leaves_no_hole_in_the_log() {
     assert_eq!(follower.get(b"lost").unwrap(), None);
 }
 
+/// PROD-6 review (#42): a failed fsync is not a failed append. After an
+/// fsync error the kernel may have dropped the dirty pages, so what the log
+/// holds past that point cannot be trusted — the engine stops taking client
+/// writes (and says why) instead of cutting the tail and carrying on. The
+/// failed write took no seq, and nothing acknowledged is touched.
+#[test]
+fn a_failed_wal_sync_fences_the_engine_with_the_reason() {
+    let mut cfg = leader_config(dir("repl-syncfail-leader"));
+    cfg.wal_sync_fail_next = true;
+    let leader = Db::open(cfg).unwrap();
+    let before = leader.last_seq();
+
+    assert!(leader.put(b"lost", b"never acked").is_err());
+    assert_eq!(leader.last_seq(), before, "the failed write takes no seq");
+    let why = leader.fence_reason().expect("an fsync error fences");
+    assert!(why.contains("sync"), "the reason names the fsync: {why}");
+    let refused = leader.put(b"after", b"x").unwrap_err().to_string();
+    assert!(
+        refused.contains("not leader"),
+        "later writes are refused: {refused}"
+    );
+    assert_eq!(leader.get(b"lost").unwrap(), None);
+}
+
 /// PROD-6 (failure matrix row 13 — the standby's disk refuses a WAL
 /// append): the replicated frame is not applied and the standby's
 /// `last_seq` — what it acks to the leader — does not move, so a
