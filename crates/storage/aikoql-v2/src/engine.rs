@@ -49,6 +49,8 @@ pub trait StorageAdminApi: Send + Sync {
     /// MRFC-0080 R4 — refuse client writes from now on (a later call
     /// replaces the reason).
     fn fence(&self, why: String);
+    /// Why client writes are refused right now — None while they are not.
+    fn fence_reason(&self) -> Option<String>;
     /// MRFC-0080 standby reads — apply one leader frame (a read replica
     /// replicates into its open engine).
     fn apply_replicated(&self, seq: u64, ops: &[Op]) -> KResult<u64>;
@@ -130,6 +132,10 @@ impl StorageAdminApi for AikoqlStorageEngineV2 {
 
     fn fence(&self, why: String) {
         self.db.fence(why)
+    }
+
+    fn fence_reason(&self) -> Option<String> {
+        self.db.fence_reason()
     }
 
     fn apply_replicated(&self, seq: u64, ops: &[Op]) -> KResult<u64> {

@@ -105,7 +105,8 @@ spec:
           # the node serves reads (/readyz): true for the leader AND the
           # standby, false for a fenced or stopping node. Writes follow the
           # lease, not a probe — /readyz/write answers 200 on the leader
-          # only, for a Service or a load balancer that routes by class.
+          # only, for a load balancer that routes by class. A plain Service
+          # cannot: readiness is per pod, so it also reaches the standby.
           startupProbe:
             httpGet:
               path: /livez

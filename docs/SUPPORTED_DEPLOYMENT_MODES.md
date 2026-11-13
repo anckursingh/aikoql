@@ -74,8 +74,11 @@ to `users.db` only if no user was added or changed after the upgrade.
   (PROD-4): startup and liveness ask `/livez` (the process answers
   HTTP), readiness asks `/readyz` (the node serves reads — true for the
   leader and the standby, false for a fenced or stopping node).
-  `/readyz/write` answers 200 on the leader only, for a Service or load
-  balancer that routes by traffic class; the chart does not use it. All
+  `/readyz/write` answers 200 on the leader only (and not while its engine
+  refuses writes), for a load balancer that routes by traffic class; the
+  chart does not use it, so **its in-cluster Service sends about half the
+  writes to the standby, which refuses them** — route writes through a
+  health-checked load balancer or a leader-following client. All
   three are unauthenticated, like `/health`, and report the role, the
   term and readiness — no data.
 - The server handles SIGTERM (PROD-3): a deleted leader pod fences its
