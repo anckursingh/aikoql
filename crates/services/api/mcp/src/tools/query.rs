@@ -837,6 +837,70 @@ mod tests {
         );
     }
 
+    /// MEM-SECRET — decision (user, 2026-11-13): a secret stored in memory
+    /// is stored as given but never handed back raw by recall; it comes
+    /// back as `[REDACTED:<KIND>]`, as the Ask route already does. (C7
+    /// SENS-001: recall returned an AWS access key verbatim.)
+    #[test]
+    fn recall_redacts_a_secret_in_memory() {
+        let k = Arc::new(
+            Kernel::open(
+                Arc::new(MemoryEngine::new()),
+                Arc::new(ManualClock::new(10_000)),
+                0xBEEF,
+            )
+            .unwrap(),
+        );
+        let m = aikoql_scheduler::IndexMaintainer::start(
+            &k,
+            Arc::new(BruteForceVectorIndex::new()),
+            Arc::new(TokenTextIndex::default()),
+        )
+        .unwrap();
+        k.attach_indexes(m.clone());
+        let mut props = PropertyMap::new();
+        props.insert(
+            "text".into(),
+            Value::Text("Alice's AWS key is AKIAIOSFODNN7EXAMPLE keep it safe".into()),
+        );
+        k.remember(RememberRequest {
+            context: subject_of(&json!({"subject": "alice"})).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "Note".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap();
+        let res = tool_recall(
+            &k,
+            &json!({"subject": "alice", "query": "Alice AWS key", "wait_for_freshness_ms": 2000}),
+        )
+        .unwrap();
+        let text = res.to_string();
+        assert!(
+            res["items"].as_array().is_some_and(|i| !i.is_empty()),
+            "{res}"
+        );
+        assert!(
+            !text.contains("AKIAIOSFODNN7EXAMPLE"),
+            "the raw key leaks: {res}"
+        );
+        assert!(text.contains("[REDACTED:"), "the secret is marked: {res}");
+    }
+
     /// MEM-RYW — an agent recalls right after it remembers. `embed: true`
     /// attaches the vector asynchronously, and the default recall goes
     /// vector-only once the question embeds: a memory not yet embedded was
