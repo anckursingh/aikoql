@@ -1077,6 +1077,8 @@ mod tests {
             scores.windows(2).all(|w| w[0] >= w[1]),
             "rank order: {scores:?}"
         );
+        // the contract exactly: the best is 1.0, then 61/(61 + rank)
+        assert_eq!(scores, vec![1.0, 61.0 / 62.0], "rank-derived scale");
     }
 
     /// The same law when the vector leg is full: ten embedded memories match
