@@ -33,12 +33,22 @@ fn term(w: &str) -> String {
         .to_lowercase()
 }
 
-/// The question's search words: three characters or more.
+/// Question words that say nothing about where the answer is: they are in
+/// nearly every passage, so counted as terms they pull the window anywhere.
+const FILLER: &[&str] = &[
+    "the", "and", "are", "was", "were", "has", "have", "had", "does", "did", "who", "whom",
+    "whose", "what", "which", "when", "where", "why", "how", "many", "much", "this", "that",
+    "these", "those", "with", "from", "for", "into", "about", "say", "says", "said", "there",
+    "their", "they", "them", "his", "her", "its", "our", "you", "your", "can", "could", "would",
+    "should", "will", "not", "any", "all", "one", "book", "text",
+];
+
+/// The question's search words: three characters or more, filler left out.
 fn terms(question: &str) -> BTreeSet<String> {
     question
         .split_whitespace()
         .map(term)
-        .filter(|w| w.chars().count() >= 3)
+        .filter(|w| w.chars().count() >= 3 && !FILLER.contains(&w.as_str()))
         .collect()
 }
 

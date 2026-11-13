@@ -29,14 +29,33 @@ fn words(s: &str) -> Vec<String> {
 
 /// Does `claim` quote `fact`? Either the whole statement (the knowledge-
 /// graph case: one short fact per row), or a run of at least
-/// `MIN_QUOTE_WORDS` whole words of it in their order (the document case:
-/// a fact is a passage, and an answer quotes the sentence that says it).
+/// `MIN_QUOTE_WORDS` of its words in their order (the document case: a
+/// fact is a passage, and an answer quotes the sentence that says it).
+///
+/// The run is matched letter for letter with the spaces between words
+/// left out, so a quote reads through words the PDF extraction split
+/// ("voic e" quoted as "voice"); it must still start and end where a word
+/// of the fact starts and ends, so no word is cut in half.
+// ponytail: joining also lets "the rapist" match "therapist" inside a run;
+// only identical letters ever match, so the cost is a rare false positive
+// on a word split the other way.
 fn quotes(claim: &str, fact: &str) -> bool {
     if norm(claim) == norm(fact) {
         return true;
     }
-    let (c, f) = (words(claim), words(fact));
-    c.len() >= MIN_QUOTE_WORDS && f.windows(c.len()).any(|run| run == c.as_slice())
+    let c = words(claim);
+    if c.len() < MIN_QUOTE_WORDS {
+        return false;
+    }
+    let c = c.concat();
+    let (mut f, mut bounds) = (String::new(), vec![0]);
+    for w in words(fact) {
+        f.push_str(&w);
+        bounds.push(f.len());
+    }
+    bounds
+        .iter()
+        .any(|&at| f[at..].starts_with(&c) && bounds.binary_search(&(at + c.len())).is_ok())
 }
 
 /// A refusal passes with no claims. Otherwise every claim must quote a
