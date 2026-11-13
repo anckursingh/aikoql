@@ -979,6 +979,95 @@ mod tests {
         );
     }
 
+    /// vector_led mixes two score scales — cosine (≤ 1) for embedded hits,
+    /// BM25 (≈ 6 here) for the rest — and memory_search's MMR divides every
+    /// relevance by the top score, so one text-only hit would flatten every
+    /// vector hit to near zero. Its scores are one scale: at most 1.0,
+    /// non-increasing in its own order.
+    #[test]
+    fn vector_led_scores_are_one_scale_in_rank_order() {
+        struct Fixed;
+        impl aikoql_kernel::embedding::EmbeddingProvider for Fixed {
+            fn embed(&self, _t: &str, _m: Option<&str>) -> aikoql_kernel::KResult<Vec<f32>> {
+                Ok(vec![1.0, 0.0, 0.0])
+            }
+        }
+        let k = Arc::new(
+            Kernel::open(
+                Arc::new(MemoryEngine::new()),
+                Arc::new(ManualClock::new(10_000)),
+                0xBEEF,
+            )
+            .unwrap()
+            .with_embedding_provider(Arc::new(Fixed)),
+        );
+        let m = aikoql_scheduler::IndexMaintainer::start(
+            &k,
+            Arc::new(BruteForceVectorIndex::new()),
+            Arc::new(TokenTextIndex::default()),
+        )
+        .unwrap();
+        k.attach_indexes(m.clone());
+        for (text, embedded) in [
+            ("weekly status update", true),
+            ("status of the quokka", false),
+        ] {
+            let mut props = PropertyMap::new();
+            props.insert("text".into(), Value::Text(text.into()));
+            k.remember(RememberRequest {
+                context: subject_of(&json!({"subject": "alice"})).into(),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: None,
+                metadata: Metadata {
+                    type_name: "Note".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: embedded.then(|| aikoql_kernel::SemanticBlock {
+                    embedding_model: Some("fixed".into()),
+                    embedding: Some(vec![1.0, 0.0, 0.0]),
+                    confidence: None,
+                    source: None,
+                    summary: None,
+                }),
+                relationships: vec![],
+                security: None,
+                extensions: ExtensionMap::new(),
+                origin: Origin::Human,
+                note: None,
+                referential_policy: ReferentialPolicy::default(),
+            })
+            .unwrap();
+        }
+        m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+        let hits = vector_led(
+            &k,
+            SimilarityQuery {
+                context: subject_of(&json!({"subject": "alice"})).into(),
+                filter: None,
+                text: Some("quokka status".into()),
+                vector: Some(vec![1.0, 0.0, 0.0]),
+                embedding_model: None,
+                k: 8,
+                fusion: crate::Fusion::TextOnly,
+            },
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 2, "both memories");
+        let scores: Vec<f32> = hits.iter().map(|h| h.score).collect();
+        assert!(
+            scores.iter().all(|s| *s > 0.0 && *s <= 1.0),
+            "one scale: {scores:?}"
+        );
+        assert!(
+            scores.windows(2).all(|w| w[0] >= w[1]),
+            "rank order: {scores:?}"
+        );
+    }
+
     /// The same law when the vector leg is full: ten embedded memories match
     /// the question's vector, one fresh memory has only its text indexed. A
     /// vector-only list of the top five would never reach it; it competes by
