@@ -243,6 +243,8 @@ fn search_memory_files(args: &J) -> Result<J, String> {
                 .unwrap_or_else(|| body_text.lines().next().unwrap_or(""))
                 .trim()
                 .to_string();
+            // MEM-SECRET: never hand a stored secret back raw
+            let snippet = aikoql_ingestion::redact_text(&snippet);
             let snippet = if snippet.len() > 200 {
                 format!("{}...", &snippet[..200])
             } else {
@@ -549,7 +551,8 @@ pub(crate) fn tool_memory_search(k: &Kernel, args: &J) -> Result<J, String> {
                 "name": wrap(name.clone()),
                 "description": wrap(text_prop(&h.ko, "description")),
                 "file": wrap(format!("{name}.md")),
-                "snippet": wrap(content.chars().take(200).collect()),
+                // MEM-SECRET: never hand a stored secret back raw
+                "snippet": wrap(aikoql_ingestion::redact_text(&content).chars().take(200).collect()),
                 "score": h.score,
                 "koid": h.ko.koid.to_hex(),
                 "scope": text_prop(&h.ko, "scope"),
