@@ -499,21 +499,22 @@ pub(crate) fn tool_memory_search(k: &Kernel, args: &J) -> Result<J, String> {
     );
     let (vector, _) = crate::tools::query::embed_query(k, query);
     let semantic = vector.is_some();
-    let hits = k
-        .find_similar(crate::SimilarityQuery {
-            context: subject_of(args).into(),
-            filter: None,
-            text: Some(query.to_string()),
-            vector,
-            embedding_model: None,
-            k: max_results * 3,
-            fusion: if semantic {
-                crate::Fusion::VectorOnly
-            } else {
-                crate::Fusion::TextOnly
-            },
-        })
-        .map_err(|e| e.to_string())?;
+    let q = crate::SimilarityQuery {
+        context: subject_of(args).into(),
+        filter: None,
+        text: Some(query.to_string()),
+        vector,
+        embedding_model: None,
+        k: max_results * 3,
+        fusion: crate::Fusion::TextOnly,
+    };
+    // MEM-RYW: semantic-led, a memory not yet embedded ranked by its text
+    let hits = if semantic {
+        crate::tools::query::vector_led(k, q)
+    } else {
+        k.find_similar(q)
+    }
+    .map_err(|e| e.to_string())?;
     // AG-33: agents may filter by trust class; untrusted content is fenced
     let trust_want = args.get("trust").and_then(|v| v.as_str());
     let fence = Fence::new();
