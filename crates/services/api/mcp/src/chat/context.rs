@@ -370,6 +370,26 @@ mod tests {
 
     /// A page and its chunk carry the same text: showing both spent the
     /// budget twice on one passage.
+    /// "does" and "have" are in nearly every passage: counted as question
+    /// terms they pulled the Purusa window onto the wrong verse on the Vedas
+    /// test. Only the question's content words choose the window.
+    #[test]
+    fn the_window_follows_content_words_not_filler() {
+        let filler = "they does have does have it does have ".repeat(30);
+        let other = "cattle were born and horses ".repeat(30);
+        let page =
+            format!("{filler} {other} A THOUSAND heads hath Purusa, a thousand eyes. {other}");
+        let f = facts_from_rows(
+            &json!([row("k1", "DocumentChunk", json!({"text": page}))]),
+            "How many heads does Purusa have?",
+        );
+        assert!(
+            f[0].statement.contains("heads hath Purusa"),
+            "the window is on the content words: {}",
+            f[0].statement
+        );
+    }
+
     #[test]
     fn the_same_passage_is_shown_once() {
         let text = "On the instigation of the god Savitr, through Brhaspati.";
