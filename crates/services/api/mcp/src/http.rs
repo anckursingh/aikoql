@@ -1967,9 +1967,12 @@ pub(crate) fn status_report(admin: Option<&dyn aikoql_storage_v2::engine::Storag
         crate::replication::standbys_json(acked, head)
     });
     let deps = &crate::node::DEPS;
+    // why the engine refuses writes, when it does (null while it writes)
+    let mut node = crate::node::state().to_json();
+    node["write_fence"] = json!(crate::node::engine_fence());
     json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "node": crate::node::state().to_json(),
+        "node": node,
         "replication": {"head_seq": head, "standbys": standbys},
         "lease": deps.lease_json(),
         "archive": deps.archive_json(head),
