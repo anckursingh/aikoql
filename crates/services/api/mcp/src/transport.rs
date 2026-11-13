@@ -713,7 +713,8 @@ mod tcp_auth_tests {
 
     #[test]
     fn tcp_tenant_isolation_across_tokens() {
-        let addr = spawn_server(&["userA:tenantA:viewer", "userB:tenantB:viewer"]);
+        // writer tokens: the isolation is by tenant, and a viewer is read-only (MEM-VIEWER)
+        let addr = spawn_server(&["userA:tenantA:editor", "userB:tenantB:editor"]);
         // Tenant A creates a KO.
         let mut a = TcpClient::connect(addr);
         let resp = a.init("userA");
