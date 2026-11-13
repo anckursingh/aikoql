@@ -212,8 +212,10 @@ def _generate(model, tokenizer, prompts: List[str],
     texts: List[str] = []
     for i in range(0, len(prompts), batch_size):
         chunk = prompts[i:i + batch_size]
-        enc = tokenizer(chunk, padding=True, truncation=True,
-                        max_length=256, return_tensors="pt")
+        # the whole prompt, on the model's device: a 256-token cut lost the
+        # answer prompt's reply format, and CPU inputs crashed --device cuda
+        enc = tokenizer(chunk, padding=True, return_tensors="pt")
+        enc = enc.to(model.device)
         prompt_lens = enc["attention_mask"].sum(dim=1)
         with torch.no_grad():
             gen = model.generate(
