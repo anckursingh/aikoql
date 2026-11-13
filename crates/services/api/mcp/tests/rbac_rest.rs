@@ -489,7 +489,7 @@ fn admin_passes_all_gates() {
 }
 
 #[test]
-fn unlicensed_tcp_token_roles_unchanged() {
+fn unlicensed_tcp_token_roles_and_a_read_only_viewer() {
     // no license anywhere: v0.4.0 role behavior, byte-for-byte
     let db = std::env::temp_dir().join(format!("aikoql-rbac-parity-db-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&db);
@@ -532,11 +532,25 @@ fn unlicensed_tcp_token_roles_unchanged() {
             .contains("mcp:read"),
         "{read}"
     );
-    // a "viewer" role name is uninterpreted in community mode — no gate
+    // MEM-VIEWER: a viewer token is read-only in community mode too — an
+    // agent handed a read-only memory token must not be able to write (the
+    // C7 certification check AUTH-001 wrote through one). Reads still pass.
     let viewer = mcp_call(mcp_port, "vtok", "remember", &json!({"type_name": "Fact"}));
+    assert_eq!(
+        viewer["error"]["code"], -32001,
+        "a viewer token cannot write: {viewer}"
+    );
     assert!(
-        viewer.get("result").is_some(),
-        "community viewer token stays v0.4.0-unrestricted: {viewer}"
+        viewer["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("viewer role is read-only"),
+        "{viewer}"
+    );
+    let viewer_read = mcp_call(mcp_port, "vtok", "recall", &json!({"query": "anything"}));
+    assert!(
+        viewer_read.get("result").is_some(),
+        "a viewer token still reads: {viewer_read}"
     );
     // the read-scope token still reaches read tools
     let health_tool = mcp_call(mcp_port, "rtok", "health", &json!({}));
