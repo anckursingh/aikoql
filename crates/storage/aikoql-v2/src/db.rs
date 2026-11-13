@@ -442,6 +442,11 @@ pub struct Db {
     /// MRFC-0080 R4 — set once a newer replication term deposed this
     /// node: client writes are refused, replicated frames still apply.
     fenced: RwLock<Option<String>>,
+    /// Admission: a client write holds it shared from the fenced check to
+    /// its ack; `fence()` takes it exclusively, so it returns only once
+    /// every write that passed the check is acknowledged — `last_seq()`
+    /// read after it covers them all (PROD-3 review).
+    admit: RwLock<()>,
     /// MRFC-0080 R4b — the synchronous-replication wait, when armed.
     commit_gate: std::sync::OnceLock<CommitGate>,
 }
@@ -948,6 +953,7 @@ impl Db {
             control: ControlStats::default(),
             wal_fail_next: AtomicBool::new(wal_fail_next_armed),
             fenced: RwLock::new(None),
+            admit: RwLock::new(()),
             commit_gate: std::sync::OnceLock::new(),
         })
     }
@@ -1080,6 +1086,9 @@ impl Db {
     /// term deposed this node); `why` rides each refusal.
     pub fn fence(&self, why: String) {
         // justified: RwLock poison is unrecoverable
+        // Drain first: a write that already passed the check finishes (and
+        // is acked) before the fence returns; later ones see the reason.
+        let _drained = self.admit.write().unwrap();
         *self.fenced.write().unwrap() = Some(why); // a newer reason replaces
     }
 
@@ -1188,11 +1197,16 @@ impl Db {
                 )));
             }
         }
+        // Held to the end of this call: the check below and the commit are
+        // one step as far as `fence()` can tell.
+        let _admitted = expected.is_none().then(|| self.admit.read().unwrap());
         if expected.is_none() {
             // justified: RwLock poison is unrecoverable
             if let Some(why) = self.fenced.read().unwrap().as_ref() {
                 return Err(FormatError::Stale(format!("not leader: {why}")));
             }
+            // park hook (no-op unset): a client write that passed the check
+            crash_park("AIKOQL_V2_ADMIT_PARK", &self.config.dir, "after_admit");
         }
         if expected.is_none() && self.config.durability == DurabilityMode::GroupCommit {
             let seq = self.writer()?.write(ops)?;

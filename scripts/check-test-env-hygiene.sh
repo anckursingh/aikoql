@@ -34,6 +34,7 @@ allowed() { # file|token -> 0 if pinned (patterns fully quoted: the | is literal
     'crates/storage/aikoql-v2/tests/shutdown_matrix.rs|env') return 0 ;; # L-15 shutdown matrix: ParkArm::new(env, stage) arms COMPACT/GROUP parks around each shutdown stage; the static PARK_LOCK serializes the process-wide env
     'crates/storage/aikoql-v2/tests/shutdown_matrix.rs|COMPACT_ENV') return 0 ;; # the same L-15 ParkArm drop clears both park vars (const AIKOQL_V2_COMPACT_PARK)
     'crates/storage/aikoql-v2/tests/shutdown_matrix.rs|GROUP_ENV') return 0 ;; # the same L-15 ParkArm drop clears both park vars (const AIKOQL_V2_GROUP_PARK)
+    'crates/storage/aikoql-v2/tests/fence_linearized.rs|ADMIT_ENV') return 0 ;; # const AIKOQL_V2_ADMIT_PARK; armed around the in-flight write under test, cleared by a drop guard; the static PARK_LOCK serializes the two legs
     *) return 1 ;;
   esac
 }
