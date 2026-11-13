@@ -513,6 +513,9 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
             })
             .collect::<Vec<_>>()
             .join("; ");
+        // MEM-SECRET: a secret in memory is stored as given, never recalled
+        // raw (redacted before the cut, so a key is never half-shown)
+        snippet = aikoql_ingestion::redact_text(&snippet);
         if snippet.chars().count() > 300 {
             snippet = snippet.chars().take(300).collect::<String>() + "…";
         }
