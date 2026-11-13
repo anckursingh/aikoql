@@ -129,6 +129,46 @@ mod tests {
         assert!(verify(&a, &f).is_err());
     }
 
+    /// Document facts are passages, not one-line statements: a claim that
+    /// must equal the whole passage can never pass. A verbatim quote of a
+    /// run of the passage's words (case, spacing and edge punctuation aside)
+    /// grounds the claim — on the Vedas test, llama3.1 saw the right page
+    /// for three questions and every answer was downgraded to UNKNOWN.
+    #[test]
+    fn a_verbatim_quote_from_a_passage_grounds_the_claim() {
+        let page = "DocumentChunk: HYMN XC. Purusa. 1. A THOUSAND heads hath                     Purusa, a thousand eyes, a thousand feet. On every side                     pervading earth he fills a space ten fingers wide.";
+        let f = [fact("k1", page), fact("k2", "unrelated")];
+        for quote in [
+            "A thousand heads hath Purusa, a thousand eyes",
+            "a THOUSAND heads hath Purusa,",
+            "  he fills a space ten fingers wide.  ",
+        ] {
+            let claims = verify(&reply(vec![(quote, vec![])]), &f)
+                .unwrap_or_else(|e| panic!("{quote:?}: {e}"));
+            assert_eq!(claims[0].evidence_ids, vec!["k1".to_string()], "{quote:?}");
+        }
+    }
+
+    /// The quote path stays strict: whole words in their order, no
+    /// paraphrase, no stitching, no word cut in half, and never fewer than
+    /// four words (a bare "a thousand" grounds nothing).
+    #[test]
+    fn a_quote_must_be_a_run_of_at_least_four_whole_words() {
+        let f = [fact(
+            "k1",
+            "Agni. 1 I Laud Agni, the chosen Priest, God, minister of sacrifice",
+        )];
+        for bad in [
+            "Agni is the chosen Priest",                    // paraphrase
+            "I Laud Agni, minister of sacrifice",           // stitched from two runs
+            "aud Agni, the chosen",                         // a word cut in half
+            "the chosen Priest",                            // three words
+            "Priest, God, minister of sacrifice, and more", // runs past the fact
+        ] {
+            assert!(verify(&reply(vec![(bad, vec![])]), &f).is_err(), "{bad:?}");
+        }
+    }
+
     #[test]
     fn verify_never_panics() {
         let f = [fact("k1", "héllo wörld"), fact("k2", "")];
