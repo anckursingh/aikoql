@@ -208,6 +208,76 @@ mod tests {
         assert!(total <= MAX_CONTEXT_CHARS, "total {total}");
     }
 
+    /// A PDF page is a ~3,600-character passage padded with the layout's
+    /// line breaks: shown whole it took the entire 2,000-character budget,
+    /// so the model saw one page — and only when search ranked the right
+    /// one first. Long text is shown as the window around the question's
+    /// words, with spacing collapsed, so several passages fit.
+    #[test]
+    fn long_text_is_shown_as_the_window_around_the_question() {
+        let filler = |n: usize| "Indra \n  \n hymn verse ".repeat(n);
+        let page = format!(
+            "{} A THOUSAND heads hath Purusa, a thousand eyes, a thousand feet. {}",
+            filler(80),
+            filler(80)
+        );
+        let rows: Vec<_> = (0..4)
+            .map(|i| {
+                row(
+                    &format!("k{i}"),
+                    "DocumentChunk",
+                    json!({"text": page.clone() + &i.to_string()}),
+                )
+            })
+            .collect();
+        let f = facts_from_rows(&json!(rows), "How many heads does Purusa have?");
+        assert!(f.len() >= 3, "several passages fit the budget: {}", f.len());
+        let st = &f[0].statement;
+        assert!(
+            st.contains("A THOUSAND heads hath Purusa, a thousand eyes"),
+            "the window holds the question's words: {st}"
+        );
+        assert!(
+            !st.contains("  ") && !st.contains('\n'),
+            "spacing is collapsed: {st:?}"
+        );
+        assert!(
+            st.contains("a thousand feet.") && st.starts_with("DocumentChunk: …"),
+            "centred: the sentence whole, cut on both sides: {st}"
+        );
+        assert!(st.ends_with('…'), "a cut passage is marked: {st}");
+    }
+
+    /// A page and its chunk carry the same text: showing both spent the
+    /// budget twice on one passage.
+    #[test]
+    fn the_same_passage_is_shown_once() {
+        let text = "On the instigation of the god Savitr, through Brhaspati.";
+        let f = facts_from_rows(
+            &json!([
+                row(
+                    "p1",
+                    "DocumentPage",
+                    json!({"text": text, "document": "d1"})
+                ),
+                row(
+                    "c1",
+                    "DocumentChunk",
+                    json!({"text": format!("  {text}\n"), "document": "d1"})
+                ),
+                row(
+                    "p2",
+                    "DocumentPage",
+                    json!({"text": text, "document": "d2"})
+                ),
+                row("n1", "Note", json!({"text": "something else"})),
+            ]),
+            "Savitr",
+        );
+        let koids: Vec<_> = f.iter().map(|x| x.koid.as_str()).collect();
+        assert_eq!(koids, ["p1", "p2", "n1"], "one per document");
+    }
+
     #[test]
     fn facts_skip_rows_without_koid() {
         let f = facts_from_rows(&json!([
