@@ -19,13 +19,15 @@ changes unless a `[chat]` table is configured; without it the route answers
    2000 characters** (each value capped at 200 characters; ingestion bookkeeping
    such as `confidence` and `evidence_*` is left out). A passage — a document
    page, chunk or fragment — is shown as at most 480 characters centred on the
-   question's words, with its spacing collapsed, and a passage already shown
+   question's content words (filler such as "does" and "have" is ignored), with its spacing collapsed, and a passage already shown
    for the same document is skipped, so several passages fit. Secrets are
    redacted (`[REDACTED:<KIND>]`) *before* the facts leave the server.
 4. **Grounding check, by the server.** Every claim must quote a retrieved fact:
    either the whole fact, or a run of at least four of its whole words in their
    order (case, spacing and edge punctuation aside; no paraphrase, no stitching
-   two runs together, no word cut in half). Otherwise the answer is
+   two runs together, no word cut in half). The words are compared with the
+   spaces between them left out, so a quote may spell a word whole where the
+   PDF extraction split it ("voic e"). Otherwise the answer is
    downgraded to `UNKNOWN: answer not supported by the retrieved facts`.
    A quote is checked word for word, not for meaning: it can leave out a
    qualifier ("not", "only") that sits outside the quoted words, and the
