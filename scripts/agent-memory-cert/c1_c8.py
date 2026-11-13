@@ -378,9 +378,10 @@ def _(c):
 @check("C7", "POLICY-001", "a deny policy blocks the action itself")
 def _(c):
     s = c["a"]
-    s.tool("deploy_policy", name="NoAgentDeletes", effect="Deny", principal="acme-agent",
+    # the caller over TCP is the agent "tcp-agent" (see PERS-005)
+    s.tool("deploy_policy", name="NoAgentDeletes", effect="Deny", principal="tcp-agent",
            action="Delete", resource_type="Note")
-    ok, ev = s.tool("evaluate_policies", principal="acme-agent", action="Delete", resource_type="Note")
+    ok, ev = s.tool("evaluate_policies", principal="tcp-agent", action="Delete", resource_type="Note")
     _, d = s.tool("remember", type_name="Note", properties={"text": "a note the agent may not delete"})
     ok2, f = s.tool("forget", koid=koid_of(d))
     evaluated = '"allowed": false' in json.dumps(ev).lower()
@@ -431,6 +432,7 @@ def main():
         else:
             side.unlink(missing_ok=True)
     shutil.rmtree(HERE / "memdir", ignore_errors=True)
+    shutil.rmtree(HERE / "memory", ignore_errors=True)
     LOG.write_text("")
     ctx = {"srv": Server(DB, TOKENS, LOG)}
     ctx["a"] = Session(ctx["srv"], "acme-agent")

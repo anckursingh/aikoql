@@ -36,6 +36,8 @@ class Server:
             [BIN, "--config", str(cfg), "serve", str(db),
              "--listen", f"127.0.0.1:{self.port}", *extra]
             + [a for t in tokens for a in ("--tcp-token", t)],
+            # memory files and every relative path stay in the work dir
+            cwd=HERE, env={**os.environ, "AIKOQL_MEMORY_DIR": str(HERE / "memory")},
             stdout=subprocess.DEVNULL, stderr=open(log, "ab"))
         deadline = time.time() + 120
         while time.time() < deadline:
