@@ -1,15 +1,15 @@
 {
-  "captured_at": "2026-09-29",
-  "captured_head": "f8a57cb",
-  "machine": "windows-latest CI runner (run 36550106310) — the gate's own measured report at the launch-branch head; the drop is L-08's checked-arithmetic error arms in wal.rs (19ddcd1), never hit by the suite (the >4 GiB overflow/truncation arms need payloads no test can allocate) — the same deliberate re-baseline class as 2026-09-24 (post-baseline code with untestable lines). checkpoint/snapshot unchanged at 96.40/81.05 (their cells held exactly), so the wal.rs drift is attributable to that one diff.",
-  "rustc": "1.98.1",
+  "captured_at": "2026-11-13",
+  "captured_head": "141834ea",
+  "machine": "Two independent measurements agree to the hundredth: the windows-latest CI job (run 43284865234) on PR #48's head, whose diff touches no crates/storage file, and a local macOS arm64 run on the production-readiness stack's tip. The drop is the rustc 1.99.1 -> 1.100.0 toolchain's line accounting (all three trio files fell, none by a code change), not a regression.",
+  "rustc": "1.100.0",
   "cargo_llvm_cov": "0.9.1",
   "suite": "cargo llvm-cov test -p aikoql-storage-v2 --all-features --no-report",
   "tolerance_pct": 0.05,
-  "note": "Per-file line coverage of the PR6-003 codec/replay trio (checkpoint/snapshot/wal) under the storage-v2 suite. Tolerance 0.05% points absorbs report rounding only; a real decrease fails. Re-baseline deliberately when the toolchain changes or post-baseline code adds untestable lines. 2026-09-24: rustc 1.97.1 -> 1.98.1 AND the M28/M33/M34 snapshot.rs commits (ledger: TESTING-PLAN P5-M47). 2026-09-29: L-08 checked arithmetic in wal.rs (TDD-015) added overflow error arms the suite cannot reach (wal 91.19 -> 90.05); checkpoint/snapshot held exactly — re-based to the gate's own measured trio (ledger: IMPLEMENTATION-PLAN-LAUNCH L-27 CI round). 2026-11-04: restored after the d70be2c public-launch scrub swept it up as QA-artifact collateral; cells unchanged (the post-capture diff to snapshot/wal is covered-path code — R6 last_seq, a pub constant — not untestable arms).",
+  "note": "Per-file line coverage of the PR6-003 codec/replay trio (checkpoint/snapshot/wal) under the storage-v2 suite. Tolerance 0.05% points absorbs report rounding only; a real decrease fails. Re-baseline deliberately when the toolchain changes or post-baseline code adds untestable lines. 2026-09-24: rustc 1.97.1 -> 1.98.1 AND the M28/M33/M34 snapshot.rs commits (ledger: TESTING-PLAN P5-M47). 2026-09-29: L-08 checked arithmetic in wal.rs (TDD-015) added overflow error arms the suite cannot reach (wal 91.19 -> 90.05); checkpoint/snapshot held exactly \u2014 re-based to the gate's own measured trio (ledger: IMPLEMENTATION-PLAN-LAUNCH L-27 CI round). 2026-11-04: restored after the d70be2c public-launch scrub swept it up as QA-artifact collateral; cells unchanged (the post-capture diff to snapshot/wal is covered-path code \u2014 R6 last_seq, a pub constant \u2014 not untestable arms). 2026-11-13: rustc 1.99.1 -> 1.100.0 (CI's stable moved 2026-11-09). With no storage change the trio measures checkpoint 94.50 / snapshot 75.71 / wal 88.33 (was 96.40 / 81.05 / 90.05); re-based to those, deliberately, per this note's own rule.",
   "cells": {
-    "checkpoint.rs": 96.40,
-    "snapshot.rs": 81.05,
-    "wal.rs": 90.05
+    "checkpoint.rs": 94.5,
+    "snapshot.rs": 75.71,
+    "wal.rs": 88.33
   }
 }
