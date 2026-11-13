@@ -559,3 +559,65 @@ fn unlicensed_tcp_token_roles_and_a_read_only_viewer() {
         "mcp:read must read: {health_tool}"
     );
 }
+
+/// MEM-VIEWER (REST half): decision (user, 2026-11-13) — the viewer role is
+/// read-only in every mode. A community-mode server (no licence) with a
+/// `[auth].users` login whose only role is `viewer`: the REST read passes,
+/// the REST write is refused. Before, community mode skipped the gate.
+#[test]
+fn a_community_viewer_login_cannot_write_over_rest() {
+    let tag = "comm-viewer";
+    let db = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-db-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&db);
+    common::register_temp_path(&db);
+    let log = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-{}.log", std::process::id()));
+    common::register_temp_path(&log);
+    let hash = {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+            .args(["hash-password", "view-pw"])
+            .output()
+            .expect("hash-password");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert!(hash.starts_with("$argon2"), "hash-password: {hash:?}");
+    let cfg = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-{}.toml", std::process::id()));
+    common::register_temp_path(&cfg);
+    std::fs::write(
+        &cfg,
+        format!("[auth]\nusers = [{{ username = \"vera\", hash = \"{hash}\", roles = [\"viewer\"] }}]\n"),
+    )
+    .unwrap();
+    let cfg_s = cfg.to_str().unwrap().to_string();
+    let srv = common::spawn_server(&db, &log, &[], &["--config", &cfg_s]);
+    common::wait_health(srv.port, Instant::now() + Duration::from_secs(60));
+    let login = http(
+        srv.port,
+        "POST",
+        "/api/login",
+        r#"{"username":"vera","password":"view-pw"}"#,
+    );
+    assert_eq!(login.status, 200, "{}", login.body);
+    let token = serde_json::from_str::<J>(&login.body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let read = http(
+        srv.port,
+        "POST",
+        &format!("/api/v1/aikoql?token={token}"),
+        r#"{"query":"MATCH Note RETURN *"}"#,
+    );
+    assert_eq!(read.status, 200, "a viewer reads: {}", read.body);
+    let write = http(
+        srv.port,
+        "POST",
+        &format!("/api/v1/remember?token={token}"),
+        r#"{"type_name":"Note","properties":{"text":"viewer write"}}"#,
+    );
+    assert_eq!(write.status, 403, "a viewer cannot write: {}", write.body);
+    assert!(
+        write.body.contains("viewer role is read-only"),
+        "{}",
+        write.body
+    );
+}
