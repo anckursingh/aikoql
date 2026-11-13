@@ -1296,6 +1296,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A loaded index must not live in the checkpoint it was loaded from.
+    /// The next checkpoint replaces that directory (`IndexMaintainer::
+    /// checkpoint`: write `.tmp`, remove the old dir, rename) — found on a
+    /// restarted server that resumed from a checkpoint: removing the dir
+    /// failed under the open index on Windows (os error 145), deleted its
+    /// `meta.json`, and every text search after it failed. The loaded index
+    /// must survive its source being removed: removable, still searchable,
+    /// still writable, and checkpointable again.
+    #[test]
+    fn text_index_loaded_from_a_checkpoint_survives_its_removal() {
+        // justified: test-thread names contain `::` (invalid on Windows paths)
+        let base = std::env::temp_dir().join(format!("aikoql-tvec-own-{}", std::process::id()));
+        let (src, next) = (base.join("ckpt"), base.join("ckpt.next"));
+        let _ = std::fs::remove_dir_all(&base);
+        let tokens = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+        let first = TantivyTextIndex::new().unwrap();
+        first
+            .upsert(kid(1), &tokens(&["purusa", "thousand"]))
+            .unwrap();
+        first.checkpoint(&src).unwrap();
+
+        let loaded = TantivyTextIndex::load(&src).unwrap();
+        std::fs::remove_dir_all(&src)
+            .expect("the checkpoint a live index was loaded from must be removable");
+        assert_eq!(
+            loaded.search(&tokens(&["purusa"]), 5).unwrap().len(),
+            1,
+            "the loaded documents are still searchable"
+        );
+        loaded.upsert(kid(2), &tokens(&["agni", "priest"])).unwrap();
+        assert_eq!(loaded.search(&tokens(&["agni"]), 5).unwrap().len(), 1);
+        loaded.checkpoint(&next).unwrap();
+        let again = TantivyTextIndex::load(&next).unwrap();
+        assert_eq!(again.len(), 2, "both documents reach the next checkpoint");
+        drop((loaded, again));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// MRFC-0080 R3b — a node with no embedding model checkpoints an empty
     /// HNSW; fast-hnsw cannot load a zero-point file, so every restart and
     /// every promotion fell back to a full journal replay.
