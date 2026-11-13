@@ -390,3 +390,32 @@ def test_training_rows_teach_the_model_to_stop():
     assert row["labels"][-1] == CharTokenizer.eos_token_id, "EOS is trained"
     assert row["labels"][:2] == [-100, -100], "the prompt stays unlabelled"
     assert len(row["attention_mask"]) == len(row["input_ids"])
+
+
+def test_rows_longer_than_the_window_are_dropped_not_cut():
+    """A row cut at the window teaches nothing (a prompt that fills it has
+    no labels) or teaches the wrong stop (an EOS after half a JSON object).
+    Measured on the Vedas retrain: at --seq-len 256 all 300 answer-skill
+    rows were cut — 210 had no labels, 90 ended in EOS mid-object, and the
+    served model stopped inside a string. Such rows are dropped."""
+    import importlib.util
+
+    root = Path(__file__).parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "finetune", root / "training" / "scripts" / "finetune.py")
+    finetune = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(finetune)
+
+    class CharTokenizer:
+        eos_token_id = 0
+
+        def __call__(self, text, truncation=True, max_length=None):
+            ids = [ord(c) for c in text][:max_length]
+            return {"input_ids": ids}
+
+    rows = [("Q:", '{"a":1}'),            # 9 chars + EOS: fits in 12
+            ("Q:", '{"answer":"long"}'),  # completion cut by the window
+            ("a long prompt that fills it", "{}")]
+    encs = finetune._encode_rows(CharTokenizer(), rows, 12)
+    assert len(encs) == 1, "only the row that fits whole is kept"
+    assert encs[0]["input_ids"][-1] == 0
