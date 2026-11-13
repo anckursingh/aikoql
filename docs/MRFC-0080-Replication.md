@@ -165,6 +165,18 @@ embedding model) checkpoint could not be loaded (`fast-hnsw`: "file
 contains no payload section"), so **every** restart — single-node too —
 replayed the journal. Fixed: `physical == 0` loads as a fresh index.
 
+A second defect on the resume path (IDX-CKPT, found on a 1,446-page
+document test): the text index was opened **in** `{dir}.ckpt/text` and
+kept a writer there, and the next periodic checkpoint replaces that
+directory. On Windows the removal failed under the open index after
+deleting `meta.json` and segments — every text search, and every later
+checkpoint, failed until the checkpoint was moved aside by hand.
+`TantivyTextIndex::load` now only reads the checkpoint and re-indexes its
+documents into a fresh in-RAM index, so a resumed index holds nothing in
+`{dir}.ckpt`; the HNSW load already read into memory. Pinned by
+`ck002_a_resumed_server_keeps_searching_without_its_checkpoint` and two
+unit tests in `crates/engines/vector`.
+
 Measured (`replication_failover.rs`, structural — events replayed by the
 maintainer at promotion): **156 → 0** (history 150 + tail 5; the tail is
 bounded by one checkpoint interval). The resume-fallback warning now
