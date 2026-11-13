@@ -358,7 +358,9 @@ pub(crate) fn vector_led(
             .as_ref()
             .is_some_and(|s| s.embedding.is_some())
     };
-    let rank = |i: usize| 1.0 / (61.0 + i as f32);
+    // 61/(61 + rank): RRF's 1/(k0 + rank) with k0 = 60, scaled so the best
+    // is exactly 1.0 — one scale for both lists, monotone in rank
+    let rank = |i: usize| 61.0 / (61.0 + i as f32);
     let mut seen = std::collections::BTreeSet::new();
     let mut ranked: Vec<(f32, crate::ScoredKO)> = Vec::new();
     for (i, h) in vector_hits
@@ -382,13 +384,12 @@ pub(crate) fn vector_led(
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
     // One scale for the caller: the two lists score differently (cosine
     // ≤ 1, BM25 unbounded), and memory_search's MMR divides by the top
-    // score. Each hit's score becomes its fused rank score scaled so the
-    // best is 1.0 — monotone in this order.
+    // score — each hit's score becomes its rank score.
     Ok(ranked
         .into_iter()
         .take(want)
         .map(|(r, mut h)| {
-            h.score = r * 61.0;
+            h.score = r;
             h
         })
         .collect())
@@ -1077,8 +1078,12 @@ mod tests {
             scores.windows(2).all(|w| w[0] >= w[1]),
             "rank order: {scores:?}"
         );
-        // the contract exactly: the best is 1.0, then 61/(61 + rank)
-        assert_eq!(scores, vec![1.0, 61.0 / 62.0], "rank-derived scale");
+        // the contract exactly: 61/(61 + rank) per list — the fresh memory is
+        // the top text hit, so it ties the top vector hit at 1.0 (the vector
+        // hit first, by the stable sort)
+        assert_eq!(scores, vec![1.0, 1.0], "rank-derived scale");
+        let first = hits[0].ko.properties.get("text").cloned();
+        assert_eq!(first, Some(Value::Text("weekly status update".into())));
     }
 
     /// The same law when the vector leg is full: ten embedded memories match
