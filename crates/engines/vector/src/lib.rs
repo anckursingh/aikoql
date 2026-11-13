@@ -731,33 +731,43 @@ impl TantivyTextIndex {
         })
     }
 
+    /// Restore from a prior checkpoint. The checkpoint is only READ: its
+    /// documents are re-indexed into a fresh in-RAM index (the same shape
+    /// `new` builds), so the loaded index never holds a file, a lock or a
+    /// writer in `dir` — the next checkpoint replaces that directory, and a
+    /// live index inside it lost its files (search failed on a restarted
+    /// server that had resumed from its checkpoint).
     pub fn load(dir: &std::path::Path) -> KResult<Self> {
-        let mut schema_builder = Schema::builder();
-        let koid_field = schema_builder.add_text_field("koid", STRING | STORED);
-        let tokens_field = schema_builder.add_text_field("tokens", TEXT | STORED);
-        let _schema = schema_builder.build();
+        let docs = Self::read_checkpoint(dir)?;
+        let fresh = Self::new()?;
+        let items: Vec<(KOID, BTreeSet<String>)> = docs.into_iter().collect();
+        fresh.upsert_many(&items)?;
+        Ok(fresh)
+    }
+
+    /// Every document of the checkpoint at `dir`. The on-disk index is
+    /// opened read-only and closed before this returns.
+    fn read_checkpoint(dir: &std::path::Path) -> KResult<BTreeMap<KOID, BTreeSet<String>>> {
         let index = Index::open_in_dir(dir)
             .map_err(|e| KError::Store(format!("open tantivy index: {}", e)))?;
-        let writer = index
-            .writer(15_000_000)
-            .map_err(|e| KError::Store(format!("tantivy writer: {}", e)))?;
-
+        let schema = index.schema();
+        let field = |name: &str| {
+            schema
+                .get_field(name)
+                .map_err(|e| KError::Store(format!("tantivy checkpoint field {name}: {e}")))
+        };
+        let (koid_field, tokens_field) = (field("koid")?, field("tokens")?);
         let reader = index
             .reader()
             .map_err(|e| KError::Store(format!("tantivy reader: {}", e)))?;
         let searcher = reader.searcher();
         let num_docs = searcher.num_docs();
+        let mut docs: BTreeMap<KOID, BTreeSet<String>> = BTreeMap::new();
         // An empty checkpoint is legal (the maintainer can checkpoint
         // before the first note seeds tokens): TopDocs::with_limit(0)
         // panics inside tantivy, so short-circuit the scan.
         if num_docs == 0 {
-            return Ok(TantivyTextIndex {
-                koid_field,
-                tokens_field,
-                index,
-                writer: Mutex::new(writer),
-                docs: RwLock::new(BTreeMap::new()),
-            });
+            return Ok(docs);
         }
         let top_docs = searcher
             .search(
@@ -765,7 +775,6 @@ impl TantivyTextIndex {
                 &TopDocs::with_limit(num_docs as usize).order_by_score(),
             )
             .map_err(|e| KError::Store(format!("tantivy scan: {}", e)))?;
-        let mut docs: BTreeMap<KOID, BTreeSet<String>> = BTreeMap::new();
         for (_score, doc_address) in top_docs {
             let doc: TantivyDocument = searcher
                 .doc(doc_address)
@@ -780,16 +789,9 @@ impl TantivyTextIndex {
                 .get_first(tokens_field)
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| KError::Store("tantivy doc tokens".into()))?;
-            let tokens: BTreeSet<String> = text.split_whitespace().map(|s| s.to_string()).collect();
-            docs.insert(koid, tokens);
+            docs.insert(koid, text.split_whitespace().map(String::from).collect());
         }
-        Ok(TantivyTextIndex {
-            koid_field,
-            tokens_field,
-            index,
-            writer: Mutex::new(writer),
-            docs: RwLock::new(docs),
-        })
+        Ok(docs)
     }
 }
 
@@ -1331,6 +1333,31 @@ mod tests {
         let again = TantivyTextIndex::load(&next).unwrap();
         assert_eq!(again.len(), 2, "both documents reach the next checkpoint");
         drop((loaded, again));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The vector half of the same law: a vector index loaded from a
+    /// checkpoint keeps working once that checkpoint is removed (pins that
+    /// the HNSW load reads into memory and holds nothing in `dir`).
+    #[test]
+    fn vector_index_loaded_from_a_checkpoint_survives_its_removal() {
+        // justified: test-thread names contain `::` (invalid on Windows paths)
+        let base = std::env::temp_dir().join(format!("aikoql-vec-own-{}", std::process::id()));
+        let (src, next) = (base.join("ckpt"), base.join("ckpt.next"));
+        let _ = std::fs::remove_dir_all(&base);
+        let first = ModelAwareVectorIndex::new(100);
+        first.upsert(kid(1), "m", &[1.0, 0.0, 0.5]);
+        first.checkpoint(&src).unwrap();
+
+        let loaded = ModelAwareVectorIndex::load(&src).unwrap();
+        std::fs::remove_dir_all(&src)
+            .expect("the checkpoint a live index was loaded from must be removable");
+        assert_eq!(loaded.search(&[1.0, 0.0, 0.5], 5, None).len(), 1);
+        loaded.upsert(kid(2), "m", &[0.0, 1.0, 0.5]);
+        assert_eq!(loaded.search(&[0.0, 1.0, 0.5], 5, None).len(), 2);
+        loaded.checkpoint(&next).unwrap();
+        assert_eq!(ModelAwareVectorIndex::load(&next).unwrap().len(), 2);
+        drop(loaded);
         let _ = std::fs::remove_dir_all(&base);
     }
 
