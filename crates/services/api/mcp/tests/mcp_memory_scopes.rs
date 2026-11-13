@@ -316,3 +316,56 @@ fn s05_promotion_is_a_new_version() {
         "promoted"
     );
 }
+
+/// MEM-TENANT — an agent's key/value memory belongs to the tenant it was
+/// written in. `agent_memory` wrote it tenantless, so the writer's own
+/// tenant-scoped read filtered it out (found by the C1 certification
+/// harness: CHAT-MEM-005 read back `count: 0` right after the write), and
+/// the idempotency key carried no tenant — another tenant writing the same
+/// agent and key got the first tenant's object back.
+#[test]
+fn s06_an_agent_memory_is_read_back_in_its_tenant_and_only_there() {
+    let root = tmp("agentmem");
+    let mut m = Mcp::serve(&root);
+    let w = m.tool(
+        "assistant-1",
+        "acme",
+        "agent_memory",
+        json!({"agent_id": "assistant-1", "key": "env", "value": "AWS", "ttl": 3600}),
+    );
+    let acme_koid = w["koid"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{w}"))
+        .to_string();
+    let read = m.tool(
+        "assistant-1",
+        "acme",
+        "agent_memory",
+        json!({"agent_id": "assistant-1"}),
+    );
+    assert_eq!(read["count"], 1, "the writer reads its memory back: {read}");
+    assert_eq!(read["memories"][0]["value"], "AWS", "{read}");
+
+    let other = m.tool(
+        "assistant-1",
+        "globex",
+        "agent_memory",
+        json!({"agent_id": "assistant-1", "key": "env", "value": "GCP", "ttl": 3600}),
+    );
+    assert_ne!(
+        other["koid"].as_str(),
+        Some(acme_koid.as_str()),
+        "another tenant's write is its own object: {other}"
+    );
+    let globex = m.tool(
+        "assistant-1",
+        "globex",
+        "agent_memory",
+        json!({"agent_id": "assistant-1"}),
+    );
+    assert_eq!(globex["count"], 1, "{globex}");
+    assert_eq!(
+        globex["memories"][0]["value"], "GCP",
+        "never acme's: {globex}"
+    );
+}
