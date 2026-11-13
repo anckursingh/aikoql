@@ -9,10 +9,13 @@ use crate::{
 };
 use aikoql_kernel::kernel::{mmr_rerank, MMR_LAMBDA};
 pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> {
+    // MEM-AGENT: defaults to the caller; over TCP it is always the caller
+    // (forced by the session — see fill_identity)
+    let subject_name = subject_of(args).name;
     let agent_id = args
         .get("agent_id")
         .and_then(|v| v.as_str())
-        .ok_or("missing: agent_id")?;
+        .unwrap_or(subject_name.as_str());
     let key = args.get("key").and_then(|v| v.as_str());
     let value = args.get("value");
     let ttl = args.get("ttl").and_then(|v| v.as_i64()).unwrap_or(3600);

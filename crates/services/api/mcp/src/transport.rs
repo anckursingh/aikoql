@@ -226,7 +226,7 @@ pub(crate) fn handle_tcp_client(
                 let token = params.get("token").and_then(|t| t.as_str()).unwrap_or("");
                 match auth.lookup(token) {
                     Some(ident) => {
-                        session.agent_id = "tcp-agent".into();
+                        session.agent_id = ident.agent.clone();
                         session.tenant = ident.tenant.clone();
                         session.roles = ident.roles.clone();
                         authenticated = true;
