@@ -818,3 +818,41 @@ pub(crate) fn system_time_iso8601() -> String {
     let y = if m <= 2 { y + 1 } else { y };
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, h, mi, s)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aikoql_kernel::{ManualClock, MemoryEngine, KOID};
+    use std::sync::Arc;
+
+    /// MEM-TTL (C1 CHAT-MEM-005): an agent memory's TTL runs from when it
+    /// was stored. A later commit of the same object (a background writer
+    /// re-commits fresh objects) must not restart it — measured: the first
+    /// memory of a run outlived its 2 s TTL by its v2 commit 2.4 s later.
+    #[test]
+    fn a_recommit_does_not_restart_an_agent_memorys_ttl() {
+        let clock = Arc::new(ManualClock::new(10_000));
+        let k = Kernel::open(Arc::new(MemoryEngine::new()), clock.clone(), 0xBEEF).unwrap();
+        let who = json!({"subject": "a1", "agent_id": "a1"});
+        let mut w = who.clone();
+        w["key"] = json!("env");
+        w["value"] = json!("AWS");
+        w["ttl"] = json!(2);
+        let koid = tool_agent_memory(&k, &w).unwrap()["koid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let koid = KOID::from_hex(&koid).unwrap();
+
+        clock.tick(1_500);
+        let ko = k.get(subject_of(&who), &koid).unwrap();
+        let mut again = RememberRequest::update(subject_of(&who), koid, ko.metadata.clone());
+        again.properties = ko.properties.clone();
+        k.remember(again).unwrap();
+
+        clock.tick(1_000); // 2.5 s after the write, 1 s after the re-commit
+        let read = tool_agent_memory(&k, &who).unwrap();
+        assert_eq!(read["count"], 0, "expired 2 s after it was stored: {read}");
+        assert_eq!(read["expired_dropped"], 1, "{read}");
+    }
+}
