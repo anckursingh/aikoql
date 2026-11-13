@@ -1216,10 +1216,6 @@ fn main() {
             admin,
             cfg.request_timeout_secs,
         );
-        // PROD-3: the loop ended (stdin EOF or the `shutdown` method) —
-        // fence and hand the lease over before the checkpoint, so a
-        // standby is not kept waiting on this node's index flush.
-        stop.settle("stdio closed");
         // P5-M22 (P1-15): stdio mode returns at stdin EOF — checkpoint the
         // maintainer before the process exits. TCP mode never returns, so
         // it has no shutdown-time checkpoint yet (honest ledger).
@@ -1227,7 +1223,10 @@ fn main() {
         // T-59 (P3-010): the maintainer is attached from a spawned thread
         // (see the serve setup above) — a close->rapid-EOF shutdown can
         // read the slot before the attach lands and skip the checkpoint.
-        // Wait for the attach (bounded) so the hand-off is deterministic.
+        // Wait for the attach (bounded) so the hand-off is deterministic —
+        // BEFORE the fence: the attach starts the maintainer, a write the
+        // fence would refuse ("not leader: shutting down"), skipping the
+        // checkpoint and leaving the process to outlive its client.
         let maintainer = {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             loop {
@@ -1242,6 +1241,10 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         };
+        // PROD-3: the loop ended (stdin EOF or the `shutdown` method) —
+        // fence and hand the lease over before the checkpoint, so a
+        // standby is not kept waiting on this node's index flush.
+        stop.settle("stdio closed");
         if let Some(m) = maintainer {
             let t0 = std::time::Instant::now();
             // justified: Mutex poison is unrecoverable
