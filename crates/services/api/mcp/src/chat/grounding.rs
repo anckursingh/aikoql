@@ -11,9 +11,38 @@ fn norm(s: &str) -> String {
         .to_lowercase()
 }
 
+/// The fewest words a quote may have: below this a span ("a thousand")
+/// says nothing about the passage it was cut from.
+const MIN_QUOTE_WORDS: usize = 4;
+
+/// Words for quote matching: lowercased, edge punctuation trimmed, empty
+/// tokens dropped ("Purusa," and "purusa" are the same word).
+fn words(s: &str) -> Vec<String> {
+    s.split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// Does `claim` quote `fact`? Either the whole statement (the knowledge-
+/// graph case: one short fact per row), or a run of at least
+/// `MIN_QUOTE_WORDS` whole words of it in their order (the document case:
+/// a fact is a passage, and an answer quotes the sentence that says it).
+fn quotes(claim: &str, fact: &str) -> bool {
+    if norm(claim) == norm(fact) {
+        return true;
+    }
+    let (c, f) = (words(claim), words(fact));
+    c.len() >= MIN_QUOTE_WORDS && f.windows(c.len()).any(|run| run == c.as_slice())
+}
+
 /// A refusal passes with no claims. Otherwise every claim must quote a
-/// retrieved statement (trim/case/whitespace-normalised, no fuzzy match), and
-/// the returned claims carry the koids of the facts they matched. The
+/// retrieved statement: the whole of it, or a run of at least four of its
+/// whole words (case, spacing and edge punctuation aside; no fuzzy match).
+/// The returned claims carry the koids of the facts they matched. The
 /// model's own `evidence_ids` are ignored: it is shown statements, not
 /// koids, so it cannot know them. The free-text `answer` is not matched.
 pub(crate) fn verify(answer: &AnswerReply, facts: &[Fact]) -> Result<Vec<Claim>, String> {
@@ -27,10 +56,9 @@ pub(crate) fn verify(answer: &AnswerReply, facts: &[Fact]) -> Result<Vec<Claim>,
         .claims
         .iter()
         .map(|c| {
-            let want = norm(&c.statement);
             let evidence_ids: Vec<String> = facts
                 .iter()
-                .filter(|f| norm(&f.statement) == want)
+                .filter(|f| quotes(&c.statement, &f.statement))
                 .map(|f| f.koid.clone())
                 .collect();
             if evidence_ids.is_empty() {

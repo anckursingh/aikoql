@@ -2,6 +2,7 @@
 //! tenant-scoped retrieval fallback.
 
 use crate::{json, Kernel};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Fact {
@@ -15,14 +16,110 @@ pub(crate) const MAX_CONTEXT_CHARS: usize = 2000;
 /// cannot swallow the whole budget.
 const MAX_VALUE_CHARS: usize = 200;
 
+/// The most of one passage (a row's `text`) that is shown: long enough for
+/// the sentence that answers, short enough that several passages fit the
+/// budget. A whole PDF page took all of it.
+const MAX_TEXT_CHARS: usize = 480;
+
+/// Spacing collapsed: PDF text keeps the page layout (a line break and
+/// padding after every word), which cost a fifth of the budget per word.
+fn collapse(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A word as a search term: lowercase, edge punctuation trimmed.
+fn term(w: &str) -> String {
+    w.trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase()
+}
+
+/// The question's search words: three characters or more.
+fn terms(question: &str) -> BTreeSet<String> {
+    question
+        .split_whitespace()
+        .map(term)
+        .filter(|w| w.chars().count() >= 3)
+        .collect()
+}
+
+/// At most `MAX_TEXT_CHARS` of `text`, centred on the question: find the
+/// run of words holding the most distinct question terms (the earliest on a
+/// tie, so it is deterministic), then grow a window from the middle of its
+/// matches outward, one word each side in turn. Each cut side is marked
+/// with an ellipsis.
+fn window(text: &str, terms: &BTreeSet<String>) -> String {
+    let text = collapse(text);
+    if text.chars().count() <= MAX_TEXT_CHARS {
+        return text;
+    }
+    let words: Vec<&str> = text.split(' ').collect();
+    let width = |w: &str| w.chars().count() + 1;
+    let hit = |w: &str| terms.contains(&term(w));
+    let mut best: Option<(usize, usize, usize)> = None; // (distinct hits, start, end)
+    for start in 0..words.len() {
+        let (mut end, mut len) = (start, 0);
+        while end < words.len() && len + width(words[end]) <= MAX_TEXT_CHARS {
+            len += width(words[end]);
+            end += 1;
+        }
+        let distinct = words[start..end]
+            .iter()
+            .filter(|w| hit(w))
+            .map(|w| term(w))
+            .collect::<BTreeSet<_>>()
+            .len();
+        if best.is_none_or(|(h, _, _)| distinct > h) {
+            best = Some((distinct, start, end));
+        }
+        if end == words.len() {
+            break; // a later start only shrinks the run
+        }
+    }
+    let (_, run_start, run_end) = best.unwrap_or((0, 0, words.len()));
+    let matched: Vec<usize> = (run_start..run_end).filter(|&i| hit(words[i])).collect();
+    let centre = match (matched.first(), matched.last()) {
+        (Some(&a), Some(&b)) => (a + b) / 2,
+        _ => run_start,
+    };
+    let (mut start, mut end, mut len) = (centre, centre + 1, width(words[centre]));
+    loop {
+        let grow_right = end < words.len() && len + width(words[end]) <= MAX_TEXT_CHARS;
+        if grow_right {
+            len += width(words[end]);
+            end += 1;
+        }
+        let grow_left = start > 0 && len + width(words[start - 1]) <= MAX_TEXT_CHARS;
+        if grow_left {
+            start -= 1;
+            len += width(words[start]);
+        }
+        if !grow_right && !grow_left {
+            break;
+        }
+    }
+    let mut out = words[start..end].join(" ");
+    if start > 0 {
+        out = format!("\u{2026}{out}");
+    }
+    if end < words.len() {
+        out.push('\u{2026}');
+    }
+    out
+}
+
 /// Ingestion bookkeeping that tells a model nothing about the subject.
 fn is_internal(key: &str) -> bool {
     matches!(key, "confidence" | "type_hint") || key.starts_with("evidence_")
 }
 
-/// Render result rows as facts. Rows without a koid or any content are
-/// skipped; every statement is secret-scrubbed; the total is bounded.
-pub(crate) fn facts_from_rows(rows: &serde_json::Value) -> Vec<Fact> {
+/// Render result rows as facts for `question`. Rows without a koid or any
+/// content are skipped, and so is a passage already shown (a page and its
+/// chunk carry the same text); a long passage is cut to the window around
+/// the question's words; every statement is secret-scrubbed; the total is
+/// bounded.
+pub(crate) fn facts_from_rows(rows: &serde_json::Value, question: &str) -> Vec<Fact> {
+    let terms = terms(question);
+    let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     let mut budget = MAX_CONTEXT_CHARS;
     for row in rows.as_array().into_iter().flatten() {
@@ -32,9 +129,12 @@ pub(crate) fn facts_from_rows(rows: &serde_json::Value) -> Vec<Fact> {
         let Some(koid) = row.get("koid").and_then(|v| v.as_str()) else {
             continue;
         };
-        let Some(statement) = render(row) else {
+        let Some((statement, passage)) = render(row, &terms) else {
             continue;
         };
+        if passage.is_some_and(|p| !seen.insert(p)) {
+            continue;
+        }
         let statement: String = aikoql_ingestion::redact_text(&statement)
             .chars()
             .take(budget)
@@ -48,7 +148,10 @@ pub(crate) fn facts_from_rows(rows: &serde_json::Value) -> Vec<Fact> {
     out
 }
 
-fn render(row: &serde_json::Value) -> Option<String> {
+/// The statement, and for a passage of a document its duplicate key: the
+/// document and the whole text (a page and its chunk carry the same text;
+/// two documents, or two tenants, that say the same thing stay apart).
+fn render(row: &serde_json::Value, terms: &BTreeSet<String>) -> Option<(String, Option<String>)> {
     let ty = row.get("type_name").and_then(|v| v.as_str()).unwrap_or("");
     let props = row
         .get("properties")?
@@ -70,7 +173,11 @@ fn render(row: &serde_json::Value) -> Option<String> {
         .find_map(|k| props.get(*k).and_then(|v| v.as_str()));
     if label.is_none() {
         if let Some(t) = props.get("text").and_then(|v| v.as_str()) {
-            return Some(format!("{ty}: {t}"));
+            let key = props
+                .get("document")
+                .and_then(|d| d.as_str())
+                .map(|d| format!("{d}\u{0}{}", collapse(t)));
+            return Some((format!("{ty}: {}", window(t, terms)), key));
         }
     }
     let mut body: Vec<String> = props
@@ -79,10 +186,11 @@ fn render(row: &serde_json::Value) -> Option<String> {
         .map(|(k, v)| format!("{k}={}", text(v)))
         .collect();
     body.sort();
-    Some(match label {
+    let statement = match label {
         Some(l) => format!("{ty} {l}: {}", body.join("; ")),
         None => format!("{ty}: {}", body.join("; ")),
-    })
+    };
+    Some((collapse(&statement), None))
 }
 
 /// Text/vector search over what the caller may see, confined to `tenant`
@@ -125,7 +233,7 @@ pub(crate) fn retrieve_fallback(
             })
         })
         .collect();
-    facts_from_rows(&json!(rows))
+    facts_from_rows(&json!(rows), question)
 }
 
 #[cfg(test)]
@@ -145,11 +253,14 @@ mod tests {
 
     #[test]
     fn facts_render_type_label_and_properties() {
-        let f = facts_from_rows(&json!([row(
-            "k1",
-            "Person",
-            json!({"name": "Ada", "city": "London"})
-        )]));
+        let f = facts_from_rows(
+            &json!([row(
+                "k1",
+                "Person",
+                json!({"name": "Ada", "city": "London"})
+            )]),
+            "",
+        );
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].koid, "k1");
         assert_eq!(f[0].statement, "Person Ada: city=London; name=Ada");
@@ -157,24 +268,30 @@ mod tests {
 
     #[test]
     fn facts_render_chunk_text() {
-        let f = facts_from_rows(&json!([row(
-            "k1",
-            "DocChunk",
-            json!({"text": "Refunds take 5 days."})
-        )]));
+        let f = facts_from_rows(
+            &json!([row(
+                "k1",
+                "DocChunk",
+                json!({"text": "Refunds take 5 days."})
+            )]),
+            "",
+        );
         assert_eq!(f[0].statement, "DocChunk: Refunds take 5 days.");
     }
 
     #[test]
     fn facts_drop_internal_metadata_and_cap_long_values() {
         let long = "word ".repeat(200);
-        let f = facts_from_rows(&json!([row(
-            "k1",
-            "Thing",
-            json!({"name": "Ada", "confidence": 0.85, "type_hint": "Person",
+        let f = facts_from_rows(
+            &json!([row(
+                "k1",
+                "Thing",
+                json!({"name": "Ada", "confidence": 0.85, "type_hint": "Person",
                    "evidence_model": "rules-v1", "evidence_document": "/x/y",
                    "mentions": long})
-        )]));
+            )]),
+            "",
+        );
         let st = &f[0].statement;
         for noise in ["confidence", "type_hint", "evidence_"] {
             assert!(!st.contains(noise), "{st}");
@@ -187,11 +304,14 @@ mod tests {
 
     #[test]
     fn facts_are_scrubbed() {
-        let f = facts_from_rows(&json!([row(
-            "k1",
-            "Note",
-            json!({"body": "AKIAIOSFODNN7EXAMPLE", "region": "Asia Pacific"})
-        )]));
+        let f = facts_from_rows(
+            &json!([row(
+                "k1",
+                "Note",
+                json!({"body": "AKIAIOSFODNN7EXAMPLE", "region": "Asia Pacific"})
+            )]),
+            "",
+        );
         assert!(!f[0].statement.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(f[0].statement.contains("Asia Pacific"));
     }
@@ -202,7 +322,7 @@ mod tests {
         let rows: Vec<_> = (0..20)
             .map(|i| row(&format!("k{i}"), "Note", json!({"text": big})))
             .collect();
-        let f = facts_from_rows(&json!(rows));
+        let f = facts_from_rows(&json!(rows), "");
         assert!(f.len() <= MAX_FACTS && !f.is_empty());
         let total: usize = f.iter().map(|x| x.statement.chars().count()).sum();
         assert!(total <= MAX_CONTEXT_CHARS, "total {total}");
@@ -280,10 +400,13 @@ mod tests {
 
     #[test]
     fn facts_skip_rows_without_koid() {
-        let f = facts_from_rows(&json!([
-            {"properties": {"a": "b"}},
-            row("k2", "Note", json!({"a": "b"}))
-        ]));
+        let f = facts_from_rows(
+            &json!([
+                {"properties": {"a": "b"}},
+                row("k2", "Note", json!({"a": "b"}))
+            ]),
+            "",
+        );
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].koid, "k2");
     }
