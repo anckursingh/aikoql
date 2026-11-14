@@ -2700,3 +2700,53 @@ fn the_restore_drill_restores_verifies_reports_and_cleans_up() {
         "{none}"
     );
 }
+
+/// PROD-9: every way `serve` ends on purpose hands the lease over, not
+/// only a signal or stdin closing. A leader serving MCP over TCP that is
+/// told to `shutdown` releases its lease like any other planned stop, and
+/// the standby takes over without waiting out the TTL.
+#[test]
+fn ha_a_leader_shut_down_over_tcp_releases_its_lease() {
+    let (adir, bdir) = (tmp("ha-tcp-a"), tmp("ha-tcp-b"));
+    let lease = tmp("ha-tcp-lease").join("lease.json");
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let listen = format!("127.0.0.1:{}", free_port());
+    let a_args = [
+        ha_args(&lease, "a", &ra),
+        vec!["--listen".into(), listen.clone()],
+    ]
+    .concat();
+    let mut a = Mcp::spawn_env(&adir, &strs(&a_args), false, &[]);
+    wait_port(&listen);
+    let b_args = ha_args(&lease, "b", &rb);
+    let mut b = Mcp::spawn_raw(&bdir, &strs(&b_args), true);
+    let log = b.log.take().unwrap();
+    wait_line(&log, "standby caught up");
+
+    let mut conn = std::net::TcpStream::connect(&listen).unwrap();
+    conn.set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let mut replies = BufReader::new(conn.try_clone().unwrap());
+    let mut call = |id: u32, method: &str, params: J| -> J {
+        writeln!(
+            conn,
+            "{}",
+            json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+        )
+        .unwrap();
+        let mut line = String::new();
+        replies.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap_or_else(|_| panic!("{method}: {line:?}"))
+    };
+    let init = call(1, "initialize", json!({"token": "repl-secret"}));
+    assert!(init.get("result").is_some(), "initialize: {init}");
+    let ack = call(2, "shutdown", json!({}));
+    assert_eq!(ack["result"]["shutting_down"], json!(true), "{ack}");
+
+    let status = a.child.wait().unwrap();
+    assert!(status.success(), "a requested stop exits 0: {status:?}");
+    wait_line(&log, "the lease was released");
+}
