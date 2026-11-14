@@ -724,6 +724,15 @@ fn renew(cfg: &HaConfig, mut lease: Lease, mut ver: String, mut last_ok: Instant
         if release_asked_within(&held.state, cfg.ttl / 3) {
             return release(cfg, &lease, &ver, held);
         }
+        // A leader whose engine can no longer write must not keep the lease
+        // (it is alive, so a standby would never take over): self-fence and
+        // exit for the supervisor, like a lease it could not renew.
+        if crate::node::unwritable_leader(
+            slot.get().is_some_and(|a| a.fence_reason().is_some()),
+            crate::node::state().stopping,
+        ) {
+            fence(cfg, slot, lease.term, "the engine can no longer write");
+        }
         let started = Instant::now();
         let next = Lease {
             beat: lease.beat + 1,

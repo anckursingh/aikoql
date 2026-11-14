@@ -5,7 +5,7 @@ binary; whoever holds the lease (`k8s://<namespace>/<leaseName>`)
 serves writes, the other follows the holder's replication stream
 (TLS) and serves reads (with a `NOT_LEADER` hint to SDKs). MCP is
 Streamable HTTP on the metrics port (`/mcp`, bearer = the auth token;
-`/metrics` for Prometheus and the readiness probe).
+`/metrics` for Prometheus; `/livez` and `/readyz` for the probes).
 
 ## Install
 
@@ -25,6 +25,31 @@ helm install aikoql deploy/helm/aikoql
   yourself for a real CA (per-pod certs would be a cert-manager step).
 - `appVersion` tracks the workspace version — `scripts/bump-version.py`
   bumps this Chart.yaml too (pinned by `tests/helm_chart.rs`).
+
+## Probes and stopping
+
+- Startup and liveness: `/livez` — the process answers HTTP. A slow
+  metrics scrape never restarts a pod.
+- Readiness: `/readyz` — the node serves reads. Both the leader and the
+  standby are ready; a fenced or stopping node is not. The body names the
+  role (`leader`, `standby`, `fenced`, `standalone`) and the term.
+- `/readyz/write` is 200 on the lease holder only, and not while its
+  engine refuses writes (a disk fault fences it; a leader in that state
+  also stops renewing the lease and exits for the supervisor). The chart
+  does not probe it — the standby must stay Ready for reads.
+- **The chart's Service does not route writes to the leader.** Kubernetes
+  readiness is per pod and has no second probe, so the in-cluster default
+  sends roughly half of all writes to the standby, which refuses them
+  (503 naming the leader). For a working write endpoint use one of: a
+  load balancer, ingress or gateway whose active health check is
+  `GET /readyz/write`; or a client that follows the leader named in the
+  refusal or the lease. Labelling the leader's own pod (so a Service can
+  select it) needs a small RBAC grant and is not implemented.
+- A terminating pod gets `terminationGracePeriodSeconds` (default 30)
+  for its planned stop: writes are fenced, the leader waits at most 5 s
+  for the standby to hold its final seq, releases the lease and exits 0.
+  The standby then takes over on its next lease poll, not after a full
+  TTL.
 
 ## Known limits
 

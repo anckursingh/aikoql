@@ -1092,6 +1092,13 @@ impl Db {
         *self.fenced.write().unwrap() = Some(why); // a newer reason replaces
     }
 
+    /// Why client writes are refused, when they are (a fence, from a newer
+    /// term, a planned stop, or a disk fault) — None while the db writes.
+    pub fn fence_reason(&self) -> Option<String> {
+        // justified: RwLock poison is unrecoverable
+        self.fenced.read().unwrap().clone()
+    }
+
     /// MRFC-0080 R1 — the newest committed seq (0 on an empty db): a
     /// follower's resume point.
     pub fn last_seq(&self) -> u64 {

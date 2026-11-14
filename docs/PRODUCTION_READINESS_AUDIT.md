@@ -32,7 +32,7 @@ reports nothing.
 | G2 | `users.db` is node-local SQLite, outside replication and outside the storage fence — **closed by PROD-2** (users are rows of the replicated system store) | high | 3 |
 | G3 | The tool audit log is a node-local file; it does not follow a promotion | high | 3 |
 | G4 | No SIGTERM/SIGINT handler: a pod termination is a hard kill and the lease is left to expire — **closed by PROD-3** (`shutdown.rs`: fence, release the lease, exit 0) | high | 6 |
-| G5 | Liveness and readiness both probe `/metrics`; `/health` is a static `ok` with no role, lease or dependency state | medium | 5 |
+| G5 | Liveness and readiness both probe `/metrics`; `/health` is a static `ok` with no role, lease or dependency state — **closed by PROD-4** for role and traffic class (`/livez`, `/readyz`, `/readyz/write`); dependency health (archive, lease API, KMS) is still not reported | medium | 5 |
 | G6 | No archive metrics and no lease/role/term metrics; archive failures are log lines only | medium | 6 |
 | G7 | `status` reports health, metrics and ABI only — nothing about role, lease, lag or archive | medium | 6 |
 | G8 | No alert rules, runbooks, restore drill or support bundle | medium | 6 |
