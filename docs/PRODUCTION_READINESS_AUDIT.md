@@ -38,7 +38,7 @@ reports nothing.
 | G8 | No alert rules, runbooks, restore drill or support bundle | medium | 6 |
 | G9 | No user-disable operation, so "a disabled user stays disabled after failover" cannot be tested yet | medium | 3 |
 | G10 | The Helm chart has no licence wiring, no PodDisruptionBudget, no NetworkPolicy, no termination settings | low | 5 |
-| G11 | Failure-matrix cells with no test: disk full, certificate expiry/rotation, full-cluster restart, replication partition, process pause | medium | `HA_FAILURE_MATRIX.md` |
+| G11 | Failure-matrix cells with no test: disk full, certificate expiry/rotation, full-cluster restart, replication partition, process pause — **partly closed by PROD-6**: disk full (both nodes, by injection), full restart and archive outage are tested, and the disk-full test found and fixed a seq-hole defect in the WAL write path; partition, certificate lifetime and process pause remain | medium | `HA_FAILURE_MATRIX.md` |
 
 ## 2. High availability and replication
 

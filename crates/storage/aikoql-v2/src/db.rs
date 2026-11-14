@@ -201,6 +201,9 @@ pub struct Config {
     /// tests would race on). Lets a test observe an unacknowledged
     /// reservation across a restart.
     pub wal_fail_next: bool,
+    /// Test hook like `wal_fail_next`, for the fsync: fail the NEXT Sync-path
+    /// WAL sync once (the frame was written; the sync reports an error).
+    pub wal_sync_fail_next: bool,
     /// MRFC-0080 R1 — keep the frames each flush truncates from the WAL in
     /// `rlog/` so followers can catch up (`log_since`); the leader drops
     /// them with `release_log`. Off by default: a lone node pays nothing.
@@ -226,6 +229,7 @@ impl Config {
             checkpoint_bytes: DEFAULT_CHECKPOINT_BYTES,
             trace_every: 0,
             wal_fail_next: false,
+            wal_sync_fail_next: false,
             retain_log: false,
         }
     }
@@ -439,6 +443,8 @@ pub struct Db {
     /// armed from `Config::wal_fail_next` (consumed on the next frame;
     /// production configs never arm it).
     pub(crate) wal_fail_next: AtomicBool,
+    /// `Config::wal_sync_fail_next`, consumed on the next Sync-path sync.
+    wal_sync_fail_next: AtomicBool,
     /// MRFC-0080 R4 — set once a newer replication term deposed this
     /// node: client writes are refused, replicated frames still apply.
     fenced: RwLock<Option<String>>,
@@ -935,6 +941,7 @@ impl Db {
             .store(open_t.elapsed().as_millis() as u64, Ordering::Relaxed);
         wstats.wal_replay_bytes.store(consumed, Ordering::Relaxed);
         let wal_fail_next_armed = config.wal_fail_next;
+        let wal_sync_fail_next_armed = config.wal_sync_fail_next;
         Ok(Db {
             config,
             _lock: lock,
@@ -952,6 +959,7 @@ impl Db {
             trace: TraceState::new(),
             control: ControlStats::default(),
             wal_fail_next: AtomicBool::new(wal_fail_next_armed),
+            wal_sync_fail_next: AtomicBool::new(wal_sync_fail_next_armed),
             fenced: RwLock::new(None),
             admit: RwLock::new(()),
             commit_gate: std::sync::OnceLock::new(),
@@ -1080,6 +1088,43 @@ impl Db {
             ));
         }
         self.write_at(ops, Some(seq))
+    }
+
+    /// One frame onto the WAL's end (the caller sought there), synced
+    /// when the mode says so. Any error leaves the caller to cut the tail
+    /// back: nothing here is acknowledged until this returns Ok.
+    fn append_frame(&self, wal: &mut std::fs::File, frame: &[u8]) -> Result<(), FormatError> {
+        // PR6-R2-003 test hook — the frame is NOT appended: the
+        // reservations carried in the ops never become durable. What
+        // happens to them across a restart is exactly the contract under
+        // test (acknowledged ids never reused; an unacknowledged
+        // reservation may recycle — nothing ever observed it).
+        if self.wal_fail_next.swap(false, Ordering::Relaxed) {
+            return Err(FormatError::Io(
+                "injected WAL append failure (wal_fail_next)".into(),
+            ));
+        }
+        wal.write_all(frame)
+            .map_err(|e| FormatError::Io(format!("WAL append: {e}")))?;
+        if self.config.durability == DurabilityMode::Sync {
+            let t = Instant::now();
+            if self.wal_sync_fail_next.swap(false, Ordering::Relaxed) {
+                return Err(FormatError::Io(
+                    "WAL sync: injected failure (wal_sync_fail_next)".into(),
+                ));
+            }
+            wal.sync_all()
+                .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
+            record_latency_us(
+                &self.wstats.fsync_latency_us_buckets,
+                t.elapsed().as_micros() as u64,
+            );
+            self.fsyncs.fetch_add(1, Ordering::SeqCst);
+        }
+        self.wstats
+            .wal_bytes
+            .fetch_add(frame.len() as u64, Ordering::Relaxed);
+        Ok(())
     }
 
     /// MRFC-0080 R4 — refuse every client write from now on (a newer
@@ -1233,38 +1278,41 @@ impl Db {
             }
             _ => {}
         }
-        state.next_seq += 1;
         let frame = encode_frame(seq, ops)?;
         {
             let mut wal = self.wal.lock().unwrap();
-            wal.seek(SeekFrom::End(0))
+            let end = wal
+                .seek(SeekFrom::End(0))
                 .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
-            // PR6-R2-003 test hook — the frame is NOT appended: the
-            // reservations carried in `ops` never become durable. What
-            // happens to them across a restart is exactly the contract
-            // under test (acknowledged ids never reused; an unacknowledged
-            // reservation may recycle — nothing ever observed it).
-            if self.wal_fail_next.swap(false, Ordering::Relaxed) {
-                return Err(FormatError::Io(
-                    "injected WAL append failure (wal_fail_next)".into(),
-                ));
-            }
-            wal.write_all(&frame)
-                .map_err(|e| FormatError::Io(format!("WAL append: {e}")))?;
-            self.wstats
-                .wal_bytes
-                .fetch_add(frame.len() as u64, Ordering::Relaxed);
-            if self.config.durability == DurabilityMode::Sync {
-                let t = Instant::now();
-                wal.sync_all()
-                    .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
-                record_latency_us(
-                    &self.wstats.fsync_latency_us_buckets,
-                    t.elapsed().as_micros() as u64,
-                );
-                self.fsyncs.fetch_add(1, Ordering::SeqCst);
+            if let Err(e) = self.append_frame(&mut wal, &frame) {
+                // PROD-6: the frame is not durable, so nothing of it may
+                // stay. A torn tail left in place would sit BEFORE every
+                // later frame, and replay stops at the first torn frame —
+                // the acked writes behind it would be lost at the next
+                // open. If the tail cannot be cut back, stop taking client
+                // writes: an unacked failure is safe, a silent hole is not.
+                if let Err(cut) = wal.set_len(end) {
+                    // justified: RwLock poison is unrecoverable
+                    *self.fenced.write().unwrap() = Some(format!(
+                        "the WAL could not be rolled back after a failed append ({cut})"
+                    ));
+                } else if is_sync_failure(&e) {
+                    // After an fsync error the kernel may have marked the
+                    // dirty pages clean: what the log holds past here cannot
+                    // be trusted, so cutting the tail and carrying on is not
+                    // enough — stop taking client writes and say why.
+                    // justified: RwLock poison is unrecoverable
+                    *self.fenced.write().unwrap() =
+                        Some(format!("the WAL could not be synced ({e})"));
+                }
+                return Err(e);
             }
         }
+        // PROD-6: the seq is taken only once its frame is durable. A failed
+        // append returned above with `next_seq` untouched — `last_seq`
+        // never names a write that does not exist, and the replication
+        // log has no hole for a follower to stall on.
+        state.next_seq += 1;
         for op in ops {
             match op {
                 Op::Put(k, v) => state.active.apply(k.clone(), seq, Some(v.clone())),
@@ -3320,6 +3368,12 @@ fn flush_entry(
         .flush_latency_us
         .fetch_add(flush_t.elapsed().as_micros() as u64, Ordering::Relaxed);
     Ok(())
+}
+
+/// An fsync error (as `FormatError::Io` words it), as opposed to a failed
+/// append: the page cache is no longer trustworthy after it.
+fn is_sync_failure(e: &FormatError) -> bool {
+    matches!(e, FormatError::Io(m) if m.starts_with("WAL sync"))
 }
 
 /// The committer: drain the queue into groups bounded by the caps and
