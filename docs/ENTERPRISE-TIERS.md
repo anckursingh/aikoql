@@ -75,8 +75,14 @@ override credentials on later starts.
 
 ## Users and roles
 
-- In enterprise mode the user store (`users.db`, SQLite, in the data dir)
-  is authoritative. Users are auto-provisioned on first OIDC login from
+- In enterprise mode the user store is authoritative: rows of the
+  database's own system store (`sys/users/<sub>`), so users and roles
+  replicate, are covered by the archive, and are encrypted at rest when
+  the database is (PROD-2). A pre-PROD-2 `users.db` (SQLite, in the data
+  dir) is imported on the first start and set aside as
+  `users.db.migrated` (skipped with a logged warning if the store already
+  has users; an older binary does not see users created after the
+  migration). Users are auto-provisioned on first OIDC login from
   `id_token.sub`; roles come from the mapped claim.
 - Startup refuses (exit 2) if `multi-user` is on and no admin can be seeded
   or claimed.
@@ -115,16 +121,18 @@ The export refuses to overwrite the live audit log itself.
 
 - **Last-admin lockout**: live role lookup means an admin can demote the
   only remaining admin via `PUT /api/users/{sub}/roles` and lock the
-  deployment out of admin access. Recovery: edit the `users` table directly
-  in sqlite (the `roles` column is a JSON array), or restart with
-  `AIKOQL_ADMIN_PASSWORD` set so the bootstrap seed runs again (it seeds
-  whenever no admin exists), or keep a second admin.
-- **Single-node**: enterprise multi-user is single-node in v1. Users and
-  roles live in a node-local SQLite file; HA (`--replicate-listen`,
-  failover) + multi-user is deferred to a later wave and **unsupported** —
-  a multi-user licensed server refuses to start (exit 2) with
-  `--replicate-listen`, `--follow` or `--ha-lease` (PROD-1; pinned by
-  `multi_user_with_replication_refuses_start` in `tests/users.rs`).
+  deployment out of admin access. Recovery: restart with
+  `AIKOQL_ADMIN_PASSWORD` set so the bootstrap seed runs again (it
+  repairs the `admin` row whenever no admin exists, keeping its stored
+  password), or keep a second admin. There is no file to edit beside the
+  database: the rows live in its store.
+- **Replicated deployments**: multi-user runs on a leader + standby or
+  HA pair (PROD-2). Users, roles and the bootstrap admin replicate with
+  the data; only the leader changes them — a standby answers the user
+  routes' writes with 503. Still process-local, and lost on a promotion:
+  Studio sessions and an OIDC sign-in in progress (sign in again). Pinned
+  by `ha_users_and_role_changes_survive_a_failover` in
+  `tests/replication_failover.rs`.
 - **Test seams are debug-only**: `AIKOQL_LICENSE_PUBLIC_KEY` (public-key
   override) and `AIKOQL_OIDC_MOCK` / `AIKOQL_OIDC_MOCK_CLAIMS` (mock IdP)
   exist only in debug builds (`cfg(debug_assertions)`); release builds

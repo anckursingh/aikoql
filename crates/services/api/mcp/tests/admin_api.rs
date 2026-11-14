@@ -16,13 +16,28 @@ use std::time::{Duration, Instant};
 
 /// A licensed multi-user server (bootstrap admin password "pw").
 fn serve(tag: &str, expires: Option<&str>) -> common::Server {
+    boot(tag, expires, true)
+}
+
+/// PROD-2: restart on the same data dir. The users live in the server's
+/// own store now (no file to edit beside it), so the way back from a
+/// demoted bootstrap admin is the product's: the next start's seed
+/// repairs the row.
+fn reboot(srv: common::Server, tag: &str) -> common::Server {
+    srv.shutdown();
+    boot(tag, None, false)
+}
+
+fn boot(tag: &str, expires: Option<&str>, fresh: bool) -> common::Server {
     let (pk, blob) = common::sign("acme-corp", expires.map(String::from), &["multi-user"]);
     let pk_b64 = URL_SAFE_NO_PAD.encode(&pk);
     let lic = std::env::temp_dir().join(format!("aikoql-admin-{tag}-{}.lic", std::process::id()));
     std::fs::write(&lic, &blob).unwrap();
     common::register_temp_path(&lic);
     let db = std::env::temp_dir().join(format!("aikoql-admin-{tag}-db-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&db);
+    if fresh {
+        let _ = std::fs::remove_dir_all(&db);
+    }
     common::register_temp_path(&db);
     let log = std::env::temp_dir().join(format!("aikoql-admin-{tag}-{}.log", std::process::id()));
     common::register_temp_path(&log);
@@ -87,27 +102,18 @@ fn admin_token(port: u16) -> String {
     j["token"].as_str().expect("token").to_string()
 }
 
-/// Overwrite the stored roles (the store is the authority). The server may
-/// hold the file briefly — retry past SQLITE_BUSY.
-fn set_roles(db: &std::path::Path, sub: &str, roles: &[&str]) {
-    let conn = rusqlite::Connection::open(db.join("users.db")).expect("users.db");
-    let roles_json = serde_json::to_string(roles).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match conn.execute(
-            "UPDATE users SET roles = ?1 WHERE sub = ?2",
-            rusqlite::params![roles_json, sub],
-        ) {
-            Ok(_) => return,
-            Err(rusqlite::Error::SqliteFailure(e, _))
-                if e.code == rusqlite::ErrorCode::DatabaseBusy =>
-            {
-                assert!(Instant::now() < deadline, "users.db stayed busy");
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => panic!("set roles: {e}"),
-        }
-    }
+/// Flip the bootstrap admin to viewer through the admin API — its own
+/// last act as an admin (the store is the authority, read per request).
+/// PROD-2: the users live in the server's store; there is no file to edit.
+fn demote_admin(port: u16) {
+    let token = admin_token(port);
+    let r = http(
+        port,
+        "PUT",
+        &format!("/api/users/admin/roles?token={token}"),
+        r#"{"roles":["viewer"]}"#,
+    );
+    assert_eq!(r.status, 200, "demote the bootstrap admin: {}", r.body);
 }
 
 #[test]
@@ -182,7 +188,7 @@ fn users_list_requires_admin() {
     );
     // the store is authoritative: flip the admin to viewer and the SAME
     // session is refused on its very next request
-    set_roles(&srv.db, "admin", &["viewer"]);
+    demote_admin(srv.port);
     let denied = http(srv.port, "GET", &format!("/api/users?token={token}"), "");
     assert_eq!(
         denied.status, 403,
@@ -194,8 +200,8 @@ fn users_list_requires_admin() {
         "{}",
         denied.body
     );
-    // restored, the route serves again
-    set_roles(&srv.db, "admin", &["admin"]);
+    // restored (the restart's seed repairs the row), the route serves again
+    let srv = reboot(srv, "list");
     let token = admin_token(srv.port);
     let ok = http(srv.port, "GET", &format!("/api/users?token={token}"), "");
     assert_eq!(ok.status, 200, "{}", ok.body);
@@ -204,7 +210,7 @@ fn users_list_requires_admin() {
 #[test]
 fn viewer_cannot_create_user() {
     let srv = serve("create", None);
-    set_roles(&srv.db, "admin", &["viewer"]);
+    demote_admin(srv.port);
     let token = admin_token(srv.port);
     let denied = http(
         srv.port,
@@ -223,7 +229,7 @@ fn viewer_cannot_create_user() {
         denied.body
     );
     // fail-closed: the 403 came before the write — restore and confirm
-    set_roles(&srv.db, "admin", &["admin"]);
+    let srv = reboot(srv, "create");
     let token = admin_token(srv.port);
     let list = http(srv.port, "GET", &format!("/api/users?token={token}"), "");
     assert!(

@@ -2067,3 +2067,151 @@ fn ha_an_oauth_sign_in_survives_a_failover() {
         .to_string();
     assert_eq!(mcp_init_status(&hb, &fresh), 200);
 }
+
+/// POST /api/login as the bootstrap admin; the session token.
+fn admin_login(addr: &str, password: &str) -> String {
+    let (st, body) = http_req(
+        addr,
+        "POST",
+        "/api/login",
+        "application/json",
+        &[],
+        &json!({"username": "admin", "password": password}).to_string(),
+    );
+    assert_eq!(st, 200, "the bootstrap admin signs in on {addr}: {body}");
+    serde_json::from_str::<J>(&body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// PROD-2 (G2): enterprise users and roles live in the replicated store,
+/// so a multi-user licence runs on an HA pair. A user created and a role
+/// changed on the leader are what the promoted standby serves; the
+/// bootstrap admin is one row, signed in with the same password on both
+/// sides of the failover. Semi-sync: the user routes answer 200 only once
+/// the standby acked the write.
+#[test]
+fn ha_users_and_role_changes_survive_a_failover() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    let (pk, blob) = common::sign("test", None, &["multi-user"]);
+    let lic = tmp("ha-users-lic").join("license.lic");
+    std::fs::create_dir_all(lic.parent().unwrap()).unwrap();
+    std::fs::write(&lic, &blob).unwrap();
+    let lease = tmp("ha-users-lease").join("lease.json");
+    let (adir, bdir) = (tmp("ha-users-a"), tmp("ha-users-b"));
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let (ha, hb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let env = vec![
+        ("AIKOQL_ADMIN_PASSWORD".to_string(), "ha-pw".to_string()),
+        (
+            "AIKOQL_LICENSE".to_string(),
+            lic.to_str().unwrap().to_string(),
+        ),
+        (
+            "AIKOQL_LICENSE_PUBLIC_KEY".to_string(),
+            URL_SAFE_NO_PAD.encode(&pk),
+        ),
+    ];
+    let sync = ["--replicate-sync-ms".to_string(), "3000".to_string()];
+    let a_args = [
+        ha_args(&lease, "a", &ra),
+        sync.to_vec(),
+        vec!["--metrics-addr".into(), ha.clone()],
+    ]
+    .concat();
+    let b_args = [
+        ha_args(&lease, "b", &rb),
+        vec!["--metrics-addr".into(), hb.clone()],
+    ]
+    .concat();
+    let mut a = Mcp::spawn_env(&adir, &strs(&a_args), false, &env);
+    wait_port(&ha);
+    let mut b = Mcp::spawn_env(&bdir, &strs(&b_args), true, &env);
+    let mut blog = b.log.take().unwrap();
+    wait_line(&blog, "standby caught up");
+    wait_port(&hb);
+
+    let token = admin_login(&ha, "ha-pw");
+    let auth = format!("Bearer {token}");
+    let hdr = [("Authorization", auth.as_str())];
+    let (st, body) = http_req(
+        &ha,
+        "POST",
+        "/api/users",
+        "application/json",
+        &hdr,
+        r#"{"sub": "alice", "name": "Alice", "roles": ["viewer"]}"#,
+    );
+    assert_eq!(st, 200, "the leader creates the user: {body}");
+    let (st, body) = http_req(
+        &ha,
+        "PUT",
+        "/api/users/alice/roles",
+        "application/json",
+        &hdr,
+        r#"{"roles": ["admin"]}"#,
+    );
+    assert_eq!(st, 200, "the leader changes the role: {body}");
+
+    // the standby signs the same admin in (the row replicated) and refuses
+    // the write: the store is the leader's to change
+    let standby = format!("Bearer {}", admin_login(&hb, "ha-pw"));
+    let (st, body) = http_req(
+        &hb,
+        "POST",
+        "/api/users",
+        "application/json",
+        &[("Authorization", standby.as_str())],
+        r#"{"sub": "mallory", "roles": ["admin"]}"#,
+    );
+    assert_eq!(st, 503, "a standby cannot keep a user: {body}");
+
+    let _ = a.child.kill();
+    let _ = a.child.wait();
+    wait_line(&blog, "won the lease");
+    if !cfg!(unix) {
+        assert_eq!(b.child.wait().unwrap().code(), Some(75), "promotion exit");
+        b = Mcp::spawn_env(&bdir, &strs(&b_args), true, &env);
+        blog = b.log.take().unwrap();
+    }
+    wait_line(&blog, "metrics HTTP server started");
+    wait_port(&hb);
+
+    // the same break-glass password: the admin row replicated, not re-seeded
+    let token = admin_login(&hb, "ha-pw");
+    let auth = format!("Bearer {token}");
+    let (st, body) = http_req(
+        &hb,
+        "GET",
+        "/api/users",
+        "application/json",
+        &[("Authorization", auth.as_str())],
+        "",
+    );
+    assert_eq!(st, 200, "the promoted node lists users: {body}");
+    let listed: J = serde_json::from_str(&body).unwrap();
+    let users = listed["users"].as_array().expect("a users array").clone();
+    let alice = users
+        .iter()
+        .find(|u| u["sub"] == "alice")
+        .unwrap_or_else(|| panic!("alice survives the failover: {body}"));
+    assert_eq!(
+        alice["roles"],
+        json!(["admin"]),
+        "the role change survives the failover"
+    );
+    assert_eq!(
+        users.iter().filter(|u| u["sub"] == "admin").count(),
+        1,
+        "one bootstrap admin, not one per node: {body}"
+    );
+    assert_eq!(users.len(), 2, "no other rows: {body}");
+}

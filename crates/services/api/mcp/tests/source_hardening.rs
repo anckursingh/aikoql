@@ -496,21 +496,18 @@ fn a_viewer_cannot_discover_publish_or_import_but_can_list() {
         200,
         "admin discovers"
     );
-    // the store is authoritative for roles: demote the bootstrap admin
-    let conn = rusqlite::Connection::open(r.srv.db.join("users.db")).expect("users.db");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match conn.execute(
-            "UPDATE users SET roles = ?1 WHERE sub = 'admin'",
-            ["[\"viewer\"]"],
-        ) {
-            Ok(_) => break,
-            Err(e) => {
-                assert!(Instant::now() < deadline, "users.db busy: {e}");
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        }
-    }
+    // the store is authoritative for roles: the bootstrap admin demotes
+    // itself through the admin API (PROD-2: no users.db file to edit)
+    assert_eq!(
+        r.call(
+            "PUT",
+            "/api/users/admin/roles",
+            json!({"roles": ["viewer"]})
+        )
+        .status,
+        200,
+        "demote the bootstrap admin"
+    );
     for (path, body) in [
         ("/api/v1/sources/discover", json!({"source": "crm"})),
         (

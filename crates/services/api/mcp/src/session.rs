@@ -350,33 +350,11 @@ pub(crate) fn oidc_flows() -> &'static OidcFlows {
 /// the startup open/seed/refuse); None in community mode.
 static USERS: OnceLock<Option<Arc<Mutex<UserStore>>>> = OnceLock::new();
 
-/// Open the serving handle on the store main.rs seeded at `{db_path}/users.db`.
-/// Called by serve_metrics — the shared path of every HTTP surface.
-pub(crate) fn open_users(db_path: &str) -> Option<Arc<Mutex<UserStore>>> {
-    if !crate::license::LICENSE_STATE
-        .get()
-        .is_some_and(|s| s.features.multi_user)
-    {
-        return None;
-    }
-    USERS.get_or_init(|| {
-        let path = std::path::PathBuf::from(format!("{db_path}/users.db"));
-        match UserStore::open(&path) {
-            Ok(s) => Some(Arc::new(Mutex::new(s))),
-            Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "user store unavailable — enterprise logins degrade");
-                None
-            }
-        }
-    })
-    .clone()
-}
-
 /// Publish the store handle main.rs opened and seeded at startup (final
 /// review I-1): the process-wide handle every gate reads. main.rs exits on
 /// a startup open/seed failure, so a published handle is always a working
 /// store — and the gates hold on every serve surface, MCP over TCP with or
-/// without a metrics listener. serve_metrics' later open_users is a no-op.
+/// without a metrics listener.
 pub(crate) fn set_users(store: Arc<Mutex<UserStore>>) {
     USERS.get_or_init(|| Some(store));
 }
