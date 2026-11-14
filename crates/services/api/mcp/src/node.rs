@@ -143,6 +143,196 @@ impl NodeState {
     }
 }
 
+/// PROD-5 — how this node's dependencies are doing: the HA lease it
+/// renews and the archive it uploads to. Written by their loops (one
+/// atomic store each), read by `/status` and the scrape. A dependency
+/// that was never started reports nothing.
+#[derive(Default)]
+pub(crate) struct Deps {
+    lease_on: AtomicBool,
+    lease_last_renew_ms: AtomicU64,
+    lease_renew_failures: AtomicU64,
+    archive_on: AtomicBool,
+    archive_last_success_ms: AtomicU64,
+    archive_uploaded_seq: AtomicU64,
+    archive_last_snapshot_ms: AtomicU64,
+    archive_snapshot_seq: AtomicU64,
+    archive_failures: AtomicU64,
+}
+
+/// The serving process's dependencies (tests build their own `Deps`).
+pub(crate) static DEPS: Deps = Deps {
+    lease_on: AtomicBool::new(false),
+    lease_last_renew_ms: AtomicU64::new(0),
+    lease_renew_failures: AtomicU64::new(0),
+    archive_on: AtomicBool::new(false),
+    archive_last_success_ms: AtomicU64::new(0),
+    archive_uploaded_seq: AtomicU64::new(0),
+    archive_last_snapshot_ms: AtomicU64::new(0),
+    archive_snapshot_seq: AtomicU64::new(0),
+    archive_failures: AtomicU64::new(0),
+};
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+impl Deps {
+    /// A lease write landed (the win, the resume, every renewal).
+    pub(crate) fn lease_renewed(&self) {
+        self.lease_on.store(true, Ordering::SeqCst);
+        self.lease_last_renew_ms.store(unix_ms(), Ordering::SeqCst);
+    }
+
+    /// A renewal could not be written (the store did not answer).
+    pub(crate) fn lease_renew_failed(&self) {
+        self.lease_renew_failures.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The archive loop started.
+    pub(crate) fn archive_started(&self) {
+        self.archive_on.store(true, Ordering::SeqCst);
+    }
+
+    /// An archive pass ended without an error: the log is uploaded up to
+    /// `seq` (a pass with nothing new to upload still counts — the lag
+    /// series says how far behind the head that is).
+    pub(crate) fn archive_passed(&self, seq: u64) {
+        self.archive_uploaded_seq.store(seq, Ordering::SeqCst);
+        self.archive_last_success_ms
+            .store(unix_ms(), Ordering::SeqCst);
+    }
+
+    /// A snapshot at `seq` is in the archive.
+    pub(crate) fn archive_snapshotted(&self, seq: u64) {
+        self.archive_snapshot_seq.store(seq, Ordering::SeqCst);
+        self.archive_last_snapshot_ms
+            .store(unix_ms(), Ordering::SeqCst);
+    }
+
+    /// A pass, a snapshot or a prune failed.
+    pub(crate) fn archive_failed(&self) {
+        self.archive_failures.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The lease, as `/status` reports it; null when this node runs none.
+    pub(crate) fn lease_json(&self) -> J {
+        if !self.lease_on.load(Ordering::SeqCst) {
+            return J::Null;
+        }
+        json!({
+            "last_renew_unix_ms": self.lease_last_renew_ms.load(Ordering::SeqCst),
+            "renew_failures": self.lease_renew_failures.load(Ordering::SeqCst),
+        })
+    }
+
+    /// The archive, as `/status` reports it (`head` = this node's newest
+    /// seq); null when this node runs none.
+    pub(crate) fn archive_json(&self, head: u64) -> J {
+        if !self.archive_on.load(Ordering::SeqCst) {
+            return J::Null;
+        }
+        let uploaded = self.archive_uploaded_seq.load(Ordering::SeqCst);
+        json!({
+            "uploaded_seq": uploaded,
+            "lag_frames": head.saturating_sub(uploaded),
+            "last_success_unix_ms": self.archive_last_success_ms.load(Ordering::SeqCst),
+            "last_snapshot_unix_ms": self.archive_last_snapshot_ms.load(Ordering::SeqCst),
+            "snapshot_seq": self.archive_snapshot_seq.load(Ordering::SeqCst),
+            "failures": self.archive_failures.load(Ordering::SeqCst),
+        })
+    }
+
+    /// The node and its dependencies in Prometheus text format. Timestamps
+    /// are unix seconds (0 = never), so `time() - series` is an age.
+    pub(crate) fn metrics(&self, node: NodeState) -> String {
+        let mut out = String::from(
+            "# HELP aikoql_node_role This node's replication role (1 on the role it has).\n\
+             # TYPE aikoql_node_role gauge\n",
+        );
+        for role in [
+            NodeRole::Standalone,
+            NodeRole::Leader,
+            NodeRole::Standby,
+            NodeRole::Fenced,
+        ] {
+            out.push_str(&format!(
+                "aikoql_node_role{{role=\"{}\"}} {}\n",
+                role.as_str(),
+                u8::from(node.role == role)
+            ));
+        }
+        let mut gauge = |name: &str, kind: &str, help: &str, value: String| {
+            out.push_str(&format!(
+                "# HELP {name} {help}\n# TYPE {name} {kind}\n{name} {value}\n"
+            ));
+        };
+        let secs = |ms: &AtomicU64| format!("{:.3}", ms.load(Ordering::SeqCst) as f64 / 1000.0);
+        let count = |n: &AtomicU64| n.load(Ordering::SeqCst).to_string();
+        gauge(
+            "aikoql_node_stopping",
+            "gauge",
+            "1 once a planned stop began.",
+            u8::from(node.stopping).to_string(),
+        );
+        gauge(
+            "aikoql_node_engine_fenced",
+            "gauge",
+            "1 while the storage engine refuses client writes (a fault fence, a deposed term, a planned stop).",
+            u8::from(node.engine_fenced).to_string(),
+        );
+        gauge(
+            "aikoql_replication_term",
+            "gauge",
+            "The replication term this node serves at.",
+            node.term.to_string(),
+        );
+        if self.lease_on.load(Ordering::SeqCst) {
+            gauge(
+                "aikoql_ha_lease_last_renew_timestamp_seconds",
+                "gauge",
+                "When this node last wrote its HA lease (unix seconds).",
+                secs(&self.lease_last_renew_ms),
+            );
+            gauge(
+                "aikoql_ha_lease_renew_failures_total",
+                "counter",
+                "Lease renewals the store did not answer.",
+                count(&self.lease_renew_failures),
+            );
+        }
+        if self.archive_on.load(Ordering::SeqCst) {
+            gauge(
+                "aikoql_archive_last_success_timestamp_seconds",
+                "gauge",
+                "When an archive pass last ended without an error (unix seconds, 0 = never).",
+                secs(&self.archive_last_success_ms),
+            );
+            gauge(
+                "aikoql_archive_uploaded_seq",
+                "gauge",
+                "The newest log seq in the archive.",
+                count(&self.archive_uploaded_seq),
+            );
+            gauge(
+                "aikoql_archive_last_snapshot_timestamp_seconds",
+                "gauge",
+                "When the archive last took a snapshot (unix seconds, 0 = never).",
+                secs(&self.archive_last_snapshot_ms),
+            );
+            gauge(
+                "aikoql_archive_failures_total",
+                "counter",
+                "Archive passes, snapshots and prunes that failed.",
+                count(&self.archive_failures),
+            );
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +411,64 @@ mod tests {
             json!({"role": "standby", "term": 3, "stopping": false, "engine_fenced": false,
                    "ready": {"read": true, "write": false}})
         );
+    }
+
+    /// PROD-5 — a dependency that never started reports nothing; one that
+    /// did reports its last success, its position and its failures, in
+    /// the status JSON and as series.
+    #[test]
+    fn dependencies_report_only_once_started() {
+        let deps = Deps::default();
+        let node = at(NodeRole::Leader, false);
+        assert_eq!(deps.lease_json(), J::Null);
+        assert_eq!(deps.archive_json(10), J::Null);
+        let quiet = deps.metrics(node);
+        assert!(
+            quiet.contains("aikoql_node_role{role=\"leader\"} 1"),
+            "{quiet}"
+        );
+        assert!(
+            quiet.contains("aikoql_node_role{role=\"standby\"} 0"),
+            "{quiet}"
+        );
+        assert!(quiet.contains("aikoql_replication_term 3"), "{quiet}");
+        assert!(quiet.contains("aikoql_node_engine_fenced 0"), "{quiet}");
+        let faulted = NodeState {
+            engine_fenced: true,
+            ..node
+        };
+        assert!(
+            deps.metrics(faulted)
+                .contains("aikoql_node_engine_fenced 1"),
+            "an engine that refuses writes is a series an alert can read"
+        );
+        assert!(!quiet.contains("aikoql_archive_"), "{quiet}");
+        assert!(!quiet.contains("aikoql_ha_lease_"), "{quiet}");
+
+        deps.lease_renewed();
+        deps.lease_renew_failed();
+        deps.archive_started();
+        deps.archive_failed();
+        let never = deps.archive_json(10);
+        assert_eq!(never["last_success_unix_ms"], json!(0), "never passed");
+        assert_eq!(never["lag_frames"], json!(10));
+        deps.archive_passed(7);
+        deps.archive_snapshotted(5);
+        let archive = deps.archive_json(10);
+        assert_eq!(archive["uploaded_seq"], json!(7));
+        assert_eq!(archive["lag_frames"], json!(3));
+        assert_eq!(archive["snapshot_seq"], json!(5));
+        assert_eq!(archive["failures"], json!(1));
+        assert!(archive["last_success_unix_ms"].as_u64().unwrap() > 0);
+        assert_eq!(deps.lease_json()["renew_failures"], json!(1));
+        let busy = deps.metrics(node);
+        for series in [
+            "aikoql_archive_uploaded_seq 7",
+            "aikoql_archive_failures_total 1",
+            "aikoql_ha_lease_renew_failures_total 1",
+            "# TYPE aikoql_archive_failures_total counter",
+        ] {
+            assert!(busy.contains(series), "no {series:?}:\n{busy}");
+        }
     }
 }

@@ -2355,3 +2355,96 @@ fn ha_readiness_tells_the_roles_apart() {
     assert_eq!(st, 503, "the standby is not write-ready: {refused}");
     assert_eq!(refused["role"], json!("standby"), "{refused}");
 }
+
+/// PROD-5 (G6, G7): an operator can ask a running node what it is and how
+/// its dependencies are doing — one JSON report (`/status`) and the same
+/// facts as Prometheus series. An HA leader with an archive reports its
+/// role and term, the lease's last renewal, and the archive's last
+/// successful pass, uploaded seq and snapshot.
+#[test]
+fn the_status_report_and_the_scrape_carry_the_node_the_lease_and_the_archive() {
+    let dir = tmp("status-a");
+    let lease = tmp("status-lease").join("lease.json");
+    let archive = tmp("status-archive");
+    let repl = format!("127.0.0.1:{}", free_port());
+    let http = format!("127.0.0.1:{}", free_port());
+    let args = [
+        ha_args(&lease, "a", &repl),
+        strs_owned(&[
+            "--metrics-addr",
+            &http,
+            "--archive",
+            archive.to_str().unwrap(),
+            "--archive-log-ms",
+            "200",
+            "--archive-snapshot-secs",
+            "1",
+        ]),
+    ]
+    .concat();
+    let env = vec![("AIKOQL_ADMIN_PASSWORD".to_string(), "st-pw".to_string())];
+    let _a = Mcp::spawn_env(&dir, &strs(&args), false, &env);
+    wait_port(&http);
+
+    let get = |path: &str| http_req(&http, "GET", path, "application/json", &[], "");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let status: J = loop {
+        let (st, body) = get("/status");
+        assert_eq!(st, 200, "/status: {body}");
+        let j: J = serde_json::from_str(&body).unwrap_or_else(|_| panic!("/status: {body}"));
+        // the first archive pass and snapshot land within their periods
+        if j["archive"]["last_success_unix_ms"].as_u64().unwrap_or(0) > 0
+            && j["archive"]["last_snapshot_unix_ms"].as_u64().unwrap_or(0) > 0
+        {
+            break j;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the archive never reported a pass and a snapshot: {j}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(status["node"]["role"], json!("leader"), "{status}");
+    assert_eq!(status["node"]["term"], json!(1), "{status}");
+    assert_eq!(status["node"]["ready"]["write"], json!(true), "{status}");
+    assert!(status["version"].as_str().is_some_and(|v| !v.is_empty()));
+    let head = status["replication"]["head_seq"]
+        .as_u64()
+        .expect("head_seq");
+    assert!(head > 0, "the open-time records: {status}");
+    assert!(
+        status["lease"]["last_renew_unix_ms"].as_u64().unwrap_or(0) > 0,
+        "{status}"
+    );
+    assert_eq!(status["lease"]["renew_failures"], json!(0), "{status}");
+    assert_eq!(status["archive"]["failures"], json!(0), "{status}");
+    assert!(
+        status["archive"]["uploaded_seq"].as_u64().unwrap_or(0) > 0,
+        "{status}"
+    );
+    assert!(status["storage"].is_object(), "storage stats: {status}");
+
+    let (st, scrape) = get("/metrics");
+    assert_eq!(st, 200);
+    for series in [
+        "aikoql_node_role{role=\"leader\"} 1",
+        "aikoql_node_role{role=\"standby\"} 0",
+        "aikoql_node_stopping 0",
+        "aikoql_replication_term 1",
+        "aikoql_ha_lease_last_renew_timestamp_seconds ",
+        "aikoql_ha_lease_renew_failures_total 0",
+        "aikoql_archive_last_success_timestamp_seconds ",
+        "aikoql_archive_last_snapshot_timestamp_seconds ",
+        "aikoql_archive_uploaded_seq ",
+        "aikoql_archive_failures_total 0",
+    ] {
+        assert!(
+            scrape.contains(series),
+            "no {series:?} in the scrape:\n{scrape}"
+        );
+    }
+}
+
+fn strs_owned(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}

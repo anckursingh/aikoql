@@ -51,6 +51,21 @@ helm install aikoql deploy/helm/aikoql
   The standby then takes over on its next lease poll, not after a full
   TTL.
 
+## Status and metrics
+
+`GET /status` (same port, unauthenticated like `/metrics`) is one JSON
+report: version, the node's role, term and readiness by traffic class,
+the head seq and each standby's lag, the lease's last renewal, the
+archive's last successful pass, uploaded seq and last snapshot, and
+storage stats. The same facts are Prometheus series:
+`aikoql_node_role{role}`, `aikoql_replication_term`,
+`aikoql_ha_lease_last_renew_timestamp_seconds`,
+`aikoql_ha_lease_renew_failures_total`,
+`aikoql_archive_last_success_timestamp_seconds`,
+`aikoql_archive_uploaded_seq`,
+`aikoql_archive_last_snapshot_timestamp_seconds`,
+`aikoql_archive_failures_total`.
+
 ## Known limits
 
 - One shared serving cert for both pods, and no `--advertise` client
