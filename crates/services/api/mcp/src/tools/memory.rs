@@ -9,10 +9,13 @@ use crate::{
 };
 use aikoql_kernel::kernel::{mmr_rerank, MMR_LAMBDA};
 pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> {
+    // MEM-AGENT: defaults to the caller; over TCP it is always the caller
+    // (forced by the session — see fill_identity)
+    let subject_name = subject_of(args).name;
     let agent_id = args
         .get("agent_id")
         .and_then(|v| v.as_str())
-        .ok_or("missing: agent_id")?;
+        .unwrap_or(subject_name.as_str());
     let key = args.get("key").and_then(|v| v.as_str());
     let value = args.get("value");
     let ttl = args.get("ttl").and_then(|v| v.as_i64()).unwrap_or(3600);
@@ -27,6 +30,14 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
             json_to_value(mem_val).unwrap_or(Value::Null),
         );
         props.insert("ttl".into(), Value::Int(ttl));
+        // MEM-TENANT: the memory belongs to the caller's tenant (the
+        // session's, as `remember`): stored tenantless, a tenant-scoped
+        // reader — the writer itself — could never read it back. The
+        // kernel scopes the idempotency key by that tenant (T-52).
+        let tenant = args
+            .get("tenant")
+            .and_then(|t| t.as_str())
+            .map(String::from);
         let r = kernel
             .remember(RememberRequest {
                 context: subject_of(args).into(),
@@ -35,7 +46,7 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
                 idempotency_key: Some(format!("agent-mem-{}-{}", agent_id, mem_key)),
                 metadata: Metadata {
                     type_name: "aikoql:memory".into(),
-                    tenant: None,
+                    tenant,
                     schema_version: 1,
                     tags: vec!["agent-memory".into()],
                 },
@@ -62,8 +73,8 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
         .scan_by_type(&subject, "aikoql:memory")
         .map_err(|e| e.to_string())?;
     // v0.3 K5: TTL is now enforced on the read path — a memory whose
-    // commit_ts + ttl has passed is dropped from the result, never returned
-    // as if it were still live. commit_ts packs HLC millis in the high bits.
+    // creation + ttl has passed is dropped from the result, never returned
+    // as if it were still live.
     let now = kernel.clock_now();
     let mut expired_dropped = 0usize;
     let memories: Vec<J> = all.iter()
@@ -78,7 +89,10 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
                 })
                 .unwrap_or(3600)
                 * 1000;
-            let alive = (ko.commit_ts >> 16) + ttl_ms > now;
+            // MEM-TTL: from when the memory was stored (the KOID's mint
+            // instant), not its latest commit — a later re-commit of the
+            // object must not restart its TTL
+            let alive = ko.koid.created_ms() + ttl_ms > now;
             if !alive {
                 expired_dropped += 1;
             }
@@ -235,6 +249,8 @@ fn search_memory_files(args: &J) -> Result<J, String> {
                 .unwrap_or_else(|| body_text.lines().next().unwrap_or(""))
                 .trim()
                 .to_string();
+            // MEM-SECRET: never hand a stored secret back raw
+            let snippet = aikoql_ingestion::redact_text(&snippet);
             let snippet = if snippet.len() > 200 {
                 format!("{}...", &snippet[..200])
             } else {
@@ -491,21 +507,22 @@ pub(crate) fn tool_memory_search(k: &Kernel, args: &J) -> Result<J, String> {
     );
     let (vector, _) = crate::tools::query::embed_query(k, query);
     let semantic = vector.is_some();
-    let hits = k
-        .find_similar(crate::SimilarityQuery {
-            context: subject_of(args).into(),
-            filter: None,
-            text: Some(query.to_string()),
-            vector,
-            embedding_model: None,
-            k: max_results * 3,
-            fusion: if semantic {
-                crate::Fusion::VectorOnly
-            } else {
-                crate::Fusion::TextOnly
-            },
-        })
-        .map_err(|e| e.to_string())?;
+    let q = crate::SimilarityQuery {
+        context: subject_of(args).into(),
+        filter: None,
+        text: Some(query.to_string()),
+        vector,
+        embedding_model: None,
+        k: max_results * 3,
+        fusion: crate::Fusion::TextOnly,
+    };
+    // MEM-RYW: semantic-led, a memory not yet embedded ranked by its text
+    let hits = if semantic {
+        crate::tools::query::vector_led(k, q)
+    } else {
+        k.find_similar(q)
+    }
+    .map_err(|e| e.to_string())?;
     // AG-33: agents may filter by trust class; untrusted content is fenced
     let trust_want = args.get("trust").and_then(|v| v.as_str());
     let fence = Fence::new();
@@ -540,7 +557,8 @@ pub(crate) fn tool_memory_search(k: &Kernel, args: &J) -> Result<J, String> {
                 "name": wrap(name.clone()),
                 "description": wrap(text_prop(&h.ko, "description")),
                 "file": wrap(format!("{name}.md")),
-                "snippet": wrap(content.chars().take(200).collect()),
+                // MEM-SECRET: never hand a stored secret back raw
+                "snippet": wrap(aikoql_ingestion::redact_text(&content).chars().take(200).collect()),
                 "score": h.score,
                 "koid": h.ko.koid.to_hex(),
                 "scope": text_prop(&h.ko, "scope"),
@@ -802,4 +820,42 @@ pub(crate) fn system_time_iso8601() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, h, mi, s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aikoql_kernel::{ManualClock, MemoryEngine, KOID};
+    use std::sync::Arc;
+
+    /// MEM-TTL (C1 CHAT-MEM-005): an agent memory's TTL runs from when it
+    /// was stored. A later commit of the same object (a background writer
+    /// re-commits fresh objects) must not restart it — measured: the first
+    /// memory of a run outlived its 2 s TTL by its v2 commit 2.4 s later.
+    #[test]
+    fn a_recommit_does_not_restart_an_agent_memorys_ttl() {
+        let clock = Arc::new(ManualClock::new(10_000));
+        let k = Kernel::open(Arc::new(MemoryEngine::new()), clock.clone(), 0xBEEF).unwrap();
+        let who = json!({"subject": "a1", "agent_id": "a1"});
+        let mut w = who.clone();
+        w["key"] = json!("env");
+        w["value"] = json!("AWS");
+        w["ttl"] = json!(2);
+        let koid = tool_agent_memory(&k, &w).unwrap()["koid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let koid = KOID::from_hex(&koid).unwrap();
+
+        clock.tick(1_500);
+        let ko = k.get(subject_of(&who), &koid).unwrap();
+        let mut again = RememberRequest::update(subject_of(&who), koid, ko.metadata.clone());
+        again.properties = ko.properties.clone();
+        k.remember(again).unwrap();
+
+        clock.tick(1_000); // 2.5 s after the write, 1 s after the re-commit
+        let read = tool_agent_memory(&k, &who).unwrap();
+        assert_eq!(read["count"], 0, "expired 2 s after it was stored: {read}");
+        assert_eq!(read["expired_dropped"], 1, "{read}");
+    }
 }

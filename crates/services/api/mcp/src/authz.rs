@@ -14,6 +14,7 @@ const READ_TOOLS: &[&str] = &[
     "abi_version",
     "aikoql",
     "audit_report",
+    "compile_context",
     "compliance_report",
     "constraint_diagnostics",
     "document_list",
@@ -62,10 +63,10 @@ pub(crate) fn check_scope(
     args: &serde_json::Value,
 ) -> Result<(), (i64, String)> {
     let read_scoped = roles.iter().any(|r| r == READ_SCOPE_ROLE);
-    // Enterprise (Task 6): the viewer role is read-only through `aikoql`
-    // too (only a MATCH reads). Community mode (no user store) leaves the
-    // role name uninterpreted — v0.4.0 behavior byte-for-byte.
-    let viewer = crate::session::users().is_some() && roles.iter().any(|r| r == "viewer");
+    // Task 6 / MEM-VIEWER: the viewer role is read-only through `aikoql`
+    // too (only a MATCH reads) — in every mode: a read-only memory token
+    // handed to an agent must not write, licence or not.
+    let viewer = roles.iter().any(|r| r == "viewer");
     if !read_scoped && !viewer {
         return Ok(());
     }
@@ -156,14 +157,10 @@ pub(crate) fn check_capability(
         }
     }
 
-    // Enterprise (Task 6): the viewer role reaches read tools only — the
-    // same READ_TOOLS allowlist an mcp:read token carries (fail-closed).
-    // Community mode (no user store) leaves the role name uninterpreted,
-    // so v0.4.0 behavior is byte-for-byte unchanged.
-    if crate::session::users().is_some()
-        && roles.iter().any(|r| r == "viewer")
-        && !READ_TOOLS.contains(&tool)
-    {
+    // Task 6 / MEM-VIEWER: the viewer role reaches read tools only — the
+    // same READ_TOOLS allowlist an mcp:read token carries (fail-closed), in
+    // every mode (community mode used to leave the role uninterpreted).
+    if roles.iter().any(|r| r == "viewer") && !READ_TOOLS.contains(&tool) {
         return Err((
             -32001,
             format!("capability denied: viewer role is read-only — tool '{tool}' writes"),
@@ -192,11 +189,19 @@ impl ApiError {
 
 /// Task 6: the REST write gate. `admin` always passes; `admin_only`
 /// requires admin; otherwise any non-viewer passes (a viewer may read but
-/// never write). Community mode (no user store) has no gate — v0.4.0
-/// behavior byte-for-byte.
+/// never write). MEM-VIEWER: in community mode (no user store) the viewer
+/// half holds too — a viewer never writes, licence or not — while
+/// admin-only routes keep their v0.4.0 community behavior.
 pub(crate) fn check_rest(roles: &[String], admin_only: bool) -> Result<(), ApiError> {
-    if crate::session::users().is_none() || roles.iter().any(|r| r == "admin") {
+    if roles.iter().any(|r| r == "admin") {
         return Ok(());
+    }
+    if crate::session::users().is_none() {
+        return if roles.iter().any(|r| r == "viewer") {
+            Err(ApiError::Forbidden("viewer role is read-only"))
+        } else {
+            Ok(())
+        };
     }
     if admin_only {
         return Err(ApiError::Forbidden("admin role required"));
@@ -209,10 +214,22 @@ pub(crate) fn check_rest(roles: &[String], admin_only: bool) -> Result<(), ApiEr
 
 #[cfg(test)]
 mod tests {
-    use super::{check_capability, TrustMode};
+    use super::{check_capability, check_scope, TrustMode};
 
     fn roles(r: &[&str]) -> Vec<String> {
         r.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// MEM-VIEWER follow-up: compile_context only reads (its package cache
+    /// is in-process), so a viewer and an mcp:read token may call it.
+    #[test]
+    fn compile_context_is_a_read() {
+        for r in ["viewer", super::READ_SCOPE_ROLE] {
+            assert!(
+                check_scope(&roles(&[r]), "compile_context", &serde_json::json!({})).is_ok(),
+                "{r} must reach compile_context"
+            );
+        }
     }
 
     #[test]

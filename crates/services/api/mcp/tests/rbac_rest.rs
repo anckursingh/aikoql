@@ -489,7 +489,7 @@ fn admin_passes_all_gates() {
 }
 
 #[test]
-fn unlicensed_tcp_token_roles_unchanged() {
+fn unlicensed_tcp_token_roles_and_a_read_only_viewer() {
     // no license anywhere: v0.4.0 role behavior, byte-for-byte
     let db = std::env::temp_dir().join(format!("aikoql-rbac-parity-db-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&db);
@@ -532,16 +532,213 @@ fn unlicensed_tcp_token_roles_unchanged() {
             .contains("mcp:read"),
         "{read}"
     );
-    // a "viewer" role name is uninterpreted in community mode — no gate
+    // MEM-VIEWER: a viewer token is read-only in community mode too — an
+    // agent handed a read-only memory token must not be able to write (the
+    // C7 certification check AUTH-001 wrote through one). Reads still pass.
     let viewer = mcp_call(mcp_port, "vtok", "remember", &json!({"type_name": "Fact"}));
+    assert_eq!(
+        viewer["error"]["code"], -32001,
+        "a viewer token cannot write: {viewer}"
+    );
     assert!(
-        viewer.get("result").is_some(),
-        "community viewer token stays v0.4.0-unrestricted: {viewer}"
+        viewer["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("viewer role is read-only"),
+        "{viewer}"
+    );
+    let viewer_read = mcp_call(mcp_port, "vtok", "recall", &json!({"query": "anything"}));
+    assert!(
+        viewer_read.get("result").is_some(),
+        "a viewer token still reads: {viewer_read}"
     );
     // the read-scope token still reaches read tools
     let health_tool = mcp_call(mcp_port, "rtok", "health", &json!({}));
     assert!(
         health_tool.get("result").is_some(),
         "mcp:read must read: {health_tool}"
+    );
+}
+
+/// MEM-VIEWER (REST half): decision (user, 2026-11-13) — the viewer role is
+/// read-only in every mode. A community-mode server (no licence) with a
+/// `[auth].users` login whose only role is `viewer`: the REST read passes,
+/// the REST write is refused. Before, community mode skipped the gate.
+#[test]
+fn a_community_viewer_login_cannot_write_over_rest() {
+    let tag = "comm-viewer";
+    let db = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-db-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&db);
+    common::register_temp_path(&db);
+    let log = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-{}.log", std::process::id()));
+    common::register_temp_path(&log);
+    let hash = {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+            .args(["hash-password", "view-pw"])
+            .output()
+            .expect("hash-password");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert!(hash.starts_with("$argon2"), "hash-password: {hash:?}");
+    let cfg = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-{}.toml", std::process::id()));
+    common::register_temp_path(&cfg);
+    std::fs::write(
+        &cfg,
+        format!("[auth]\nusers = [{{ username = \"vera\", hash = \"{hash}\", roles = [\"viewer\"] }}]\n"),
+    )
+    .unwrap();
+    let cfg_s = cfg.to_str().unwrap().to_string();
+    let srv = common::spawn_server(&db, &log, &[], &["--config", &cfg_s]);
+    common::wait_health(srv.port, Instant::now() + Duration::from_secs(60));
+    let login = http(
+        srv.port,
+        "POST",
+        "/api/login",
+        r#"{"username":"vera","password":"view-pw"}"#,
+    );
+    assert_eq!(login.status, 200, "{}", login.body);
+    let token = serde_json::from_str::<J>(&login.body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let read = http(
+        srv.port,
+        "POST",
+        &format!("/api/v1/aikoql?token={token}"),
+        r#"{"query":"MATCH Note RETURN *"}"#,
+    );
+    assert_eq!(read.status, 200, "a viewer reads: {}", read.body);
+    let write = http(
+        srv.port,
+        "POST",
+        &format!("/api/v1/remember?token={token}"),
+        r#"{"type_name":"Note","properties":{"text":"viewer write"}}"#,
+    );
+    assert_eq!(write.status, 403, "a viewer cannot write: {}", write.body);
+    assert!(
+        write.body.contains("viewer role is read-only"),
+        "{}",
+        write.body
+    );
+}
+
+/// The JSON payload of a tools/call response (its first text block).
+fn payload(resp: &J) -> J {
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no tool result: {resp}"));
+    serde_json::from_str(text).unwrap_or_else(|_| json!(text))
+}
+
+/// MEM-AGENT (C6 PERS-005): a token names its agent (`agent=NAME` in the
+/// role list), so two agents in one tenant are two principals. Before,
+/// every TCP token was the one agent `tcp-agent`, and a "private" memory
+/// was shared by every agent of the tenant. Also: over TCP `agent_memory`
+/// takes `agent_id` from the token, not the call, so one agent cannot write
+/// or read another's agent memory by naming it.
+#[test]
+fn two_agents_in_one_tenant_keep_their_memories_apart() {
+    let tag = "agents";
+    let db = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-db-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&db);
+    common::register_temp_path(&db);
+    let log = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-{}.log", std::process::id()));
+    common::register_temp_path(&log);
+    let mcp_port = common::free_port();
+    let mcp_addr = format!("127.0.0.1:{mcp_port}");
+    let extra = [
+        "--listen",
+        mcp_addr.as_str(),
+        "--tcp-token",
+        "atok:acme:editor,agent=alice",
+        "--tcp-token",
+        "btok:acme:editor,agent=bob",
+    ];
+    let srv = common::spawn_server(&db, &log, &[], &extra);
+    let health = common::wait_health(srv.port, Instant::now() + Duration::from_secs(60));
+    assert!(health.contains(" 200 "), "health: {health}");
+
+    let me = payload(&mcp_call(
+        mcp_port,
+        "atok",
+        "session_init",
+        &json!({"run_id": "r1"}),
+    ));
+    assert_eq!(me["session"]["agent_id"], "alice", "{me}");
+    assert_eq!(me["session"]["roles"], json!(["editor"]), "{me}");
+
+    let stored = payload(&mcp_call(
+        mcp_port,
+        "atok",
+        "memory_store",
+        &json!({"name": "alice-pin", "description": "alice-pin", "trust": "user",
+                "content": "alice's locker code is 4417"}),
+    ));
+    let koid = stored["koid"]
+        .as_str()
+        .unwrap_or_else(|| panic!("memory_store: {stored}"))
+        .to_string();
+    let own = payload(&mcp_call(
+        mcp_port,
+        "atok",
+        "memory_search",
+        &json!({"query": "locker code"}),
+    ));
+    assert!(
+        own.to_string().contains("alice-pin"),
+        "the writer finds it: {own}"
+    );
+
+    for (tool, args) in [
+        ("memory_search", json!({"query": "locker code"})),
+        (
+            "recall",
+            json!({"query": "locker code", "wait_for_freshness_ms": 3000}),
+        ),
+        ("get", json!({"koid": koid})),
+        ("aikoql", json!({"query": "MATCH Memory RETURN content"})),
+    ] {
+        let seen = mcp_call(mcp_port, "btok", tool, &args);
+        assert!(
+            !seen.to_string().contains("4417"),
+            "bob reads alice's private memory via {tool}: {seen}"
+        );
+    }
+
+    mcp_call(
+        mcp_port,
+        "atok",
+        "agent_memory",
+        &json!({"agent_id": "alice", "key": "env", "value": "AWS-alice", "ttl": 3600}),
+    );
+    let forged_read = mcp_call(
+        mcp_port,
+        "btok",
+        "agent_memory",
+        &json!({"agent_id": "alice"}),
+    );
+    assert!(
+        !forged_read.to_string().contains("AWS-alice"),
+        "bob names alice and reads her agent memory: {forged_read}"
+    );
+    mcp_call(
+        mcp_port,
+        "btok",
+        "agent_memory",
+        &json!({"agent_id": "alice", "key": "env2", "value": "forged-by-bob", "ttl": 3600}),
+    );
+    let alice_reads = mcp_call(
+        mcp_port,
+        "atok",
+        "agent_memory",
+        &json!({"agent_id": "alice"}),
+    );
+    assert!(
+        alice_reads.to_string().contains("AWS-alice"),
+        "{alice_reads}"
+    );
+    assert!(
+        !alice_reads.to_string().contains("forged-by-bob"),
+        "bob wrote into alice's agent memory: {alice_reads}"
     );
 }

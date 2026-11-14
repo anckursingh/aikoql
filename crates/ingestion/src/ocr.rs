@@ -401,7 +401,10 @@ pub fn tool_available(name: &str) -> bool {
 }
 
 fn tool_available_cmd(cmd: &mut Command) -> bool {
+    // stdin null: a binary that ignores --version (Windows `cmd`) would
+    // otherwise sit on an inherited, never-closing stdin forever.
     cmd.arg("--version")
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()

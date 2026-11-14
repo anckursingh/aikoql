@@ -284,7 +284,7 @@ pub(crate) fn handle_native_client(
                     .to_string();
                 match auth.lookup(&token) {
                     Some(ident) => {
-                        session.agent_id = "tcp-agent".into();
+                        session.agent_id = ident.agent.clone();
                         session.tenant = ident.tenant.clone();
                         session.roles = ident.roles.clone();
                         authenticated = true;
@@ -427,7 +427,7 @@ pub(crate) fn handle_native_client(
                 let subject = args
                     .get("subject")
                     .and_then(|s| s.as_str())
-                    .unwrap_or("tcp-agent")
+                    .unwrap_or(crate::session::DEFAULT_TCP_AGENT)
                     .to_string();
                 let roles: Vec<String> = session.roles.clone();
                 let tenant = session.tenant.clone();

@@ -18,10 +18,18 @@ pub(crate) enum TrustMode {
 pub(crate) struct TcpIdentity {
     pub(crate) tenant: Option<String>,
     pub(crate) roles: Vec<String>,
+    /// MEM-AGENT: the agent this token is (`agent=NAME` in the role list);
+    /// `tcp-agent` when the token names none.
+    pub(crate) agent: String,
 }
 
-/// Token table from repeated `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]]` flags.
-/// Every token must carry at least one role (fail-closed).
+/// The agent a TCP token is when it names none.
+pub(crate) const DEFAULT_TCP_AGENT: &str = "tcp-agent";
+
+/// Token table from repeated `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2[,agent=NAME]]]`
+/// flags. Every token must carry at least one role (fail-closed). An
+/// `agent=NAME` entry names the token's agent and is not a role; it rides
+/// the role list because roles may contain `:` (`scope:read`).
 pub(crate) struct TcpAuthTable {
     by_token: HashMap<String, TcpIdentity>,
 }
@@ -47,23 +55,46 @@ impl TcpAuthTable {
                     }
                 })
                 .unwrap_or(None);
-            let roles: Vec<String> = parts
+            let entries: Vec<&str> = parts
                 .next()
-                .map(|r| {
-                    r.split(',')
-                        .filter(|s| !s.is_empty())
-                        .map(String::from)
-                        .collect()
-                })
+                .map(|r| r.split(',').filter(|s| !s.is_empty()).collect())
                 // justified: absence of a roles section → empty list
                 .unwrap_or_default();
+            let (agents, roles): (Vec<&str>, Vec<&str>) =
+                entries.into_iter().partition(|e| e.starts_with("agent="));
+            let roles: Vec<String> = roles.into_iter().map(String::from).collect();
+            let agent = match agents.as_slice() {
+                [] => DEFAULT_TCP_AGENT.to_string(),
+                [one] => {
+                    let name = &one["agent=".len()..];
+                    let valid = !name.is_empty()
+                        && name.len() <= 64
+                        && name
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || "._-".contains(ch));
+                    if !valid {
+                        return Err(format!(
+                            "'{spec}' has a bad agent name (agent=NAME: 1-64 of A-Z a-z 0-9 . _ -)"
+                        ));
+                    }
+                    name.to_string()
+                }
+                _ => return Err(format!("'{spec}' names more than one agent")),
+            };
             if roles.is_empty() {
                 return Err(format!(
                     "'{spec}' assigns no roles — at least one is required (TOKEN[:TENANT[:ROLE1,ROLE2]])"
                 ));
             }
             if by_token
-                .insert(token, TcpIdentity { tenant, roles })
+                .insert(
+                    token,
+                    TcpIdentity {
+                        tenant,
+                        roles,
+                        agent,
+                    },
+                )
                 .is_some()
             {
                 return Err(format!("'{spec}' repeats a token already defined"));
@@ -187,6 +218,11 @@ pub(crate) fn reject_empty_tenant(args: &J) -> Result<(), String> {
 fn fill_identity(a: &mut J, session: &McpSession, forced: bool) {
     if forced {
         a["subject"] = json!(session.agent_id);
+        // MEM-AGENT: an agent-scoped call (agent_memory) acts as the token's
+        // agent; naming another agent cannot reach that agent's memory
+        if a.get("agent_id").is_some() {
+            a["agent_id"] = json!(session.agent_id);
+        }
         a["roles"] = json!(session.roles);
         if let Some(t) = &session.tenant {
             a["tenant"] = json!(t);
@@ -422,6 +458,27 @@ mod tests {
     }
 
     #[test]
+    fn tcp_token_agent_entry_is_not_a_role() {
+        // MEM-AGENT: `agent=NAME` names the agent; it is never a role
+        let t = TcpAuthTable::parse(&specs(&["tok:acme:editor,agent=alice"])).unwrap();
+        assert_eq!(t.lookup("tok").unwrap().roles, vec!["editor".to_string()]);
+        assert_eq!(t.lookup("tok").unwrap().agent, "alice");
+        // a role with a colon is still one role
+        let t = TcpAuthTable::parse(&specs(&["r:acme:scope:read"])).unwrap();
+        assert_eq!(t.lookup("r").unwrap().roles, vec!["scope:read".to_string()]);
+        assert_eq!(t.lookup("r").unwrap().agent, DEFAULT_TCP_AGENT);
+        // fail-closed: an agent but no role, an empty or repeated agent, a bad name
+        for bad in [
+            "tok:acme:agent=alice",
+            "tok:acme:editor,agent=",
+            "tok:acme:editor,agent=a,agent=b",
+            "tok:acme:editor,agent=a b",
+        ] {
+            assert!(TcpAuthTable::parse(&specs(&[bad])).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn forced_injection_overrides_identity() {
         let mut s = McpSession {
             trust_mode: TrustMode::Tcp,
@@ -431,9 +488,15 @@ mod tests {
             roles: vec!["viewer".into()],
             ..Default::default()
         };
-        let args = json!({"subject": "mallory", "roles": ["admin"], "tenant": "other", "x": 1});
+        let args = json!({"subject": "mallory", "roles": ["admin"], "tenant": "other", "x": 1,
+                          "agent_id": "mallory"});
         let f = inject_session_forced(&args, &s);
         assert_eq!(f["subject"], "tcp-agent");
+        // MEM-AGENT: an agent-scoped call cannot name another agent
+        assert_eq!(f["agent_id"], "tcp-agent");
+        assert!(inject_session_forced(&json!({}), &s)
+            .get("agent_id")
+            .is_none());
         assert_eq!(f["roles"], json!(["viewer"]));
         assert_eq!(f["tenant"], "acme");
         assert_eq!(f["x"], 1);

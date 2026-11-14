@@ -89,6 +89,10 @@ override credentials on later starts.
 - **Live role lookup**: roles resolve from the store on every request (not
   a snapshot at grant time), so a demotion revokes access immediately.
   `viewer` gates both MCP capability checks and REST/admin-API writes.
+- **Viewer without a licence**: a `viewer` role on a `--tcp-token` (or any
+  MCP session) is read-only in community mode too — read tools only, and
+  through `aikoql` only a `MATCH`. Before this, community mode left the role
+  name uninterpreted.
 - Admin API:
   - `GET /api/license` — license status (tier, org, features, expiry);
     any authenticated session
