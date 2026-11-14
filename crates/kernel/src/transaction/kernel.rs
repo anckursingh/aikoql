@@ -5926,6 +5926,63 @@ mod tests {
         assert!(k.get(&carol, &note.koid).is_ok());
     }
 
+    /// POLICY-ENF: a deployed Deny is enforced, not advisory — it binds even
+    /// the object's owner and an admin, covers creates, lifts when the policy
+    /// is forgotten, and never reaches across tenants.
+    #[test]
+    fn a_deployed_deny_policy_blocks_the_action_itself() {
+        let (k, _clock) = kernel();
+        let agent = Subject::with_roles("assistant-1", &["admin"]).in_tenant("acme");
+        let tmeta = |t: &str| Metadata {
+            tenant: Some("acme".into()),
+            ..meta(t)
+        };
+        let note = k
+            .remember(RememberRequest::create(agent.clone(), tmeta("Note")))
+            .unwrap();
+        let pol = k
+            .deploy_policy(
+                "NoAgentDeletes",
+                "Deny",
+                "assistant-1",
+                "Delete",
+                "Note",
+                None,
+                &agent,
+            )
+            .unwrap();
+        let denied = k.forget(&agent, &note.koid, ForgetMode::Tombstone, None, None);
+        assert!(
+            matches!(denied, Err(KError::AccessDenied { .. })),
+            "a deny policy must block the owner-admin's delete: {denied:?}"
+        );
+        // a Write deny also blocks creating that type
+        let wpol = k
+            .deploy_policy("NoNotes", "deny", "*", "write", "Note", None, &agent)
+            .unwrap();
+        let created = k.remember(RememberRequest::create(agent.clone(), tmeta("Note")));
+        assert!(
+            matches!(created, Err(KError::AccessDenied { .. })),
+            "a write deny must block a create: {created:?}"
+        );
+        // forgetting the policies lifts them at once (no reopen)
+        k.forget(&agent, &wpol.koid, ForgetMode::Tombstone, None, None)
+            .unwrap();
+        k.forget(&agent, &pol.koid, ForgetMode::Tombstone, None, None)
+            .unwrap();
+        k.forget(&agent, &note.koid, ForgetMode::Tombstone, None, None)
+            .unwrap();
+        // another tenant's deny never binds acme's objects
+        let other = Subject::with_roles("globex-admin", &["admin"]).in_tenant("globex");
+        k.deploy_policy("GlobexNoDeletes", "Deny", "*", "*", "*", None, &other)
+            .unwrap();
+        let note2 = k
+            .remember(RememberRequest::create(agent.clone(), tmeta("Note")))
+            .unwrap();
+        k.forget(&agent, &note2.koid, ForgetMode::Tombstone, None, None)
+            .unwrap();
+    }
+
     #[test]
     fn cosine_and_jaccard_behave() {
         assert!((cosine(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
