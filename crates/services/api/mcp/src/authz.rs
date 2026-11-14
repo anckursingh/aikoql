@@ -14,6 +14,7 @@ const READ_TOOLS: &[&str] = &[
     "abi_version",
     "aikoql",
     "audit_report",
+    "compile_context",
     "compliance_report",
     "constraint_diagnostics",
     "document_list",
