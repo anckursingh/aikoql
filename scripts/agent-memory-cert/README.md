@@ -17,8 +17,10 @@ python scripts/agent-memory-cert/repeat.py 5   # five runs -> summary.json
   `<tmp>/aikoql-agent-memory-cert`). Nothing is written into the repo.
 
 The server is started with three tenant tokens (`acme` admin, `acme` editor,
-`acme` viewer) and one in another tenant (`globex`). It is restarted once
-mid-run (CHAT-MEM-003).
+`acme` viewer) and one in another tenant (`globex`), each naming its own agent
+(`TOKEN:TENANT:ROLES,agent=NAME`). It is restarted once mid-run
+(CHAT-MEM-003). Pass `AIKOQL_BIN` as an absolute path: the scripts run from
+their own directory.
 
 ## What it covers
 
@@ -39,11 +41,11 @@ vector RAG, graph RAG) are not run here.
 
 C5's real evidence is model-in-the-loop: the Vedas Ask run (`docs/CHAT.md`).
 
-## Results (2026-11-13, branch `fix/index-checkpoint-resume`, debug build)
+## Results (2026-11-14, branch `fix/index-checkpoint-resume`, debug build)
 
-Five runs: **27 checks pass 5/5, 2 are gaps 5/5, none flaky.**
+Three runs: **28 checks pass 3/3, 1 is a gap 3/3, none flaky.**
 
-Running the harness found five defects. All five are fixed on that branch,
+Running the harness found seven defects. All seven are fixed on that branch,
 each with a test that fails first:
 
 | Found by | Defect | Fix |
@@ -53,16 +55,17 @@ each with a test that fails first:
 | AUTH-001 | a `viewer` token could write and delete memory unless the enterprise licence was active | the viewer role is read-only in every mode: MCP, native protocol and REST writes |
 | SENS-001 | `recall` returned a stored AWS key verbatim | `recall` and `memory_search` return `[REDACTED:<KIND>]` |
 | (fix review) | `vector_led` mixed BM25 and cosine scores, and `memory_search`'s MMR divides by the top score | one score scale, `61/(61+rank)` |
+| PERS-005 | every TCP token was the agent `tcp-agent`, so two agents in one tenant were one principal and a "private" memory was shared by all of them | a token names its agent: `agent=NAME` in the role list; `agent_memory`'s `agent_id` defaults to the caller |
+| CHAT-MEM-005 | `agent_memory`'s TTL ran from `commit_ts`, which a background re-commit advances about 2 s after the write, so the TTL restarted | the TTL runs from the memory's creation (its KOID) |
 
-The two gaps are product decisions still to make:
+The first PERS-005 verdict was also partly a harness false positive: the
+check searched the whole response, which echoes the query. It now reads
+`results` only.
 
-- **PERS-005, per-agent private memory over TCP.** Every TCP token is the
-  agent `tcp-agent`, and `session_init` refuses an `agent_id` over TCP. Two
-  agents in one tenant are therefore one principal, and a "private" memory is
-  shared by all of them. The token spec (`TOKEN:TENANT:ROLES`) has no field
-  for the agent's name.
+The one gap is a product decision still to make:
+
 - **POLICY-001, policies are advisory.** `evaluate_policies` answers
-  "denied" for the real caller (`tcp-agent`), but the denied `forget` still
+  "denied" for the real caller, but the denied `forget` still
   succeeds. In the code, only the `evaluate_policies` tool reads policies; no
   write path consults them.
 
