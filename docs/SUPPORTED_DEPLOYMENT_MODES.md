@@ -72,10 +72,12 @@ to `users.db` only if no user was added or changed after the upgrade.
 - One serving certificate shared by both pods.
 - `/metrics` is unauthenticated and doubles as the liveness and
   readiness probe; neither probe reflects the node's role.
-- No `terminationGracePeriodSeconds` or `preStop`, and the server does
-  not handle SIGTERM: deleting the leader pod is a hard stop, and
-  writes resume only after the lease TTL lapses and the standby
-  promotes.
+- The server handles SIGTERM (PROD-3): a deleted leader pod fences its
+  writes, releases its lease and exits 0, and the standby takes over on
+  its next lease poll (TTL/5) instead of after a full TTL. The chart sets
+  no `terminationGracePeriodSeconds`; the Kubernetes default (30 s) covers
+  the stop, which waits at most 5 s for the standby plus one lease
+  write. A killed pod (SIGKILL, node loss) still waits out the TTL.
 - No licence wiring in the chart.
 - PVC snapshot backup is a manual procedure (chart README).
 

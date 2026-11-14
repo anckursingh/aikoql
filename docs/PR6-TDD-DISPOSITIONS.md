@@ -232,8 +232,8 @@ findings are Requirement KOs; the dispositions doc is the compiled
 knowledge document; each re-stamp commit below is reconciled via
 the A8 `reconcile` tool against that document.
 
-- knowledge document KOID: `01a1d9ee3d580000000000000000a9c9`
-- reconciled re-stamp commits: 351 (first 7f3150c, last 7577e94)
+- knowledge document KOID: `01a1d9ef95330000000000000000a9c9`
+- reconciled re-stamp commits: 352 (first 27ea1e4, last 7577e94)
 - trace answers: `R3-003->finding: R3-003 | R3-005->re-stamping`
 
 The trace pins the requirement leg (the finding is found by query).
@@ -246,12 +246,12 @@ follow-up, not this milestone.
 
 | finding | KOID | disposition | status |
 |---|---|---|---|
-| R3-001 | 01a1d9ee3d0d0000000000000000a9c9 | NOT A FINDING | closed |
-| R3-002 | 01a1d9ee3d3e0000000000000000a9c9 | FIXED | closed |
-| R3-003 | 01a1d9ee3d420000000000000000a9c9 | FIXED | closed |
-| R3-004 | 01a1d9ee3d470000000000000000a9c9 | COVERED | closed |
-| R3-005 | 01a1d9ee3d4b0000000000000000a9c9 | FIXED | closed |
-| R2-008 | 01a1d9ee3d510000000000000000a9c9 | CLOSED | closed |
+| R3-001 | 01a1d9ef94e70000000000000000a9c9 | NOT A FINDING | closed |
+| R3-002 | 01a1d9ef95190000000000000000a9c9 | FIXED | closed |
+| R3-003 | 01a1d9ef951e0000000000000000a9c9 | FIXED | closed |
+| R3-004 | 01a1d9ef95230000000000000000a9c9 | COVERED | closed |
+| R3-005 | 01a1d9ef95270000000000000000a9c9 | FIXED | closed |
+| R2-008 | 01a1d9ef952b0000000000000000a9c9 | CLOSED | closed |
 
-compiled-head: 4575c83659a34d9a20839288e90f96993b6e4bd8
+compiled-head: d60dbec102f3c8043d613123c5421f8955c26357
 <!-- DOGFOOD-COMPILED-END -->

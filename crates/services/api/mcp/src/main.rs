@@ -47,6 +47,7 @@ mod s3;
 mod sampling;
 mod session;
 mod shell;
+mod shutdown;
 mod sources;
 mod studio;
 mod tls;
@@ -559,8 +560,8 @@ fn main() {
         }
     });
     // standby reads: an HA standby serves reads until it wins the lease
-    let (ha_slot, ha_standby) = match begun {
-        Some(ha::Begun::Lead(slot)) => (Some(slot), None),
+    let (ha_held, ha_standby) = match begun {
+        Some(ha::Begun::Lead(held)) => (Some(held), None),
         Some(ha::Begun::Standby(c)) => (None, Some(c)),
         None => (None, None),
     };
@@ -621,9 +622,18 @@ fn main() {
         // a metrics listener.
         crate::session::set_users(Arc::new(Mutex::new(store)));
     }
-    if let (Some(slot), Some(a)) = (&ha_slot, &admin) {
-        let _ = slot.set(a.clone()); // the renewer can now fence writes
+    if let (Some(held), Some(a)) = (&ha_held, &admin) {
+        let _ = held.admin.set(a.clone()); // the renewer can now fence writes
     }
+    // PROD-3: from here a SIGTERM (or Ctrl-C) is a stop, not a crash —
+    // writes fenced, the lease released, exit 0. The stdio path settles
+    // the same way when its loop ends.
+    let stop = shutdown::Stop {
+        admin: admin.clone(),
+        held: ha_held.clone(),
+        ttl: std::time::Duration::from_millis(cfg.ha_ttl_ms),
+    };
+    shutdown::watch(stop.clone());
     // R4d: after the kernel created the directory (a fresh one must be
     // empty when it opens)
     if let (replication::Role::Leader, Some(addr), false) =
@@ -1213,7 +1223,10 @@ fn main() {
         // T-59 (P3-010): the maintainer is attached from a spawned thread
         // (see the serve setup above) — a close->rapid-EOF shutdown can
         // read the slot before the attach lands and skip the checkpoint.
-        // Wait for the attach (bounded) so the hand-off is deterministic.
+        // Wait for the attach (bounded) so the hand-off is deterministic —
+        // BEFORE the fence: the attach starts the maintainer, a write the
+        // fence would refuse ("not leader: shutting down"), skipping the
+        // checkpoint and leaving the process to outlive its client.
         let maintainer = {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             loop {
@@ -1228,6 +1241,10 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         };
+        // PROD-3: the loop ended (stdin EOF or the `shutdown` method) —
+        // fence and hand the lease over before the checkpoint, so a
+        // standby is not kept waiting on this node's index flush.
+        stop.settle("stdio closed");
         if let Some(m) = maintainer {
             let t0 = std::time::Instant::now();
             // justified: Mutex poison is unrecoverable
