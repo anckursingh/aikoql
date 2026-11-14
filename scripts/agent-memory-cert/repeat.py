@@ -11,8 +11,12 @@ from mcp import HERE  # noqa: E402  (the work dir)
 n = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 runs = []
 for i in range(n):
-    subprocess.run([sys.executable, str(SRC / "c1_c8.py")], cwd=SRC, stdout=subprocess.DEVNULL,
-                   stderr=subprocess.DEVNULL, env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"})
+    (HERE / "results.json").unlink(missing_ok=True)  # never summarise a stale run
+    done = subprocess.run([sys.executable, str(SRC / "c1_c8.py")], cwd=SRC, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.PIPE, text=True,
+                          env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"})
+    if done.returncode != 0:
+        sys.exit(f"run {i + 1} failed: {done.stderr[-2000:]}")
     runs.append(json.loads((HERE / "results.json").read_text(encoding="utf-8")))
     print(f"run {i + 1}/{n} done", flush=True)
 by = collections.OrderedDict()

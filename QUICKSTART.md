@@ -39,7 +39,7 @@ SE2-M41. Legacy `.redb` files and v1 WALs are no longer readable: opening
 one fails closed with an explicit error.
 
 ### TCP Mode
-Accepts multiple MCP client connections over TCP. Requires a token — `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]]` (repeatable; also `AIKOQL_TCP_TOKEN` env, `AIKOQL_TCP_TOKEN_FILE`, or `tcp_tokens` in `aikoql.toml`). Refuses to start without one — and a bare `TOKEN` (no roles) exits 2, roles are mandatory. A `viewer` token is read-only (read tools, and only `MATCH` through `aikoql`). Every TCP token is the same agent identity (`tcp-agent`), told apart only by tenant and roles, so per-agent private memory is not expressible over TCP.
+Accepts multiple MCP client connections over TCP. Requires a token — `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2[,agent=NAME]]]` (repeatable; also `AIKOQL_TCP_TOKEN` env, `AIKOQL_TCP_TOKEN_FILE`, or `tcp_tokens` in `aikoql.toml`). Refuses to start without one — and a bare `TOKEN` (no roles) exits 2, roles are mandatory. A `viewer` token is read-only (read tools, and only `MATCH` through `aikoql`). A token names its agent with an `agent=NAME` entry in the role list (`--tcp-token s3cret:acme:editor,agent=alice`); without one the token is the agent `tcp-agent`. Each named agent is its own principal: its private memories, its `agent_memory` (over TCP `agent_id` is always the token's agent), its audit subject and its own rate budget. Give every agent its own token.
 
 ```
 aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin [database_path]

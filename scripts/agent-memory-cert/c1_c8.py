@@ -20,8 +20,9 @@ EV = lambda src: [{"source_artifact": src, "method": "human_provided"}]
 from mcp import Server, Session, BIN, HERE
 DB = HERE / "mem-db"
 LOG = HERE / "server.log"
-TOKENS = ["acme-agent:acme:admin", "acme-bob:acme:editor", "acme-viewer:acme:viewer",
-          "globex-agent:globex:admin"]
+# each token names its agent (agent=NAME): two agents of one tenant are two principals
+TOKENS = ["acme-agent:acme:admin,agent=assistant-1", "acme-bob:acme:editor,agent=bob",
+          "acme-viewer:acme:viewer,agent=auditor", "globex-agent:globex:admin,agent=globex-1"]
 
 results = []
 
@@ -345,12 +346,9 @@ def _(c):
         _, his = b.tool("memory_search", query="salary band")
     finally:
         b.close()
-    seen_by_owner = "salary" in json.dumps(mine).lower()
-    leak = "salary" in json.dumps(his).lower()
-    if seen_by_owner and leak:
-        # every TCP token is the agent "tcp-agent" (session_init refuses an
-        # agent_id over TCP): two agents in one tenant are one principal
-        return "GAP", "two TCP tokens in one tenant are the same agent ('tcp-agent'): per-agent private memory is not expressible over TCP"
+    # the results only: the response echoes the query ("salary band")
+    seen_by_owner = "salary" in json.dumps(mine.get("results")).lower()
+    leak = "salary" in json.dumps(his.get("results")).lower()
     return ("PASS" if seen_by_owner and not leak else "FAIL"), f"owner sees={seen_by_owner} other user sees={leak}"
 
 
@@ -378,10 +376,10 @@ def _(c):
 @check("C7", "POLICY-001", "a deny policy blocks the action itself")
 def _(c):
     s = c["a"]
-    # the caller over TCP is the agent "tcp-agent" (see PERS-005)
-    s.tool("deploy_policy", name="NoAgentDeletes", effect="Deny", principal="tcp-agent",
+    # the caller over TCP is its token's agent
+    s.tool("deploy_policy", name="NoAgentDeletes", effect="Deny", principal="assistant-1",
            action="Delete", resource_type="Note")
-    ok, ev = s.tool("evaluate_policies", principal="tcp-agent", action="Delete", resource_type="Note")
+    ok, ev = s.tool("evaluate_policies", principal="assistant-1", action="Delete", resource_type="Note")
     _, d = s.tool("remember", type_name="Note", properties={"text": "a note the agent may not delete"})
     ok2, f = s.tool("forget", koid=koid_of(d))
     evaluated = '"allowed": false' in json.dumps(ev).lower()
