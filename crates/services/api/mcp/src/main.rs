@@ -345,6 +345,22 @@ fn main() {
         ),
     }
 
+    // PROD-1 (G1): users and roles live in a node-local users.db, outside
+    // replication and outside the storage fence — after a promotion the new
+    // leader has a different user table. Refuse the combination (exit 2, an
+    // operator fix) until the store replicates; a deployment must not look
+    // supported while its identity semantics are undefined.
+    if license::LICENSE_STATE
+        .get()
+        .is_some_and(|s| s.features.multi_user)
+        && (replicate_listen.is_some() || cfg.follow.is_some() || cfg.ha_lease.is_some())
+    {
+        eprintln!(
+            "a multi-user license does not combine with replication              (--replicate-listen, --follow, --ha-lease): users and roles are              node-local in this version — see docs/SUPPORTED_DEPLOYMENT_MODES.md"
+        );
+        std::process::exit(2);
+    }
+
     // Enterprise audit retention (Task 7): startup rotation, gated on the
     // license's audit-export flag — community mode never touches the log.
     if license::LICENSE_STATE

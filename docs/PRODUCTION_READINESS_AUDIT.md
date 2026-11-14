@@ -28,7 +28,7 @@ reports nothing.
 
 | # | Gap | Severity | Section |
 |---|---|---|---|
-| G1 | A multi-user licence combined with replication or `--ha-lease` starts without refusal; the docs call the combination unsupported | high | 3 |
+| G1 | A multi-user licence combined with replication or `--ha-lease` starts without refusal; the docs call the combination unsupported — **closed by PROD-1** (startup now exits 2) | high | 3 |
 | G2 | `users.db` is node-local SQLite, outside replication and outside the storage fence | high | 3 |
 | G3 | The tool audit log is a node-local file; it does not follow a promotion | high | 3 |
 | G4 | No SIGTERM/SIGINT handler: a pod termination is a hard kill and the lease is left to expire | high | 6 |

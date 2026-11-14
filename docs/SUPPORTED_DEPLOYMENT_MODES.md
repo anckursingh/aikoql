@@ -31,12 +31,12 @@ non-loopback address refuses to start.
 |---|---|---|
 | Static bearer token (`--tcp-token`) | supported | supported — same Secret on both nodes |
 | Config-file logins + OAuth (community) | supported | supported — grants live in the replicated store; a sign-in made before failover keeps working (`ha_an_oauth_sign_in_survives_a_failover`) |
-| Enterprise multi-user (`multi-user` licence) | supported | **unsupported, and not refused at startup** |
-| Enterprise OIDC SSO (`oidc-sso` licence, implies multi-user) | supported | **unsupported, and not refused at startup** |
+| Enterprise multi-user (`multi-user` licence) | supported | **unsupported — refused at startup (exit 2)** |
+| Enterprise OIDC SSO (`oidc-sso` licence, implies multi-user) | supported | **unsupported — refused at startup (exit 2)** |
 
 Why the enterprise rows are unsupported with replication: users and
 roles live in `{db}/users.db`, a SQLite file each node owns separately.
-After a promotion:
+If the combination were allowed, then after a promotion:
 
 - users that exist only in that table are refused until they sign in
   again (fail-closed);
@@ -45,10 +45,10 @@ After a promotion:
 - the tool audit log (`{db}.audit.log`) starts from the new leader's
   own file.
 
-Until the user table moves into the replicated store, **do not run a
-multi-user or OIDC licence with `--replicate-listen`, `--follow` or
-`--ha-lease`.** The server will start; it should not. Making it refuse
-is the first code change planned after this audit.
+Until the user table moves into the replicated store, a server with a
+multi-user or OIDC licence refuses to start with `--replicate-listen`,
+`--follow` or `--ha-lease` (PROD-1, test
+`multi_user_with_replication_refuses_start`).
 
 ## 3. Sessions and clients
 
