@@ -2405,6 +2405,13 @@ impl Kernel {
                     koid,
                 });
             }
+            // POLICY-ENF: a deployed Write deny on this type blocks the create
+            self.auth.read().unwrap().check_create(
+                &req.context.subject,
+                &req.metadata.tenant,
+                koid,
+                &req.metadata.type_name,
+            )?;
             s
         } else {
             let h = head.as_ref().unwrap();
@@ -3498,6 +3505,25 @@ impl Kernel {
     // ---- forget (MRFC-0011 §6.2) -------------------------------------------
 
     pub fn forget(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+        mode: ForgetMode,
+        expected_version: Option<u64>,
+        note: Option<String>,
+    ) -> KResult<Forgotten> {
+        let is_auth_meta = self.head_object(koid)?.is_some_and(|h| {
+            h.metadata.type_name == ROLE_TYPE || h.metadata.type_name == POLICY_TYPE
+        });
+        let out = self.forget_locked(ctx, koid, mode, expected_version, note)?;
+        // POLICY-ENF: forgetting a policy or role lifts it at once
+        if is_auth_meta {
+            self.refresh_auth_cache()?;
+        }
+        Ok(out)
+    }
+
+    fn forget_locked(
         &self,
         ctx: impl Into<KnowledgeContext>,
         koid: &KOID,
