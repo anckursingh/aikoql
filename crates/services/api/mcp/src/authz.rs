@@ -213,10 +213,22 @@ pub(crate) fn check_rest(roles: &[String], admin_only: bool) -> Result<(), ApiEr
 
 #[cfg(test)]
 mod tests {
-    use super::{check_capability, TrustMode};
+    use super::{check_capability, check_scope, TrustMode};
 
     fn roles(r: &[&str]) -> Vec<String> {
         r.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// MEM-VIEWER follow-up: compile_context only reads (its package cache
+    /// is in-process), so a viewer and an mcp:read token may call it.
+    #[test]
+    fn compile_context_is_a_read() {
+        for r in ["viewer", super::READ_SCOPE_ROLE] {
+            assert!(
+                check_scope(&roles(&[r]), "compile_context", &serde_json::json!({})).is_ok(),
+                "{r} must reach compile_context"
+            );
+        }
     }
 
     #[test]
