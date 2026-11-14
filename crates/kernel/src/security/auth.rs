@@ -65,18 +65,59 @@ fn access_denied(subject: &Subject, action: Action, koid: KOID) -> KError {
     }
 }
 
+/// POLICY-ENF: a `deploy_policy` Deny (`effect`/`principal`/`action`/
+/// `resource_type`). `None` fields are the `*` wildcard. Only Deny is
+/// enforced: a deployed Allow never grants (it stays advisory), and
+/// `condition` is not evaluated, so a conditional Deny binds always.
+#[derive(Clone, Debug)]
+struct DenyRule {
+    tenant: Option<String>,
+    principal: Option<String>,
+    action: Option<Action>,
+    resource_type: Option<String>,
+}
+
+fn wild(s: String) -> Option<String> {
+    (s != "*").then_some(s)
+}
+
+/// A deploy-shape policy that is a Deny, or `None`. An unknown action name
+/// is skipped rather than widened to `*`.
+fn deny_rule(ko: &KnowledgeObject) -> Option<DenyRule> {
+    let p = &ko.properties;
+    if !text_prop(p, "effect")?.eq_ignore_ascii_case("deny") {
+        return None;
+    }
+    let action = text_prop(p, "action")?.to_ascii_lowercase();
+    let action = match action.as_str() {
+        "*" => None,
+        a => Some(Action::from_name(a)?),
+    };
+    Some(DenyRule {
+        tenant: ko.metadata.tenant.clone(),
+        principal: wild(text_prop(p, "principal")?),
+        action,
+        resource_type: wild(text_prop(p, "resource_type")?),
+    })
+}
+
 /// In-memory authorization cache.
 #[derive(Clone, Debug, Default)]
 pub struct AuthManager {
     role_parents: HashMap<String, Vec<String>>,
     policies: HashMap<String, Vec<AclEntry>>,
+    denies: Vec<DenyRule>,
 }
 
 impl AuthManager {
     /// Load role and policy objects from the repository.
     pub fn load(repo: &KnowledgeRepository) -> KResult<Self> {
         let mut auth = AuthManager::default();
-        for (koid, _version, ts, _state) in repo.scan_heads()? {
+        for (koid, _version, ts, state) in repo.scan_heads()? {
+            // a forgotten role or policy no longer binds anyone
+            if state == LifecycleState::Deleted {
+                continue;
+            }
             let Some(ko) = repo.get_object_version(&koid, ts)? else {
                 return Err(KError::Store("head points at missing version".into()));
             };
@@ -89,6 +130,8 @@ impl AuthManager {
                 if let Some(target) = text_prop(&ko.properties, "target_type") {
                     auth.policies
                         .insert(target, parse_acl_rules(&ko.properties, "rules"));
+                } else if let Some(rule) = deny_rule(&ko) {
+                    auth.denies.push(rule);
                 }
             }
         }
@@ -151,6 +194,8 @@ impl AuthManager {
         }
         let is_admin = subject.is_admin();
         let principals = self.effective_principals(subject);
+        // POLICY-ENF: an explicit deployed Deny overrides ownership and admin.
+        self.check_denies(subject, &principals, tenant, koid, type_name, action)?;
         // T-55 (POC-3 P3-009 MEDIUM): a tenant-less READ is confined to
         // shared (untenanted) rows — scoped data fails closed instead of
         // leaking every tenant's head. Only an explicit admin role (direct
@@ -187,6 +232,48 @@ impl AuthManager {
             }
         }
         Err(access_denied(subject, action, koid))
+    }
+
+    /// POLICY-ENF: a create has no head to authorize, so `remember` asks
+    /// this before minting an object of `type_name`.
+    pub(crate) fn check_create(
+        &self,
+        subject: &Subject,
+        tenant: &Option<String>,
+        koid: KOID,
+        type_name: &str,
+    ) -> KResult<()> {
+        if self.denies.is_empty() {
+            return Ok(());
+        }
+        let principals = self.effective_principals(subject);
+        self.check_denies(subject, &principals, tenant, koid, type_name, Action::Write)
+    }
+
+    fn check_denies(
+        &self,
+        subject: &Subject,
+        principals: &HashSet<String>,
+        tenant: &Option<String>,
+        koid: KOID,
+        type_name: &str,
+        action: Action,
+    ) -> KResult<()> {
+        // roles and policies themselves are exempt: a `* * *` deny must not
+        // lock the admin out of forgetting it
+        if type_name == POLICY_TYPE || type_name == ROLE_TYPE {
+            return Ok(());
+        }
+        let hit = self.denies.iter().any(|r| {
+            (r.tenant.is_none() || r.tenant == *tenant)
+                && r.principal.as_ref().is_none_or(|p| principals.contains(p))
+                && r.action.is_none_or(|a| a == action)
+                && r.resource_type.as_deref().is_none_or(|t| t == type_name)
+        });
+        if hit {
+            return Err(access_denied(subject, action, koid));
+        }
+        Ok(())
     }
 
     fn effective_principals(&self, subject: &Subject) -> HashSet<String> {
