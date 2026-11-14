@@ -225,3 +225,108 @@ fn prod4_probes_use_the_health_endpoints_not_the_scrape() {
         "the stop budget (PROD-3's drain + lease release) is explicit"
     );
 }
+
+/// PROD-7 (G8): the alert rules are an asset with laws of their own.
+/// Every alert names a severity and links a runbook section that exists;
+/// every `aikoql_*` series an expression reads is one the server really
+/// exports (a renamed series must fail here, not page nobody at 3 a.m.).
+#[test]
+fn prod7_alert_rules_link_real_runbooks_and_read_real_series() {
+    let rules = read(&root().join("deploy/prometheus/aikoql-alerts.yaml"));
+    let runbooks = read(&root().join("docs/RUNBOOKS.md"));
+    let src: String = ["http.rs", "node.rs", "replication.rs"]
+        .iter()
+        .map(|f| read(&root().join("crates/services/api/mcp/src").join(f)))
+        .collect();
+
+    let alerts: Vec<&str> = rules
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("- alert: "))
+        .collect();
+    assert!(
+        alerts.len() >= 12,
+        "the rule file lists its alerts: {alerts:?}"
+    );
+    let count = |needle: &str| {
+        rules
+            .lines()
+            .filter(|l| l.trim().starts_with(needle))
+            .count()
+    };
+    assert_eq!(count("severity: "), alerts.len(), "a severity per alert");
+    assert_eq!(count("runbook_url: "), alerts.len(), "a runbook per alert");
+
+    let anchors: Vec<String> = runbooks
+        .lines()
+        .filter_map(|l| l.strip_prefix("## "))
+        .map(|h| h.trim().to_lowercase().replace(' ', "-"))
+        .collect();
+    for line in rules
+        .lines()
+        .filter(|l| l.trim().starts_with("runbook_url: "))
+    {
+        let anchor = line.rsplit('#').next().unwrap().trim();
+        assert!(
+            line.contains("docs/RUNBOOKS.md#") && anchors.iter().any(|a| a == anchor),
+            "no runbook section for {line:?} (sections: {anchors:?})"
+        );
+    }
+    // every alert is the heading of its own section
+    for alert in &alerts {
+        assert!(
+            anchors.contains(&alert.to_lowercase()),
+            "RUNBOOKS.md has no section for {alert}"
+        );
+    }
+
+    // Review of #43: `sum` over a series that is gone returns nothing, so a
+    // total outage (every pod down or unscraped) never fires AikoqlNoWriter.
+    // An `absent()` rule covers it; and a leader whose engine refuses writes
+    // looks healthy by role, so its own series has an alert.
+    assert!(
+        rules.contains("absent(aikoql_node_role"),
+        "no rule fires when every node's series vanish"
+    );
+    assert!(
+        alerts.contains(&"AikoqlNoNodesReporting") && alerts.contains(&"AikoqlWriteFenced"),
+        "the total-outage and write-fenced alerts exist: {alerts:?}"
+    );
+    assert!(
+        rules.contains("aikoql_node_engine_fenced"),
+        "an engine that cannot write is alertable"
+    );
+
+    let mut series: Vec<&str> = rules
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|t| t.starts_with("aikoql_"))
+        .collect();
+    series.sort_unstable();
+    series.dedup();
+    assert!(
+        series.len() >= 8,
+        "the rules read the server's series: {series:?}"
+    );
+    for name in series {
+        assert!(src.contains(name), "no server code exports {name}");
+    }
+}
+
+/// PROD-7: a PodDisruptionBudget keeps a voluntary disruption (a node
+/// drain, a cluster upgrade) from evicting the leader and its standby
+/// together. `maxUnavailable: 1` of two never blocks draining one node.
+#[test]
+fn prod7_a_pdb_allows_one_member_down_at_a_time() {
+    let pdb = read(&root().join("deploy/helm/aikoql/templates/pdb.yaml"));
+    assert!(pdb.contains("kind: PodDisruptionBudget"));
+    assert!(pdb.contains("apiVersion: policy/v1"));
+    assert!(
+        pdb.contains("maxUnavailable: 1"),
+        "one at a time, never zero"
+    );
+    assert!(
+        pdb.contains(".Values.podDisruptionBudget.enabled"),
+        "an operator can turn it off"
+    );
+    let values = read(&root().join("deploy/helm/aikoql/values.yaml"));
+    assert!(values.contains("podDisruptionBudget:"));
+}

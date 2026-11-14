@@ -2596,3 +2596,107 @@ fn an_archive_outage_is_visible_and_heals_without_losing_log() {
     assert_eq!(uploaded, head, "{healed}");
     assert!(uploaded > stuck, "the held log was uploaded: {healed}");
 }
+
+/// Wait until the archiver goes quiet: it logs whenever it uploads, so a
+/// second with no new "log up to seq" line means the log is up.
+fn archive_settled(log: &mpsc::Receiver<String>) {
+    wait_line(log, "archive: log up to seq");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut quiet_since = std::time::Instant::now();
+    while quiet_since.elapsed() < Duration::from_secs(1) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the archive never settled"
+        );
+        if let Ok(line) = log.recv_timeout(Duration::from_millis(100)) {
+            if line.contains("archive: log up to seq") {
+                quiet_since = std::time::Instant::now();
+            }
+        }
+    }
+}
+
+/// PROD-7 (G8): a backup is proven by restoring it. `restore-drill`
+/// restores the archive into a scratch directory of its own, opens the
+/// database, checks it, writes a machine-readable report and removes the
+/// scratch — exit 0 only when every check passed, so a scheduler can
+/// alert on the exit code. It never touches a serving database.
+#[test]
+fn the_restore_drill_restores_verifies_reports_and_cleans_up() {
+    let (ldir, store) = (tmp("drill-leader"), tmp("drill-archive"));
+    let mut leader = Mcp::start_logged(
+        &ldir,
+        &[
+            "--archive",
+            store.to_str().unwrap(),
+            "--archive-log-ms",
+            "200",
+        ],
+    );
+    let log = leader.log.take().unwrap();
+    for i in 0..10 {
+        leader.remember(i);
+    }
+    archive_settled(&log);
+    drop(leader);
+
+    let reports = tmp("drill-reports");
+    std::fs::create_dir_all(&reports).unwrap();
+    let drill = |archive: &Path, name: &str, extra: &[&str]| -> (Option<i32>, J) {
+        let report = reports.join(name);
+        let out = Command::new(bin())
+            .arg("restore-drill")
+            .args(["--archive", archive.to_str().unwrap()])
+            .args(["--report", report.to_str().unwrap()])
+            .args(extra)
+            .output()
+            .unwrap();
+        let body = std::fs::read(&report).unwrap_or_else(|e| {
+            panic!(
+                "no report at {}: {e}\n{}",
+                report.display(),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        (out.status.code(), serde_json::from_slice(&body).unwrap())
+    };
+
+    let (code, ok) = drill(&store, "ok.json", &["--expect-min-seq", "1"]);
+    assert_eq!(code, Some(0), "a good archive passes: {ok}");
+    assert_eq!(ok["ok"], json!(true), "{ok}");
+    assert!(ok["restored_seq"].as_u64().unwrap() > 0, "{ok}");
+    assert!(ok["object_count"].as_u64().unwrap() >= 10, "{ok}");
+    assert!(ok["bytes_restored"].as_u64().unwrap() > 0, "{ok}");
+    assert!(ok["duration_ms"].is_u64(), "{ok}");
+    let checks = ok["checks"].as_array().unwrap();
+    assert!(
+        checks.len() >= 3 && checks.iter().all(|c| c["ok"] == json!(true)),
+        "every check passed: {ok}"
+    );
+    let scratch = ok["scratch"].as_str().unwrap();
+    assert!(!Path::new(scratch).exists(), "the scratch copy is removed");
+
+    // the archive does not reach the seq the operator expects: a failure
+    let (code, short) = drill(&store, "short.json", &["--expect-min-seq", "99999999"]);
+    assert_eq!(code, Some(1), "{short}");
+    assert_eq!(short["ok"], json!(false), "{short}");
+    assert!(
+        short["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["ok"] == json!(false) && c["name"] == json!("expected seq")),
+        "{short}"
+    );
+
+    // nothing to restore: a failure with the reason, not a crash
+    let empty = tmp("drill-empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let (code, none) = drill(&empty, "empty.json", &[]);
+    assert_eq!(code, Some(1), "{none}");
+    assert_eq!(none["ok"], json!(false), "{none}");
+    assert!(
+        none["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "{none}"
+    );
+}
