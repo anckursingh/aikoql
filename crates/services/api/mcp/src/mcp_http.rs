@@ -198,7 +198,14 @@ impl McpHttp {
         let caller = match self.auth.lookup(token) {
             Some(ident) => Caller {
                 principal: token.to_string(),
-                agent: "http-agent".into(),
+                // MEM-AGENT: a token that names its agent (`agent=NAME`) is
+                // that agent here too; an unnamed one stays `http-agent`, so
+                // objects it already owns stay reachable after an upgrade
+                agent: if ident.agent == crate::session::DEFAULT_TCP_AGENT {
+                    "http-agent".into()
+                } else {
+                    ident.agent.clone()
+                },
                 tenant: ident.tenant.clone(),
                 roles: ident.roles.clone(),
             },

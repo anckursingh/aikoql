@@ -210,10 +210,32 @@ pub(crate) fn commit_ts_millis(ts: u64) -> u64 {
     ts >> 16
 }
 
+/// The object types an agent keeps memories in: what it stored there is
+/// content, and a credential in it must not come back raw on a direct read.
+pub(crate) fn is_memory_type(type_name: &str) -> bool {
+    matches!(type_name, "Memory" | "Fact" | "Experience")
+        || type_name.starts_with("aikoql:memory")
+        || type_name.starts_with("aikoql:lesson")
+        || type_name.starts_with("aikoql:experience")
+}
+
+/// Mask credentials in every string of a JSON value (MEM-SECRET).
+pub(crate) fn mask_credentials(v: &mut J) {
+    match v {
+        J::String(s) => *s = aikoql_ingestion::redact_credentials(s),
+        J::Array(a) => a.iter_mut().for_each(mask_credentials),
+        J::Object(o) => o.values_mut().for_each(mask_credentials),
+        _ => {}
+    }
+}
+
 pub(crate) fn ko_json(ko: &KnowledgeObject) -> J {
     let mut props = serde_json::Map::new();
     for (k, v) in &ko.properties {
         props.insert(k.clone(), value_to_json(v));
+    }
+    if is_memory_type(&ko.metadata.type_name) {
+        props.values_mut().for_each(mask_credentials);
     }
     // v0.3 K1: extensions (epistemic state, history, evidence, authority,
     // scope, trust) must survive to the query boundary — dropping them here

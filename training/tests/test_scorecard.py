@@ -363,3 +363,109 @@ def test_finetune_script_targets_a_05b_class_model_with_lora():
 
 # (T-20: the marker-parse pins moved to tests/test_protocol.py —
 # the JSON protocol replaced the QUERY:/ANSWER: prose contract.)
+
+
+def test_training_rows_teach_the_model_to_stop():
+    """Every completion ends in the tokenizer's EOS, labelled. Without it
+    the LoRA never learned where a reply ends: served through Ollama it ran
+    past its JSON object ("{...} }", a second object) and the server's
+    one-object parser rejected the reply as malformed."""
+    import importlib.util
+
+    root = Path(__file__).parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "finetune", root / "training" / "scripts" / "finetune.py")
+    finetune = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(finetune)
+
+    class CharTokenizer:
+        eos_token_id = 0
+
+        def __call__(self, text, truncation=True, max_length=None):
+            ids = [ord(c) for c in text][:max_length]
+            return {"input_ids": ids}
+
+    [row] = finetune._encode_rows(CharTokenizer(), [("Q:", '{"a":1}')], 64)
+    assert row["input_ids"][-1] == CharTokenizer.eos_token_id
+    assert row["labels"][-1] == CharTokenizer.eos_token_id, "EOS is trained"
+    assert row["labels"][:2] == [-100, -100], "the prompt stays unlabelled"
+    assert len(row["attention_mask"]) == len(row["input_ids"])
+
+
+def test_rows_longer_than_the_window_are_dropped_not_cut():
+    """A row cut at the window teaches nothing (a prompt that fills it has
+    no labels) or teaches the wrong stop (an EOS after half a JSON object).
+    Measured on the Vedas retrain: at --seq-len 256 all 300 answer-skill
+    rows were cut — 210 had no labels, 90 ended in EOS mid-object, and the
+    served model stopped inside a string. Such rows are dropped."""
+    import importlib.util
+
+    root = Path(__file__).parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "finetune", root / "training" / "scripts" / "finetune.py")
+    finetune = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(finetune)
+
+    class CharTokenizer:
+        eos_token_id = 0
+
+        def __call__(self, text, truncation=True, max_length=None):
+            ids = [ord(c) for c in text][:max_length]
+            return {"input_ids": ids}
+
+    rows = [("Q:", '{"a":1}'),            # 9 chars + EOS: fits in 12
+            ("Q:", '{"answer":"long"}'),  # completion cut by the window
+            ("a long prompt that fills it", "{}")]
+    encs = finetune._encode_rows(CharTokenizer(), rows, 12)
+    assert len(encs) == 1, "only the row that fits whole is kept"
+    assert encs[0]["input_ids"][-1] == 0
+
+
+def test_predict_sends_the_whole_prompt_to_the_models_device():
+    """predict cut every prompt at 256 tokens — the answer prompt (median
+    373 on the AcmePay corpus) lost its end, where the reply format is
+    spelled out — and left the inputs on the CPU, so --device cuda crashed
+    ("index is on cpu, different from other tensors on cuda:0")."""
+    import importlib.util
+
+    root = Path(__file__).parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "finetune", root / "training" / "scripts" / "finetune.py")
+    finetune = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(finetune)
+    torch = __import__("pytest").importorskip("torch")
+
+    seen = {}
+
+    class Enc(dict):
+        def to(self, device):
+            seen["moved_to"] = device
+            return self
+
+    class Tok:
+        pad_token_id = 0
+        padding_side = "right"
+
+        def __call__(self, texts, padding=True, truncation=False, max_length=None,
+                     return_tensors=None):
+            ids = [[ord(c) for c in t] for t in texts]
+            if truncation and max_length:
+                ids = [i[:max_length] for i in ids]
+            seen["lengths"] = [len(i) for i in ids]
+            n = max(len(i) for i in ids)
+            return Enc(input_ids=torch.tensor([[0] * (n - len(i)) + i for i in ids]),
+                       attention_mask=torch.tensor([[0] * (n - len(i)) + [1] * len(i) for i in ids]))
+
+        def batch_decode(self, seqs, skip_special_tokens=True):
+            return ["" for _ in seqs]
+
+    class Model:
+        device = "meta-device"
+
+        def generate(self, input_ids=None, attention_mask=None, **kw):
+            return input_ids
+
+    long_prompt = "x" * 900
+    finetune._generate(Model(), Tok(), [long_prompt], 1, 8)
+    assert seen["lengths"] == [900], "the prompt reaches the model whole"
+    assert seen.get("moved_to") == "meta-device", "the inputs go to the model's device"

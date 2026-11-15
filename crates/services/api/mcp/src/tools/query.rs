@@ -330,6 +330,71 @@ pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
     }))
 }
 
+/// MEM-RYW — the semantic-led search `recall` and `memory_search` run when
+/// the question embeds. Embedded memories are ranked by the vector leg alone
+/// (on natural-language questions the lexical leg mostly matches stopwords —
+/// the measured reason recall is vector-led). A memory with no vector yet —
+/// written a moment ago (`embed` attaches it asynchronously) or stored
+/// without `embed` — is in no vector list, so it competes by its text rank
+/// instead: both lists contribute `1/(61 + rank)`, the vector list only for
+/// embedded memories, the text list only for the rest. An agent always
+/// reads its own writes.
+pub(crate) fn vector_led(
+    k: &Kernel,
+    q: SimilarityQuery,
+) -> aikoql_kernel::KResult<Vec<crate::ScoredKO>> {
+    let want = q.k;
+    let vector_hits = k.find_similar(SimilarityQuery {
+        fusion: crate::Fusion::VectorOnly,
+        ..q.clone()
+    })?;
+    let text_hits = k.find_similar(SimilarityQuery {
+        vector: None,
+        fusion: crate::Fusion::TextOnly,
+        ..q
+    })?;
+    let has_vector = |h: &crate::ScoredKO| {
+        h.ko.semantic
+            .as_ref()
+            .is_some_and(|s| s.embedding.is_some())
+    };
+    // 61/(61 + rank): RRF's 1/(k0 + rank) with k0 = 60, scaled so the best
+    // is exactly 1.0 — one scale for both lists, monotone in rank
+    let rank = |i: usize| 61.0 / (61.0 + i as f32);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ranked: Vec<(f32, crate::ScoredKO)> = Vec::new();
+    for (i, h) in vector_hits
+        .into_iter()
+        .filter(|h| h.score > 0.0)
+        .enumerate()
+    {
+        if seen.insert(h.ko.koid) {
+            ranked.push((rank(i), h));
+        }
+    }
+    let pending = text_hits
+        .into_iter()
+        .filter(|h| h.score > 0.0 && !has_vector(h));
+    for (j, h) in pending.enumerate() {
+        if seen.insert(h.ko.koid) {
+            ranked.push((rank(j), h));
+        }
+    }
+    // stable: on a tie the vector hit keeps its place ahead
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    // One scale for the caller: the two lists score differently (cosine
+    // ≤ 1, BM25 unbounded), and memory_search's MMR divides by the top
+    // score — each hit's score becomes its rank score.
+    Ok(ranked
+        .into_iter()
+        .take(want)
+        .map(|(r, mut h)| {
+            h.score = r;
+            h
+        })
+        .collect())
+}
+
 /// The query's embedding, or why there is none. The model fails fast while
 /// background enrichment holds it (T-44); a deliberate retrieval waits a
 /// little before falling back to text-only — and says so.
@@ -372,26 +437,30 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
     let subject = subject_of(args);
     let (vector, semantic_note) = embed_query(k, query);
     let semantic = vector.is_some();
-    let hits = k
-        .find_similar(SimilarityQuery {
-            context: subject.clone().into(),
-            filter: None,
-            text: Some(query.to_string()),
-            vector,
-            embedding_model: None,
-            // headroom for the system records and statuses filtered below
-            k: k_req * 2,
-            // semantic-led by default: on natural-language questions the
-            // lexical leg mostly matches stopwords (6 no-shared-word
-            // questions: vector 5/6 top-1, rrf 3/6, text 2/6); an explicit
-            // fusion (e.g. rrf for an exact identifier) wins
-            fusion: match (args.get("fusion"), semantic) {
-                (Some(_), _) => parse_fusion(args),
-                (None, true) => crate::Fusion::VectorOnly,
-                (None, false) => crate::Fusion::TextOnly,
-            },
-        })
-        .map_err(|e| e.to_string())?;
+    let q = SimilarityQuery {
+        context: subject.clone().into(),
+        filter: None,
+        text: Some(query.to_string()),
+        vector,
+        embedding_model: None,
+        // headroom for the system records and statuses filtered below
+        k: k_req * 2,
+        fusion: crate::Fusion::TextOnly,
+    };
+    // semantic-led by default: on natural-language questions the lexical
+    // leg mostly matches stopwords (6 no-shared-word questions: vector 5/6
+    // top-1, rrf 3/6, text 2/6) — with memories not yet embedded ranked by
+    // text (`vector_led`); an explicit fusion (e.g. rrf for an exact
+    // identifier) wins
+    let hits = match (args.get("fusion"), semantic) {
+        (Some(_), _) => k.find_similar(SimilarityQuery {
+            fusion: parse_fusion(args),
+            ..q
+        }),
+        (None, true) => vector_led(k, q),
+        (None, false) => k.find_similar(q),
+    }
+    .map_err(|e| e.to_string())?;
     // shortcut: open conflicts by a scan of the conflict records (no claim →
     // conflict index), add one when conflicts number in the thousands
     let open: Vec<(String, String, String)> = k
@@ -456,6 +525,9 @@ pub(crate) fn tool_recall(k: &Kernel, args: &J) -> Result<J, String> {
             })
             .collect::<Vec<_>>()
             .join("; ");
+        // MEM-SECRET: a secret in memory is stored as given, never recalled
+        // raw (redacted before the cut, so a key is never half-shown)
+        snippet = aikoql_ingestion::redact_text(&snippet);
         if snippet.chars().count() > 300 {
             snippet = snippet.chars().take(300).collect::<String>() + "…";
         }
@@ -777,6 +849,322 @@ mod tests {
             res["results"].as_array().map(|a| a.len()),
             Some(2),
             "non-stream tool surfaces groups too"
+        );
+    }
+
+    /// MEM-SECRET — decision (user, 2026-11-13): a secret stored in memory
+    /// is stored as given but never handed back raw by recall; it comes
+    /// back as `[REDACTED:<KIND>]`, as the Ask route already does. (C7
+    /// SENS-001: recall returned an AWS access key verbatim.)
+    #[test]
+    fn recall_redacts_a_secret_in_memory() {
+        let k = Arc::new(
+            Kernel::open(
+                Arc::new(MemoryEngine::new()),
+                Arc::new(ManualClock::new(10_000)),
+                0xBEEF,
+            )
+            .unwrap(),
+        );
+        let m = aikoql_scheduler::IndexMaintainer::start(
+            &k,
+            Arc::new(BruteForceVectorIndex::new()),
+            Arc::new(TokenTextIndex::default()),
+        )
+        .unwrap();
+        k.attach_indexes(m.clone());
+        let mut props = PropertyMap::new();
+        props.insert(
+            "text".into(),
+            Value::Text("Alice's AWS key is AKIAIOSFODNN7EXAMPLE keep it safe".into()),
+        );
+        k.remember(RememberRequest {
+            context: subject_of(&json!({"subject": "alice"})).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "Note".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap();
+        let res = tool_recall(
+            &k,
+            &json!({"subject": "alice", "query": "Alice AWS key", "wait_for_freshness_ms": 2000}),
+        )
+        .unwrap();
+        let text = res.to_string();
+        assert!(
+            res["items"].as_array().is_some_and(|i| !i.is_empty()),
+            "{res}"
+        );
+        assert!(
+            !text.contains("AKIAIOSFODNN7EXAMPLE"),
+            "the raw key leaks: {res}"
+        );
+        assert!(text.contains("[REDACTED:"), "the secret is marked: {res}");
+    }
+
+    /// MEM-RYW — an agent recalls right after it remembers. `embed: true`
+    /// attaches the vector asynchronously, and the default recall goes
+    /// vector-only once the question embeds: a memory not yet embedded was
+    /// invisible (found by the C1-C8 harness: 1 miss in 20 store-then-recall
+    /// pairs, the only one with the semantic leg on). A memory the text
+    /// index already holds must come back.
+    #[test]
+    fn recall_returns_a_memory_whose_vector_has_not_landed() {
+        struct Fixed;
+        impl aikoql_kernel::embedding::EmbeddingProvider for Fixed {
+            fn embed(&self, _t: &str, _m: Option<&str>) -> aikoql_kernel::KResult<Vec<f32>> {
+                Ok(vec![1.0, 0.0, 0.0])
+            }
+        }
+        let k = Arc::new(
+            Kernel::open(
+                Arc::new(MemoryEngine::new()),
+                Arc::new(ManualClock::new(10_000)),
+                0xBEEF,
+            )
+            .unwrap()
+            .with_embedding_provider(Arc::new(Fixed)),
+        );
+        let m = aikoql_scheduler::IndexMaintainer::start(
+            &k,
+            Arc::new(BruteForceVectorIndex::new()),
+            Arc::new(TokenTextIndex::default()),
+        )
+        .unwrap();
+        k.attach_indexes(m.clone());
+        let mut props = PropertyMap::new();
+        props.insert(
+            "text".into(),
+            Value::Text("Alice saw a quokka at the zoo".into()),
+        );
+        let r = k
+            .remember(RememberRequest {
+                context: subject_of(&json!({"subject": "alice"})).into(),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: None,
+                metadata: Metadata {
+                    type_name: "Note".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: None, // the vector has not landed yet
+                relationships: vec![],
+                security: None,
+                extensions: ExtensionMap::new(),
+                origin: Origin::Human,
+                note: None,
+                referential_policy: ReferentialPolicy::default(),
+            })
+            .unwrap();
+        let res = tool_recall(
+            &k,
+            &json!({"subject": "alice", "query": "What did Alice see? quokka", "wait_for_freshness_ms": 2000}),
+        )
+        .unwrap();
+        assert_eq!(res["semantic"], true, "the question embedded: {res}");
+        let koids: Vec<_> = res["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["koid"].as_str())
+            .collect();
+        assert!(
+            koids.contains(&r.koid.to_hex().as_str()),
+            "the memory written a moment ago is recalled: {res}"
+        );
+    }
+
+    /// vector_led mixes two score scales — cosine (≤ 1) for embedded hits,
+    /// BM25 (≈ 6 here) for the rest — and memory_search's MMR divides every
+    /// relevance by the top score, so one text-only hit would flatten every
+    /// vector hit to near zero. Its scores are one scale: at most 1.0,
+    /// non-increasing in its own order.
+    #[test]
+    fn vector_led_scores_are_one_scale_in_rank_order() {
+        struct Fixed;
+        impl aikoql_kernel::embedding::EmbeddingProvider for Fixed {
+            fn embed(&self, _t: &str, _m: Option<&str>) -> aikoql_kernel::KResult<Vec<f32>> {
+                Ok(vec![1.0, 0.0, 0.0])
+            }
+        }
+        let k = Arc::new(
+            Kernel::open(
+                Arc::new(MemoryEngine::new()),
+                Arc::new(ManualClock::new(10_000)),
+                0xBEEF,
+            )
+            .unwrap()
+            .with_embedding_provider(Arc::new(Fixed)),
+        );
+        let m = aikoql_scheduler::IndexMaintainer::start(
+            &k,
+            Arc::new(BruteForceVectorIndex::new()),
+            Arc::new(TokenTextIndex::default()),
+        )
+        .unwrap();
+        k.attach_indexes(m.clone());
+        for (text, embedded) in [
+            ("weekly status update", true),
+            ("status of the quokka", false),
+        ] {
+            let mut props = PropertyMap::new();
+            props.insert("text".into(), Value::Text(text.into()));
+            k.remember(RememberRequest {
+                context: subject_of(&json!({"subject": "alice"})).into(),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: None,
+                metadata: Metadata {
+                    type_name: "Note".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: embedded.then(|| aikoql_kernel::SemanticBlock {
+                    embedding_model: Some("fixed".into()),
+                    embedding: Some(vec![1.0, 0.0, 0.0]),
+                    confidence: None,
+                    source: None,
+                    summary: None,
+                }),
+                relationships: vec![],
+                security: None,
+                extensions: ExtensionMap::new(),
+                origin: Origin::Human,
+                note: None,
+                referential_policy: ReferentialPolicy::default(),
+            })
+            .unwrap();
+        }
+        m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+        let hits = vector_led(
+            &k,
+            SimilarityQuery {
+                context: subject_of(&json!({"subject": "alice"})).into(),
+                filter: None,
+                text: Some("quokka status".into()),
+                vector: Some(vec![1.0, 0.0, 0.0]),
+                embedding_model: None,
+                k: 8,
+                fusion: crate::Fusion::TextOnly,
+            },
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 2, "both memories");
+        let scores: Vec<f32> = hits.iter().map(|h| h.score).collect();
+        assert!(
+            scores.iter().all(|s| *s > 0.0 && *s <= 1.0),
+            "one scale: {scores:?}"
+        );
+        assert!(
+            scores.windows(2).all(|w| w[0] >= w[1]),
+            "rank order: {scores:?}"
+        );
+        // the contract exactly: 61/(61 + rank) per list — the fresh memory is
+        // the top text hit, so it ties the top vector hit at 1.0 (the vector
+        // hit first, by the stable sort)
+        assert_eq!(scores, vec![1.0, 1.0], "rank-derived scale");
+        let first = hits[0].ko.properties.get("text").cloned();
+        assert_eq!(first, Some(Value::Text("weekly status update".into())));
+    }
+
+    /// The same law when the vector leg is full: ten embedded memories match
+    /// the question's vector, one fresh memory has only its text indexed. A
+    /// vector-only list of the top five would never reach it; it competes by
+    /// its text rank instead — as the top lexical match, it makes the five.
+    #[test]
+    fn a_fresh_memory_is_not_crowded_out_by_embedded_ones() {
+        struct Fixed;
+        impl aikoql_kernel::embedding::EmbeddingProvider for Fixed {
+            fn embed(&self, _t: &str, _m: Option<&str>) -> aikoql_kernel::KResult<Vec<f32>> {
+                Ok(vec![1.0, 0.0, 0.0])
+            }
+        }
+        let k = Arc::new(
+            Kernel::open(
+                Arc::new(MemoryEngine::new()),
+                Arc::new(ManualClock::new(10_000)),
+                0xBEEF,
+            )
+            .unwrap()
+            .with_embedding_provider(Arc::new(Fixed)),
+        );
+        let m = aikoql_scheduler::IndexMaintainer::start(
+            &k,
+            Arc::new(BruteForceVectorIndex::new()),
+            Arc::new(TokenTextIndex::default()),
+        )
+        .unwrap();
+        k.attach_indexes(m.clone());
+        let note = |text: &str, embedded: bool| {
+            let mut props = PropertyMap::new();
+            props.insert("text".into(), Value::Text(text.into()));
+            k.remember(RememberRequest {
+                context: subject_of(&json!({"subject": "alice"})).into(),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: None,
+                metadata: Metadata {
+                    type_name: "Note".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: embedded.then(|| aikoql_kernel::SemanticBlock {
+                    embedding_model: Some("fixed".into()),
+                    embedding: Some(vec![1.0, 0.0, 0.0]),
+                    confidence: None,
+                    source: None,
+                    summary: None,
+                }),
+                relationships: vec![],
+                security: None,
+                extensions: ExtensionMap::new(),
+                origin: Origin::Human,
+                note: None,
+                referential_policy: ReferentialPolicy::default(),
+            })
+            .unwrap()
+            .koid
+            .to_hex()
+        };
+        for i in 0..10 {
+            note(&format!("Alice's weekly status update number {i}"), true);
+        }
+        let fresh = note("Alice saw a quokka at the zoo", false);
+        let res = tool_recall(
+            &k,
+            &json!({"subject": "alice", "query": "What did Alice see? quokka", "k": 5, "wait_for_freshness_ms": 2000}),
+        )
+        .unwrap();
+        let koids: Vec<_> = res["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["koid"].as_str())
+            .collect();
+        assert!(
+            koids.contains(&fresh.as_str()),
+            "the fresh memory makes the top five: {res}"
         );
     }
 

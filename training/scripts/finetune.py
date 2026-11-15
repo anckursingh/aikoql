@@ -108,10 +108,17 @@ def _load_tokenizer():
 
 
 def _encode_rows(tokenizer, rows: List[Tuple[str, str]], max_len: int):
+    """Rows that fit the window whole, each ending in a labelled EOS (the
+    model learns where a reply ends). A row that does not fit is dropped,
+    never cut: a cut prompt has no labels, and a cut completion would end
+    in an EOS mid-object — teaching the model to stop inside its JSON."""
     encs = []
     for prompt, completion in rows:
         full = tokenizer(prompt + completion, truncation=True,
                          max_length=max_len)["input_ids"]
+        if len(full) >= max_len:  # no room left for the EOS: it was cut
+            continue
+        full = full + [tokenizer.eos_token_id]
         n_prompt = len(tokenizer(prompt, truncation=True,
                                  max_length=max_len)["input_ids"])
         # ponytail: a BPE merge across the boundary mislabels one token
@@ -155,6 +162,10 @@ def train(args) -> int:
     tokenizer = _load_tokenizer()
     tokenizer.padding_side = "right"
     encs = _encode_rows(tokenizer, rows, args.seq_len)
+    # a row that does not fit is dropped: say how many, never train on none
+    print(f"rows kept {len(encs)}/{len(rows)} at seq-len {args.seq_len}")
+    if not encs:
+        sys.exit(f"no row fits --seq-len {args.seq_len}: raise it")
 
     class Rows(torch.utils.data.Dataset):
         def __len__(self):
@@ -201,8 +212,10 @@ def _generate(model, tokenizer, prompts: List[str],
     texts: List[str] = []
     for i in range(0, len(prompts), batch_size):
         chunk = prompts[i:i + batch_size]
-        enc = tokenizer(chunk, padding=True, truncation=True,
-                        max_length=256, return_tensors="pt")
+        # the whole prompt, on the model's device: a 256-token cut lost the
+        # answer prompt's reply format, and CPU inputs crashed --device cuda
+        enc = tokenizer(chunk, padding=True, return_tensors="pt")
+        enc = enc.to(model.device)
         prompt_lens = enc["attention_mask"].sum(dim=1)
         with torch.no_grad():
             gen = model.generate(
@@ -295,7 +308,9 @@ def main(argv=None) -> int:
     t.add_argument("--out", required=True, help="adapter output directory")
     t.add_argument("--max-rows", type=int, default=0,
                    help="cap training rows (0 = all)")
-    t.add_argument("--seq-len", type=int, default=256)
+    # the answer prompt carries up to 2,000 characters of facts: 1024 tokens
+    # holds most rows whole (256 held no answer-skill row at all)
+    t.add_argument("--seq-len", type=int, default=1024)
     t.add_argument("--batch-size", type=int, default=2)
     t.add_argument("--epochs", type=float, default=1.0)
     t.add_argument("--lora-r", type=int, default=4)

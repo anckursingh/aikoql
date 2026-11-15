@@ -199,7 +199,7 @@ Connects via stdin/stdout — perfect for Claude Code, VS Code, and other MCP cl
 
 ### TCP Server + Web UI
 
-TCP mode requires at least one auth token (`TOKEN[:TENANT[:ROLE1,ROLE2]]`); clients
+TCP mode requires at least one auth token (`TOKEN[:TENANT[:ROLE1,ROLE2[,agent=NAME]]]`; `agent=NAME` names the agent); clients
 pass it as `params.token` to MCP `initialize`.
 
 ```bash

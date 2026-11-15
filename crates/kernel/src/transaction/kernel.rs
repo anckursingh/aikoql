@@ -2405,6 +2405,13 @@ impl Kernel {
                     koid,
                 });
             }
+            // POLICY-ENF: a deployed Write deny on this type blocks the create
+            self.auth.read().unwrap().check_create(
+                &req.context.subject,
+                &req.metadata.tenant,
+                koid,
+                &req.metadata.type_name,
+            )?;
             s
         } else {
             let h = head.as_ref().unwrap();
@@ -3498,6 +3505,25 @@ impl Kernel {
     // ---- forget (MRFC-0011 §6.2) -------------------------------------------
 
     pub fn forget(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+        mode: ForgetMode,
+        expected_version: Option<u64>,
+        note: Option<String>,
+    ) -> KResult<Forgotten> {
+        let is_auth_meta = self.head_object(koid)?.is_some_and(|h| {
+            h.metadata.type_name == ROLE_TYPE || h.metadata.type_name == POLICY_TYPE
+        });
+        let out = self.forget_locked(ctx, koid, mode, expected_version, note)?;
+        // POLICY-ENF: forgetting a policy or role lifts it at once
+        if is_auth_meta {
+            self.refresh_auth_cache()?;
+        }
+        Ok(out)
+    }
+
+    fn forget_locked(
         &self,
         ctx: impl Into<KnowledgeContext>,
         koid: &KOID,
@@ -5924,6 +5950,63 @@ mod tests {
         k.remember(junior).unwrap();
 
         assert!(k.get(&carol, &note.koid).is_ok());
+    }
+
+    /// POLICY-ENF: a deployed Deny is enforced, not advisory — it binds even
+    /// the object's owner and an admin, covers creates, lifts when the policy
+    /// is forgotten, and never reaches across tenants.
+    #[test]
+    fn a_deployed_deny_policy_blocks_the_action_itself() {
+        let (k, _clock) = kernel();
+        let agent = Subject::with_roles("assistant-1", &["admin"]).in_tenant("acme");
+        let tmeta = |t: &str| Metadata {
+            tenant: Some("acme".into()),
+            ..meta(t)
+        };
+        let note = k
+            .remember(RememberRequest::create(agent.clone(), tmeta("Note")))
+            .unwrap();
+        let pol = k
+            .deploy_policy(
+                "NoAgentDeletes",
+                "Deny",
+                "assistant-1",
+                "Delete",
+                "Note",
+                None,
+                &agent,
+            )
+            .unwrap();
+        let denied = k.forget(&agent, &note.koid, ForgetMode::Tombstone, None, None);
+        assert!(
+            matches!(denied, Err(KError::AccessDenied { .. })),
+            "a deny policy must block the owner-admin's delete: {denied:?}"
+        );
+        // a Write deny also blocks creating that type
+        let wpol = k
+            .deploy_policy("NoNotes", "deny", "*", "write", "Note", None, &agent)
+            .unwrap();
+        let created = k.remember(RememberRequest::create(agent.clone(), tmeta("Note")));
+        assert!(
+            matches!(created, Err(KError::AccessDenied { .. })),
+            "a write deny must block a create: {created:?}"
+        );
+        // forgetting the policies lifts them at once (no reopen)
+        k.forget(&agent, &wpol.koid, ForgetMode::Tombstone, None, None)
+            .unwrap();
+        k.forget(&agent, &pol.koid, ForgetMode::Tombstone, None, None)
+            .unwrap();
+        k.forget(&agent, &note.koid, ForgetMode::Tombstone, None, None)
+            .unwrap();
+        // another tenant's deny never binds acme's objects
+        let other = Subject::with_roles("globex-admin", &["admin"]).in_tenant("globex");
+        k.deploy_policy("GlobexNoDeletes", "Deny", "*", "*", "*", None, &other)
+            .unwrap();
+        let note2 = k
+            .remember(RememberRequest::create(agent.clone(), tmeta("Note")))
+            .unwrap();
+        k.forget(&agent, &note2.koid, ForgetMode::Tombstone, None, None)
+            .unwrap();
     }
 
     #[test]

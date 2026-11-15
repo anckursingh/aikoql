@@ -7,6 +7,22 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Agent memory: identity, governance and what a read may return (#49) — behaviour changes
+- **`viewer` is read-only in every mode.** Over MCP, the native protocol and REST a `viewer` token no longer
+  writes without an enterprise licence (it used to be an uninterpreted role name in community mode). A security
+  fix; if you gave a token the role `viewer` and relied on it writing, give it `editor`.
+- **A token names its agent:** `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2[,agent=NAME]]]`. Two agents in one tenant
+  are separate principals over TCP, the native protocol and Streamable HTTP, so a private memory stays private.
+  An unnamed token keeps its old agent (`tcp-agent`; `http-agent` over HTTP).
+- **A deployed Deny policy is enforced, and overrides ownership and admin.** Only an admin may deploy a Deny
+  (an Allow stays a developer's and never grants); `condition` is recorded, not evaluated, so a conditional Deny
+  always binds; policy and role objects are exempt so a `* * *` Deny can still be forgotten.
+- **`agent_memory`:** rewriting a key now updates it (it used to answer `stored: true` and keep the old value),
+  and the TTL runs from the latest write. The memory belongs to the caller's tenant.
+- **Credentials are masked when a memory is read back:** `recall` and `memory_search` mask credentials and
+  personal data; `get` of a memory object and `agent_memory` mask credentials (keys, tokens, passwords,
+  connection strings). Personal data (email, SSN, card) is a separate policy and `get` still returns it.
+
 ### Data sources: schema discovery → canonical ontology
 - `[[sources]]` in `aikoql.toml` names external databases (PostgreSQL, MongoDB, Neo4j, SQLite, ClickHouse) by
   an environment variable holding the connection string — never the string itself. Studio's **Data Sources**
