@@ -13,7 +13,6 @@ use serde_json::Value as J;
 use sha2::Digest as _;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -168,38 +167,51 @@ fn register(port: u16) -> String {
         .to_string()
 }
 
-/// The stored roles of `sub`; None when the row or the store is absent.
-fn store_roles(db: &Path, sub: &str) -> Option<Vec<String>> {
-    let conn = rusqlite::Connection::open(db.join("users.db")).ok()?;
-    let raw: Option<String> = conn
-        .query_row("SELECT roles FROM users WHERE sub = ?1", [sub], |row| {
-            row.get(0)
-        })
-        .ok()?;
-    raw.and_then(|r| serde_json::from_str(&r).ok())
+/// A session token for the bootstrap admin (break-glass login).
+fn admin_session(port: u16, password: &str) -> String {
+    let r = http(
+        port,
+        "POST",
+        "/api/login",
+        &[("Content-Type", "application/json")],
+        &serde_json::json!({"username": "admin", "password": password}).to_string(),
+    );
+    assert_eq!(r.status, 200, "break-glass login: {}", r.body);
+    r.json()["token"].as_str().expect("token").to_string()
 }
 
-/// Overwrite the stored roles (the store is the authority). The server may
-/// hold the file briefly — retry past SQLITE_BUSY.
-fn set_roles(db: &Path, sub: &str, roles: &[&str]) {
-    let conn = rusqlite::Connection::open(db.join("users.db")).expect("users.db");
-    let roles_json = serde_json::to_string(roles).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match conn.execute(
-            "UPDATE users SET roles = ?1 WHERE sub = ?2",
-            rusqlite::params![roles_json, sub],
-        ) {
-            Ok(_) => return,
-            Err(rusqlite::Error::SqliteFailure(e, _))
-                if e.code == rusqlite::ErrorCode::DatabaseBusy =>
-            {
-                assert!(Instant::now() < deadline, "users.db stayed busy");
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => panic!("set roles: {e}"),
-        }
-    }
+/// The stored roles of `sub`, read through the admin API (PROD-2: the
+/// users live in the server's store); None when there is no such row.
+fn store_roles(port: u16, password: &str, sub: &str) -> Option<Vec<String>> {
+    let auth = format!("Bearer {}", admin_session(port, password));
+    let r = http(
+        port,
+        "GET",
+        "/api/users",
+        &[("Authorization", auth.as_str())],
+        "",
+    );
+    assert_eq!(r.status, 200, "list users: {}", r.body);
+    let users = r.json()["users"].as_array().expect("users").clone();
+    let row = users.into_iter().find(|u| u["sub"] == sub)?;
+    serde_json::from_value(row["roles"].clone()).ok()
+}
+
+/// Overwrite the stored roles through the admin API (the store is the
+/// authority).
+fn set_roles(port: u16, password: &str, sub: &str, roles: &[&str]) {
+    let auth = format!("Bearer {}", admin_session(port, password));
+    let r = http(
+        port,
+        "PUT",
+        &format!("/api/users/{sub}/roles"),
+        &[
+            ("Authorization", auth.as_str()),
+            ("Content-Type", "application/json"),
+        ],
+        &serde_json::json!({"roles": roles}).to_string(),
+    );
+    assert_eq!(r.status, 200, "set roles: {}", r.body);
 }
 
 /// The Studio SSO round trip: /api/login/sso → the IdP → /oidc/callback,
@@ -269,7 +281,7 @@ fn sso_login_creates_session_and_user() {
     assert_eq!(schema.status, 200, "{}", schema.body);
     // and the store holds the upserted user with the default viewer role
     assert_eq!(
-        store_roles(&srv.db, "mock-user"),
+        store_roles(srv.port, "pw", "mock-user"),
         Some(vec!["viewer".to_string()])
     );
 }
@@ -306,7 +318,7 @@ fn unknown_claim_maps_to_viewer() {
     assert_eq!(user, "janitor");
     // unknown claim roles map to viewer — never admin
     assert_eq!(
-        store_roles(&srv.db, "janitor"),
+        store_roles(srv.port, "pw", "janitor"),
         Some(vec!["viewer".to_string()])
     );
     let schema = http(
@@ -478,7 +490,7 @@ fn live_role_revocation() {
     assert_eq!(call.status, 200);
     assert!(!call.body.contains("capability denied"), "{}", call.body);
     // flip the store roles admin → viewer (the store is the authority)
-    set_roles(&srv.db, "boss", &["viewer"]);
+    set_roles(srv.port, "pw", "boss", &["viewer"]);
     // the same token, a fresh session: the live lookup sees viewer
     let init2 = http(
         srv.port,
@@ -584,7 +596,7 @@ fn config_user_admin_login_still_works_in_enterprise() {
     assert_eq!(glass.status, 200, "{}", glass.body);
     // and the store holds the seeded admin
     assert_eq!(
-        store_roles(&srv.db, "admin"),
+        store_roles(srv.port, "seed-pw", "admin"),
         Some(vec!["admin".to_string()])
     );
 }

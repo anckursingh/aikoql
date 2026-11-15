@@ -190,9 +190,6 @@ pub(crate) fn serve_metrics(
     // in spawn_metrics precedes the bind, so it cannot gate a client.
     info!(addr = %addr, "metrics HTTP server listening");
     let sessions: Arc<Mutex<HashMap<String, HttpSession>>> = Arc::new(Mutex::new(HashMap::new()));
-    // Enterprise (Task 5): the serving handle on the user store main.rs
-    // opened (users.db); None in community mode.
-    crate::session::open_users(db_path.as_str());
     for stream in listener.incoming() {
         match stream {
             Ok(mut s) => {
@@ -1002,7 +999,7 @@ pub(crate) fn handle_login(
         ));
     }
     // Enterprise break-glass (Task 5): with multi-user on, the bootstrap
-    // admin verifies against the users.db hash — AIKOQL_ADMIN_PASSWORD only
+    // admin verifies against the user store's hash — AIKOQL_ADMIN_PASSWORD only
     // seeded it. Config-file users keep the AuthResolver path untouched.
     let roles = match crate::session::users() {
         Some(store) if username == crate::users::ADMIN_SUB => store
@@ -1635,6 +1632,28 @@ pub(crate) fn handle_http(
             "application/javascript; charset=utf-8",
             studio::VIS_JS.to_string(),
         ),
+        // PROD-4: three questions, three answers. Liveness consults no
+        // state (the process answered); readiness is by traffic class —
+        // a standby is ready for reads and not for writes.
+        "/livez" => (
+            "200 OK",
+            "application/json",
+            json!({"status": "ok"}).to_string(),
+        ),
+        "/readyz" | "/readyz/write" => {
+            let node = crate::node::state();
+            let ready = if path == "/readyz" {
+                node.read_ready()
+            } else {
+                node.write_ready()
+            };
+            let status = if ready {
+                "200 OK"
+            } else {
+                "503 Service Unavailable"
+            };
+            (status, "application/json", node.to_json().to_string())
+        }
         "/health" => {
             let uptime = SERVER_START
                 .get()
@@ -1644,6 +1663,7 @@ pub(crate) fn handle_http(
             let sem = crate::semantic_status_snapshot();
             let body = json!({
                 "status": "ok",
+                "node": crate::node::state().to_json(),
                 "uptime_seconds": (uptime * 10.0).round() / 10.0,
                 "semantic": {"state": sem.state, "detail": sem.detail},
             })
@@ -1654,6 +1674,14 @@ pub(crate) fn handle_http(
             let body = prometheus_metrics(k, admin);
             ("200 OK", "text/plain; version=0.0.4", body)
         }
+        // PROD-5: one machine-readable answer to "what is this node and
+        // how are its dependencies" — the facts behind the probes and the
+        // scrape, no data and no secrets (unauthenticated like both).
+        "/status" => (
+            "200 OK",
+            "application/json",
+            status_report(admin).to_string(),
+        ),
         "/api/login" if method == "POST" => {
             match handle_login(&body_str, sessions, auth, client_ip) {
                 Ok(token) => {
@@ -1928,6 +1956,31 @@ fn enc_query(s: &str) -> String {
         .collect()
 }
 
+/// PROD-5 — the `/status` body: version, the node (role, term, readiness
+/// by traffic class), replication (head seq, each standby's lag), the HA
+/// lease and the archive when this node runs them, and storage stats.
+/// Everything is read from counters the serving loops already keep — no
+/// scan, so a probe-rate caller is harmless.
+pub(crate) fn status_report(admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>) -> J {
+    let head = admin.map_or(0, |a| a.last_seq());
+    let standbys = crate::replication::LEADER.get().map_or(json!([]), |acked| {
+        crate::replication::standbys_json(acked, head)
+    });
+    let deps = &crate::node::DEPS;
+    // why the engine refuses writes, when it does (null while it writes)
+    let mut node = crate::node::state().to_json();
+    node["write_fence"] = json!(crate::node::engine_fence());
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "node": node,
+        "replication": {"head_seq": head, "standbys": standbys},
+        "lease": deps.lease_json(),
+        "archive": deps.archive_json(head),
+        "storage": crate::tools::admin::tool_storage_stats(admin).unwrap_or(J::Null),
+        "uptime_seconds": SERVER_START.get().map_or(0.0, |s| s.elapsed().as_secs_f64()),
+    })
+}
+
 pub(crate) fn prometheus_metrics(
     k: &Kernel,
     admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
@@ -1983,6 +2036,8 @@ pub(crate) fn prometheus_metrics(
     if let (Some(acked), Some(admin)) = (crate::replication::LEADER.get(), admin) {
         storage_metrics.push_str(&crate::replication::metrics(acked, admin.last_seq()));
     }
+    // PROD-5: the node's role and term, and the lease and archive it runs
+    storage_metrics.push_str(&crate::node::DEPS.metrics(crate::node::state()));
 
     format!(
         "# HELP aikoql_journal_seq Monotonically increasing journal sequence number.\n\

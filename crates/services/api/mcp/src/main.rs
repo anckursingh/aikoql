@@ -22,6 +22,7 @@ mod cli;
 mod config;
 mod derived_ids;
 mod dispatcher;
+mod drill;
 mod engine;
 mod error_codes;
 mod graph_ui;
@@ -35,6 +36,7 @@ mod license;
 mod mcp_http;
 mod model;
 mod native;
+mod node;
 mod oauth;
 mod observability;
 mod oidc;
@@ -47,6 +49,7 @@ mod s3;
 mod sampling;
 mod session;
 mod shell;
+mod shutdown;
 mod sources;
 mod studio;
 mod tls;
@@ -218,6 +221,34 @@ fn use_ansi() -> bool {
         || std::env::var_os("TERM_PROGRAM").is_some()
         || std::env::var_os("TERM").is_some_and(|t| !t.eq_ignore_ascii_case("dumb"))
         || std::env::var_os("CI").is_some()
+}
+
+/// PROD-2: the writer's user-store startup — import a pre-PROD-2 users.db,
+/// then make sure an admin exists. Exits on failure: serve never runs with
+/// an unverifiable store (1) or with no admin to seed or claim (2).
+fn seed_users(store: &users::UserStore, db_path: &str, admin_password: Option<&str>) {
+    let legacy = std::path::PathBuf::from(format!("{db_path}/users.db"));
+    match store.import_legacy(&legacy) {
+        Ok(0) => {}
+        Ok(n) => {
+            info!(rows = n, path = %legacy.display(), "users.db imported into the replicated store")
+        }
+        Err(e) => {
+            eprintln!("multi-user user store: {e}");
+            std::process::exit(1);
+        }
+    }
+    if store.has_admin() {
+        return;
+    }
+    let Some(pw) = admin_password else {
+        eprintln!("multi-user requires a bootstrap admin (set AIKOQL_ADMIN_PASSWORD)");
+        std::process::exit(2);
+    };
+    if let Err(e) = store.seed_bootstrap_admin(pw) {
+        eprintln!("multi-user user store: seed bootstrap admin: {e}");
+        std::process::exit(1);
+    }
 }
 
 fn main() {
@@ -531,8 +562,8 @@ fn main() {
         }
     });
     // standby reads: an HA standby serves reads until it wins the lease
-    let (ha_slot, ha_standby) = match begun {
-        Some(ha::Begun::Lead(slot)) => (Some(slot), None),
+    let (ha_held, ha_standby) = match begun {
+        Some(ha::Begun::Lead(held)) => (Some(held), None),
         Some(ha::Begun::Standby(c)) => (None, Some(c)),
         None => (None, None),
     };
@@ -553,6 +584,16 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // PROD-4: what the probes and the status report call this node
+    node::set(
+        match role {
+            _ if serving_standby => node::NodeRole::Standby,
+            replication::Role::Fenced => node::NodeRole::Fenced,
+            _ if replicate_listen.is_some() => node::NodeRole::Leader,
+            _ => node::NodeRole::Standalone,
+        },
+        term,
+    );
     let (kernel, admin) =
         // the log is retained for standbys and for the archive (R6)
         match engine::open_kernel(
@@ -572,42 +613,43 @@ fn main() {
                 std::process::exit(1);
             }
         };
-    // Enterprise multi-user (Task 3): only a verified multi-user license
-    // opens the user store — community mode never creates users.db. The
-    // store lives in the data dir, which the kernel has just opened. First
-    // start seeds the bootstrap admin from AIKOQL_ADMIN_PASSWORD; with no
-    // admin to seed or claim, serve refuses (exit 2 — an operator fix, not
-    // a runtime failure).
+    // Enterprise multi-user (Task 3; PROD-2): only a verified multi-user
+    // license opens the user store — community mode never writes a user
+    // row. The rows live in the kernel's system store, so they replicate
+    // and a promoted standby serves the same users. The writer (a leader)
+    // carries a pre-PROD-2 users.db over, then seeds the bootstrap admin
+    // from AIKOQL_ADMIN_PASSWORD; with no admin to seed or claim, serve
+    // refuses (exit 2 — an operator fix, not a runtime failure). A serving
+    // standby writes nothing: its rows arrive on the replication stream.
     if license::LICENSE_STATE
         .get()
         .is_some_and(|s| s.features.multi_user)
     {
-        let store_path = std::path::PathBuf::from(format!("{db_path}/users.db"));
-        let store = match users::UserStore::open(&store_path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("multi-user user store {}: {e}", store_path.display());
-                std::process::exit(1);
-            }
-        };
-        if !store.has_admin() {
-            let Some(pw) = cfg.admin_password.as_deref() else {
-                eprintln!("multi-user requires a bootstrap admin (set AIKOQL_ADMIN_PASSWORD)");
-                std::process::exit(2);
-            };
-            if let Err(e) = store.seed_bootstrap_admin(pw) {
-                eprintln!("multi-user user store: seed bootstrap admin: {e}");
-                std::process::exit(1);
-            }
+        let store = users::UserStore::new(kernel.system_store());
+        if !serving_standby {
+            seed_users(&store, &db_path, cfg.admin_password.as_deref());
         }
         // Final review I-1: publish the handle process-wide so every serve
         // surface sees the store — MCP over TCP gates viewers even without
-        // a metrics listener (serve_metrics' open_users is then a no-op).
+        // a metrics listener.
         crate::session::set_users(Arc::new(Mutex::new(store)));
     }
-    if let (Some(slot), Some(a)) = (&ha_slot, &admin) {
-        let _ = slot.set(a.clone()); // the renewer can now fence writes
+    if let Some(a) = &admin {
+        let a = a.clone();
+        node::watch_engine(Box::new(move || a.fence_reason())); // PROD-4 review
     }
+    if let (Some(held), Some(a)) = (&ha_held, &admin) {
+        let _ = held.admin.set(a.clone()); // the renewer can now fence writes
+    }
+    // PROD-3: from here a SIGTERM (or Ctrl-C) is a stop, not a crash —
+    // writes fenced, the lease released, exit 0. The stdio path settles
+    // the same way when its loop ends.
+    let stop = shutdown::Stop {
+        admin: admin.clone(),
+        held: ha_held.clone(),
+        ttl: std::time::Duration::from_millis(cfg.ha_ttl_ms),
+    };
+    shutdown::watch(stop.clone());
     // R4d: after the kernel created the directory (a fresh one must be
     // empty when it opens)
     if let (replication::Role::Leader, Some(addr), false) =
@@ -1197,7 +1239,10 @@ fn main() {
         // T-59 (P3-010): the maintainer is attached from a spawned thread
         // (see the serve setup above) — a close->rapid-EOF shutdown can
         // read the slot before the attach lands and skip the checkpoint.
-        // Wait for the attach (bounded) so the hand-off is deterministic.
+        // Wait for the attach (bounded) so the hand-off is deterministic —
+        // BEFORE the fence: the attach starts the maintainer, a write the
+        // fence would refuse ("not leader: shutting down"), skipping the
+        // checkpoint and leaving the process to outlive its client.
         let maintainer = {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             loop {
@@ -1212,6 +1257,10 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         };
+        // PROD-3: the loop ended (stdin EOF or the `shutdown` method) —
+        // fence and hand the lease over before the checkpoint, so a
+        // standby is not kept waiting on this node's index flush.
+        stop.settle("stdio closed");
         if let Some(m) = maintainer {
             let t0 = std::time::Instant::now();
             // justified: Mutex poison is unrecoverable
@@ -1225,6 +1274,11 @@ fn main() {
             );
         }
     }
+    // PROD-9: whichever surface `serve` was running has ended on purpose
+    // (the TCP or native accept loop saw the `shutdown` method). Settle
+    // here too — idempotent after the stdio path's own call — so every
+    // planned exit fences and hands the lease over, not only a signal.
+    stop.settle("serve ended");
 }
 
 /// P5-M22 (P1-15): resume from `ckpt_dir` when a COMPLETE checkpoint is

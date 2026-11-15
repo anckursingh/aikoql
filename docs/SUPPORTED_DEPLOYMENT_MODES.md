@@ -31,24 +31,30 @@ non-loopback address refuses to start.
 |---|---|---|
 | Static bearer token (`--tcp-token`) | supported | supported — same Secret on both nodes |
 | Config-file logins + OAuth (community) | supported | supported — grants live in the replicated store; a sign-in made before failover keeps working (`ha_an_oauth_sign_in_survives_a_failover`) |
-| Enterprise multi-user (`multi-user` licence) | supported | **unsupported, and not refused at startup** |
-| Enterprise OIDC SSO (`oidc-sso` licence, implies multi-user) | supported | **unsupported, and not refused at startup** |
+| Enterprise multi-user (`multi-user` licence) | supported | supported (PROD-2) — users and roles live in the replicated store; `ha_users_and_role_changes_survive_a_failover` |
+| Enterprise OIDC SSO (`oidc-sso` licence, implies multi-user) | supported | starts and shares the user store (PROD-2); an OIDC sign-in across a promotion has no test yet |
 
-Why the enterprise rows are unsupported with replication: users and
-roles live in `{db}/users.db`, a SQLite file each node owns separately.
-After a promotion:
+What holds across a promotion, and what does not:
 
-- users that exist only in that table are refused until they sign in
-  again (fail-closed);
-- role changes made through the REST API on the old leader are gone;
+- users, roles and the bootstrap admin's password hash are rows of the
+  replicated store, so the promoted node serves the same ones;
+- only the leader changes them — a standby answers `POST /api/users` and
+  `PUT /api/users/{sub}/roles` with 503;
+- an OIDC user's sign-in on a read replica cannot record the user (the
+  write is the leader's); sign in through the leader;
 - a sign-in in progress fails, because OIDC flow state is in memory;
-- the tool audit log (`{db}.audit.log`) starts from the new leader's
-  own file.
+- Studio sessions are process-local: sign in again;
+- the tool audit log (`{db}.audit.log`) is still a node-local file and
+  starts from the new leader's own.
 
-Until the user table moves into the replicated store, **do not run a
-multi-user or OIDC licence with `--replicate-listen`, `--follow` or
-`--ha-lease`.** The server will start; it should not. Making it refuse
-is the first code change planned after this audit.
+A pre-PROD-2 single-node deployment keeps its users: the first start
+imports `{db}/users.db` into the store and sets the file aside. If the
+store already holds users the file is not read: the start logs a warning
+naming it and its row count, and its rows are not imported.
+
+Rollback: after the migration an older (pre-PROD-2) binary opens a fresh
+`users.db` and does not see users created since. Restore `users.db.migrated`
+to `users.db` only if no user was added or changed after the upgrade.
 
 ## 3. Sessions and clients
 
@@ -62,14 +68,27 @@ is the first code change planned after this audit.
 
 ## 4. Kubernetes chart limits
 
-- Two replicas; no PodDisruptionBudget, NetworkPolicy or HPA.
+- Two replicas. A PodDisruptionBudget (`maxUnavailable: 1`, PROD-7)
+  keeps a node drain from evicting both members at once. No
+  NetworkPolicy; no HPA, by design.
 - One serving certificate shared by both pods.
-- `/metrics` is unauthenticated and doubles as the liveness and
-  readiness probe; neither probe reflects the node's role.
-- No `terminationGracePeriodSeconds` or `preStop`, and the server does
-  not handle SIGTERM: deleting the leader pod is a hard stop, and
-  writes resume only after the lease TTL lapses and the standby
-  promotes.
+- `/metrics` is unauthenticated. The probes no longer scrape it
+  (PROD-4): startup and liveness ask `/livez` (the process answers
+  HTTP), readiness asks `/readyz` (the node serves reads — true for the
+  leader and the standby, false for a fenced or stopping node).
+  `/readyz/write` answers 200 on the leader only (and not while its engine
+  refuses writes), for a load balancer that routes by traffic class; the
+  chart does not use it, so **its in-cluster Service sends about half the
+  writes to the standby, which refuses them** — route writes through a
+  health-checked load balancer or a leader-following client. All
+  three are unauthenticated, like `/health`, and report the role, the
+  term and readiness — no data.
+- The server handles SIGTERM (PROD-3): a deleted leader pod fences its
+  writes, releases its lease and exits 0, and the standby takes over on
+  its next lease poll (TTL/5) instead of after a full TTL. The chart sets
+  no `terminationGracePeriodSeconds`; the Kubernetes default (30 s) covers
+  the stop, which waits at most 5 s for the standby plus one lease
+  write. A killed pod (SIGKILL, node loss) still waits out the TTL.
 - No licence wiring in the chart.
 - PVC snapshot backup is a manual procedure (chart README).
 

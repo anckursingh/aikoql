@@ -25,6 +25,7 @@ the architect review.
 | `docs/IMPLEMENTATION-PLAN-AGENTIC.md`, `docs/TESTING-PLAN-AGENTIC.md` | **the next plan** (2026-10-30, post-launch) — AG-01..62: agent surface (tool profiles, one `recall`), one memory store + scopes + sampling extraction, ANN/indexed filters at 1M, trust debt (Ed25519, KEK rotation), multi-agent, platform, ecosystem; each milestone with its evidence, RED and gate |
 | `docs/PR6-TDD-DISPOSITIONS.md` | the review-disposition state machine (R3-001..005, R2-008, follow-up milestones); CI gates pin its freshness |
 | `docs/PRODUCTION_READINESS_AUDIT.md`, `docs/SUPPORTED_DEPLOYMENT_MODES.md`, `docs/HA_FAILURE_MATRIX.md` | productionisation Phase 0 (2026-11-11): evidence-based gap audit, what may be run together, and fault scenarios vs tests — read before any HA/identity/ops hardening |
+| `docs/RUNBOOKS.md`, `deploy/prometheus/aikoql-alerts.yaml` | operator runbooks, one section per alert rule (PROD-7); `tests/helm_chart.rs` pins that every alert links a section and reads a series the server exports |
 | `docs/ARCHITECT-REVIEW-2026-09.md` | project-level assessment vs the agentic-DB field (2026-09-20) |
 | `docs/first-class-db-roadmap.md` | the honest primary-DB roadmap, phases 0–5, evidence-gated triggers |
 | `docs/MRFC-0005-System-Architecture.md` | system architecture |

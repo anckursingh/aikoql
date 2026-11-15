@@ -2067,3 +2067,686 @@ fn ha_an_oauth_sign_in_survives_a_failover() {
         .to_string();
     assert_eq!(mcp_init_status(&hb, &fresh), 200);
 }
+
+/// POST /api/login as the bootstrap admin; the session token.
+fn admin_login(addr: &str, password: &str) -> String {
+    let (st, body) = http_req(
+        addr,
+        "POST",
+        "/api/login",
+        "application/json",
+        &[],
+        &json!({"username": "admin", "password": password}).to_string(),
+    );
+    assert_eq!(st, 200, "the bootstrap admin signs in on {addr}: {body}");
+    serde_json::from_str::<J>(&body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// PROD-2 (G2): enterprise users and roles live in the replicated store,
+/// so a multi-user licence runs on an HA pair. A user created and a role
+/// changed on the leader are what the promoted standby serves; the
+/// bootstrap admin is one row, signed in with the same password on both
+/// sides of the failover. Semi-sync: the user routes answer 200 only once
+/// the standby acked the write.
+#[test]
+fn ha_users_and_role_changes_survive_a_failover() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    let (pk, blob) = common::sign("test", None, &["multi-user"]);
+    let lic = tmp("ha-users-lic").join("license.lic");
+    std::fs::create_dir_all(lic.parent().unwrap()).unwrap();
+    std::fs::write(&lic, &blob).unwrap();
+    let lease = tmp("ha-users-lease").join("lease.json");
+    let (adir, bdir) = (tmp("ha-users-a"), tmp("ha-users-b"));
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let (ha, hb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let env = vec![
+        ("AIKOQL_ADMIN_PASSWORD".to_string(), "ha-pw".to_string()),
+        (
+            "AIKOQL_LICENSE".to_string(),
+            lic.to_str().unwrap().to_string(),
+        ),
+        (
+            "AIKOQL_LICENSE_PUBLIC_KEY".to_string(),
+            URL_SAFE_NO_PAD.encode(&pk),
+        ),
+    ];
+    let sync = ["--replicate-sync-ms".to_string(), "3000".to_string()];
+    let a_args = [
+        ha_args(&lease, "a", &ra),
+        sync.to_vec(),
+        vec!["--metrics-addr".into(), ha.clone()],
+    ]
+    .concat();
+    let b_args = [
+        ha_args(&lease, "b", &rb),
+        vec!["--metrics-addr".into(), hb.clone()],
+    ]
+    .concat();
+    let mut a = Mcp::spawn_env(&adir, &strs(&a_args), false, &env);
+    wait_port(&ha);
+    let mut b = Mcp::spawn_env(&bdir, &strs(&b_args), true, &env);
+    let mut blog = b.log.take().unwrap();
+    wait_line(&blog, "standby caught up");
+    wait_port(&hb);
+
+    let token = admin_login(&ha, "ha-pw");
+    let auth = format!("Bearer {token}");
+    let hdr = [("Authorization", auth.as_str())];
+    let (st, body) = http_req(
+        &ha,
+        "POST",
+        "/api/users",
+        "application/json",
+        &hdr,
+        r#"{"sub": "alice", "name": "Alice", "roles": ["viewer"]}"#,
+    );
+    assert_eq!(st, 200, "the leader creates the user: {body}");
+    let (st, body) = http_req(
+        &ha,
+        "PUT",
+        "/api/users/alice/roles",
+        "application/json",
+        &hdr,
+        r#"{"roles": ["admin"]}"#,
+    );
+    assert_eq!(st, 200, "the leader changes the role: {body}");
+
+    // the standby signs the same admin in (the row replicated) and refuses
+    // the write: the store is the leader's to change
+    let standby = format!("Bearer {}", admin_login(&hb, "ha-pw"));
+    let (st, body) = http_req(
+        &hb,
+        "POST",
+        "/api/users",
+        "application/json",
+        &[("Authorization", standby.as_str())],
+        r#"{"sub": "mallory", "roles": ["admin"]}"#,
+    );
+    assert_eq!(st, 503, "a standby cannot keep a user: {body}");
+
+    let _ = a.child.kill();
+    let _ = a.child.wait();
+    wait_line(&blog, "won the lease");
+    if !cfg!(unix) {
+        assert_eq!(b.child.wait().unwrap().code(), Some(75), "promotion exit");
+        b = Mcp::spawn_env(&bdir, &strs(&b_args), true, &env);
+        blog = b.log.take().unwrap();
+    }
+    wait_line(&blog, "metrics HTTP server started");
+    wait_port(&hb);
+
+    // the same break-glass password: the admin row replicated, not re-seeded
+    let token = admin_login(&hb, "ha-pw");
+    let auth = format!("Bearer {token}");
+    let (st, body) = http_req(
+        &hb,
+        "GET",
+        "/api/users",
+        "application/json",
+        &[("Authorization", auth.as_str())],
+        "",
+    );
+    assert_eq!(st, 200, "the promoted node lists users: {body}");
+    let listed: J = serde_json::from_str(&body).unwrap();
+    let users = listed["users"].as_array().expect("a users array").clone();
+    let alice = users
+        .iter()
+        .find(|u| u["sub"] == "alice")
+        .unwrap_or_else(|| panic!("alice survives the failover: {body}"));
+    assert_eq!(
+        alice["roles"],
+        json!(["admin"]),
+        "the role change survives the failover"
+    );
+    assert_eq!(
+        users.iter().filter(|u| u["sub"] == "admin").count(),
+        1,
+        "one bootstrap admin, not one per node: {body}"
+    );
+    assert_eq!(users.len(), 2, "no other rows: {body}");
+}
+
+/// PROD-3 (G4): a leader that stops on purpose hands its lease over. It
+/// fences its writes, marks the lease released at its final seq and exits
+/// 0; the standby takes over on its next poll — it does not wait out the
+/// TTL as it must for a leader that died. The log line is the evidence
+/// (a timing bound would pin runner speed, not behaviour).
+#[test]
+fn ha_a_stopping_leader_releases_its_lease() {
+    let (adir, bdir) = (tmp("ha-rel-a"), tmp("ha-rel-b"));
+    let lease = tmp("ha-rel-lease").join("lease.json");
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let a_args = ha_args(&lease, "a", &ra);
+    let mut a = Mcp::start(&adir, &strs(&a_args));
+    let koids: Vec<String> = (0..5).map(|i| a.remember(i)).collect();
+    let b_args = ha_args(&lease, "b", &rb);
+    let mut b = Mcp::spawn_raw(&bdir, &strs(&b_args), true);
+    let mut log = b.log.take().unwrap();
+    wait_line(&log, "standby caught up");
+
+    let ack = a.request("shutdown", json!({}));
+    assert_eq!(ack["shutting_down"], json!(true), "{ack}");
+    let status = a.child.wait().unwrap();
+    assert!(status.success(), "a requested stop exits 0: {status:?}");
+    // (the record itself is pinned by ha.rs's unit tests: reading the
+    // file here races the standby, which may already hold the next term)
+    wait_line(&log, "the lease was released");
+    wait_line(&log, "won the lease");
+    promoted(&mut b, &mut log, || {
+        Mcp::spawn_raw(&bdir, &strs(&b_args), true)
+    });
+    b.init();
+    for (i, koid) in koids.iter().enumerate() {
+        let got = b.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "object {koid}");
+    }
+    b.remember(99);
+}
+
+/// PROD-3 (G4): SIGTERM — what Kubernetes sends a terminating pod — is a
+/// stop, not a crash: the leader fences its writes, releases its lease
+/// and exits 0. No standby here, so the released record stays on disk to
+/// be read. Unix only: the Windows console-control path has no portable
+/// way to be raised at a child from a test.
+#[cfg(unix)]
+#[test]
+fn ha_sigterm_releases_the_lease_and_exits_zero() {
+    let adir = tmp("ha-term-a");
+    let lease = tmp("ha-term-lease").join("lease.json");
+    let ra = format!("127.0.0.1:{}", free_port());
+    let http = format!("127.0.0.1:{}", free_port());
+    let a_args = [
+        ha_args(&lease, "a", &ra),
+        vec!["--metrics-addr".into(), http.clone()],
+    ]
+    .concat();
+    let mut a = Mcp::spawn_env(&adir, &strs(&a_args), true, &[]);
+    let alog = a.log.take().unwrap();
+    wait_port(&http);
+
+    let killed = Command::new("kill")
+        .args(["-TERM", &a.child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success(), "kill -TERM");
+    let status = a.child.wait().unwrap();
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "SIGTERM is a clean stop: {status:?}"
+    );
+    wait_line(&alog, "the lease is released");
+    let held: J = serde_json::from_slice(&std::fs::read(&lease).unwrap()).unwrap();
+    assert_eq!(held["released"], json!(true), "the lease on disk: {held}");
+    assert_eq!(held["holder"], json!("a"), "{held}");
+}
+
+/// PROD-4 (G5): liveness, read-readiness and write-readiness are three
+/// questions. Both members of an HA pair are alive and read-ready; only
+/// the lease holder is write-ready, and each says which role it has — so
+/// a probe (or a Service selector) can route by traffic class instead of
+/// reading one boolean off /metrics.
+#[test]
+fn ha_readiness_tells_the_roles_apart() {
+    let lease = tmp("ha-ready-lease").join("lease.json");
+    let (adir, bdir) = (tmp("ha-ready-a"), tmp("ha-ready-b"));
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let (ha, hb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let env = vec![("AIKOQL_ADMIN_PASSWORD".to_string(), "ha-pw".to_string())];
+    let a_args = [
+        ha_args(&lease, "a", &ra),
+        vec!["--metrics-addr".into(), ha.clone()],
+    ]
+    .concat();
+    let b_args = [
+        ha_args(&lease, "b", &rb),
+        vec!["--metrics-addr".into(), hb.clone()],
+    ]
+    .concat();
+    let _a = Mcp::spawn_env(&adir, &strs(&a_args), false, &env);
+    wait_port(&ha);
+    let mut b = Mcp::spawn_env(&bdir, &strs(&b_args), true, &env);
+    let blog = b.log.take().unwrap();
+    wait_line(&blog, "standby caught up");
+    wait_port(&hb);
+
+    let probe = |addr: &str, path: &str| -> (u16, J) {
+        let (st, body) = http_req(addr, "GET", path, "application/json", &[], "");
+        let j = serde_json::from_str(&body).unwrap_or_else(|_| panic!("{path} → {st}: {body}"));
+        (st, j)
+    };
+    for addr in [&ha, &hb] {
+        assert_eq!(probe(addr, "/livez").0, 200, "{addr} is alive");
+    }
+    let (st, leader) = probe(&ha, "/readyz");
+    assert_eq!(st, 200, "the leader serves reads: {leader}");
+    assert_eq!(leader["role"], json!("leader"), "{leader}");
+    assert_eq!(leader["ready"], json!({"read": true, "write": true}));
+    assert_eq!(
+        probe(&ha, "/readyz/write").0,
+        200,
+        "the leader serves writes"
+    );
+
+    let (st, standby) = probe(&hb, "/readyz");
+    assert_eq!(st, 200, "the standby serves reads: {standby}");
+    assert_eq!(standby["role"], json!("standby"), "{standby}");
+    assert_eq!(standby["ready"], json!({"read": true, "write": false}));
+    let (st, refused) = probe(&hb, "/readyz/write");
+    assert_eq!(st, 503, "the standby is not write-ready: {refused}");
+    assert_eq!(refused["role"], json!("standby"), "{refused}");
+}
+
+/// PROD-5 (G6, G7): an operator can ask a running node what it is and how
+/// its dependencies are doing — one JSON report (`/status`) and the same
+/// facts as Prometheus series. An HA leader with an archive reports its
+/// role and term, the lease's last renewal, and the archive's last
+/// successful pass, uploaded seq and snapshot.
+#[test]
+fn the_status_report_and_the_scrape_carry_the_node_the_lease_and_the_archive() {
+    let dir = tmp("status-a");
+    let lease = tmp("status-lease").join("lease.json");
+    let archive = tmp("status-archive");
+    let repl = format!("127.0.0.1:{}", free_port());
+    let http = format!("127.0.0.1:{}", free_port());
+    let args = [
+        ha_args(&lease, "a", &repl),
+        strs_owned(&[
+            "--metrics-addr",
+            &http,
+            "--archive",
+            archive.to_str().unwrap(),
+            "--archive-log-ms",
+            "200",
+            "--archive-snapshot-secs",
+            "1",
+        ]),
+    ]
+    .concat();
+    let env = vec![("AIKOQL_ADMIN_PASSWORD".to_string(), "st-pw".to_string())];
+    let _a = Mcp::spawn_env(&dir, &strs(&args), false, &env);
+    wait_port(&http);
+
+    let get = |path: &str| http_req(&http, "GET", path, "application/json", &[], "");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let status: J = loop {
+        let (st, body) = get("/status");
+        assert_eq!(st, 200, "/status: {body}");
+        let j: J = serde_json::from_str(&body).unwrap_or_else(|_| panic!("/status: {body}"));
+        // the first archive pass and snapshot land within their periods
+        if j["archive"]["last_success_unix_ms"].as_u64().unwrap_or(0) > 0
+            && j["archive"]["last_snapshot_unix_ms"].as_u64().unwrap_or(0) > 0
+        {
+            break j;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the archive never reported a pass and a snapshot: {j}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(status["node"]["role"], json!("leader"), "{status}");
+    assert_eq!(status["node"]["term"], json!(1), "{status}");
+    assert_eq!(status["node"]["ready"]["write"], json!(true), "{status}");
+    assert!(status["version"].as_str().is_some_and(|v| !v.is_empty()));
+    let head = status["replication"]["head_seq"]
+        .as_u64()
+        .expect("head_seq");
+    assert!(head > 0, "the open-time records: {status}");
+    assert!(
+        status["lease"]["last_renew_unix_ms"].as_u64().unwrap_or(0) > 0,
+        "{status}"
+    );
+    assert_eq!(status["lease"]["renew_failures"], json!(0), "{status}");
+    assert_eq!(status["archive"]["failures"], json!(0), "{status}");
+    assert!(
+        status["archive"]["uploaded_seq"].as_u64().unwrap_or(0) > 0,
+        "{status}"
+    );
+    assert!(status["storage"].is_object(), "storage stats: {status}");
+
+    let (st, scrape) = get("/metrics");
+    assert_eq!(st, 200);
+    for series in [
+        "aikoql_node_role{role=\"leader\"} 1",
+        "aikoql_node_role{role=\"standby\"} 0",
+        "aikoql_node_stopping 0",
+        "aikoql_replication_term 1",
+        "aikoql_ha_lease_last_renew_timestamp_seconds ",
+        "aikoql_ha_lease_renew_failures_total 0",
+        "aikoql_archive_last_success_timestamp_seconds ",
+        "aikoql_archive_last_snapshot_timestamp_seconds ",
+        "aikoql_archive_uploaded_seq ",
+        "aikoql_archive_failures_total 0",
+    ] {
+        assert!(
+            scrape.contains(series),
+            "no {series:?} in the scrape:\n{scrape}"
+        );
+    }
+}
+
+fn strs_owned(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+/// PROD-6 (failure matrix row 11 — both nodes restart): nothing but the
+/// lease and the two directories survives. The previous holder resumes
+/// its own lease at the same term — no second term, no second writer —
+/// with every acknowledged object; the other node follows again, serves
+/// the same objects, and receives a write made after the restart.
+#[test]
+fn ha_both_nodes_restart_and_the_holder_resumes_with_every_object() {
+    let (adir, bdir) = (tmp("ha-cold-a"), tmp("ha-cold-b"));
+    let lease = tmp("ha-cold-lease").join("lease.json");
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let (a_args, b_args) = (ha_args(&lease, "a", &ra), ha_args(&lease, "b", &rb));
+    let koids: Vec<String> = {
+        let mut a = Mcp::start(&adir, &strs(&a_args));
+        let koids = (0..6).map(|i| a.remember(i)).collect();
+        let mut b = Mcp::spawn_raw(&bdir, &strs(&b_args), true);
+        let log = b.log.take().unwrap();
+        wait_line(&log, "standby caught up");
+        // both die at once: the drop is a kill, not a planned stop
+        koids
+    };
+
+    let mut a = Mcp::start(&adir, &strs(&a_args));
+    assert_eq!(
+        std::fs::read_to_string(adir.join("REPL-TERM")).unwrap(),
+        "1 leader\n",
+        "the holder resumes its own term"
+    );
+    for (i, koid) in koids.iter().enumerate() {
+        let got = a.tool("get", json!({"subject": "admin", "koid": koid}));
+        assert_eq!(got["properties"]["n"], json!(i), "leader lost {koid}");
+    }
+    let after = a.remember(100);
+
+    let mut b = Mcp::spawn_raw(&bdir, &strs(&b_args), true);
+    let log = b.log.take().unwrap();
+    wait_line(&log, "standby caught up");
+    b.init();
+    let read = |b: &mut Mcp, koid: &str| -> J {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let res = b.request(
+                "tools/call",
+                json!({"name": "get", "arguments": {"subject": "admin", "koid": koid}}),
+            );
+            if res["isError"] == json!(false) {
+                return serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the standby never served {koid}: {res}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    for (i, koid) in koids.iter().enumerate() {
+        assert_eq!(read(&mut b, koid)["properties"]["n"], json!(i), "{koid}");
+    }
+    assert_eq!(read(&mut b, &after)["properties"]["n"], json!(100));
+    assert_eq!(
+        std::fs::read_to_string(bdir.join("REPL-TERM")).unwrap(),
+        "1 standby\n",
+        "one term, one writer"
+    );
+}
+
+/// PROD-6 (failure matrix row 16 — archive outage): the database keeps
+/// taking writes, the outage is visible (failures count up, lag grows),
+/// and when the archive returns it catches up to the head — the log it
+/// could not upload was held, not released.
+#[test]
+fn an_archive_outage_is_visible_and_heals_without_losing_log() {
+    let dir = tmp("arch-out-db");
+    let archive = tmp("arch-out-archive");
+    let away = tmp("arch-out-away");
+    let http = format!("127.0.0.1:{}", free_port());
+    let args = [
+        "--metrics-addr",
+        &http,
+        "--archive",
+        archive.to_str().unwrap(),
+        "--archive-log-ms",
+        "200",
+    ];
+    let env = vec![("AIKOQL_ADMIN_PASSWORD".to_string(), "ar-pw".to_string())];
+    let _srv = Mcp::spawn_env(&dir, &args, false, &env);
+    wait_port(&http);
+    let status = || -> J {
+        let (st, body) = http_req(&http, "GET", "/status", "application/json", &[], "");
+        assert_eq!(st, 200, "/status: {body}");
+        serde_json::from_str(&body).unwrap()
+    };
+    let until = |what: &str, done: &dyn Fn(&J) -> bool| -> J {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let s = status();
+            if done(&s) {
+                return s;
+            }
+            assert!(std::time::Instant::now() < deadline, "never {what}: {s}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let auth = format!("Bearer {}", admin_login(&http, "ar-pw"));
+    let remember = |n: u32| {
+        let (st, body) = http_req(
+            &http,
+            "POST",
+            "/api/v1/remember",
+            "application/json",
+            &[("Authorization", auth.as_str())],
+            &json!({"type_name": "note", "properties": {"n": n}}).to_string(),
+        );
+        assert_eq!(st, 200, "a write during the test: {body}");
+    };
+
+    remember(1);
+    until("archived the first write", &|s| {
+        s["archive"]["lag_frames"] == json!(0) && s["archive"]["uploaded_seq"] != json!(0)
+    });
+
+    // the outage: the archive root is a file — every upload fails
+    std::fs::rename(&archive, &away).unwrap();
+    std::fs::write(&archive, b"not a directory").unwrap();
+    remember(2); // the database is unaffected
+    let down = until("reported the outage", &|s| {
+        s["archive"]["failures"].as_u64().unwrap_or(0) > 0
+            && s["archive"]["lag_frames"].as_u64().unwrap_or(0) > 0
+    });
+    let stuck = down["archive"]["uploaded_seq"].as_u64().unwrap();
+    remember(3);
+
+    // the archive returns
+    std::fs::remove_file(&archive).unwrap();
+    std::fs::rename(&away, &archive).unwrap();
+    let healed = until("caught up after the outage", &|s| {
+        s["archive"]["lag_frames"] == json!(0)
+    });
+    let (head, uploaded) = (
+        healed["replication"]["head_seq"].as_u64().unwrap(),
+        healed["archive"]["uploaded_seq"].as_u64().unwrap(),
+    );
+    assert_eq!(uploaded, head, "{healed}");
+    assert!(uploaded > stuck, "the held log was uploaded: {healed}");
+}
+
+/// Wait until the archiver goes quiet: it logs whenever it uploads, so a
+/// second with no new "log up to seq" line means the log is up.
+fn archive_settled(log: &mpsc::Receiver<String>) {
+    wait_line(log, "archive: log up to seq");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut quiet_since = std::time::Instant::now();
+    while quiet_since.elapsed() < Duration::from_secs(1) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the archive never settled"
+        );
+        if let Ok(line) = log.recv_timeout(Duration::from_millis(100)) {
+            if line.contains("archive: log up to seq") {
+                quiet_since = std::time::Instant::now();
+            }
+        }
+    }
+}
+
+/// PROD-7 (G8): a backup is proven by restoring it. `restore-drill`
+/// restores the archive into a scratch directory of its own, opens the
+/// database, checks it, writes a machine-readable report and removes the
+/// scratch — exit 0 only when every check passed, so a scheduler can
+/// alert on the exit code. It never touches a serving database.
+#[test]
+fn the_restore_drill_restores_verifies_reports_and_cleans_up() {
+    let (ldir, store) = (tmp("drill-leader"), tmp("drill-archive"));
+    let mut leader = Mcp::start_logged(
+        &ldir,
+        &[
+            "--archive",
+            store.to_str().unwrap(),
+            "--archive-log-ms",
+            "200",
+        ],
+    );
+    let log = leader.log.take().unwrap();
+    for i in 0..10 {
+        leader.remember(i);
+    }
+    archive_settled(&log);
+    drop(leader);
+
+    let reports = tmp("drill-reports");
+    std::fs::create_dir_all(&reports).unwrap();
+    let drill = |archive: &Path, name: &str, extra: &[&str]| -> (Option<i32>, J) {
+        let report = reports.join(name);
+        let out = Command::new(bin())
+            .arg("restore-drill")
+            .args(["--archive", archive.to_str().unwrap()])
+            .args(["--report", report.to_str().unwrap()])
+            .args(extra)
+            .output()
+            .unwrap();
+        let body = std::fs::read(&report).unwrap_or_else(|e| {
+            panic!(
+                "no report at {}: {e}\n{}",
+                report.display(),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        (out.status.code(), serde_json::from_slice(&body).unwrap())
+    };
+
+    let (code, ok) = drill(&store, "ok.json", &["--expect-min-seq", "1"]);
+    assert_eq!(code, Some(0), "a good archive passes: {ok}");
+    assert_eq!(ok["ok"], json!(true), "{ok}");
+    assert!(ok["restored_seq"].as_u64().unwrap() > 0, "{ok}");
+    assert!(ok["object_count"].as_u64().unwrap() >= 10, "{ok}");
+    assert!(ok["bytes_restored"].as_u64().unwrap() > 0, "{ok}");
+    assert!(ok["duration_ms"].is_u64(), "{ok}");
+    let checks = ok["checks"].as_array().unwrap();
+    assert!(
+        checks.len() >= 3 && checks.iter().all(|c| c["ok"] == json!(true)),
+        "every check passed: {ok}"
+    );
+    let scratch = ok["scratch"].as_str().unwrap();
+    assert!(!Path::new(scratch).exists(), "the scratch copy is removed");
+
+    // the archive does not reach the seq the operator expects: a failure
+    let (code, short) = drill(&store, "short.json", &["--expect-min-seq", "99999999"]);
+    assert_eq!(code, Some(1), "{short}");
+    assert_eq!(short["ok"], json!(false), "{short}");
+    assert!(
+        short["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["ok"] == json!(false) && c["name"] == json!("expected seq")),
+        "{short}"
+    );
+
+    // nothing to restore: a failure with the reason, not a crash
+    let empty = tmp("drill-empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let (code, none) = drill(&empty, "empty.json", &[]);
+    assert_eq!(code, Some(1), "{none}");
+    assert_eq!(none["ok"], json!(false), "{none}");
+    assert!(
+        none["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "{none}"
+    );
+}
+
+/// PROD-9: every way `serve` ends on purpose hands the lease over, not
+/// only a signal or stdin closing. A leader serving MCP over TCP that is
+/// told to `shutdown` releases its lease like any other planned stop, and
+/// the standby takes over without waiting out the TTL.
+#[test]
+fn ha_a_leader_shut_down_over_tcp_releases_its_lease() {
+    let (adir, bdir) = (tmp("ha-tcp-a"), tmp("ha-tcp-b"));
+    let lease = tmp("ha-tcp-lease").join("lease.json");
+    let (ra, rb) = (
+        format!("127.0.0.1:{}", free_port()),
+        format!("127.0.0.1:{}", free_port()),
+    );
+    let listen = format!("127.0.0.1:{}", free_port());
+    let a_args = [
+        ha_args(&lease, "a", &ra),
+        vec!["--listen".into(), listen.clone()],
+    ]
+    .concat();
+    let mut a = Mcp::spawn_env(&adir, &strs(&a_args), false, &[]);
+    wait_port(&listen);
+    let b_args = ha_args(&lease, "b", &rb);
+    let mut b = Mcp::spawn_raw(&bdir, &strs(&b_args), true);
+    let log = b.log.take().unwrap();
+    wait_line(&log, "standby caught up");
+
+    let mut conn = std::net::TcpStream::connect(&listen).unwrap();
+    conn.set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let mut replies = BufReader::new(conn.try_clone().unwrap());
+    let mut call = |id: u32, method: &str, params: J| -> J {
+        writeln!(
+            conn,
+            "{}",
+            json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+        )
+        .unwrap();
+        let mut line = String::new();
+        replies.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap_or_else(|_| panic!("{method}: {line:?}"))
+    };
+    let init = call(1, "initialize", json!({"token": "repl-secret"}));
+    assert!(init.get("result").is_some(), "initialize: {init}");
+    let ack = call(2, "shutdown", json!({}));
+    assert_eq!(ack["result"]["shutting_down"], json!(true), "{ack}");
+
+    let status = a.child.wait().unwrap();
+    assert!(status.success(), "a requested stop exits 0: {status:?}");
+    wait_line(&log, "the lease was released");
+}

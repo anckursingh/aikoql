@@ -1,4 +1,5 @@
-//! Enterprise multi-user store (Task 3). aikoql-mcp is a binary crate (no
+//! Enterprise multi-user store (Task 3; PROD-2: rows of the kernel's system
+//! store, not a SQLite file). aikoql-mcp is a binary crate (no
 //! lib target to link), so users.rs is compiled directly into this test
 //! crate for the unit tests; the integration tests spawn the debug binary
 //! with a TEST keypair license via the debug-only AIKOQL_LICENSE_PUBLIC_KEY
@@ -12,16 +13,11 @@ use users::UserStore;
 
 mod common;
 
-static STORE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// A fresh store file unique to this test process, swept at thread exit.
-fn tmp_store(tag: &str) -> (UserStore, std::path::PathBuf) {
-    let n = STORE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!("aikoql-users-{tag}-{}-{n}.db", std::process::id()));
-    let _ = std::fs::remove_file(&p);
-    common::register_temp_path(&p);
-    let store = UserStore::open(&p).expect("open a fresh user store");
-    (store, p)
+/// A fresh store over an in-memory engine (the serve path hands the
+/// kernel's system store to the same constructor).
+fn tmp_store(_tag: &str) -> (UserStore, ()) {
+    let engine = aikoql_kernel::storage::store::MemoryEngine::new();
+    (UserStore::new(std::sync::Arc::new(engine)), ())
 }
 
 #[test]
@@ -154,7 +150,8 @@ fn multi_user_without_admin_refuses_start() {
 }
 
 /// No license anywhere ⇒ exactly v0.4.0 behavior: TCP-token MCP auth and
-/// password login work as before, and no enterprise users.db is created.
+/// password login work as before, and no enterprise user row is written
+/// (nor the pre-PROD-2 users.db file created).
 #[test]
 fn unlicensed_server_unchanged() {
     let db = std::env::temp_dir().join(format!("aikoql-users-parity-db-{}", std::process::id()));

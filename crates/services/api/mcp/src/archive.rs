@@ -365,23 +365,36 @@ impl Archiver {
         let (mut last_snap, mut reported) = (Instant::now(), 0);
         // a snapshot of an unchanged db adds nothing: skip it
         let mut snapped = None;
+        // PROD-5: every outcome below is also a fact for /status and the
+        // scrape — an archive that only logs its failures is invisible
+        let deps = &crate::node::DEPS;
+        deps.archive_started();
         loop {
             std::thread::sleep(log_every);
             match self.pass() {
-                Ok(seq) if seq != reported => {
-                    eprintln!("archive: log up to seq {seq}");
-                    reported = seq;
+                Ok(seq) => {
+                    deps.archive_passed(seq);
+                    if seq != reported {
+                        eprintln!("archive: log up to seq {seq}");
+                        reported = seq;
+                    }
                 }
-                Ok(_) => {}
-                Err(e) => warn!("{e}"),
+                Err(e) => {
+                    deps.archive_failed();
+                    warn!("{e}");
+                }
             }
             if last_snap.elapsed() >= snap_every && snapped != Some(self.source.last_seq()) {
                 match self.snapshot() {
                     Ok(seq) => {
+                        deps.archive_snapshotted(seq);
                         eprintln!("archive: snapshot at seq {seq}");
                         snapped = Some(seq);
                     }
-                    Err(e) => warn!("{e}"),
+                    Err(e) => {
+                        deps.archive_failed();
+                        warn!("{e}");
+                    }
                 }
                 if let Some(keep) = self.keep {
                     match prune(&*self.store, keep) {
@@ -389,7 +402,10 @@ impl Archiver {
                         Ok(n) => {
                             eprintln!("archive: pruned {n} objects (keeping {keep} snapshots)")
                         }
-                        Err(e) => warn!("archive: prune: {e}"),
+                        Err(e) => {
+                            deps.archive_failed();
+                            warn!("archive: prune: {e}");
+                        }
                     }
                 }
                 last_snap = Instant::now();

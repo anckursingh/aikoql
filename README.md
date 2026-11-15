@@ -57,8 +57,8 @@ community edition — nothing is taken away.
 - **Audit export** — retention rotation (`AIKOQL_AUDIT_RETENTION_DAYS`,
   default 90) plus JSONL export via `aikoql-mcp audit --export-jsonl PATH`
   and the Studio admin panel.
-- **v1 limitation** — enterprise multi-user is single-node; HA
-  (`--replicate-listen`, failover) + multi-user is unsupported.
+- **Replicated deployments** — users and roles live in the database's
+  replicated store, so multi-user runs on a leader + standby or HA pair.
 
 Full usage doc — key issuance, the admin API, ops notes:
 [docs/ENTERPRISE-TIERS.md](docs/ENTERPRISE-TIERS.md).

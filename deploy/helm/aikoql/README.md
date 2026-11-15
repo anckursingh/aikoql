@@ -5,7 +5,7 @@ binary; whoever holds the lease (`k8s://<namespace>/<leaseName>`)
 serves writes, the other follows the holder's replication stream
 (TLS) and serves reads (with a `NOT_LEADER` hint to SDKs). MCP is
 Streamable HTTP on the metrics port (`/mcp`, bearer = the auth token;
-`/metrics` for Prometheus and the readiness probe).
+`/metrics` for Prometheus; `/livez` and `/readyz` for the probes).
 
 ## Install
 
@@ -26,6 +26,56 @@ helm install aikoql deploy/helm/aikoql
 - `appVersion` tracks the workspace version — `scripts/bump-version.py`
   bumps this Chart.yaml too (pinned by `tests/helm_chart.rs`).
 
+## Probes and stopping
+
+- Startup and liveness: `/livez` — the process answers HTTP. A slow
+  metrics scrape never restarts a pod.
+- Readiness: `/readyz` — the node serves reads. Both the leader and the
+  standby are ready; a fenced or stopping node is not. The body names the
+  role (`leader`, `standby`, `fenced`, `standalone`) and the term.
+- `/readyz/write` is 200 on the lease holder only, and not while its
+  engine refuses writes (a disk fault fences it; a leader in that state
+  also stops renewing the lease and exits for the supervisor). The chart
+  does not probe it — the standby must stay Ready for reads.
+- **The chart's Service does not route writes to the leader.** Kubernetes
+  readiness is per pod and has no second probe, so the in-cluster default
+  sends roughly half of all writes to the standby, which refuses them
+  (503 naming the leader). For a working write endpoint use one of: a
+  load balancer, ingress or gateway whose active health check is
+  `GET /readyz/write`; or a client that follows the leader named in the
+  refusal or the lease. Labelling the leader's own pod (so a Service can
+  select it) needs a small RBAC grant and is not implemented.
+- A terminating pod gets `terminationGracePeriodSeconds` (default 30)
+  for its planned stop: writes are fenced, the leader waits at most 5 s
+  for the standby to hold its final seq, releases the lease and exits 0.
+  The standby then takes over on its next lease poll, not after a full
+  TTL.
+
+## Status and metrics
+
+`GET /status` (same port, unauthenticated like `/metrics`) is one JSON
+report: version, the node's role, term and readiness by traffic class,
+the head seq and each standby's lag, the lease's last renewal, the
+archive's last successful pass, uploaded seq and last snapshot, and
+storage stats. The same facts are Prometheus series:
+`aikoql_node_role{role}`, `aikoql_replication_term`,
+`aikoql_ha_lease_last_renew_timestamp_seconds`,
+`aikoql_ha_lease_renew_failures_total`,
+`aikoql_archive_last_success_timestamp_seconds`,
+`aikoql_archive_uploaded_seq`,
+`aikoql_archive_last_snapshot_timestamp_seconds`,
+`aikoql_archive_failures_total`.
+
+## Alerts, runbooks and the restore drill
+
+- `deploy/prometheus/aikoql-alerts.yaml` — Prometheus alert rules over
+  the series above (plus kubelet volume stats for disk space). Each
+  alert links its section of `docs/RUNBOOKS.md`.
+- `aikoql-mcp restore-drill --archive <URL>` restores the archive into
+  a scratch directory, opens and checks the copy, prints a JSON report
+  and exits 0 only if every check passed. `docs/RUNBOOKS.md` has a
+  CronJob for it; `AikoqlRestoreDrillFailed` fires on its failure.
+
 ## Known limits
 
 - One shared serving cert for both pods, and no `--advertise` client
@@ -33,7 +83,12 @@ helm install aikoql deploy/helm/aikoql
   `NOT_LEADER` hint).
 - `/metrics` is unauthenticated (in-cluster reachable); the MCP bearer
   token is what protects knowledge.
-- No HPA or PodDisruptionBudget yet — two replicas is the HA story.
+- No HPA, by design: the two members are a leader and its standby, not
+  stateless workers. A PodDisruptionBudget (`maxUnavailable: 1`, on by
+  default, `podDisruptionBudget.enabled`) keeps a node drain from
+  evicting both at once; it is no protection against a node failure.
+- No NetworkPolicy and no chart wiring for an enterprise licence or an
+  archive: add those in your own values overlay or manifests.
 
 ## Backups: PVC snapshots
 
