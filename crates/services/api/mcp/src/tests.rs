@@ -1687,3 +1687,115 @@ fn graph_api_type_and_tenant_filters_are_percent_decoded() {
     drop(k);
     let _ = std::fs::remove_dir_all(&db);
 }
+
+/// Parameters cannot change the program (Codex/owner review, 2026-11-15). The
+/// AikoQL lexer has no escape syntax — a string literal ends at the first
+/// `"` — so `{{who}}` pasted raw into `name == "{{who}}"` let a value close
+/// the literal and add a clause: `Alice" OR name == "Bob` returned Alice AND
+/// Bob. A value that cannot sit safely where it is pasted is refused.
+fn seed_docs(tag: &str) -> crate::Kernel {
+    let db = tmp_db(tag);
+    let _ = std::fs::remove_dir_all(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+                .expect("open store"),
+        ),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let subject = crate::Subject::with_roles("test", &["admin"]);
+    for name in ["Alice", "Bob", "Carol"] {
+        let mut req = crate::RememberRequest::create(
+            subject.clone(),
+            crate::Metadata {
+                type_name: "Doc".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+        );
+        req.properties
+            .insert("name".into(), crate::Value::Text(name.into()));
+        k.remember(req).expect("seed doc");
+    }
+    k
+}
+
+fn result_names(v: &serde_json::Value) -> Vec<String> {
+    let mut names: Vec<String> = v["results"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| r["properties"]["name"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_program_parameter_cannot_add_a_clause_to_the_query() {
+    let k = seed_docs("prm-inject");
+    let prog = crate::tools::tool_deploy_program(
+        &k,
+        &serde_json::json!({"subject": "test", "roles": ["admin"], "name": "FindDoc",
+            "body": "MATCH Doc WHERE name == \"{{who}}\" RETURN *", "language": "aikoql"}),
+    )
+    .expect("deploy");
+    let koid = prog["koid"].as_str().unwrap().to_string();
+    let run = |who: &str| {
+        crate::tools::tool_execute_program(
+            &k,
+            &serde_json::json!({"koid": &koid, "subject": "test", "roles": ["admin"],
+                "params": {"who": who}}),
+        )
+    };
+    // the intended use still works
+    assert_eq!(result_names(&run("Alice").expect("benign")), vec!["Alice"]);
+    // a value that closes the literal and adds a clause is refused, not run
+    let injected = run("Alice\" OR name == \"Bob");
+    assert!(
+        injected.is_err(),
+        "an injected clause must be refused, got {injected:?}"
+    );
+    // a value that is only quote-free text is still data, whatever it says
+    assert_eq!(
+        result_names(&run("Alice OR name == Bob").expect("plain text")),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_agent_prompt_cannot_add_a_clause_to_a_skill() {
+    let k = seed_docs("prm-agent");
+    let subject = crate::Subject::with_roles("test", &["admin"]);
+    crate::tools::tool_deploy_program(
+        &k,
+        &serde_json::json!({"subject": "test", "roles": ["admin"], "name": "FindByPrompt",
+            "body": "MATCH Doc WHERE name == \"{{prompt}}\" RETURN *", "language": "aikoql"}),
+    )
+    .expect("deploy program");
+    let run = |prompt: &str| {
+        let agent = crate::tools::tool_deploy_agent(
+            &k,
+            &serde_json::json!({"subject": "test", "roles": ["admin"],
+                "name": format!("agent-{}", prompt.len()), "prompt": prompt,
+                "skills": ["FindByPrompt"]}),
+        )
+        .expect("deploy agent");
+        let koid = crate::KOID::from_hex(agent["koid"].as_str().unwrap()).unwrap();
+        crate::knowledge_runtime::execute_agent(&k, &koid, &subject, None)
+            .expect("agent runs")
+            .join("\n")
+    };
+    let ok = run("Alice");
+    assert!(ok.contains("OK: 1 results"), "the intended use works: {ok}");
+    let bad = run("Alice\" OR name == \"Bob");
+    assert!(
+        !bad.contains("OK: 2 results") && bad.to_lowercase().contains("rejected"),
+        "an injected prompt must be rejected, not run: {bad}"
+    );
+}
