@@ -30,6 +30,12 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
             json_to_value(mem_val).unwrap_or(Value::Null),
         );
         props.insert("ttl".into(), Value::Int(ttl));
+        // MEM-TTL: the TTL runs from the latest write by the caller — stamped
+        // here, so a background re-commit of the object cannot move it
+        props.insert(
+            "written_ms".into(),
+            Value::Int(kernel.clock_now().min(i64::MAX as u64) as i64),
+        );
         // MEM-TENANT: the memory belongs to the caller's tenant (the
         // session's, as `remember`): stored tenantless, a tenant-scoped
         // reader — the writer itself — could never read it back. The
@@ -38,12 +44,31 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
             .get("tenant")
             .and_then(|t| t.as_str())
             .map(String::from);
+        // Writing a key again is an update (a new version of the same object),
+        // not an idempotent replay that keeps the old value: find this
+        // agent's memory under the key, if any, and write over it.
+        let existing = kernel
+            .scan_by_type(&subject_of(args), "aikoql:memory")
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|ko| {
+                ko.properties.get("agent_id") == Some(&Value::Text(agent_id.to_string()))
+                    && ko.properties.get("key") == Some(&Value::Text(mem_key.to_string()))
+            });
+        let (koid, expected_version, idempotency_key) = match &existing {
+            Some(ko) => (Some(ko.koid), Some(ko.version), None),
+            None => (
+                None,
+                Some(0),
+                Some(format!("agent-mem-{}-{}", agent_id, mem_key)),
+            ),
+        };
         let r = kernel
             .remember(RememberRequest {
                 context: subject_of(args).into(),
-                koid: None,
-                expected_version: Some(0),
-                idempotency_key: Some(format!("agent-mem-{}-{}", agent_id, mem_key)),
+                koid,
+                expected_version,
+                idempotency_key,
                 metadata: Metadata {
                     type_name: "aikoql:memory".into(),
                     tenant,
@@ -89,10 +114,19 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
                 })
                 .unwrap_or(3600)
                 * 1000;
-            // MEM-TTL: from when the memory was stored (the KOID's mint
-            // instant), not its latest commit — a later re-commit of the
-            // object must not restart its TTL
-            let alive = ko.koid.created_ms() + ttl_ms > now;
+            // MEM-TTL: from the caller's latest write (`written_ms`), not the
+            // object's latest commit — a background re-commit must not
+            // restart it. A memory written before the stamp existed falls
+            // back to its KOID's mint instant.
+            let written = ko
+                .properties
+                .get("written_ms")
+                .and_then(|v| match v {
+                    Value::Int(i) => Some((*i).max(0) as u64),
+                    _ => None,
+                })
+                .unwrap_or_else(|| ko.koid.created_ms());
+            let alive = written + ttl_ms > now;
             if !alive {
                 expired_dropped += 1;
             }

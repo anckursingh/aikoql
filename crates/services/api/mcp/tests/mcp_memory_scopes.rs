@@ -418,3 +418,41 @@ fn s07_a_stored_credential_is_masked_on_every_read_of_a_memory() {
         "agent_memory returned the credential raw: {raw}"
     );
 }
+
+/// MEM-TTL semantics (advisor review of #49): writing an `agent_memory` key
+/// again is an UPDATE — the new value replaces the old, there is still one
+/// memory under that key, and the TTL runs from this write. A rewrite used to
+/// be swallowed as an idempotent replay: `stored: true`, the old value kept.
+#[test]
+fn s08_rewriting_an_agent_memory_key_updates_it_and_restarts_its_ttl() {
+    let root = tmp("agentttl");
+    let mut m = Mcp::serve(&root);
+    let first = m.tool(
+        "assistant-2",
+        "acme",
+        "agent_memory",
+        json!({"key": "mood", "value": "calm", "ttl": 3}),
+    );
+    assert_eq!(first["stored"], true, "{first}");
+    std::thread::sleep(std::time::Duration::from_millis(2200));
+    // 2.2 s in: the first write is about to expire; rewrite the key
+    let second = m.tool(
+        "assistant-2",
+        "acme",
+        "agent_memory",
+        json!({"key": "mood", "value": "tense", "ttl": 3}),
+    );
+    assert_eq!(second["stored"], true, "{second}");
+    assert_eq!(
+        second["koid"], first["koid"],
+        "one object per key, not a second one: {first} {second}"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // 3.7 s after the first write (past its TTL), 1.5 s after the rewrite
+    let read = m.tool("assistant-2", "acme", "agent_memory", json!({}));
+    assert_eq!(read["count"], 1, "the rewrite keeps the key alive: {read}");
+    assert_eq!(
+        read["memories"][0]["value"], "tense",
+        "the new value replaced the old: {read}"
+    );
+}
