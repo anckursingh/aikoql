@@ -69,7 +69,8 @@ or change the program.
   quote. AikoQL string literals have no escape syntax, so a value with a `"` is refused with an error
   (it would end the literal and let the value add a clause).
 - **Anywhere else** (a number, a property name) a value must be a single number or an identifier such
-  as `salary` or `profile.age`. Free text, keywords, spaces and newlines are refused.
+  as `salary` or `profile.age`, and the placeholder must be set off by whitespace, parentheses or commas
+  (`age > {{n}}`, not `age > 1{{n}}`). Free text, keywords, spaces and newlines are refused.
 - A value that contains `{{other}}` is not expanded again, and a placeholder with no parameter is left
   as written. An agent's `{{prompt}}` follows the same rules.
 

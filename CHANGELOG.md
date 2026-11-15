@@ -13,7 +13,7 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
   `who = Alice" OR name == "Bob` against `name == "{{who}}"` returned Alice and Bob. The query still ran under the
   caller's own roles and tenant, so it could not widen access, but a parameter could change a program's logic.
 - Now a value inside a string literal may be any text without `"`; outside a literal it must be one number or an
-  identifier path; anything else is refused with an error (an agent run logs `REJECTED` for that skill and goes on).
+  identifier path set off by whitespace, parentheses or commas; anything else is refused with an error (an agent run logs `REJECTED` for that skill and goes on).
   A value is never expanded again. **Behaviour change:** a program that passed free text or a quote through a
   parameter now gets an error. See `website/docs/guides/programs.md`.
 - Docs corrected to match the code: a workflow is an ordered list of programs (not a DAG), a trigger runs a program
