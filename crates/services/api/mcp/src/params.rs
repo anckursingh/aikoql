@@ -15,6 +15,11 @@
 //!
 //! One pass over the template: a value is never searched for placeholders, so
 //! a value that contains `{{other}}` is not expanded again.
+//!
+//! A value outside a literal must also stand alone: the character before the
+//! placeholder must be whitespace, `(` or `,` and the one after whitespace,
+//! `)` or `,`. Otherwise a value glued to template text could join it into
+//! something else (`O` + `R` is the keyword `OR`).
 
 use crate::http::value_to_string;
 use crate::Value;
@@ -70,7 +75,7 @@ fn plain_operand(text: &str) -> bool {
     }
 }
 
-fn value_text(name: &str, value: &Value, in_literal: bool) -> Result<String, String> {
+fn value_text(name: &str, value: &Value, in_literal: bool, alone: bool) -> Result<String, String> {
     let text = value_to_string(value);
     if in_literal {
         if text.contains('"') {
@@ -79,6 +84,11 @@ fn value_text(name: &str, value: &Value, in_literal: bool) -> Result<String, Str
                  cannot hold (it would end the literal)"
             ));
         }
+    } else if !alone {
+        return Err(format!(
+            "parameter '{name}' sits against other program text; outside a string literal a \
+             placeholder must be set off by whitespace, parentheses or commas"
+        ));
     } else if !plain_operand(&text) {
         return Err(format!(
             "parameter '{name}' is not a plain number or identifier, so it cannot be used \
@@ -105,8 +115,17 @@ pub(crate) fn substitute_params(
             .and_then(|end| params.get(&after[..end]).map(|v| (&after[..end], end, v)));
         match value {
             Some((name, end, v)) => {
-                out.push_str(&value_text(name, v, inside_literal(&out))?);
-                rest = &after[end + 2..];
+                let tail = &after[end + 2..];
+                let alone = out
+                    .chars()
+                    .last()
+                    .is_none_or(|c| c.is_whitespace() || c == '(' || c == ',')
+                    && tail
+                        .chars()
+                        .next()
+                        .is_none_or(|c| c.is_whitespace() || c == ')' || c == ',');
+                out.push_str(&value_text(name, v, inside_literal(&out), alone)?);
+                rest = tail;
             }
             None => {
                 // not a known placeholder: keep one brace and look again, so
@@ -255,7 +274,21 @@ mod tests {
         ),
         ("// {{who}}\nMATCH Doc RETURN *", &["who"]),
         (r#"MATCH Doc WHERE name == "x{{who}}y" RETURN *"#, &["who"]),
+        // values glued to template text: the template author's choice, and
+        // exactly where a value could turn into something else
+        ("MATCH Doc WHERE age > 1{{n}} RETURN *", &["n"]),
+        ("MATCH Doc WHERE O{{who}} name == \"a\" RETURN *", &["who"]),
+        (
+            "MATCH Doc WHERE {{field}}{{n}} == 1 RETURN *",
+            &["field", "n"],
+        ),
     ];
+
+    /// Templates whose placeholders touch template text: a refusal there can
+    /// be for the shape, not only for the value.
+    fn glued(template: &str) -> bool {
+        template.contains("1{{") || template.contains("O{{") || template.contains("}}{{")
+    }
 
     fn params_of(names: &[&str], rng: &mut Rng) -> BTreeMap<String, Value> {
         names.iter().map(|n| (n.to_string(), value(rng))).collect()
@@ -356,6 +389,39 @@ mod tests {
     }
 
     #[test]
+    fn a_value_glued_into_something_else_is_refused() {
+        let mut p = BTreeMap::new();
+        // `O` + `R` would be the keyword OR: a bare value never touches text
+        p.insert("who".to_string(), Value::Text("R".into()));
+        assert!(substitute_params("MATCH Doc WHERE O{{who}} x == 1", &p).is_err());
+        p.insert("who".to_string(), Value::Text("ther".into()));
+        assert!(substitute_params("MATCH Doc WHERE O{{who}} x == 1", &p).is_err());
+        assert!(substitute_params("MATCH Doc WHERE {{who}}x == 1", &p).is_err());
+        // Codex review (2026-11-15): digits and identifier characters either side
+        p.insert("n".to_string(), Value::Int(0));
+        assert!(
+            substitute_params("MATCH Doc WHERE age > 1{{n}} RETURN *", &p).is_err(),
+            "1 then 0 must not become the number 10"
+        );
+        p.insert("n".to_string(), Value::Int(1));
+        assert!(
+            substitute_params("MATCH Doc WHERE age > {{n}}e9 RETURN *", &p).is_err(),
+            "a number followed by an identifier must not be built from a value"
+        );
+        // set off by whitespace, parentheses or commas it is fine
+        for ok in [
+            "WHERE ({{who}})",
+            "WHERE f({{who}}, 1)",
+            "WHERE {{who}}\n== 1",
+            "{{who}}",
+        ] {
+            assert!(substitute_params(ok, &p).is_ok(), "{ok}");
+        }
+        // inside a literal, text on either side is the template's business
+        assert!(substitute_params(r#"name == "x{{who}}y""#, &p).is_ok());
+    }
+
+    #[test]
     fn unknown_and_malformed_placeholders_are_left_alone() {
         let p = BTreeMap::new();
         for s in ["{{nope}}", "{{", "}}", "{{who", "a{{b}}c", "{{{x}}}", "{}"] {
@@ -396,12 +462,14 @@ mod tests {
                         Err(_) => {
                             // a refusal must have a reason an outsider can
                             // see: some value carries a quote or is not one
-                            // plain operand (`value_text` decides which)
+                            // plain operand (`value_text` decides which); a
+                            // glued template may also refuse because the value touches text
                             assert!(
-                                names.iter().any(|n| {
-                                    let t = value_to_string(&params[*n]);
-                                    t.contains('"') || !plain_operand(&t)
-                                }),
+                                glued(template)
+                                    || names.iter().any(|n| {
+                                        let t = value_to_string(&params[*n]);
+                                        t.contains('"') || !plain_operand(&t)
+                                    }),
                                 "seed {seed}: refused with nothing wrong: {template:?} {params:?}"
                             );
                         }
