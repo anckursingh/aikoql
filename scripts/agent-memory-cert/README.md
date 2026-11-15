@@ -24,7 +24,7 @@ their own directory.
 
 ## What it covers
 
-33 checks against a 55-section suite. These are the **model-free** checks:
+32 checks against a 55-section suite. These are the **model-free** checks:
 what the memory store itself guarantees. The suite's baselines (LLM-only,
 vector RAG, graph RAG) are not run here.
 
@@ -43,7 +43,7 @@ C5's real evidence is model-in-the-loop: the Vedas Ask run (`docs/CHAT.md`).
 
 ## Results (2026-11-14, branch `fix/index-checkpoint-resume`, debug build)
 
-Three runs on the original branch: **29 checks pass 3/3, none flaky.** After the rebase onto `main` and the review fixes below the harness has 33 checks and passed **33/33 in one run** (the three-run repeat was not re-run).
+Three runs on the original branch: **29 checks pass 3/3, none flaky.** After the rebase onto `main` and the review fixes below the harness has 32 checks and passed **32/32 in one run** (the three-run repeat was not re-run).
 
 Running the harness found eight defects, and the review of the branch four more (below the table). All are fixed on that branch,
 each with a test that fails first:
