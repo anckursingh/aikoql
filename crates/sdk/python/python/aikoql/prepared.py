@@ -13,7 +13,9 @@ import threading
 
 from aikoql.mcp_client import McpError
 
-_PLACEHOLDER = re.compile(r":([a-zA-Z_][a-zA-Z0-9_]*)")
+# A "..." literal and a // comment are text (the server binder reads them the
+# same way), so only the third alternative captures a placeholder.
+_PLACEHOLDER = re.compile(r'"[^"]*"|//[^\n]*|(?<![\w:]):([a-zA-Z_][a-zA-Z0-9_]*)')
 
 
 class BoundStatement:

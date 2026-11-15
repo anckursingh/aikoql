@@ -37,6 +37,21 @@ class PreparedStatementTest {
     }
 
     @Test
+    void placeholdersInLiteralsAndCommentsAreText() throws Exception {
+        try (ServerSocket srv = Scripted.scripted(req -> List.of())) {
+            try (Connection c = AikoqlClient.dial("127.0.0.1:" + srv.getLocalPort())) {
+                PreparedStatement ps = c.prepare(
+                        "MATCH Doc WHERE tag == \"ns:prod\" AND name == :who // :nope\nRETURN *");
+                // exactly one placeholder: binding :who alone is accepted by check
+                PreparedStatement.check(List.of("who"), Map.of("who", "a"));
+                assertEquals(
+                        "INVALID_ARGUMENT",
+                        thrownCode(() -> ps.execute(Map.of("who", "a", "nope", 1), null)));
+            }
+        }
+    }
+
+    @Test
     void bindWrongCountFails() {
         assertEquals(
                 "INVALID_ARGUMENT",

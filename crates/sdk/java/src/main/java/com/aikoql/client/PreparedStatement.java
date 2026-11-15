@@ -14,7 +14,8 @@ import java.util.regex.Pattern;
 // binding and sends the named parameters, which the server binds.
 // Mirrors crates/sdk/go/prepared.go.
 public final class PreparedStatement {
-    private static final Pattern PLACEHOLDER = Pattern.compile(":([a-zA-Z_][a-zA-Z0-9_]*)");
+    private static final Pattern PLACEHOLDER = Pattern.compile(
+            "\"[^\"]*\"|//[^\\n]*|(?<![\\w:]):([a-zA-Z_][a-zA-Z0-9_]*)");
 
     private final Connection conn;
     private final String query;
@@ -31,7 +32,7 @@ public final class PreparedStatement {
         this.params = new ArrayList<>();
         Matcher m = PLACEHOLDER.matcher(query);
         while (m.find()) {
-            if (!params.contains(m.group(1))) params.add(m.group(1));
+            if (m.group(1) != null && !params.contains(m.group(1))) params.add(m.group(1));
         }
     }
 

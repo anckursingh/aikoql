@@ -94,6 +94,13 @@ def test_prepared_lifecycle_bind_execute_execute_close():
     assert exc.value.code == "INVALID_ARGUMENT"
 
 
+def test_prepared_placeholders_in_literals_and_comments_are_text():
+    client = _client_with(_prepared_responder([]))
+    ps = client.prepare(
+        'MATCH Doc WHERE tag == "ns:prod" AND name == :who // :nope\nRETURN *')
+    assert ps._params == ("who",)
+
+
 def test_prepared_parameter_type_mismatch():
     client = _client_with(_prepared_responder([]))
     ps = client.prepare("MATCH person WHERE age == :age RETURN *")

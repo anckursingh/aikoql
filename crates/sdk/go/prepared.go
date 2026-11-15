@@ -15,7 +15,10 @@ import (
 	"strings"
 )
 
-var preparedPlaceholder = regexp.MustCompile(`:([a-zA-Z_][a-zA-Z0-9_]*)`)
+// A "..." literal and a // comment are text (the server binder reads them the
+// same way). Group 1 is the character before a placeholder: when it is an
+// identifier character or ':' the colon is not a placeholder start.
+var preparedPlaceholder = regexp.MustCompile(`"[^"]*"|//[^\n]*|([A-Za-z0-9_:]?):([a-zA-Z_][a-zA-Z0-9_]*)`)
 
 // PreparedStatement is a validated query with its :name placeholders
 // extracted.
@@ -45,9 +48,9 @@ func (c *Client) Prepare(ctx context.Context, query string) (*PreparedStatement,
 	ps := &PreparedStatement{c: c, query: query}
 	seen := map[string]bool{}
 	for _, m := range preparedPlaceholder.FindAllStringSubmatch(query, -1) {
-		if !seen[m[1]] {
-			seen[m[1]] = true
-			ps.params = append(ps.params, m[1])
+		if m[2] != "" && m[1] == "" && !seen[m[2]] {
+			seen[m[2]] = true
+			ps.params = append(ps.params, m[2])
 		}
 	}
 	return ps, nil

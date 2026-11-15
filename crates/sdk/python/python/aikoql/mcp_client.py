@@ -483,7 +483,7 @@ class McpClient:
         params = []
         seen = set()
         for m in _PLACEHOLDER.finditer(query):
-            if m.group(1) not in seen:
+            if m.group(1) and m.group(1) not in seen:
                 seen.add(m.group(1))
                 params.append(m.group(1))
         return PreparedStatement(self, query, tuple(params))

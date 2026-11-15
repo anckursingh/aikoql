@@ -90,6 +90,23 @@ func mcpErrorCode(t *testing.T, err error) string {
 	return me.Code
 }
 
+func TestPreparedPlaceholdersInLiteralsAndCommentsAreText(t *testing.T) {
+	addr := fakeServer(t, preparedResponder(t, new([]txnCall)))
+	c, err := Dial(context.Background(), addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	ps, err := c.Prepare(context.Background(),
+		"MATCH Doc WHERE tag == \"ns:prod\" AND name == :who // :nope\nRETURN *")
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if len(ps.params) != 1 || ps.params[0] != "who" {
+		t.Fatalf("params: %v", ps.params)
+	}
+}
+
 func TestPreparedLifecycleBindExecuteExecuteClose(t *testing.T) {
 	var log []txnCall
 	addr := fakeServer(t, preparedResponder(t, &log))
