@@ -46,10 +46,8 @@ repository = "https://github.com/anckursingh/aikoql"
 aikoql-native = { path = "crates/protocol/native", version = "0.4.0" }
 aikoql-kernel = { path = "crates/kernel", version = "0.4.0" }
 aikoql-storage-v2 = { path = "crates/storage/aikoql-v2", version = "0.4.0" }
-aikoql-graph = { path = "crates/engines/graph", version = "0.4.0" }
 aikoql-vector = { path = "crates/engines/vector", version = "0.4.0" }
 aikoql-scheduler = { path = "crates/engines/scheduler", version = "0.4.0" }
-aikoql-semantic = { path = "crates/engines/semantic", version = "0.4.0" }
 aikoql-compiler = { path = "crates/compiler", version = "0.4.0" }
 aikoql-runtime = { path = "crates/runtime", version = "0.4.0" }
 
