@@ -726,6 +726,21 @@ fn ocr_pdf_pages_inner(
 mod tests {
     use super::*;
 
+    /// Linux refuses (ETXTBSY) to exec a file another thread's fork still holds open for writing.
+    /// A test that writes a fake executable and runs it at once can hit that: retry, boundedly.
+    #[cfg(unix)]
+    fn retry_busy<T>(mut f: impl FnMut() -> Result<T, String>) -> Result<T, String> {
+        for _ in 0..40 {
+            match f() {
+                Err(e) if e.contains("Text file busy") => {
+                    std::thread::sleep(std::time::Duration::from_millis(25))
+                }
+                other => return other,
+            }
+        }
+        f()
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_failing_tesseract_says_why_in_the_error() {
@@ -743,9 +758,7 @@ mod tests {
             tesseract_path: Some(fake.to_str().unwrap().into()),
             ..TesseractCli::new()
         };
-        let e = t
-            .recognize("img.png", "eng", dir.to_str().unwrap())
-            .unwrap_err();
+        let e = retry_busy(|| t.recognize("img.png", "eng", dir.to_str().unwrap())).unwrap_err();
         assert!(e.contains("Error opening data file"), "{e}");
         assert!(e.contains("exit"), "the exit status is named too: {e}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -771,7 +784,7 @@ mod tests {
             pdftoppm_path: Some(fake.to_str().unwrap().into()),
             ..TesseractCli::new()
         };
-        let png = rasterize_with(&cli, "doc.pdf", 1, dir.to_str().unwrap()).unwrap();
+        let png = retry_busy(|| rasterize_with(&cli, "doc.pdf", 1, dir.to_str().unwrap())).unwrap();
         assert!(
             std::path::Path::new(&png).exists(),
             "the image {png} must exist"
@@ -824,7 +837,7 @@ mod tests {
             pdftoppm_path: Some(fake.to_str().unwrap().into()),
             ..TesseractCli::new()
         };
-        let png = rasterize_with(&cli, "doc.pdf", 7, dir.to_str().unwrap()).unwrap();
+        let png = retry_busy(|| rasterize_with(&cli, "doc.pdf", 7, dir.to_str().unwrap())).unwrap();
         assert!(
             png.ends_with("page-7-0007.png") && std::path::Path::new(&png).exists(),
             "{png}"

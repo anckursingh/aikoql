@@ -99,6 +99,25 @@ fn cut(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+/// The first `n` characters of `s` on one line, with an ellipsis when cut: what a person sees as a name.
+fn excerpt(s: &str, n: usize) -> String {
+    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() > n {
+        format!("{}…", cut(&one_line, n))
+    } else {
+        one_line
+    }
+}
+
+/// "page 5" or "pages 12–13".
+fn page_range(start: u32, end: u32) -> String {
+    if end <= start {
+        format!("page {start}")
+    } else {
+        format!("pages {start}–{end}")
+    }
+}
+
 /// entity name -> (ontology class, attributes) from the compiler's commit plan
 type ClassOf = HashMap<String, (Option<String>, Vec<(String, String)>)>;
 
@@ -201,6 +220,7 @@ fn plan_objects(
         let mut props = BTreeMap::new();
         base(&mut props, i);
         props.insert("page".into(), int(p.page_number as usize));
+        props.insert("name".into(), text(&format!("Page {}", p.page_number)));
         props.insert("text".into(), text(&p.text));
         props.insert("char_count".into(), int(p.text.chars().count()));
         props.insert("source".into(), text(&p.source));
@@ -258,9 +278,18 @@ fn plan_objects(
     let mut covered: BTreeSet<u32> = BTreeSet::new();
     for (i, ec) in cr.embedded_chunks.iter().enumerate() {
         let c = &ec.chunk;
-        let koid = id("chunk", &format!("{i}:{}", c.chunk_id));
+        let koid = id("chunk", &i.to_string());
         let mut props = BTreeMap::new();
         base(&mut props, i);
+        props.insert(
+            "name".into(),
+            text(&format!(
+                "Chunk {} · {}: {}",
+                i + 1,
+                page_range(c.position.start_page, c.position.end_page),
+                excerpt(&c.text, 60)
+            )),
+        );
         props.insert("chunk_id".into(), text(&c.chunk_id));
         props.insert("chunk_index".into(), int(c.position.chunk_index));
         props.insert("start_page".into(), int(c.position.start_page as usize));
@@ -306,6 +335,14 @@ fn plan_objects(
         let mut props = BTreeMap::new();
         base(&mut props, n);
         props.insert(
+            "name".into(),
+            text(&format!(
+                "Chunk · page {}: {}",
+                p.page_number,
+                excerpt(&p.text, 60)
+            )),
+        );
+        props.insert(
             "chunk_id".into(),
             text(&format!("page-text/{}", p.page_number)),
         );
@@ -338,9 +375,22 @@ fn plan_objects(
 
     // fragments: the compiler's canonical segmentation, tables and images included
     for (i, f) in cr.fragments.iter().enumerate() {
-        let koid = id("fragment", &format!("{i}:{}", f.fragment_id));
+        let koid = id("fragment", &i.to_string());
         let mut props = BTreeMap::new();
         base(&mut props, i);
+        let frag_page = f.context.page.or_else(|| f.source.as_ref().map(|s| s.page));
+        let frag_what = match &f.content {
+            FragmentContent::Text(t) | FragmentContent::Code(t) => excerpt(t, 60),
+            _ => "(non-text content)".to_string(),
+        };
+        props.insert(
+            "name".into(),
+            text(&format!(
+                "{:?} fragment{}: {frag_what}",
+                f.modality,
+                frag_page.map_or(String::new(), |p| format!(" · page {p}"))
+            )),
+        );
         props.insert("fragment_id".into(), text(&f.fragment_id));
         props.insert("modality".into(), text(&format!("{:?}", f.modality)));
         props.insert("confidence".into(), Value::Float(f64::from(f.confidence)));
@@ -394,6 +444,7 @@ fn plan_objects(
         let koid = id("fact", &i.to_string());
         let mut props = BTreeMap::new();
         base(&mut props, i);
+        props.insert("name".into(), text(&excerpt(&f.statement, 80)));
         props.insert("statement".into(), text(&f.statement));
         props.insert("confidence".into(), Value::Float(f64::from(f.confidence)));
         props.insert("entities".into(), text(&f.entities.join("; ")));
@@ -456,13 +507,23 @@ fn admin(tenant: Option<&str>) -> Subject {
 }
 
 /// The saved objects of `ty` that belong to this document and tenant (live ones only).
-fn saved(k: &Kernel, ty: &str, tag: &str, tenant: Option<&str>) -> Vec<KnowledgeObject> {
-    k.scan_by_type(&admin(tenant), ty)
+/// Does `o` belong to this document? It carries the document's tag, or it names the document in its
+/// `document` property. The second test matters: a leftover of an earlier save that lost its tag would
+/// otherwise be invisible to the count, to pruning and to removal.
+fn belongs(o: &KnowledgeObject, tag: &str, doc_hex: &str) -> bool {
+    o.metadata.tags.iter().any(|t| t == tag)
+        || matches!(o.properties.get("document"), Some(Value::Text(d)) if d == doc_hex)
+}
+
+/// The saved objects of `ty` that belong to this document and tenant (live ones only).
+fn saved(k: &Kernel, ty: &str, doc_ko: &KnowledgeObject) -> Vec<KnowledgeObject> {
+    let tenant = tenant_of(doc_ko);
+    let tag = sha_of(doc_ko).map(|s| doc_tag(&s)).unwrap_or_default();
+    let hex = doc_ko.koid.to_hex();
+    k.scan_by_type(&admin(tenant.as_deref()), ty)
         .unwrap_or_default()
         .into_iter()
-        .filter(|o| {
-            o.metadata.tenant.as_deref() == tenant && o.metadata.tags.iter().any(|t| t == tag)
-        })
+        .filter(|o| o.metadata.tenant.as_deref() == tenant.as_deref() && belongs(o, &tag, &hex))
         .collect()
 }
 
@@ -533,22 +594,34 @@ pub(crate) fn commit_knowledge(
         }
     }
     progress(total, total);
-    // what an earlier save wrote and this one no longer contains
-    let mine = |ko: &KnowledgeObject| {
-        ko.metadata.tenant.as_deref() == tenant.as_deref() && ko.metadata.tags.contains(&tag)
-    };
-    let mut pruned = 0;
+    // what an earlier save wrote and this one no longer contains, or a leftover that names this
+    // document: removed as the writer. One the writer may not remove does not fail the save: it is
+    // counted and named in the manifest (it is still stored, so the n-of-n will not match).
+    let ctx = KnowledgeContext::from(writer.clone());
+    let (mut pruned, mut unremovable) = (0usize, 0usize);
     for ty in DOC_TYPES {
-        let none = HashSet::new();
-        pruned += sink
-            .prune_missing_where(ty, present.get(ty).unwrap_or(&none), mine)
-            .map_err(|e| e.to_string())?;
+        let keep = present.get(ty);
+        for ko in saved(k, ty, doc_ko) {
+            if keep.is_some_and(|set| set.contains(&ko.koid)) {
+                continue;
+            }
+            match k.forget(
+                ctx.clone(),
+                &ko.koid,
+                ForgetMode::Tombstone,
+                None,
+                Some("no longer part of the saved document".into()),
+            ) {
+                Ok(_) => pruned += 1,
+                Err(_) => unremovable += 1,
+            }
+        }
     }
 
     // read it all back: a count is only believed when the kernel gives the objects back
     let by_type: HashMap<&str, Vec<KnowledgeObject>> = DOC_TYPES
         .iter()
-        .map(|ty| (*ty, saved(k, ty, &tag, tenant.as_deref())))
+        .map(|ty| (*ty, saved(k, ty, doc_ko)))
         .collect();
     let stored_page_chars: usize = by_type[T_PAGE]
         .iter()
@@ -573,7 +646,13 @@ pub(crate) fn commit_knowledge(
     let mut gaps: Vec<String> = kinds
         .iter()
         .filter(|(_, p, s)| p != s)
-        .map(|(n, p, s)| format!("{n}: {s} stored of {p} planned"))
+        .map(|(n, p, s)| {
+            if s > p {
+                format!("{n}: {s} stored, {p} planned: {} leftover object(s) naming this document could not be removed with your permissions", s - p)
+            } else {
+                format!("{n}: {s} stored of {p} planned")
+            }
+        })
         .collect();
     if stored_page_chars != plan.page_chars {
         gaps.push(format!(
@@ -603,17 +682,17 @@ pub(crate) fn commit_knowledge(
         "merged": plan.merged,
         "written": written,
         "pruned": pruned,
+        "unremovable": unremovable,
     }))
 }
 
 /// Tombstone everything saved for this document.
 pub(crate) fn remove_knowledge(k: &Kernel, doc_ko: &KnowledgeObject) -> Result<J, String> {
-    let tag = doc_tag(&sha_of(doc_ko)?);
     let tenant = tenant_of(doc_ko);
     let ctx = KnowledgeContext::from(admin(tenant.as_deref()));
     let mut removed = 0usize;
     for ty in DOC_TYPES {
-        for ko in saved(k, ty, &tag, tenant.as_deref()) {
+        for ko in saved(k, ty, doc_ko) {
             k.forget(
                 ctx.clone(),
                 &ko.koid,
@@ -662,8 +741,7 @@ pub(crate) fn list_objects(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(J::as_str)
         .map(str::to_lowercase)
         .filter(|q| !q.is_empty());
-    let tag = doc_tag(&sha_of(&doc_ko)?);
-    let mut all = saved(k, ty, &tag, tenant_of(&doc_ko).as_deref());
+    let mut all = saved(k, ty, &doc_ko);
     let get = |o: &KnowledgeObject, p: &str| match o.properties.get(p) {
         Some(Value::Text(t)) => t.clone(),
         Some(Value::Int(n)) => n.to_string(),
@@ -687,7 +765,7 @@ pub(crate) fn list_objects(k: &Kernel, args: &J) -> Result<J, String> {
         .skip(offset)
         .take(limit)
         .map(|o| {
-            let label = ["name", "statement", "text", "content"]
+            let label = ["statement", "text", "content", "name"]
                 .iter()
                 .map(|p| get(o, p))
                 .find(|v| !v.is_empty())
@@ -720,7 +798,6 @@ pub(crate) fn document_graph(
     let koid = KOID::from_hex(doc_hex).map_err(|e| format!("bad koid: {e}"))?;
     let ctx = KnowledgeContext::from(subject.clone());
     let doc_ko = k.get(ctx, &koid).map_err(|e| e.to_string())?;
-    let tag = doc_tag(&sha_of(&doc_ko)?);
     let tenant = tenant_of(&doc_ko);
     let ty = match kind {
         "page" => T_PAGE,
@@ -737,7 +814,7 @@ pub(crate) fn document_graph(
     let limit = limit.clamp(1, 2000);
     let by_ty: Vec<(&str, Vec<KnowledgeObject>)> = DOC_TYPES
         .iter()
-        .map(|t| (*t, saved(k, t, &tag, tenant.as_deref())))
+        .map(|t| (*t, saved(k, t, &doc_ko)))
         .collect();
     let totals: serde_json::Map<String, J> = [
         ("page", T_PAGE),
@@ -955,6 +1032,7 @@ pub(crate) fn tool_document_commit(k: &Kernel, args: &J, db_path: &str) -> Resul
                 &mime,
                 &artifact,
                 batches_total,
+                &sha, // the content hash: unambiguous across documents (a KOID minted a minute apart shares its first characters)
             )?;
             let failed =
                 batches.map_or(0, |b| b.iter().filter(|x| x["status"] == "failed").count());
@@ -1367,6 +1445,7 @@ mod tests {
         )
         .unwrap();
         let koid = r["koid"].as_str().unwrap().to_string();
+        let sha_hex = r["sha256"].as_str().unwrap().to_string();
         let started =
             tool_document_commit(&k, &json!({"koid": koid}), db.to_str().unwrap()).unwrap();
         assert_eq!(started["graph"]["status"], "saving");
@@ -1399,6 +1478,12 @@ mod tests {
                 .unwrap()
                 >= 1,
             "{info}"
+        );
+        let first_chunk = live(&k, T_CHUNK, None).into_iter().next().unwrap();
+        assert!(
+            matches!(first_chunk.properties.get("chunk_id"), Some(Value::Text(t)) if t.starts_with(&sha_hex)),
+            "chunks are named after the document: {:?}",
+            first_chunk.properties.get("chunk_id")
         );
         // removal takes it all out and says so
         let gone = tool_document_uncommit(&k, &json!({"koid": koid})).unwrap();
@@ -1581,5 +1666,180 @@ mod tests {
             .unwrap_err();
         assert!(e.contains("missing pages"), "{e}");
         assert!(live(&k, T_PAGE, None).is_empty(), "nothing was written");
+    }
+
+    #[test]
+    fn every_saved_object_has_a_readable_name_not_just_an_id() {
+        let (k, doc) = (kernel(), document());
+        let cr = compiled(&doc);
+        let ko = ingest(&k, None, "names");
+        save(&k, &ko, &doc, &cr);
+        for ty in DOC_TYPES {
+            for o in live(&k, ty, None) {
+                match o.properties.get("name") {
+                    Some(Value::Text(n)) if !n.trim().is_empty() => {}
+                    other => panic!("{ty} object has no readable name: {other:?}"),
+                }
+            }
+        }
+        let name_of = |ty: &str, want_page: i64| {
+            live(&k, ty, None)
+                .into_iter()
+                .find(|o| {
+                    o.properties.get("page") == Some(&Value::Int(want_page))
+                        || o.properties.get("start_page") == Some(&Value::Int(want_page))
+                })
+                .and_then(|o| match o.properties.get("name") {
+                    Some(Value::Text(n)) => Some(n.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(name_of(T_PAGE, 5), "Page 5");
+        let chunk = name_of(T_CHUNK, 5);
+        assert!(
+            chunk.contains("page 5") && chunk.contains("Alice"),
+            "a chunk is named by its pages and its first words: {chunk}"
+        );
+        // the graph's label for a node is its name, not an identifier
+        let c = live(&k, T_CHUNK, None).into_iter().next().unwrap();
+        let label = crate::http::node_label(&c, 80);
+        assert!(!label.contains("unknown/"), "{label}");
+    }
+
+    #[test]
+    fn object_ids_do_not_depend_on_the_compilers_chunk_ids() {
+        let (k, doc) = (kernel(), document());
+        let ko = ingest(&k, None, "stable");
+        let plain = compiled(&doc); // chunk ids read unknown/chunk-N
+        save(&k, &ko, &doc, &plain);
+        let ids = |t: &str| -> std::collections::BTreeSet<_> {
+            live(&k, t, None).into_iter().map(|o| o.koid).collect()
+        };
+        let (chunks, frags) = (ids(T_CHUNK), ids(T_FRAGMENT));
+        // the same document compiled with its identity: new chunk and fragment ids, same objects
+        let named = aikoql_ingestion::compile_document_mock_with_policy_for(
+            &doc,
+            &[],
+            None,
+            &Default::default(),
+            Some(&sha_of(&ko).unwrap()),
+        );
+        save(&k, &ko, &doc, &named);
+        assert_eq!(
+            ids(T_CHUNK),
+            chunks,
+            "re-saving after the id change updates in place"
+        );
+        assert_eq!(ids(T_FRAGMENT), frags);
+        assert!(
+            live(&k, T_CHUNK, None).iter().all(|c| matches!(
+                c.properties.get("chunk_id"),
+                Some(Value::Text(t)) if t.starts_with(&sha_of(&ko).unwrap())
+            )),
+            "and the stored chunk ids now name the document"
+        );
+    }
+
+    #[test]
+    fn an_untagged_leftover_that_points_at_the_document_is_counted_and_pruned() {
+        let (k, doc) = (kernel(), document());
+        let cr = compiled(&doc);
+        let ko = ingest(&k, None, "stray");
+        let writer = writer_for(&ko);
+        // a leftover of some earlier save: it names the document but carries no tag
+        let stray = KnowledgeObject {
+            koid: crate::derived_ids::identity_koid("test", "stray", &["1".into()]),
+            version: 0,
+            commit_ts: 0,
+            metadata: crate::Metadata {
+                type_name: T_CHUNK.into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: [
+                ("document".to_string(), Value::Text(ko.koid.to_hex())),
+                ("text".to_string(), Value::Text("left behind".into())),
+            ]
+            .into(),
+            semantic: None,
+            relationships: vec![],
+            event_refs: vec![],
+            security: ko.security.clone(),
+            lifecycle: crate::Lifecycle {
+                state: crate::LifecycleState::Draft,
+                origin: crate::Origin::Human,
+            },
+            extensions: crate::ExtensionMap::new(),
+        };
+        crate::imports::ImportSink::new(&k, "t".into(), writer, vec![])
+            .put(stray, "t", "stray")
+            .unwrap();
+        assert_eq!(live(&k, T_CHUNK, None).len(), 1, "the leftover exists");
+        let m = save(&k, &ko, &doc, &cr);
+        assert_eq!(
+            live(&k, T_CHUNK, None).len(),
+            cr.embedded_chunks.len(),
+            "the leftover is gone: {m}"
+        );
+        assert!(m["pruned"].as_u64().unwrap() >= 1, "{m}");
+        assert_eq!(m["complete"], true, "{m}");
+        // and removal takes everything that names the document
+        let again = save(&k, &ko, &doc, &cr);
+        assert_eq!(again["written"], 0, "{again}");
+    }
+
+    #[test]
+    fn a_leftover_the_writer_may_not_remove_is_reported_not_a_failed_save() {
+        let (k, doc) = (kernel(), document());
+        let cr = compiled(&doc);
+        let ko = ingest(&k, None, "foreign");
+        // a non-admin writer: the document's own owner, no admin role
+        let owner = crate::Subject::new(&ko.security.owner);
+        // a leftover naming the document, owned by someone else
+        let mut foreign = ko.security.clone();
+        foreign.owner = "someone-else".into();
+        let stray = KnowledgeObject {
+            koid: crate::derived_ids::identity_koid("test", "foreign", &["1".into()]),
+            version: 0,
+            commit_ts: 0,
+            metadata: crate::Metadata {
+                type_name: T_CHUNK.into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: [("document".to_string(), Value::Text(ko.koid.to_hex()))].into(),
+            semantic: None,
+            relationships: vec![],
+            event_refs: vec![],
+            security: foreign,
+            lifecycle: crate::Lifecycle {
+                state: crate::LifecycleState::Draft,
+                origin: crate::Origin::Human,
+            },
+            extensions: crate::ExtensionMap::new(),
+        };
+        crate::imports::ImportSink::new(
+            &k,
+            "t".into(),
+            crate::Subject::with_roles("sys", &["admin"]),
+            vec![],
+        )
+        .put(stray, "t", "stray")
+        .unwrap();
+        let m = commit_knowledge(&k, &ko, &doc, &cr, 0, &owner, &|_, _| {})
+            .expect("a leftover that cannot be removed must not fail the save");
+        assert_eq!(m["complete"], false, "{m}");
+        assert!(
+            m["gaps"].to_string().contains("could not be removed"),
+            "named, not hidden: {m}"
+        );
+        assert_eq!(
+            live(&k, T_PAGE, None).len(),
+            PAGES,
+            "everything else was saved: {m}"
+        );
     }
 }
