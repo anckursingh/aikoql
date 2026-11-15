@@ -1272,16 +1272,13 @@ fn is_continuation_paragraph(node: &AstNode) -> bool {
     }
     // Not a heading (all-caps short line).
     let alpha: Vec<char> = t.chars().filter(|c| c.is_alphabetic()).collect();
-    if !alpha.is_empty()
+    let heading = !alpha.is_empty()
         && alpha.iter().all(|c| c.is_uppercase())
         && t.len() <= 80
         && !t.ends_with('.')
         && !t.ends_with(',')
-        && !t.ends_with(';')
-    {
-        return false;
-    }
-    true
+        && !t.ends_with(';');
+    !heading
 }
 
 fn flush_continuations(out: &mut Vec<AstNode>, pending: &mut Vec<AstNode>) {

@@ -383,28 +383,20 @@ fn is_credit_card(text: &str) -> bool {
     }
     // Also check for dash-separated: XXXX-XXXX-XXXX-XXXX
     let dash_parts: Vec<&str> = text.split('-').collect();
-    if dash_parts.len() == 4
+    dash_parts.len() == 4
         && dash_parts
             .iter()
             .all(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_digit()))
-    {
-        return true;
-    }
-    false
 }
 
 fn is_ssn(text: &str) -> bool {
     // Match XXX-XX-XXXX pattern
     let parts: Vec<&str> = text.split('-').collect();
-    if parts.len() == 3
+    parts.len() == 3
         && parts[0].len() == 3
         && parts[1].len() == 2
         && parts[2].len() == 4
         && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit()))
-    {
-        return true;
-    }
-    false
 }
 
 fn is_likely_token(text: &str) -> bool {
