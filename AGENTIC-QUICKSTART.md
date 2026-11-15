@@ -87,11 +87,12 @@ aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token s3cret:team:admin /data/kb
 Plaintext TCP is loopback-only — binding a non-loopback address exits 2;
 with `--tls-cert/--tls-key` (or `AIKOQL_TLS_CERT` / `AIKOQL_TLS_KEY`) the
 listener serves TLS and may bind any interface.
-TCP auth is fail-closed: the token is `TOKEN[:TENANT[:ROLE1,ROLE2]]` and a
+TCP auth is fail-closed: the token is `TOKEN[:TENANT[:ROLE1,ROLE2[,agent=NAME]]]` and a
 bare `TOKEN` (no roles) **exits 2**. In production use `AIKOQL_TCP_TOKEN`
 or `AIKOQL_TCP_TOKEN_FILE` (CLI flags leak into the process list). On TCP,
 identity is server-assigned by the token — clients must not send an
-`agent_id`; on stdio, the session is trusted and you declare identity with
+`agent_id`; name each agent in its token (`agent=alice`) so agents of one
+tenant keep their private memories apart; on stdio, the session is trusted and you declare identity with
 `session_init`.
 
 **Memories are knowledge too**: `memory_store` / `memory_update` /

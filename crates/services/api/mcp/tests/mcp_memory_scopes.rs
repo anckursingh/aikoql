@@ -316,3 +316,143 @@ fn s05_promotion_is_a_new_version() {
         "promoted"
     );
 }
+
+/// MEM-TENANT — an agent's key/value memory belongs to the tenant it was
+/// written in. `agent_memory` wrote it tenantless, so the writer's own
+/// tenant-scoped read filtered it out (found by the C1 certification
+/// harness: CHAT-MEM-005 read back `count: 0` right after the write), and
+/// the idempotency key carried no tenant — another tenant writing the same
+/// agent and key got the first tenant's object back.
+#[test]
+fn s06_an_agent_memory_is_read_back_in_its_tenant_and_only_there() {
+    let root = tmp("agentmem");
+    let mut m = Mcp::serve(&root);
+    let w = m.tool(
+        "assistant-1",
+        "acme",
+        "agent_memory",
+        json!({"agent_id": "assistant-1", "key": "env", "value": "AWS", "ttl": 3600}),
+    );
+    let acme_koid = w["koid"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{w}"))
+        .to_string();
+    let read = m.tool(
+        "assistant-1",
+        "acme",
+        "agent_memory",
+        json!({"agent_id": "assistant-1"}),
+    );
+    assert_eq!(read["count"], 1, "the writer reads its memory back: {read}");
+    assert_eq!(read["memories"][0]["value"], "AWS", "{read}");
+
+    let other = m.tool(
+        "assistant-1",
+        "globex",
+        "agent_memory",
+        json!({"agent_id": "assistant-1", "key": "env", "value": "GCP", "ttl": 3600}),
+    );
+    assert_ne!(
+        other["koid"].as_str(),
+        Some(acme_koid.as_str()),
+        "another tenant's write is its own object: {other}"
+    );
+    let globex = m.tool(
+        "assistant-1",
+        "globex",
+        "agent_memory",
+        json!({"agent_id": "assistant-1"}),
+    );
+    assert_eq!(globex["count"], 1, "{globex}");
+    assert_eq!(
+        globex["memories"][0]["value"], "GCP",
+        "never acme's: {globex}"
+    );
+}
+
+/// MEM-SECRET beyond recall (Codex review of #49): a stored credential is
+/// handed back raw by the direct read paths — `get` on a Memory and
+/// `agent_memory` — though `recall` and `memory_search` mask it. A credential
+/// (key, token, password, connection string) is masked on every read of a
+/// memory object; personal data (email, SSN, card) is a separate policy and
+/// is not touched here.
+#[test]
+fn s07_a_stored_credential_is_masked_on_every_read_of_a_memory() {
+    let root = tmp("secretreads");
+    let mut m = Mcp::serve(&root);
+    let key = "AKIAIOSFODNN7EXAMPLE";
+    let stored = m.store(
+        "alice",
+        "acme",
+        "deploy-notes",
+        &format!("the deploy key is {key} and the contact is dana@example.com"),
+        None,
+    );
+    let koid = stored["koid"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{stored}"))
+        .to_string();
+
+    let got = m.tool("alice", "acme", "get", json!({"koid": koid}));
+    let raw = got.to_string();
+    assert!(!raw.contains(key), "get returned the credential raw: {raw}");
+    assert!(
+        raw.contains("[REDACTED:AWS_KEY]"),
+        "get masks it in place: {raw}"
+    );
+    assert!(
+        raw.contains("dana@example.com"),
+        "personal data is a separate policy, not masked by get: {raw}"
+    );
+
+    m.tool(
+        "alice",
+        "acme",
+        "agent_memory",
+        json!({"key": "aws", "value": format!("use {key} for staging"), "ttl": 3600}),
+    );
+    let read = m.tool("alice", "acme", "agent_memory", json!({}));
+    let raw = read.to_string();
+    assert!(
+        !raw.contains(key) && raw.contains("[REDACTED:AWS_KEY]"),
+        "agent_memory returned the credential raw: {raw}"
+    );
+}
+
+/// MEM-TTL semantics (advisor review of #49): writing an `agent_memory` key
+/// again is an UPDATE — the new value replaces the old, there is still one
+/// memory under that key, and the TTL runs from this write. A rewrite used to
+/// be swallowed as an idempotent replay: `stored: true`, the old value kept.
+#[test]
+fn s08_rewriting_an_agent_memory_key_updates_it_and_restarts_its_ttl() {
+    let root = tmp("agentttl");
+    let mut m = Mcp::serve(&root);
+    let first = m.tool(
+        "assistant-2",
+        "acme",
+        "agent_memory",
+        json!({"key": "mood", "value": "calm", "ttl": 3}),
+    );
+    assert_eq!(first["stored"], true, "{first}");
+    std::thread::sleep(std::time::Duration::from_millis(2200));
+    // 2.2 s in: the first write is about to expire; rewrite the key
+    let second = m.tool(
+        "assistant-2",
+        "acme",
+        "agent_memory",
+        json!({"key": "mood", "value": "tense", "ttl": 3}),
+    );
+    assert_eq!(second["stored"], true, "{second}");
+    assert_eq!(
+        second["koid"], first["koid"],
+        "one object per key, not a second one: {first} {second}"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // 3.7 s after the first write (past its TTL), 1.5 s after the rewrite
+    let read = m.tool("assistant-2", "acme", "agent_memory", json!({}));
+    assert_eq!(read["count"], 1, "the rewrite keeps the key alive: {read}");
+    assert_eq!(
+        read["memories"][0]["value"], "tense",
+        "the new value replaced the old: {read}"
+    );
+}

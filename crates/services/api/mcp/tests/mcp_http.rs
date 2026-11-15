@@ -1007,3 +1007,127 @@ fn h021_the_vendored_studio_scripts_are_served_from_the_binary() {
     }
     assert_eq!(get("/studio/assets/nope.js").status, 404);
 }
+
+/// MEM-AGENT over Streamable HTTP (Codex review of #49): a `--tcp-token`
+/// that names its agent (`agent=NAME`) is that agent over HTTP too. The HTTP
+/// caller used to be the fixed `http-agent`, so two named agents in one
+/// tenant were one principal again and a private memory was shared.
+#[test]
+fn h030_a_token_names_its_agent_over_http_too() {
+    let srv = serve(
+        "030",
+        &[
+            "--tcp-token",
+            "alice-tok:acme:editor,agent=alice",
+            "--tcp-token",
+            "bob-tok:acme:editor,agent=bob",
+        ],
+    );
+    let open = |token: &str| -> String {
+        let auth = format!("Bearer {token}");
+        let r = request(
+            srv.port,
+            "POST",
+            &[("Authorization", &auth)],
+            &rpc(
+                1,
+                "initialize",
+                json!({"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "http-test", "version": "0"}}),
+            ),
+        );
+        assert_eq!(r.status, 200, "initialize: {}", r.body);
+        r.header("mcp-session-id").expect("session id").to_string()
+    };
+    let call = |token: &str, sid: &str, id: u64, args: J| -> J {
+        let auth = format!("Bearer {token}");
+        let r = request(
+            srv.port,
+            "POST",
+            &[("Authorization", &auth), ("Mcp-Session-Id", sid)],
+            &rpc(
+                id,
+                "tools/call",
+                json!({"name": "agent_memory", "arguments": args}),
+            ),
+        );
+        assert_eq!(r.status, 200, "agent_memory: {}", r.body);
+        let text = r.json()["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no text: {}", r.body))
+            .to_string();
+        serde_json::from_str(&text).unwrap()
+    };
+    let (alice, bob) = (open("alice-tok"), open("bob-tok"));
+    call(
+        "alice-tok",
+        &alice,
+        2,
+        json!({"key": "plan", "value": "alice-only", "ttl": 3600}),
+    );
+    let own = call("alice-tok", &alice, 3, json!({}));
+    assert_eq!(own["count"], 1, "alice reads her own memory: {own}");
+    // bob asks for himself, then names alice outright: both see nothing of hers
+    for args in [json!({}), json!({"agent_id": "alice"})] {
+        let theirs = call("bob-tok", &bob, 4, args.clone());
+        assert_eq!(
+            theirs["count"], 0,
+            "bob must not read alice's private memory ({args}): {theirs}"
+        );
+    }
+}
+
+/// POLICY-ENF governance (Codex review of #49): a Deny overrides ownership
+/// and admin, and `deploy_policy` is a developer capability — so a developer
+/// could lock every admin out (an untenanted Deny binds every tenant).
+/// Deploying a Deny is therefore an admin act; an Allow stays a developer's.
+#[test]
+fn h031_only_an_admin_may_deploy_a_deny_policy() {
+    let srv = serve("031", &["--tcp-token", "dev-tok:acme:developer"]);
+    let open = |token: &str| -> String {
+        let auth = format!("Bearer {token}");
+        let r = request(
+            srv.port,
+            "POST",
+            &[("Authorization", &auth)],
+            &rpc(
+                1,
+                "initialize",
+                json!({"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "http-test", "version": "0"}}),
+            ),
+        );
+        assert_eq!(r.status, 200, "initialize: {}", r.body);
+        r.header("mcp-session-id").expect("session id").to_string()
+    };
+    let deploy = |token: &str, sid: &str, name: &str, effect: &str| -> String {
+        let auth = format!("Bearer {token}");
+        let r = request(
+            srv.port,
+            "POST",
+            &[("Authorization", &auth), ("Mcp-Session-Id", sid)],
+            &rpc(
+                2,
+                "tools/call",
+                json!({"name": "deploy_policy", "arguments": {
+                    "name": name, "effect": effect, "principal": "admin",
+                    "action": "*", "resource_type": "*"}}),
+            ),
+        );
+        assert_eq!(r.status, 200, "deploy_policy: {}", r.body);
+        r.body
+    };
+    let (dev, admin) = (open("dev-tok"), open("http-tok"));
+    let refused = deploy("dev-tok", &dev, "lock-admin-out", "deny");
+    assert!(
+        refused.contains("admin") && refused.to_lowercase().contains("deny"),
+        "a developer must not deploy a Deny: {refused}"
+    );
+    let allow = deploy("dev-tok", &dev, "dev-allow", "allow");
+    assert!(
+        allow.contains("koid"),
+        "a developer may still deploy an Allow: {allow}"
+    );
+    let ok = deploy("http-tok", &admin, "admin-deny", "deny");
+    assert!(ok.contains("koid"), "an admin may deploy a Deny: {ok}");
+}

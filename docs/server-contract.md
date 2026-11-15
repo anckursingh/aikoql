@@ -10,13 +10,15 @@ explicitly out of scope.
 ```
 aikoql-mcp serve <db-path> \
   --listen 127.0.0.1:9090 \
-  --tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]] \
+  --tcp-token TOKEN[:TENANT[:ROLE1,ROLE2[,agent=NAME]]] \
   [--request-timeout-secs 30] \
   [--max-connections 64]
 ```
 
 - `--tcp-token` is required in TCP mode (fail-closed); at least one role per
-  token spec. The token is passed as `params.token` to `initialize`.
+  token spec. The token is passed as `params.token` to `initialize`. An
+  `agent=NAME` entry in the role list is the session's `agent_id` (default
+  `tcp-agent`); it is not a role.
 - Loopback-only binds. `--request-timeout-secs` (default 30) bounds one
   request's wall-clock execution; `--max-connections` (default 64) caps
   concurrent client connections.
