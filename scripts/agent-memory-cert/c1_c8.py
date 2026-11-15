@@ -22,7 +22,8 @@ DB = HERE / "mem-db"
 LOG = HERE / "server.log"
 # each token names its agent (agent=NAME): two agents of one tenant are two principals
 TOKENS = ["acme-agent:acme:admin,agent=assistant-1", "acme-bob:acme:editor,agent=bob",
-          "acme-viewer:acme:viewer,agent=auditor", "globex-agent:globex:admin,agent=globex-1"]
+          "acme-viewer:acme:viewer,agent=auditor", "globex-agent:globex:admin,agent=globex-1",
+          "acme-dev:acme:developer,agent=dev-1"]
 
 results = []
 
@@ -371,6 +372,53 @@ def _(c):
     _, t = recall_text(s, "What is Alice's AWS key?")
     raw = "akiaiosfodnn7example" in t
     return ("FAIL" if raw else "PASS"), ("the raw key is returned by recall: " if raw else "") + t[:300]
+
+
+@check("C7", "SENS-002", "a credential is masked on get and agent_memory, not only on recall")
+def _(c):
+    s = c["a"]
+    ok, d = s.tool("memory_store", name="deploy-key", description="deploy key", trust="user",
+                   content="staging deploy key AKIAIOSFODNN7EXAMPLE for the pipeline")
+    ok2, g = s.tool("get", koid=koid_of(d))
+    s.tool("agent_memory", key="aws", value="use AKIAIOSFODNN7EXAMPLE for staging", ttl=3600)
+    ok3, am = s.tool("agent_memory")
+    raw_get = "akiaiosfodnn7example" in json.dumps(g).lower()
+    raw_am = "akiaiosfodnn7example" in json.dumps(am).lower()
+    status = "PASS" if (ok and ok2 and ok3 and not raw_get and not raw_am) else "FAIL"
+    return status, f"raw in get={raw_get} raw in agent_memory={raw_am}"
+
+
+@check("C7", "AUTH-002", "a developer cannot deploy a Deny policy; an admin can")
+def _(c):
+    dev = Session(c["srv"], "acme-dev")
+    try:
+        ok_deny, d1 = dev.tool("deploy_policy", name="LockAdminOut", effect="Deny", principal="admin",
+                               action="*", resource_type="*")
+        ok_allow, d2 = dev.tool("deploy_policy", name="DevAllow", effect="Allow", principal="dev-1",
+                                action="Read", resource_type="Note")
+    finally:
+        dev.close()
+    ok_admin, d3 = c["a"].tool("deploy_policy", name="AdminDenyAudit", effect="Deny", principal="nobody-x",
+                               action="Delete", resource_type="Note")
+    good = (not ok_deny) and ok_allow and ok_admin
+    return ("PASS" if good else "FAIL"), f"dev deny ok={ok_deny} dev allow ok={ok_allow} admin deny ok={ok_admin}"
+
+
+@check("C6", "PERS-006", "rewriting a memory key updates it; a non-admin agent cannot read another agent's")
+def _(c):
+    s = c["a"]
+    s.tool("agent_memory", key="mood", value="calm", ttl=3600)
+    s.tool("agent_memory", key="mood", value="tense", ttl=3600)
+    _, mine = s.tool("agent_memory")
+    vals = [m.get("value") for m in mine.get("memories", []) if m.get("key") == "mood"]
+    bob = Session(c["srv"], "acme-bob")
+    try:
+        _, theirs = bob.tool("agent_memory", agent_id="assistant-1")
+    finally:
+        bob.close()
+    leaked = any(m.get("key") == "mood" for m in theirs.get("memories", []))
+    good = vals == ["tense"] and not leaked
+    return ("PASS" if good else "FAIL"), f"own values {vals}; bob sees assistant-1's mood: {leaked}"
 
 
 @check("C7", "POLICY-001", "a deny policy blocks the action itself")

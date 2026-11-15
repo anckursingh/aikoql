@@ -24,7 +24,7 @@ their own directory.
 
 ## What it covers
 
-29 checks against a 55-section suite. These are the **model-free** checks:
+33 checks against a 55-section suite. These are the **model-free** checks:
 what the memory store itself guarantees. The suite's baselines (LLM-only,
 vector RAG, graph RAG) are not run here.
 
@@ -43,9 +43,9 @@ C5's real evidence is model-in-the-loop: the Vedas Ask run (`docs/CHAT.md`).
 
 ## Results (2026-11-14, branch `fix/index-checkpoint-resume`, debug build)
 
-Three runs: **29 checks pass 3/3, none flaky.**
+Three runs on the original branch: **29 checks pass 3/3, none flaky.** After the rebase onto `main` and the review fixes below the harness has 33 checks and passed **33/33 in one run** (the three-run repeat was not re-run).
 
-Running the harness found eight defects. All eight are fixed on that branch,
+Running the harness found eight defects, and the review of the branch four more (below the table). All are fixed on that branch,
 each with a test that fails first:
 
 | Found by | Defect | Fix |
@@ -58,6 +58,15 @@ each with a test that fails first:
 | PERS-005 | every TCP token was the agent `tcp-agent`, so two agents in one tenant were one principal and a "private" memory was shared by all of them | a token names its agent: `agent=NAME` in the role list; `agent_memory`'s `agent_id` defaults to the caller |
 | POLICY-001 | policies were advisory: `evaluate_policies` answered "denied" but the denied `forget` still succeeded, because no write path read `deploy_policy` objects | a deployed Deny is enforced on reads, writes, deletes and creates, ahead of ownership and admin, within its tenant; Allow stays advisory |
 | CHAT-MEM-005 | `agent_memory`'s TTL ran from `commit_ts`, which a background re-commit advances about 2 s after the write, so the TTL restarted | the TTL runs from the memory's creation (its KOID) |
+
+Found afterwards by review (Codex and the advisor), each with a test that fails first:
+
+| Found by | Defect | Fix |
+|---|---|---|
+| Codex review | over Streamable HTTP every token was the fixed agent `http-agent`, so `agent=NAME` was ignored and two agents of one tenant shared private memory again (PERS-005 over HTTP) | an HTTP token that names its agent is that agent (`mcp_http.rs` test `h030`) |
+| Codex + advisor | `deploy_policy` is a developer capability and a Deny overrides admin, so a developer could lock every admin out (an untenanted Deny binds every tenant) | deploying a Deny requires admin (AUTH-002; `h031`) |
+| Codex review | `get` on a memory object and `agent_memory` returned a stored credential raw although `recall` masked it | credentials are masked on those reads (SENS-002; `s07`); personal data is a separate policy |
+| advisor review | writing an `agent_memory` key a second time answered `stored: true` and kept the OLD value; the rewrite also did not restart the TTL | a rewrite is a new version of the same object and the TTL runs from the latest write (PERS-006; `s08`) |
 
 The first PERS-005 verdict was also partly a harness false positive: the
 check searched the whole response, which echoes the query. It now reads
