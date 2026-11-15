@@ -62,7 +62,17 @@ Execute with parameters:
 {"koid": "019fdc...", "params": {"dept": "Engineering"}}
 ```
 
-The `{{dept}}` placeholder is substituted before compilation.
+The `{{dept}}` placeholder is substituted before compilation. A value is data: it can never add to
+or change the program.
+
+- **Inside a string literal** (`"{{dept}}"`) a value may be any text that does not contain a double
+  quote. AikoQL string literals have no escape syntax, so a value with a `"` is refused with an error
+  (it would end the literal and let the value add a clause).
+- **Anywhere else** (a number, a property name) a value must be a single number or an identifier such
+  as `salary` or `profile.age`, and the placeholder must be set off by whitespace, parentheses or commas
+  (`age > {{n}}`, not `age > 1{{n}}`). Free text, keywords, spaces and newlines are refused.
+- A value that contains `{{other}}` is not expanded again, and a placeholder with no parameter is left
+  as written. An agent's `{{prompt}}` follows the same rules.
 
 ## Version Your Program
 

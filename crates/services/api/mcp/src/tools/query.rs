@@ -10,10 +10,11 @@ use crate::{
 };
 use std::time::Duration;
 pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
-    let source = args
-        .get("query")
+    args.get("query")
         .and_then(|q| q.as_str())
         .ok_or("missing argument: query")?;
+    let bound = crate::params::tool_query(args)?;
+    let source = bound.as_str();
     let subject = args
         .get("subject")
         .and_then(|s| s.as_str())

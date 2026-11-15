@@ -4,8 +4,8 @@
 use crate::helpers::*;
 use crate::session::*;
 use crate::{
-    json, knowledge_runtime, value_to_string, Action, GraphEngineApi, Kernel, KnowledgeContext,
-    KnowledgeObject, Metadata, Origin, RelateRequest, RememberRequest, Value, J, KOID,
+    json, knowledge_runtime, Action, GraphEngineApi, Kernel, KnowledgeContext, KnowledgeObject,
+    Metadata, Origin, RelateRequest, RememberRequest, Value, J, KOID,
 };
 pub(crate) static PROGRAM_CACHE: std::sync::LazyLock<knowledge_runtime::ProgramCache> =
     std::sync::LazyLock::new(knowledge_runtime::ProgramCache::new);
@@ -324,10 +324,10 @@ pub(crate) fn tool_execute_program(k: &Kernel, args: &J) -> Result<J, String> {
         Some(Value::Text(s)) => s.clone(),
         _ => return Err("program has no body property".into()),
     };
-    let mut query = body;
-    for (key, val) in &params {
-        query = query.replace(&format!("{{{{{}}}}}", key), &value_to_string(val));
-    }
+    // Values are data, not query text: one that would change the program
+    // (a quote that closes a literal, free text where an operand goes) is
+    // refused — see params.rs.
+    let query = crate::params::substitute_params(&body, &params)?;
     // R9: program bodies run with the caller's roles + tenant scope.
     let plan = aikoql_compiler::parser::compile_scoped(
         &query,

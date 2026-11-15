@@ -11,10 +11,11 @@ import java.util.regex.Pattern;
 // compiles client-side on every execute — the abstraction precedes a native
 // prepare protocol, so the statement holds no server-side plan (nothing to
 // invalidate, nothing lost across a server restart). Bind validates the
-// binding and substitutes the JSON-encoded literals into the query.
+// binding and sends the named parameters, which the server binds.
 // Mirrors crates/sdk/go/prepared.go.
 public final class PreparedStatement {
-    private static final Pattern PLACEHOLDER = Pattern.compile(":([a-zA-Z_][a-zA-Z0-9_]*)");
+    private static final Pattern PLACEHOLDER = Pattern.compile(
+            "\"[^\"]*\"|//[^\\n]*|(?<![\\w:]):([a-zA-Z_][a-zA-Z0-9_]*)");
 
     private final Connection conn;
     private final String query;
@@ -31,7 +32,7 @@ public final class PreparedStatement {
         this.params = new ArrayList<>();
         Matcher m = PLACEHOLDER.matcher(query);
         while (m.find()) {
-            if (!params.contains(m.group(1))) params.add(m.group(1));
+            if (m.group(1) != null && !params.contains(m.group(1))) params.add(m.group(1));
         }
     }
 
@@ -46,12 +47,13 @@ public final class PreparedStatement {
         return bind(params).execute(dl);
     }
 
-    /** Substitutes the binding, compiles the query server-side, and runs
-     * it. */
+    /** Validates the binding and runs the query; the server binds the
+     * named parameters. */
     public Json.Value execute(Deadline dl) throws AikoqlException {
         if (closed) throw AikoqlException.invalidArgument("prepared statement is closed");
-        String q = substitute(query, params, bound == null ? Map.of() : bound);
-        return conn.aikoql(q, "", dl);
+        Map<String, Object> b = bound == null ? Map.of() : bound;
+        check(params, b);
+        return conn.aikoql(query, "", b, dl);
     }
 
     /** Closes the statement; further executes are refused. There is no
@@ -60,22 +62,15 @@ public final class PreparedStatement {
         closed = true;
     }
 
-    /** substitute validates the binding (exact placeholder set, scalar
-     * values only) and inlines the JSON-encoded literals. Placeholders are
-     * replaced longest-first so a name that prefixes another cannot be
-     * clobbered. ponytail: a bound value containing a ":name"-looking
-     * substring is replaced blindly — the native protocol removes this
-     * class. */
-    static String substitute(String query, List<String> params, Map<String, Object> bound) {
+    /** check validates the binding: exact placeholder set, scalar values
+     * only. */
+    static void check(List<String> params, Map<String, Object> bound) {
         if (bound.size() != params.size()) {
             throw AikoqlException.invalidArgument(
                     "bound " + bound.size() + " parameters, the statement has "
                             + params.size() + " (" + String.join(", ", params) + ")");
         }
-        List<String> sorted = new ArrayList<>(params);
-        sorted.sort(Comparator.comparingInt(String::length).reversed());
-        String q = query;
-        for (String name : sorted) {
+        for (String name : params) {
             if (!bound.containsKey(name)) {
                 throw AikoqlException.invalidArgument("parameter :" + name + " is not bound");
             }
@@ -86,9 +81,6 @@ public final class PreparedStatement {
                         "parameter :" + name + " must be a scalar, got "
                                 + value.getClass().getSimpleName());
             }
-            String lit = Json.stringify(Json.from(value));
-            q = q.replace(":" + name, lit);
         }
-        return q;
     }
 }

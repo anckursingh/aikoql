@@ -506,8 +506,18 @@ pub fn execute_agent(
             }
         };
 
-        // Substitute {{prompt}} placeholder if present.
-        let body = body.replace("{{prompt}}", prompt);
+        // Substitute {{prompt}} placeholder if present. The prompt is data:
+        // one that would change the skill is rejected (params.rs).
+        let mut prompt_param = std::collections::BTreeMap::new();
+        prompt_param.insert("prompt".to_string(), Value::Text(prompt.to_string()));
+        let body = match crate::params::substitute_params(&body, &prompt_param) {
+            Ok(b) => b,
+            Err(e) => {
+                total_errors += 1;
+                logs.push(format!("    REJECTED: {e}"));
+                continue;
+            }
+        };
 
         // Check program cache.
         let (mut plan, cache_hit) = if let Some(c) = cache {

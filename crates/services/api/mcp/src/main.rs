@@ -40,6 +40,7 @@ mod node;
 mod oauth;
 mod observability;
 mod oidc;
+mod params;
 mod prompts;
 mod protocol;
 mod rate_limiter;

@@ -459,8 +459,11 @@ class McpClient:
             args["wait_for_freshness_ms"] = wait_for_freshness_ms
         return self.call_tool("find_similar", args)
 
-    def aikoql(self, query: str, subject: Optional[str] = None) -> dict:
+    def aikoql(self, query: str, subject: Optional[str] = None,
+               params: Optional[Dict[str, Any]] = None) -> dict:
         args: Dict[str, Any] = {"query": query}
+        if params is not None:
+            args["params"] = params  # bound by the server, never inlined here
         if subject:
             args["subject"] = subject
         return self.call_tool("aikoql", args)
@@ -480,7 +483,7 @@ class McpClient:
         params = []
         seen = set()
         for m in _PLACEHOLDER.finditer(query):
-            if m.group(1) not in seen:
+            if m.group(1) and m.group(1) not in seen:
                 seen.add(m.group(1))
                 params.append(m.group(1))
         return PreparedStatement(self, query, tuple(params))

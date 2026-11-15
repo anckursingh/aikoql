@@ -90,6 +90,23 @@ func mcpErrorCode(t *testing.T, err error) string {
 	return me.Code
 }
 
+func TestPreparedPlaceholdersInLiteralsAndCommentsAreText(t *testing.T) {
+	addr := fakeServer(t, preparedResponder(t, new([]txnCall)))
+	c, err := Dial(context.Background(), addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	ps, err := c.Prepare(context.Background(),
+		"MATCH Doc WHERE tag == \"ns:prod\" AND name == :who // :nope\nRETURN *")
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if len(ps.params) != 1 || ps.params[0] != "who" {
+		t.Fatalf("params: %v", ps.params)
+	}
+}
+
 func TestPreparedLifecycleBindExecuteExecuteClose(t *testing.T) {
 	var log []txnCall
 	addr := fakeServer(t, preparedResponder(t, &log))
@@ -126,9 +143,15 @@ func TestPreparedLifecycleBindExecuteExecuteClose(t *testing.T) {
 			t.Fatalf("unexpected result: %s", raw)
 		}
 	}
-	want := `MATCH person WHERE name == "ada" RETURN *`
+	// the value travels as a parameter: it is never spliced into the query
+	want := "MATCH person WHERE name == :who RETURN *"
 	if got := aikoqlQueries(log); len(got) != 2 || got[0] != want || got[1] != want {
-		t.Fatalf("substituted queries: %q", got)
+		t.Fatalf("queries: %q", got)
+	}
+	for _, call := range log {
+		if call.Name == "aikoql" && call.Args["params"].(map[string]any)["who"] != "ada" {
+			t.Fatalf("params: %v", call.Args["params"])
+		}
 	}
 	if err := ps.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
