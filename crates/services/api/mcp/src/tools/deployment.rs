@@ -414,6 +414,17 @@ pub(crate) fn tool_list_programs(k: &Kernel, args: &J) -> Result<J, String> {
     }))
 }
 
+/// Who may deploy a Deny: an admin, or a local caller with no roles at all
+/// (stdio, where the OS process boundary is the trust boundary; a role-less
+/// TCP or HTTP session never reaches a tool — the dispatch gate refuses it).
+fn may_deploy_deny(args: &J) -> bool {
+    match args.get("roles").and_then(|r| r.as_array()) {
+        None => true,
+        Some(r) if r.is_empty() => true,
+        Some(r) => r.iter().any(|x| x.as_str() == Some("admin")),
+    }
+}
+
 pub(crate) fn tool_deploy_policy(k: &Kernel, args: &J) -> Result<J, String> {
     let name = args
         .get("name")
@@ -436,6 +447,16 @@ pub(crate) fn tool_deploy_policy(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|v| v.as_str())
         .ok_or("missing: resource_type")?;
     let condition = args.get("condition").and_then(|v| v.as_str());
+    // A deployed Deny overrides ownership and admin (POLICY-ENF), so deploying
+    // one is an admin act: `deploy_policy` is a developer capability, and a
+    // developer's Deny aimed at admin — untenanted, at every tenant — would
+    // lock them out. An Allow stays a developer's (it never grants).
+    if effect.eq_ignore_ascii_case("deny") && !may_deploy_deny(args) {
+        return Err(
+            "deploying a Deny policy requires the admin role (a Deny overrides ownership and admin)"
+                .into(),
+        );
+    }
     let r = k
         .deploy_policy(
             name,

@@ -1076,3 +1076,58 @@ fn h030_a_token_names_its_agent_over_http_too() {
         );
     }
 }
+
+/// POLICY-ENF governance (Codex review of #49): a Deny overrides ownership
+/// and admin, and `deploy_policy` is a developer capability — so a developer
+/// could lock every admin out (an untenanted Deny binds every tenant).
+/// Deploying a Deny is therefore an admin act; an Allow stays a developer's.
+#[test]
+fn h031_only_an_admin_may_deploy_a_deny_policy() {
+    let srv = serve("031", &["--tcp-token", "dev-tok:acme:developer"]);
+    let open = |token: &str| -> String {
+        let auth = format!("Bearer {token}");
+        let r = request(
+            srv.port,
+            "POST",
+            &[("Authorization", &auth)],
+            &rpc(
+                1,
+                "initialize",
+                json!({"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "http-test", "version": "0"}}),
+            ),
+        );
+        assert_eq!(r.status, 200, "initialize: {}", r.body);
+        r.header("mcp-session-id").expect("session id").to_string()
+    };
+    let deploy = |token: &str, sid: &str, name: &str, effect: &str| -> String {
+        let auth = format!("Bearer {token}");
+        let r = request(
+            srv.port,
+            "POST",
+            &[("Authorization", &auth), ("Mcp-Session-Id", sid)],
+            &rpc(
+                2,
+                "tools/call",
+                json!({"name": "deploy_policy", "arguments": {
+                    "name": name, "effect": effect, "principal": "admin",
+                    "action": "*", "resource_type": "*"}}),
+            ),
+        );
+        assert_eq!(r.status, 200, "deploy_policy: {}", r.body);
+        r.body
+    };
+    let (dev, admin) = (open("dev-tok"), open("http-tok"));
+    let refused = deploy("dev-tok", &dev, "lock-admin-out", "deny");
+    assert!(
+        refused.contains("admin") && refused.to_lowercase().contains("deny"),
+        "a developer must not deploy a Deny: {refused}"
+    );
+    let allow = deploy("dev-tok", &dev, "dev-allow", "allow");
+    assert!(
+        allow.contains("koid"),
+        "a developer may still deploy an Allow: {allow}"
+    );
+    let ok = deploy("http-tok", &admin, "admin-deny", "deny");
+    assert!(ok.contains("koid"), "an admin may deploy a Deny: {ok}");
+}
