@@ -293,14 +293,18 @@ POST /api/v1/evaluate-policies
 MCP: evaluate_policies
 ```
 
-### `deploy_workflow` — DAG of programs as KO
+### `deploy_workflow` — Ordered list of programs as a KO
+
+The steps are `{order, program}` entries; `execute_workflow` sorts them by `order` and runs each program in turn, finding it by name. There is no branching, looping or state passed between steps, and a program that is not found is skipped with a log line.
 
 ```
 POST /api/v1/deploy-workflow
 MCP: deploy_workflow
 ```
 
-### `deploy_trigger` — Event-condition-action trigger
+### `deploy_trigger` — Event trigger
+
+When `check_triggers` sees a journal event of `event_kind`, it runs the trigger's program. No condition is evaluated, `type_filter` is stored but not applied yet, and the program runs as an unscoped admin identity.
 
 ```
 POST /api/v1/deploy-trigger
@@ -590,14 +594,16 @@ POST /api/v1/list-benchmarks  MCP: list_benchmarks
 
 ## Trigger Management
 
-### `deploy-trigger` — Deploy event-condition-action trigger
+### `deploy-trigger` — Deploy an event trigger
 
 ```
 POST /api/v1/deploy-trigger
 MCP: deploy_trigger
 ```
 
-### `check-triggers` — Evaluate pending triggers
+### `check-triggers` — Fire matching triggers
+
+On demand only: nothing schedules it. Each call rescans the whole event journal from the start (no position is kept between calls), so a trigger can fire again for events it already handled.
 
 ```
 POST /api/v1/check-triggers

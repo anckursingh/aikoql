@@ -140,10 +140,10 @@ v1 is a tree-walking interpreter. JIT compilation (Cranelift) and WASM support a
 | Type | Purpose |
 |---|---|
 | `aikoql:program` | aikoql code as versioned KO |
-| `aikoql:workflow` | DAG of programs |
+| `aikoql:workflow` | Ordered list of programs (run in `order`) |
 | `aikoql:policy` | RBAC rule as KO |
-| `aikoql:trigger` | Event → Condition → Action |
-| `aikoql:agent` | AI agent with prompt + memory + tools |
+| `aikoql:trigger` | Event kind → program (no condition is evaluated) |
+| `aikoql:agent` | Prompt + skills (programs) + tools + policies; `execute_agent` runs the skills and calls no model |
 | `aikoql:connector` | Import/export plugin definition |
 
 Every Active KO shares the same lifecycle as data: identity, versioning, provenance, access control, audit.
