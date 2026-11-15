@@ -76,6 +76,34 @@ impl SecretKind {
     }
 }
 
+impl SecretKind {
+    /// A credential (something that grants access), as opposed to personal
+    /// data (email, SSN, card number): the first is never handed back, the
+    /// second is a per-scope policy.
+    pub fn is_credential(&self) -> bool {
+        !matches!(
+            self,
+            SecretKind::Email | SecretKind::CreditCard | SecretKind::Ssn
+        )
+    }
+}
+
+/// Like [`redact_text`], but masks credentials only (keys, tokens, passwords,
+/// private keys, connection strings); personal data is left as it is.
+pub fn redact_credentials(text: &str) -> String {
+    text.split_inclusive(char::is_whitespace)
+        .map(|piece| {
+            let token = piece.trim_end();
+            match detect_secret(token) {
+                Some(kind) if !token.is_empty() && kind.is_credential() => {
+                    format!("[REDACTED:{}]{}", kind.as_str(), &piece[token.len()..])
+                }
+                _ => piece.to_string(),
+            }
+        })
+        .collect()
+}
+
 /// Redact secrets from free text: each whitespace-separated token that
 /// looks like a secret becomes `[REDACTED:<KIND>]`; the rest is verbatim.
 pub fn redact_text(text: &str) -> String {
@@ -425,6 +453,18 @@ fn is_likely_token(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A credential is masked; personal data is a separate policy and stays.
+    #[test]
+    fn redact_credentials_masks_keys_but_not_personal_data() {
+        let out =
+            redact_credentials("key AKIAIOSFODNN7EXAMPLE mail dana@example.com ssn 123-45-6789");
+        assert!(out.contains("[REDACTED:AWS_KEY]"), "{out}");
+        assert!(out.contains("dana@example.com"), "{out}");
+        assert!(out.contains("123-45-6789"), "{out}");
+        assert!(SecretKind::AwsKey.is_credential());
+        assert!(!SecretKind::Email.is_credential());
+    }
+
     #[test]
     fn redact_text_hides_aws_key_email_jwt_and_keeps_asia_pacific() {
         let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop";

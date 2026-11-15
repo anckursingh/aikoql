@@ -369,3 +369,52 @@ fn s06_an_agent_memory_is_read_back_in_its_tenant_and_only_there() {
         "never acme's: {globex}"
     );
 }
+
+/// MEM-SECRET beyond recall (Codex review of #49): a stored credential is
+/// handed back raw by the direct read paths — `get` on a Memory and
+/// `agent_memory` — though `recall` and `memory_search` mask it. A credential
+/// (key, token, password, connection string) is masked on every read of a
+/// memory object; personal data (email, SSN, card) is a separate policy and
+/// is not touched here.
+#[test]
+fn s07_a_stored_credential_is_masked_on_every_read_of_a_memory() {
+    let root = tmp("secretreads");
+    let mut m = Mcp::serve(&root);
+    let key = "AKIAIOSFODNN7EXAMPLE";
+    let stored = m.store(
+        "alice",
+        "acme",
+        "deploy-notes",
+        &format!("the deploy key is {key} and the contact is dana@example.com"),
+        None,
+    );
+    let koid = stored["koid"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{stored}"))
+        .to_string();
+
+    let got = m.tool("alice", "acme", "get", json!({"koid": koid}));
+    let raw = got.to_string();
+    assert!(!raw.contains(key), "get returned the credential raw: {raw}");
+    assert!(
+        raw.contains("[REDACTED:AWS_KEY]"),
+        "get masks it in place: {raw}"
+    );
+    assert!(
+        raw.contains("dana@example.com"),
+        "personal data is a separate policy, not masked by get: {raw}"
+    );
+
+    m.tool(
+        "alice",
+        "acme",
+        "agent_memory",
+        json!({"key": "aws", "value": format!("use {key} for staging"), "ttl": 3600}),
+    );
+    let read = m.tool("alice", "acme", "agent_memory", json!({}));
+    let raw = read.to_string();
+    assert!(
+        !raw.contains(key) && raw.contains("[REDACTED:AWS_KEY]"),
+        "agent_memory returned the credential raw: {raw}"
+    );
+}

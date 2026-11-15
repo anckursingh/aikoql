@@ -101,7 +101,11 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
         .map(|ko| json!({
             "koid": ko.koid.to_hex(),
             "key": ko.properties.get("key").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }),
-            "value": ko.properties.get("value").map(value_to_json),
+            // MEM-SECRET: a stored credential is never handed back raw
+            "value": ko.properties.get("value").map(value_to_json).map(|mut v| {
+                crate::helpers::mask_credentials(&mut v);
+                v
+            }),
             "ttl": ko.properties.get("ttl").and_then(|v| match v { Value::Int(i) => Some(i), _ => None }),
         }))
         .collect();
