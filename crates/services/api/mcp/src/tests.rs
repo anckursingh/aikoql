@@ -1898,3 +1898,35 @@ fn fuzz_no_agent_prompt_ever_runs_a_changed_skill() {
         }
     }
 }
+
+#[test]
+fn aikoql_tool_binds_named_params_without_letting_them_change_the_query() {
+    let k = seed_docs("named-params");
+    let run = |q: &str, p: serde_json::Value| {
+        crate::tools::tool_aikoql(
+            &k,
+            &serde_json::json!({"subject": "test", "roles": ["admin"], "query": q, "params": p}),
+        )
+    };
+    let q = "MATCH Doc WHERE name == :who RETURN *";
+    assert_eq!(
+        result_names(&run(q, serde_json::json!({"who": "Alice"})).expect("benign")),
+        vec!["Alice"]
+    );
+    // the SDK-inlining payload: a value that closes the literal and adds a clause
+    assert!(run(q, serde_json::json!({"who": "zzz\" OR name != 5 //"})).is_err());
+    // a backslash is data (the lexer has no escapes), and so is non-ASCII text
+    assert_eq!(
+        result_names(&run(q, serde_json::json!({"who": "C:\\temp"})).expect("backslash")),
+        Vec::<String>::new()
+    );
+    // exact placeholder set: a missing or an extra parameter is refused
+    assert!(run(q, serde_json::json!({})).is_err());
+    assert!(run(q, serde_json::json!({"who": "Alice", "other": 1})).is_err());
+    // a ":name" inside a string literal is text, not a placeholder
+    assert!(run(
+        "MATCH Doc WHERE name == \"a:who\" RETURN *",
+        serde_json::json!({"who": "Alice"})
+    )
+    .is_err()); // unused parameter
+}
