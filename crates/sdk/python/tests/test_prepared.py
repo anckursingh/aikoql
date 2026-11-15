@@ -68,6 +68,11 @@ def _aikoql_queries(log):
             for c in log if c["params"]["name"] == "aikoql"]
 
 
+def _aikoql_params(log):
+    return [c["params"]["arguments"].get("params")
+            for c in log if c["params"]["name"] == "aikoql"]
+
+
 def test_prepared_lifecycle_bind_execute_execute_close():
     log = []
     client = _client_with(_prepared_responder(log))
@@ -77,10 +82,9 @@ def test_prepared_lifecycle_bind_execute_execute_close():
     r2 = bound.execute()  # a bound statement is re-executable
     assert r1["results"][0]["properties"]["name"] == "ada"
     assert r2["results"][0]["properties"]["name"] == "ada"
-    assert _aikoql_queries(log) == [
-        'MATCH person WHERE name == "ada" RETURN *',
-        'MATCH person WHERE name == "ada" RETURN *',
-    ]
+    # the value travels as a parameter: it is never spliced into the query
+    assert _aikoql_queries(log) == ["MATCH person WHERE name == :who RETURN *"] * 2
+    assert _aikoql_params(log) == [{"who": "ada"}] * 2
     ps.close()
     with pytest.raises(McpError) as exc:
         ps.execute({"who": "ada"})
@@ -223,3 +227,20 @@ def test_prepared_recompiles_after_server_restart():
         assert ps2.execute({"who": "ada"})["results"]  # the db survived
         pc.release()
         pool.close()
+
+
+def test_prepared_value_is_data_on_a_real_server():
+    """A bound value can neither add a clause nor be mangled by escaping."""
+    with restartable_server() as (spawn, port, _db):
+        spawn()
+        client = McpClient("127.0.0.1", port, token="test-token").connect()
+        client.initialize()
+        for name in ("ada", "bob", "José", "C:\\temp"):
+            client.remember("person", {"name": name})
+        ps = client.prepare("MATCH person WHERE name == :who\nRETURN *")
+        names = lambda r: sorted(x["properties"]["name"] for x in r["results"])  # noqa: E731
+        assert names(ps.execute({"who": "ada"})) == ["ada"]
+        assert names(ps.execute({"who": "José"})) == ["José"]
+        assert names(ps.execute({"who": "C:\\temp"})) == ["C:\\temp"]
+        with pytest.raises(McpError):  # the old payload returned every row
+            ps.execute({"who": 'zzz" OR name != 5 //'})

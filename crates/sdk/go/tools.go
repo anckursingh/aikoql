@@ -118,9 +118,18 @@ func (c *Client) FindSimilar(ctx context.Context, p FindSimilarParams) ([]Scored
 // Aikoql runs an AikoQL query ("MATCH person WHERE name == \"ada\" RETURN *")
 // and returns the raw result rows for the caller to unmarshal.
 func (c *Client) Aikoql(ctx context.Context, query, subject string) (json.RawMessage, error) {
+	return c.AikoqlParams(ctx, query, subject, nil)
+}
+
+// AikoqlParams runs a query whose ":name" placeholders the server binds from
+// params. A value is data: the server refuses one that would change the query.
+func (c *Client) AikoqlParams(ctx context.Context, query, subject string, params map[string]any) (json.RawMessage, error) {
 	args := map[string]any{"query": query}
 	if subject != "" {
 		args["subject"] = subject
+	}
+	if params != nil {
+		args["params"] = params
 	}
 	return c.CallTool(ctx, "aikoql", args)
 }

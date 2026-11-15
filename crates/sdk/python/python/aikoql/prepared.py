@@ -3,11 +3,11 @@
 The initial implementation compiles the AikoQL query client-side on every
 execute — the abstraction precedes a native prepare protocol, so the
 statement holds no server-side plan (nothing to invalidate, nothing lost
-across a server restart). bind() validates the binding and substitutes the
-JSON-encoded literals into the query.
+across a server restart). bind() validates the binding and execute() sends the
+named parameters to the server, which binds them (a value is data, never
+query text).
 """
 
-import json
 import re
 import threading
 
@@ -30,8 +30,9 @@ class BoundStatement:
         # client-level serialization.
         with self._ps._lock:
             self._ps._guard()
+            _check(self._ps._params, self._params)
             return self._ps._client.aikoql(
-                _substitute(self._ps._query, self._ps._params, self._params))
+                self._ps._query, params=dict(self._params))
 
 
 class PreparedStatement:
@@ -66,12 +67,8 @@ class PreparedStatement:
             )
 
 
-def _substitute(query: str, params: tuple, bound: dict) -> str:
-    """Validate the binding (exact placeholder set, scalar values only) and
-    inline the JSON-encoded literals. Placeholders are replaced
-    longest-first so a name that prefixes another cannot be clobbered.
-    ponytail: a bound value containing a ":name"-looking substring is
-    replaced blindly — the native protocol removes this class."""
+def _check(params: tuple, bound: dict) -> None:
+    """Validate the binding: exact placeholder set, scalar values only."""
     if len(bound) != len(params):
         raise McpError(
             code="INVALID_ARGUMENT",
@@ -94,8 +91,6 @@ def _substitute(query: str, params: tuple, bound: dict) -> str:
                         f"{type(value).__name__}",
                 suggestion="Bind scalars (string, number, bool, null) only.",
             )
-        query = query.replace(":" + name, json.dumps(value))
-    return query
 
 
 def _is_scalar(value) -> bool:

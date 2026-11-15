@@ -139,6 +139,102 @@ pub(crate) fn substitute_params(
     Ok(out)
 }
 
+/// Bind `:name` placeholders of a client query from `params` (the `aikoql`
+/// tool's `params`). Placeholders inside a string literal or a `//` comment
+/// are text, not placeholders. The placeholder set and the parameter set must
+/// match exactly. A string becomes a literal (refused if it holds `"`, the
+/// lexer having no escapes); a number, bool or null stands alone, so it must
+/// be set off from the text around it.
+pub(crate) fn bind_named(
+    query: &str,
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> Result<String, String> {
+    use serde_json::Value as J;
+    let mut out = String::with_capacity(query.len());
+    let mut used = std::collections::BTreeSet::new();
+    let chars: Vec<char> = query.chars().collect();
+    let is_id = |c: char| c.is_alphanumeric() || c == '_';
+    let (mut i, mut in_str, mut in_comment) = (0, false, false);
+    while i < chars.len() {
+        let c = chars[i];
+        if in_str || in_comment {
+            if (in_str && c == '"') || (in_comment && c == '\n') {
+                in_str = false;
+                in_comment = false;
+            }
+        } else if c == '"' {
+            in_str = true;
+        } else if c == '/' && chars.get(i + 1) == Some(&'/') {
+            in_comment = true;
+        } else if c == ':'
+            && chars
+                .get(i + 1)
+                .is_some_and(|n| n.is_alphabetic() || *n == '_')
+            && !i
+                .checked_sub(1)
+                .is_some_and(|p| is_id(chars[p]) || chars[p] == ':')
+        {
+            let end = (i + 1..chars.len())
+                .find(|&j| !is_id(chars[j]))
+                .unwrap_or(chars.len());
+            let name: String = chars[i + 1..end].iter().collect();
+            let v = params
+                .get(&name)
+                .ok_or(format!("parameter :{name} is not bound"))?;
+            used.insert(name.clone());
+            let text = match v {
+                J::String(t) if t.contains('"') => {
+                    return Err(format!(
+                    "parameter :{name} contains a double quote, which a string literal cannot hold"
+                ))
+                }
+                J::String(t) => format!("\"{t}\""),
+                J::Number(n) => {
+                    let t = n.to_string();
+                    if !matches!(tokens(&t).as_slice(), [Token::Number(_), Token::Eof]) {
+                        return Err(format!(
+                            "parameter :{name} is not a number the query language reads"
+                        ));
+                    }
+                    t
+                }
+                J::Bool(b) => b.to_string(),
+                J::Null => "null".into(),
+                _ => return Err(format!("parameter :{name} must be a scalar")),
+            };
+            if !matches!(v, J::String(_)) {
+                let before = i.checked_sub(1).map(|p| chars[p]);
+                let after = chars.get(end).copied();
+                let ok_before = before.is_none_or(|b| b.is_whitespace() || "(,=<>!".contains(b));
+                let ok_after = after.is_none_or(|a| a.is_whitespace() || a == ')' || a == ',');
+                if !(ok_before && ok_after) {
+                    return Err(format!(
+                        "parameter :{name} sits against other query text; set it off by whitespace, parentheses or commas"
+                    ));
+                }
+            }
+            out.push_str(&text);
+            i = end;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    if let Some(extra) = params.keys().find(|k| !used.contains(*k)) {
+        return Err(format!("parameter :{extra} is not used by the query"));
+    }
+    Ok(out)
+}
+
+/// The query of an `aikoql` tool call: `query`, with `params` bound when given.
+pub(crate) fn tool_query(args: &serde_json::Value) -> Result<String, String> {
+    let q = args.get("query").and_then(|q| q.as_str()).unwrap_or("");
+    match args.get("params").and_then(|p| p.as_object()) {
+        Some(p) => bind_named(q, p),
+        None => Ok(q.to_string()),
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod fuzz_support {
     //! A seeded generator for the fuzz tests (no external randomness: every
@@ -542,5 +638,105 @@ mod tests {
             "the oracle must flag every payload"
         );
         assert_eq!(ours_caught, 0, "substitute_params must never produce one");
+    }
+
+    // ---- bind_named: the `aikoql` tool's `:name` parameters ----
+
+    const NAMED: &[(&str, &[&str])] = &[
+        ("MATCH Doc WHERE name == :who RETURN *", &["who"]),
+        ("MATCH Doc WHERE age > :n RETURN *", &["n"]),
+        (
+            "MATCH Doc WHERE name == :who AND age >= :n RETURN *",
+            &["who", "n"],
+        ),
+        (
+            "MATCH Doc WHERE name == :who OR alias == :who RETURN *",
+            &["who"],
+        ),
+        (
+            "// :who\nMATCH Doc WHERE name == \"a:who\" AND age > :n RETURN *",
+            &["n"],
+        ),
+    ];
+
+    fn json_value(rng: &mut Rng) -> serde_json::Value {
+        use serde_json::json;
+        match rng.below(6) {
+            0 => json!(rng.next() as i64 % 1000),
+            1 => json!(rng.below(2) == 0),
+            2 => serde_json::Value::Null,
+            3 => json!([1]),
+            _ => {
+                let mut t = String::new();
+                for _ in 0..rng.below(5) {
+                    t.push_str(
+                        super::fuzz_support::NASTY[rng.below(super::fuzz_support::NASTY.len())],
+                    );
+                }
+                json!(t)
+            }
+        }
+    }
+
+    #[test]
+    fn named_a_value_never_changes_the_shape_of_the_query() {
+        for seed in 1..=2000u64 {
+            let mut rng = Rng(seed);
+            let (template, names) = NAMED[rng.below(NAMED.len())];
+            let mut params = serde_json::Map::new();
+            for n in names {
+                params.insert((*n).to_string(), json_value(&mut rng));
+            }
+            let Ok(bound) = bind_named(template, &params) else {
+                continue;
+            };
+            // the oracle: the template with each placeholder replaced by a
+            // single harmless token of the value's kind lexes to the same kinds
+            let mut expected = template.to_string();
+            for (n, v) in &params {
+                let stand_in = match v {
+                    serde_json::Value::String(_) => "\"s\"",
+                    serde_json::Value::Bool(_) => "true",
+                    serde_json::Value::Null => "null",
+                    _ => "0",
+                };
+                expected = expected.replace(&format!(":{n} "), &format!("{stand_in} "));
+                expected = expected.replace(&format!(":{n}\n"), &format!("{stand_in}\n"));
+            }
+            let kinds = |t: &str| shape_of(t);
+            assert_eq!(
+                kinds(&bound),
+                kinds(&expected),
+                "seed {seed}: {template:?} {params:?} -> {bound:?}"
+            );
+            // a string value arrives whole, as one literal
+            for v in params.values().filter_map(|v| v.as_str()) {
+                if template.contains(&format!(":{}", names[0])) && !template.starts_with("//") {
+                    assert!(
+                        tokens(&bound).contains(&Token::StringLit(v.into())),
+                        "seed {seed}: {v:?} lost in {bound:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn shape_of(src: &str) -> Vec<std::mem::Discriminant<Token>> {
+        tokens(src).iter().map(std::mem::discriminant).collect()
+    }
+
+    #[test]
+    fn named_the_sdk_payload_and_plain_text_cases() {
+        use serde_json::json;
+        let q = "MATCH Doc WHERE name == :who RETURN *";
+        let p = |v: serde_json::Value| json!({"who": v}).as_object().unwrap().clone();
+        assert!(bind_named(q, &p(json!("zzz\" OR name != 5 //"))).is_err());
+        assert_eq!(
+            bind_named(q, &p(json!("Jos\u{e9} C:\\temp"))).unwrap(),
+            "MATCH Doc WHERE name == \"Jos\u{e9} C:\\temp\" RETURN *"
+        );
+        assert!(bind_named("MATCH Doc WHERE age > 1:who", &p(json!(0))).is_err());
+        assert!(bind_named("MATCH Doc WHERE age > :who.x", &p(json!(0))).is_err());
+        assert!(bind_named("a :who b", &p(json!({"k": 1}))).is_err());
     }
 }

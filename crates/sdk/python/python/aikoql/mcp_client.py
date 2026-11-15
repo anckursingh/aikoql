@@ -459,8 +459,11 @@ class McpClient:
             args["wait_for_freshness_ms"] = wait_for_freshness_ms
         return self.call_tool("find_similar", args)
 
-    def aikoql(self, query: str, subject: Optional[str] = None) -> dict:
+    def aikoql(self, query: str, subject: Optional[str] = None,
+               params: Optional[Dict[str, Any]] = None) -> dict:
         args: Dict[str, Any] = {"query": query}
+        if params is not None:
+            args["params"] = params  # bound by the server, never inlined here
         if subject:
             args["subject"] = subject
         return self.call_tool("aikoql", args)

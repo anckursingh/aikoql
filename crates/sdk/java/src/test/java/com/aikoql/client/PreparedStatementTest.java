@@ -2,7 +2,7 @@ package com.aikoql.client;
 
 // The §3.6 prepared-statement legs: the ports of the Go suite's
 // prepared_test.go — empty-query refusal, exact binding validation
-// (count, presence, scalars), longest-first substitution, the closed
+// (count, presence, scalars), the closed
 // handle guard, and one execute-through leg against a scripted server.
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -27,14 +27,6 @@ class PreparedStatementTest {
         throw new AssertionError("expected AikoqlException, none thrown");
     }
 
-    private static String substitute(String query, List<String> params, Map<String, Object> bound) {
-        try {
-            return PreparedStatement.substitute(query, params, bound);
-        } catch (AikoqlException e) {
-            throw new AssertionError("unexpected " + e.getCode() + ": " + e.getMessage(), e);
-        }
-    }
-
     @Test
     void prepareRejectsEmptyQuery() throws Exception {
         try (ServerSocket srv = Scripted.scripted(req -> List.of())) {
@@ -48,33 +40,21 @@ class PreparedStatementTest {
     void bindWrongCountFails() {
         assertEquals(
                 "INVALID_ARGUMENT",
-                thrownCode(() -> PreparedStatement.substitute(
-                        "MATCH :name", List.of("name"), Map.of())));
+                thrownCode(() -> PreparedStatement.check(List.of("name"), Map.of())));
     }
 
     @Test
     void missingParameterFails() {
         assertEquals(
                 "INVALID_ARGUMENT",
-                thrownCode(() -> PreparedStatement.substitute(
-                        "MATCH :name", List.of("name"), Map.of("other", 1))));
+                thrownCode(() -> PreparedStatement.check(List.of("name"), Map.of("other", 1))));
     }
 
     @Test
     void nonScalarFails() {
         assertEquals(
                 "INVALID_ARGUMENT",
-                thrownCode(() -> PreparedStatement.substitute(
-                        "MATCH :name", List.of("name"), Map.of("name", List.of(1)))));
-    }
-
-    @Test
-    void substitutesLongestFirst() {
-        String q = substitute(
-                "MATCH :name WHERE :name2 = :name",
-                List.of("name", "name2"),
-                Map.of("name", "a", "name2", 2));
-        assertEquals("MATCH \"a\" WHERE 2 = \"a\"", q);
+                thrownCode(() -> PreparedStatement.check(List.of("name"), Map.of("name", List.of(1)))));
     }
 
     @Test
@@ -94,7 +74,8 @@ class PreparedStatementTest {
     void executeSubstitutesAndRuns() throws Exception {
         List<String> queries = Collections.synchronizedList(new java.util.ArrayList<>());
         try (ServerSocket srv = Scripted.scripted(req -> {
-            queries.add(Json.jsonStr(Json.dotGet(req, "params.arguments.query")));
+            queries.add(Json.jsonStr(Json.dotGet(req, "params.arguments.query"))
+                    + " " + Json.stringify(Json.dotGet(req, "params.arguments.params")));
             return List.of(new Scripted.Frame(
                     Scripted.toolResult(
                             Scripted.num(req.fields.get("id")), "{\"results\":[]}"),
@@ -107,6 +88,9 @@ class PreparedStatementTest {
                 ps.execute(Map.of("name", 7), null);
             }
         }
-        assertEquals(List.of("MATCH \"k1\"", "MATCH 7"), List.copyOf(queries));
+        // the value travels as a parameter: it is never spliced into the query
+        assertEquals(
+                List.of("MATCH :name {\"name\":\"k1\"}", "MATCH :name {\"name\":7}"),
+                List.copyOf(queries));
     }
 }

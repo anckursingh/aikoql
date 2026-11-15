@@ -380,9 +380,17 @@ public final class Connection implements AutoCloseable {
 
     /** Runs an AikoQL query and returns the raw result rows. */
     public Json.Value aikoql(String query, String subject, Deadline dl) throws AikoqlException {
+        return aikoql(query, subject, null, dl);
+    }
+
+    /** Runs a query whose ":name" placeholders the server binds from params
+     * (a value is data: the server refuses one that would change the query). */
+    public Json.Value aikoql(String query, String subject, Map<String, Object> params, Deadline dl)
+            throws AikoqlException {
         Map<String, Object> args = new LinkedHashMap<>();
         args.put("query", query);
         if (!subject.isEmpty()) args.put("subject", subject);
+        if (params != null) args.put("params", params);
         return callTool("aikoql", args, dl);
     }
 

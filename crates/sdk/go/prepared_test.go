@@ -126,9 +126,15 @@ func TestPreparedLifecycleBindExecuteExecuteClose(t *testing.T) {
 			t.Fatalf("unexpected result: %s", raw)
 		}
 	}
-	want := `MATCH person WHERE name == "ada" RETURN *`
+	// the value travels as a parameter: it is never spliced into the query
+	want := "MATCH person WHERE name == :who RETURN *"
 	if got := aikoqlQueries(log); len(got) != 2 || got[0] != want || got[1] != want {
-		t.Fatalf("substituted queries: %q", got)
+		t.Fatalf("queries: %q", got)
+	}
+	for _, call := range log {
+		if call.Name == "aikoql" && call.Args["params"].(map[string]any)["who"] != "ada" {
+			t.Fatalf("params: %v", call.Args["params"])
+		}
 	}
 	if err := ps.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

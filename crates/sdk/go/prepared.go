@@ -4,15 +4,14 @@ package aikoql
 // implementation compiles the AikoQL query client-side on every execute —
 // the abstraction precedes a native prepare protocol, so the statement
 // holds no server-side plan (nothing to invalidate, nothing lost across a
-// server restart). Bind validates the binding and substitutes the
-// JSON-encoded literals into the query.
+// server restart). Bind validates the binding and sends the
+// named parameters to the server, which binds them as data.
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -80,53 +79,40 @@ func (ps *PreparedStatement) guard() error {
 	return nil
 }
 
-// Execute substitutes the binding, compiles the query server-side, and
-// runs it.
+// Execute validates the binding and runs the query; the server binds the
+// named parameters.
 func (b *BoundStatement) Execute(ctx context.Context) (json.RawMessage, error) {
 	if err := b.ps.guard(); err != nil {
 		return nil, err
 	}
-	query, err := substitute(b.ps.query, b.ps.params, b.params)
-	if err != nil {
+	if err := check(b.ps.params, b.params); err != nil {
 		return nil, err
 	}
-	return b.ps.c.Aikoql(ctx, query, "")
+	return b.ps.c.AikoqlParams(ctx, b.ps.query, "", b.params)
 }
 
-// substitute validates the binding (exact placeholder set, scalar values
-// only) and inlines the JSON-encoded literals. Placeholders are replaced
-// longest-first so a name that prefixes another cannot be clobbered.
-// ponytail: a bound value containing a ":name"-looking substring is
-// replaced blindly — the native protocol removes this class.
-func substitute(query string, params []string, bound map[string]any) (string, error) {
+// check validates the binding: exact placeholder set, scalar values only.
+func check(params []string, bound map[string]any) error {
 	if len(bound) != len(params) {
-		return "", &McpError{Code: "INVALID_ARGUMENT",
+		return &McpError{Code: "INVALID_ARGUMENT",
 			Message: fmt.Sprintf("bound %d parameters, the statement has %d (%s)",
 				len(bound), len(params), strings.Join(params, ", ")),
 			Suggestion: "Bind exactly the statement's placeholders."}
 	}
-	sorted := make([]string, len(params))
-	copy(sorted, params)
-	sort.Slice(sorted, func(i, j int) bool { return len(sorted[i]) > len(sorted[j]) })
-	for _, name := range sorted {
+	for _, name := range params {
 		value, ok := bound[name]
 		if !ok {
-			return "", &McpError{Code: "INVALID_ARGUMENT",
+			return &McpError{Code: "INVALID_ARGUMENT",
 				Message:    fmt.Sprintf("parameter :%s is not bound", name),
 				Suggestion: "Bind exactly the statement's placeholders."}
 		}
 		switch value.(type) {
 		case string, float64, int, int64, bool, nil, json.Number:
 		default:
-			return "", &McpError{Code: "INVALID_ARGUMENT",
+			return &McpError{Code: "INVALID_ARGUMENT",
 				Message:    fmt.Sprintf("parameter :%s must be a scalar, got %T", name, value),
 				Suggestion: "Bind scalars (string, number, bool, null) only."}
 		}
-		lit, err := json.Marshal(value)
-		if err != nil {
-			return "", fmt.Errorf("aikoql: bind :%s: %w", name, err)
-		}
-		query = strings.ReplaceAll(query, ":"+name, string(lit))
 	}
-	return query, nil
+	return nil
 }

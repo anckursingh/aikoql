@@ -7,6 +7,16 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Prepared statements: parameters are bound by the server (security fix)
+
+The Python, Go and Java `prepare()/bind()` used to splice JSON-quoted text into the query with a plain
+replace, so a value such as `zzz" OR name != 5 //` returned every document, and a legitimate `José` (sent
+as `\u00e9`) or a backslash never matched. The `aikoql` tool now takes `params`; the SDKs send the query
+with its `:name` placeholders plus the parameters, and the server binds them: a string is one literal
+(refused if it holds a double quote, which the language cannot escape), a number, bool or null must stand
+alone, a `:name` inside a string literal or comment is text, and the placeholder and parameter sets must
+match exactly. Quote-free text, backslashes and non-ASCII now match as written.
+
 ### Programs and agents: parameters can no longer change the query (security fix)
 - `execute_program` parameters and an agent's `{{prompt}}` were pasted into the program text unescaped. The
   AikoQL lexer has no escape syntax, so a value containing `"` could close the string literal and add a clause:

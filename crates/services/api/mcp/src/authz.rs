@@ -84,9 +84,9 @@ pub(crate) fn check_scope(
         return denied(&format!("tool '{tool}' writes"));
     }
     if tool == "aikoql" {
-        let q = args.get("query").and_then(|q| q.as_str()).unwrap_or("");
+        let q = crate::params::tool_query(args).unwrap_or_default();
         if !matches!(
-            aikoql_compiler::parser::parse(q),
+            aikoql_compiler::parser::parse(&q),
             Ok(aikoql_compiler::parser::ast::Statement::Match(_))
         ) {
             return denied("only a MATCH statement reads");
