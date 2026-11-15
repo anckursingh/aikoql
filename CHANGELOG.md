@@ -7,6 +7,19 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Programs and agents: parameters can no longer change the query (security fix)
+- `execute_program` parameters and an agent's `{{prompt}}` were pasted into the program text unescaped. The
+  AikoQL lexer has no escape syntax, so a value containing `"` could close the string literal and add a clause:
+  `who = Alice" OR name == "Bob` against `name == "{{who}}"` returned Alice and Bob. The query still ran under the
+  caller's own roles and tenant, so it could not widen access, but a parameter could change a program's logic.
+- Now a value inside a string literal may be any text without `"`; outside a literal it must be one number or an
+  identifier path; anything else is refused with an error (an agent run logs `REJECTED` for that skill and goes on).
+  A value is never expanded again. **Behaviour change:** a program that passed free text or a quote through a
+  parameter now gets an error. See `website/docs/guides/programs.md`.
+- Docs corrected to match the code: a workflow is an ordered list of programs (not a DAG), a trigger runs a program
+  when an event of its kind is seen (no condition; `type_filter` is stored but not applied), and an agent runs its
+  skills and calls no model.
+
 ### Agent memory: identity, governance and what a read may return (#49) — behaviour changes
 - **`viewer` is read-only in every mode.** Over MCP, the native protocol and REST a `viewer` token no longer
   writes without an enterprise licence (it used to be an uninterpreted role name in community mode). A security

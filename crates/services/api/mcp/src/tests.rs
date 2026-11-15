@@ -1799,3 +1799,102 @@ fn an_agent_prompt_cannot_add_a_clause_to_a_skill() {
         "an injected prompt must be rejected, not run: {bad}"
     );
 }
+
+/// End to end, through the real tools and a real store: whatever a parameter
+/// says, a program `name == "{{who}}"` returns only documents whose name IS
+/// the value — never another document. Seeded: a failure replays from its
+/// seed. The classic payloads come first, then random nasty text.
+#[test]
+fn fuzz_no_parameter_value_ever_returns_a_different_document() {
+    use crate::params::fuzz_support::{text, Rng};
+    let k = seed_docs("prm-fuzz");
+    let prog = crate::tools::tool_deploy_program(
+        &k,
+        &serde_json::json!({"subject": "test", "roles": ["admin"], "name": "FindDoc",
+            "body": "MATCH Doc WHERE name == \"{{who}}\" RETURN *", "language": "aikoql"}),
+    )
+    .expect("deploy");
+    let koid = prog["koid"].as_str().unwrap().to_string();
+    let run = |who: &str| {
+        crate::tools::tool_execute_program(
+            &k,
+            &serde_json::json!({"koid": &koid, "subject": "test", "roles": ["admin"],
+                "params": {"who": who}}),
+        )
+    };
+    let classics = [
+        "Alice\" OR name == \"Bob",
+        "\" OR \"\" == \"",
+        "Alice\"//",
+        "x\" RETURN * //",
+        "{{who}}",
+        "\\",
+        "Alice\\",
+        "\" OR name != \"",
+        "Alice\n\" OR name == \"Carol",
+        "\u{201c} OR name == \u{201d}",
+    ];
+    let mut rng = Rng(0xFACE_FEED);
+    let mut values: Vec<String> = classics.iter().map(|s| s.to_string()).collect();
+    for _ in 0..600 {
+        let mut v = text(&mut rng);
+        if rng.below(4) == 0 {
+            // a real name with something nasty glued to it
+            v = format!("{}{}", ["Alice", "Bob", "Carol"][rng.below(3)], v);
+        }
+        values.push(v);
+    }
+    let mut ran = 0;
+    for v in &values {
+        // an Err is a refusal (a quote): nothing ran, nothing leaked
+        if let Ok(r) = run(v) {
+            ran += 1;
+            for name in result_names(&r) {
+                assert_eq!(&name, v, "value {v:?} returned another document: {r}");
+            }
+        }
+    }
+    assert!(ran > 100, "the fuzz must actually run queries, ran {ran}");
+}
+
+/// The same invariant through an agent's prompt.
+#[test]
+fn fuzz_no_agent_prompt_ever_runs_a_changed_skill() {
+    use crate::params::fuzz_support::{text, Rng};
+    let k = seed_docs("prm-agent-fuzz");
+    let subject = crate::Subject::with_roles("test", &["admin"]);
+    crate::tools::tool_deploy_program(
+        &k,
+        &serde_json::json!({"subject": "test", "roles": ["admin"], "name": "FindByPrompt",
+            "body": "MATCH Doc WHERE name == \"{{prompt}}\" RETURN *", "language": "aikoql"}),
+    )
+    .expect("deploy program");
+    let mut rng = Rng(0xA6E17);
+    for i in 0..120 {
+        let mut prompt = text(&mut rng);
+        if i % 3 == 0 {
+            prompt = format!("Alice{prompt}");
+        }
+        let agent = crate::tools::tool_deploy_agent(
+            &k,
+            &serde_json::json!({"subject": "test", "roles": ["admin"],
+                "name": format!("agent-fuzz-{i}"), "prompt": prompt, "skills": ["FindByPrompt"]}),
+        )
+        .expect("deploy agent");
+        let koid = crate::KOID::from_hex(agent["koid"].as_str().unwrap()).unwrap();
+        let log = crate::knowledge_runtime::execute_agent(&k, &koid, &subject, None)
+            .expect("an agent run never fails the call")
+            .join("\n");
+        // only ever zero or one document, and one only for the exact name
+        assert!(
+            !log.contains("OK: 2 results") && !log.contains("OK: 3 results"),
+            "prompt {prompt:?} ran a changed skill:\n{log}"
+        );
+        if log.contains("OK: 1 results") {
+            assert!(
+                ["Alice", "Bob", "Carol"].contains(&prompt.as_str()),
+                "prompt {prompt:?} matched a document it is not the name of:\n{log}"
+            );
+        }
+    }
+}
