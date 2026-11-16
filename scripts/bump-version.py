@@ -57,6 +57,10 @@ PINNED = [
 ]
 
 
+# files whose first N occurrences of the version are ours, the rest foreign
+LOCK_LIMIT = {"crates/sdk/typescript/package-lock.json": 2}
+
+
 def current_version() -> str:
     """The single source: Cargo.toml [workspace.package] version."""
     text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
@@ -87,7 +91,11 @@ def main() -> None:
         n = text.count(old)
         if n < at_least:
             sys.exit(f"{rel}: expected >= {at_least} pins of {old}, found {n} - add the site to PINNED or fix the drift")
-        text = text.replace(old, new)
+        # a lockfile also carries other packages' versions (json-schema is
+        # 0.4.0): only the leading occurrences belong to this project
+        limit = LOCK_LIMIT.get(rel)
+        text = text.replace(old, new, limit) if limit else text.replace(old, new)
+        n = min(n, limit) if limit else n
         p.write_text(text, encoding="utf-8", newline="")
         changed += n
     print(f"bumped {old} -> {new}: {changed} pin sites across {len(PINNED)} files")
