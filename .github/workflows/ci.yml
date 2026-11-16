@@ -572,6 +572,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          # Maven Central rate-limits shared runner IPs (HTTP 429): keep ~/.m2
+          cache: maven
+          cache-dependency-path: crates/sdk/java/pom.xml
       - name: Build server binary (the contract target)
         run: cargo build -p aikoql -p aikoql-fault-proxy
       - name: Surefire suite (real-server pin + fuzz seed sweep)
@@ -583,7 +586,7 @@ jobs:
           # on the pushed head (the job built only aikoql until now).
           AIKOQL_MCP_BIN="$PWD/../../../target/debug/aikoql" \
             AIKOQL_FAULT_PROXY="$PWD/../../../target/debug/aikoql-fault-proxy" \
-            mvn -B test
+            bash "$GITHUB_WORKSPACE/scripts/mvn-retry.sh" -B test
 
   rust-sdk:
     name: Rust SDK contract tests
@@ -624,6 +627,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          # Maven Central rate-limits shared runner IPs (HTTP 429): keep ~/.m2
+          cache: maven
+          cache-dependency-path: crates/sdk/java/pom.xml
       - name: Version parity + the five §16 corpus pins
         run: |
           set -euo pipefail
@@ -632,7 +638,7 @@ jobs:
           python -m pip install -q pytest
           python -m pytest crates/sdk/python/tests/test_corpus_pin.py -q
           (cd crates/sdk/typescript && node --test tests/corpus-pin.test.ts)
-          (cd crates/sdk/java && mvn -B test -Dtest=CorpusPinTest)
+          (cd crates/sdk/java && bash "$GITHUB_WORKSPACE/scripts/mvn-retry.sh" -B test -Dtest=CorpusPinTest)
           cargo test -p aikoql-sdk --test fuzz_corpus_pin
 
   # D-19 (SDK plan §28): a short fuzz smoke per SDK on every PR — the
@@ -659,6 +665,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          # Maven Central rate-limits shared runner IPs (HTTP 429): keep ~/.m2
+          cache: maven
+          cache-dependency-path: crates/sdk/java/pom.xml
       - name: Go native fuzz (one 5s smoke per target)
         run: |
           set -euo pipefail
