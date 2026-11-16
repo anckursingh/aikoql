@@ -15,7 +15,7 @@ as `\u00e9`) or a backslash never matched. The `aikoql` tool now takes `params`;
 with its `:name` placeholders plus the parameters, and the server binds them: a string is one literal
 (refused if it holds a double quote, which the language cannot escape), a number, bool or null must stand
 alone, a `:name` inside a string literal or comment is text, and the placeholder and parameter sets must
-match exactly. Quote-free text, backslashes and non-ASCII now match as written. REST `POST /api/v1/aikoql` takes `params` and classifies a bound `MATCH` as a read (it used to parse the unbound text, so a read with `params` was refused in read-only modes).
+match exactly. Quote-free text, backslashes and non-ASCII now match as written. REST `POST /api/v1/aikoql` and the `koql/query` method take `params` and classify a bound `MATCH` as a read (both used to parse the unbound text, so a read with `params` was refused).
 
 ### Programs and agents: parameters can no longer change the query (security fix)
 - `execute_program` parameters and an agent's `{{prompt}}` were pasted into the program text unescaped. The

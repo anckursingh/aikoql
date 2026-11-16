@@ -150,8 +150,10 @@ pub(crate) fn handle_message(
             let result = run_with_timeout(request_timeout_secs, move |token| {
                 if is_query {
                     // Read-only guard: koql/query rejects write statements.
-                    let source = params.get("query").and_then(|q| q.as_str()).unwrap_or("");
-                    match aikoql_compiler::parser::parse(source) {
+                    // the bound query: what tool_aikoql will run (an unbindable
+                    // one does not parse, so the guard refuses it)
+                    let source = crate::params::tool_query(&params).unwrap_or_default();
+                    match aikoql_compiler::parser::parse(&source) {
                         Ok(aikoql_compiler::parser::ast::Statement::Match(_)) => {}
                         Ok(_) => {
                             return Err((

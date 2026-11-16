@@ -459,6 +459,30 @@ fn sv002_restart_recovery_sees_previous_writes() {
 // --- sv003 — multiple clients + connection limit ---------------------------------
 
 #[test]
+fn sv003b_koql_query_binds_named_params_and_keeps_the_read_only_guard() {
+    let db = tmp_db("sv003b");
+    let mut server = Server::spawn(&db, &["tokA:tenA:user"], &[]);
+    let mut a = Client::new(server.port(), "tokA");
+    create_node(&mut a, 7);
+    // a :name read with params runs (the guard parses the bound query)
+    let r = a.call(
+        "koql/query",
+        json!({"query": "MATCH Node WHERE i == :n RETURN *", "params": {"n": 7}}),
+    );
+    let rows = result_of(&r)["results"].as_array().expect("results").len();
+    assert_eq!(rows, 1, "bound read: {r}");
+    // a write bound through params is still refused by the read-only guard
+    let w = a.call(
+        "koql/query",
+        json!({"query": "DELETE Node :k", "params": {"k": "x"}}),
+    );
+    assert_eq!(error_code(&w), Some(-32602), "write via koql/query: {w}");
+    a.call("shutdown", json!({}));
+    server.stop("sv003b server");
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+#[test]
 fn sv003_concurrent_clients_are_isolated_and_limited() {
     let db = tmp_db("sv003");
     let mut server = Server::spawn(
