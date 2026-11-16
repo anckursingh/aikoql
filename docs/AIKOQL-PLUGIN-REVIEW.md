@@ -1,6 +1,6 @@
 # AikoQL MCP Plugin — Review: Utility for Coding Agents
 
-Date: 2026-09-09 · Scope: plugin v0.1.19 (`npx -y aikoql@0.1.19`, the released npm server) ·
+Date: 2026-09-09 · Scope: plugin v0.1.19 (`npx -y aikoql-mcp@0.1.19`, the released npm server) ·
 Method: live stdio round-trip against the real KB (`C:\Users\ancku\aikoql-kb`) during a coding
 session, plus code inspection of the MCP surface. Honest ledger: every finding below was
 reproduced, not inferred.
@@ -18,7 +18,7 @@ never provides.
 
 | Step | Result |
 | --- | --- |
-| `initialize` | OK — aikoql 0.1.19 |
+| `initialize` | OK — aikoql-mcp 0.1.19 |
 | `tools/list` | 90 tools |
 | `remember` (dev_log note about P3-M3) | OK — KO `01a086c9…a9c9`, version 1 |
 | `aikoql` `MATCH dev_log RETURN *` | 1 row — the new KO, koid **MATCH** |

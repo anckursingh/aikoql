@@ -88,12 +88,12 @@ say "6/8 typescript suite + npm install smoke"
 ( cd npm-publish
   mkdir -p /tmp/aikoql-pkg          # npm pack does not create --pack-destination
   npm pack --pack-destination /tmp/aikoql-pkg
-  tarball=$(ls /tmp/aikoql-pkg/aikoql-*.tgz | head -1)
+  tarball=$(ls /tmp/aikoql-pkg/aikoql-aikoql-*.tgz | head -1)
   clean=$(mktemp -d)
   npm install --prefix "$clean" "$tarball" >/dev/null
   cd "$clean"
-  AIKOQL_BINARY="$BIN" npx aikoql --version
-  AIKOQL_BINARY="$BIN" node "$OLDPWD/smoke-mcp.js" npx aikoql serve "$clean/db" )
+  AIKOQL_BINARY="$BIN" npx @aikoql/aikoql --version
+  AIKOQL_BINARY="$BIN" node "$OLDPWD/smoke-mcp.js" npx @aikoql/aikoql serve "$clean/db" )
 done_
 
 # 7. Rust — the real-server suite + the 8 cargo-fuzz smokes (cargo-fuzz was

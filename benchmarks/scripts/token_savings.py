@@ -90,7 +90,7 @@ def start_aikoql(corpus_dir: str):
     import os
     import tempfile
 
-    bin_cmd = os.environ.get("AIKOQL_BIN", "npx -y aikoql").split()
+    bin_cmd = os.environ.get("AIKOQL_BIN", "npx -y @aikoql/aikoql").split()
     # AIKOQL_DB: serve a pre-built db instead of ingesting (big-corpus reruns)
     db = os.environ.get("AIKOQL_DB")
     if db is None:

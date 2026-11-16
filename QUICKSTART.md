@@ -7,7 +7,7 @@ aikoql is a knowledge database with built-in encryption, hybrid vector+text sear
 The binary is named **`aikoql`**. Install it — pick one:
 
 ```bash
-npm i -g aikoql   # launcher fetches the right binary for your OS
+npm i -g @aikoql/aikoql   # launcher fetches the right binary for your OS
 # or download from https://github.com/anckursingh/aikoql/releases (SHA-256 files alongside)
 ```
 
@@ -22,7 +22,7 @@ aikoql shell
 
 From there, serve it to agents:
 
-- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql@0.5.0 serve ./kb`
+- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y @aikoql/aikoql@0.5.0 serve ./kb`
 - **TCP + Studio UI:** `aikoql serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091` → open http://127.0.0.1:9091/studio (no default credentials — set `AIKOQL_ADMIN_PASSWORD` on first start to bootstrap the admin login)
 
 ## Usage Modes
@@ -333,7 +333,7 @@ Remote MCP clients (Claude Code's `--transport http`, other Streamable-HTTP clie
 | macOS ARM | `aikoql-macos-arm64` | ✅ Shipped binary (GitHub Releases) |
 | macOS Intel | `aikoql-macos` | ✅ Shipped binary (GitHub Releases) |
 
-Shipped binaries download from `https://github.com/anckursingh/aikoql/releases` (SHA-256 files alongside), or install via `npm i -g aikoql` — the launcher downloads, verifies, and runs the right binary automatically.
+Shipped binaries download from `https://github.com/anckursingh/aikoql/releases` (SHA-256 files alongside), or install via `npm i -g @aikoql/aikoql` — the launcher downloads, verifies, and runs the right binary automatically.
 
 ## Next Steps
 

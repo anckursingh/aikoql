@@ -156,7 +156,7 @@ async def run(opts, checks):
     if bin_env:
         command, args = bin_env, ["serve", opts.kb]
     else:
-        command, args = "npx", ["-y", "aikoql", "serve", opts.kb]
+        command, args = "npx", ["-y", "@aikoql/aikoql", "serve", opts.kb]
     params = StdioServerParameters(
         command=command,
         args=args,

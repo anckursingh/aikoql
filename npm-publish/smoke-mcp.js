@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PRR-5 MCP smoke client: spawn a command (binary path or "npx aikoql"),
+// PRR-5 MCP smoke client: spawn a command (binary path or "npx @aikoql/aikoql"),
 // speak stdio JSON-RPC — initialize -> tools/list -> one tools/call.
 // Exits 0 only if the full round-trip succeeds. Not shipped in the npm tarball
 // (package.json "files" lists run.js only).
@@ -9,7 +9,7 @@ const path = require('path');
 
 const cmdline = process.argv.slice(2);
 if (cmdline.length === 0) {
-  console.error('usage: node smoke-mcp.js <command...>  (e.g. node smoke-mcp.js npx aikoql serve <db>)');
+  console.error('usage: node smoke-mcp.js <command...>  (e.g. node smoke-mcp.js npx @aikoql/aikoql serve <db>)');
   process.exit(2);
 }
 

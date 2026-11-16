@@ -134,7 +134,7 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
   </div>
   <div class="hero-demo">
     <pre><code><span class="demo-prompt">aikoql&gt;</span> CREATE Note body == "refund policy: 30 days"<br><span class="demo-prompt">aikoql&gt;</span> MATCH Note SIMILAR TO "refund window"<br>          SCORE BM25 USING EMBEDDING RETURN *</code></pre>
-    <p>AGPL-3.0-only · <span class="demo-strong">npm i -g aikoql</span> · single binary · zero runtime deps</p>
+    <p>AGPL-3.0-only · <span class="demo-strong">npm i -g @aikoql/aikoql</span> · single binary · zero runtime deps</p>
   </div>
 </section>
 
@@ -368,7 +368,7 @@ aikoql&gt; MATCH Employee EPISTEMIC verified RETURN *    # only verified knowled
       <button class="tab" onclick="showInstall('docker',this)">Docker</button>
       <button class="tab" onclick="showInstall('source',this)">From Source</button>
     </div>
-    <div id="inst-npm"><pre><code>npm install -g aikoql
+    <div id="inst-npm"><pre><code>npm install -g @aikoql/aikoql
 aikoql --version</code></pre></div>
     <div id="inst-windows" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql.exe
 .\aikoql.exe --help</code></pre></div>

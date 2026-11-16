@@ -58,7 +58,7 @@ The ingest engine classifies every file:
 ### npm (recommended for MCP clients)
 
 ```bash
-npm install -g aikoql
+npm install -g @aikoql/aikoql
 aikoql --version
 ```
 

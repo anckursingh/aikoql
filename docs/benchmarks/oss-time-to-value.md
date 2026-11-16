@@ -26,7 +26,7 @@ observations, never invented.
   thresholded).
 - From-source baseline: `cargo build -p aikoql` (debug) observed
   at **12m49s** on this machine. The quickstart's 5-second start
-  assumes the released binary path (`npm i -g aikoql` or GitHub
+  assumes the released binary path (`npm i -g @aikoql/aikoql` or GitHub
   Releases), where install has no build step.
 
 ## Documentation failures found and closed (the TDD fix leg)

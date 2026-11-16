@@ -13,7 +13,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 async function main() {
-  // 1. install is `npm i -g aikoql` (or a released binary); the
+  // 1. install is `npm i -g @aikoql/aikoql` (or a released binary); the
   // transport below spawns `aikoql` from PATH.
   const client = new Client({ name: 'hello-agent', version: '1.0.0' });
 

@@ -14,7 +14,7 @@ Release, verifies its SHA-256, and execs it — `npm@X` always runs native
 binary `X`.
 
 ```bash
-npm install -g aikoql
+npm install -g @aikoql/aikoql
 aikoql --version
 aikoql serve ./kb              # MCP server over stdio
 ```

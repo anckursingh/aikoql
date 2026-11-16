@@ -11,7 +11,7 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ### Renamed: `aikoql-mcp` is now `aikoql` (breaking)
 
-The binary, the cargo package and the npm package are all `aikoql`: `aikoql serve`, `npx aikoql`,
+The binary and the cargo package are `aikoql` and the npm package is `@aikoql/aikoql`: `aikoql serve`, `npx @aikoql/aikoql` (the npm package is `@aikoql/aikoql`, under the aikoql org),
 `cargo build -p aikoql` (the crate is not on crates.io: its dependencies are not all published; build from source with
 `cargo install --locked --git https://github.com/anckursingh/aikoql aikoql`). Release assets are `aikoql.exe`, `aikoql-linux`, `aikoql-linux-musl`, `aikoql-macos` and
 `aikoql-macos-arm64` (with `.sha256`). `--version` prints `aikoql <version>`. Unchanged on purpose: the MCP

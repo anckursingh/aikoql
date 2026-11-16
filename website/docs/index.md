@@ -11,7 +11,7 @@ aikoql is an embedded knowledge database that treats **everything as a Knowledge
 
 ```bash
 # 5 seconds to start
-npm install -g aikoql
+npm install -g @aikoql/aikoql
 aikoql shell :memory:
 ```
 

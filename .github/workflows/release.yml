@@ -804,19 +804,19 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/aikoql-pkg  # npm pack does not create the --pack-destination dir (v0.1.18 npm job failed on ENOENT)
           npm pack --pack-destination /tmp/aikoql-pkg
-          tarball=$(ls /tmp/aikoql-pkg/aikoql-*.tgz | head -1)
+          tarball=$(ls /tmp/aikoql-pkg/aikoql-aikoql-*.tgz | head -1)
           clean=$(mktemp -d)
           npm install --prefix "$clean" "$tarball" >/dev/null
           cd "$clean"
-          npx aikoql --version
-          node "$OLDPWD/smoke-mcp.js" npx aikoql serve "$clean/db"
+          npx @aikoql/aikoql --version
+          node "$OLDPWD/smoke-mcp.js" npx @aikoql/aikoql serve "$clean/db"
       - name: Publish
         working-directory: npm-publish
         run: |
           set -euo pipefail
-          published="$(npm view aikoql version 2>/dev/null || true)"
+          published="$(npm view @aikoql/aikoql version 2>/dev/null || true)"
           if [ "$published" = "${{ needs.validate-versions.outputs.version }}" ]; then
-            echo "::notice::npm aikoql@$published already published — skip (rescue over an existing cut)"
+            echo "::notice::npm @aikoql/aikoql@$published already published — skip (rescue over an existing cut)"
             exit 0
           fi
           npm publish --provenance
@@ -1088,9 +1088,9 @@ jobs:
           V: ${{ needs.validate-versions.outputs.version }}
         run: |
           set -euo pipefail
-          got="$(npm view aikoql version)"
+          got="$(npm view @aikoql/aikoql version)"
           [ "$got" = "$V" ] || { echo "::error::npm aikoql version '$got' != tag '$V'"; exit 1; }
-          echo "::notice::npm aikoql@$got == tag"
+          echo "::notice::npm @aikoql/aikoql@$got == tag"
       - name: PyPI version == tag
         if: needs.pypi-publish.result == 'success'
         env:
