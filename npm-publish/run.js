@@ -21,7 +21,7 @@ const PLATFORM_MAP = {
 };
 
 function fail(msg) {
-  console.error(`aikoql: ${msg}\nBuild from source: cargo install aikoql`);
+  console.error(`aikoql: ${msg}\nBuild from source: cargo install --git https://github.com/anckursingh/aikoql aikoql`);
   process.exit(1);
 }
 
