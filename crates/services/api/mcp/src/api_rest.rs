@@ -804,9 +804,11 @@ fn is_write_route(path: &str, body: &str) -> bool {
     // aikoql is query-aware: a MATCH reads, every other statement writes.
     if path == "/api/v1/aikoql" {
         let q: J = serde_json::from_str(body).unwrap_or(J::Null);
-        let query = q.get("query").and_then(|q| q.as_str()).unwrap_or("");
+        // the bound query: a `params` call parses as what it will run (an
+        // unbindable one does not parse, so it counts as a write)
+        let query = crate::params::tool_query(&q).unwrap_or_default();
         return !matches!(
-            aikoql_compiler::parser::parse(query),
+            aikoql_compiler::parser::parse(&query),
             Ok(aikoql_compiler::parser::ast::Statement::Match(_))
         );
     }
@@ -943,6 +945,17 @@ fn openapi_spec() -> Result<J, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_match_with_named_params_is_a_read_route() {
+        let read = r#"{"query":"MATCH Doc WHERE name == :who RETURN *","params":{"who":"Alice"}}"#;
+        assert!(!is_write_route("/api/v1/aikoql", read));
+        // a write stays a write, and an unbindable query fails closed
+        let write = r#"{"query":"DELETE Doc :who","params":{"who":"x"}}"#;
+        assert!(is_write_route("/api/v1/aikoql", write));
+        let unbound = r#"{"query":"MATCH Doc WHERE name == :who RETURN *","params":{}}"#;
+        assert!(is_write_route("/api/v1/aikoql", unbound));
+    }
 
     // ---- Studio hardening M3: one active ontology, saved in place with CAS ----
 

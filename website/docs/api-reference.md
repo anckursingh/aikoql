@@ -134,7 +134,7 @@ language has no escapes); a number, `true`, `false` or `null` must stand alone (
 parentheses or commas) and numbers must be non-negative; a `:name` inside a string literal or a `//`
 comment is text; the placeholders and the parameters must match exactly. An SDK that sends `params` needs a
 server that binds them (an older server fails with "unexpected character ':'"), and an older SDK that still
-inlines values stays injectable: upgrade both. REST `POST /api/v1/aikoql` does not take `params` yet.
+inlines values stays injectable: upgrade both. REST `POST /api/v1/aikoql` takes `params` too.
 
 Temporal and epistemic operators (v0.3):
 
