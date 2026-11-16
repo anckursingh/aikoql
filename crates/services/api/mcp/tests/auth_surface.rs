@@ -7,7 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_aikoql-mcp"))
+    PathBuf::from(env!("CARGO_BIN_EXE_aikoql"))
 }
 
 fn tmp_db(tag: &str) -> String {
@@ -36,7 +36,7 @@ fn expect_exit2(args: &[&str], tag: &str, envs: &[(&str, &str)]) -> String {
         .envs(envs.iter().copied())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    let mut child: Child = cmd.spawn().expect("spawn aikoql-mcp");
+    let mut child: Child = cmd.spawn().expect("spawn aikoql");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match child.try_wait().expect("try_wait") {

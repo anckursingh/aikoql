@@ -55,7 +55,7 @@ community edition — nothing is taken away.
   up live on every request. `AIKOQL_ADMIN_PASSWORD` seeds the bootstrap
   break-glass admin on first start only.
 - **Audit export** — retention rotation (`AIKOQL_AUDIT_RETENTION_DAYS`,
-  default 90) plus JSONL export via `aikoql-mcp audit --export-jsonl PATH`
+  default 90) plus JSONL export via `aikoql audit --export-jsonl PATH`
   and the Studio admin panel.
 - **Replicated deployments** — users and roles live in the database's
   replicated store, so multi-user runs on a leader + standby or HA pair.

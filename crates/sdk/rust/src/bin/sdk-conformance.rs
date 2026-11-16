@@ -1,7 +1,7 @@
 //! Command sdk-conformance is the Rust adapter for the shared conformance
 //! runner (D-12, §7/§23). It executes the language-neutral vectors from
 //! tests/sdk-conformance/ (the §23 canonical workload + the §7 category
-//! dirs) and protocol/test-vectors/ against a real aikoql-mcp server
+//! dirs) and protocol/test-vectors/ against a real aikoql server
 //! through this SDK, then checks every assert/assert_any/expect_error. The
 //! expected results are the vectors themselves — every SDK produces the
 //! same transcript. Mirrors the Go adapter (crates/sdk/go/cmd/
@@ -9,7 +9,7 @@
 //!
 //! Run through scripts/sdk-conformance.sh, or directly:
 //!
-//!   cargo run --bin sdk-conformance -- --bin <aikoql-mcp> \
+//!   cargo run --bin sdk-conformance -- --bin <aikoql> \
 //!       --vectors <dir> --protocol <dir> --token <token>
 
 use aikoql_sdk::tools::{FindSimilarParams, RememberParams};

@@ -7,9 +7,9 @@ import java.util.concurrent.TimeUnit;
 // the response-deadline helper. Mirrors the module-level surface of the TS
 // SDK (index.ts).
 public final class AikoqlClient {
-    /** The oldest aikoql-mcp server this SDK will talk to (the ND-12
+    /** The oldest aikoql server this SDK will talk to (the ND-12
      * version contract, mirrored from the Python, Go, Rust and TS SDKs). */
-    public static final String MIN_SERVER_VERSION = "0.4.0";
+    public static final String MIN_SERVER_VERSION = "0.5.0";
     /** The SDK's own package version, advertised as the client identity.
      * Injected by Maven resource filtering from pom.xml (version.properties)
      * — not a restated literal; "dev" outside a Maven build. */
@@ -44,7 +44,7 @@ public final class AikoqlClient {
 
     /** Opens a TCP connection ("host:port"). The handshake is separate
      * (initialize) so a caller can dial first and authenticate later;
-     * every aikoql-mcp TCP server requires the token. */
+     * every aikoql TCP server requires the token. */
     public static Connection dial(String addr) {
         return new Connection(addr, null);
     }

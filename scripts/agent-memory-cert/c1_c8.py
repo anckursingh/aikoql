@@ -5,7 +5,7 @@ black-box over MCP (TCP transport), no LLM in the loop.
 Each check returns PASS / FAIL / GAP (the capability is not there) with the
 server's own answer as evidence. Results: results.json + a printed table.
 Usage: python scripts/agent-memory-cert/c1_c8.py
-  AIKOQL_BIN       the server binary (default target/debug/aikoql-mcp)
+  AIKOQL_BIN       the server binary (default target/debug/aikoql)
   AIKOQL_CERT_OUT  work dir for the databases, logs and results.json
                    (default <tmp>/aikoql-agent-memory-cert)"""
 import json

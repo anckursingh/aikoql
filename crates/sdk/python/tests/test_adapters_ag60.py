@@ -16,7 +16,7 @@ Embedded-client gates (tmp_aikoql) cover the same flows over the
 positional client; the thread gate asserts the async session methods
 offload their sync client I/O via asyncio.to_thread.
 
-Requires: aikoql-mcp binary built (cargo build -p aikoql-mcp).
+Requires: aikoql binary built (cargo build -p aikoql).
 Run: pytest tests/test_adapters_ag60.py -v
 """
 import asyncio

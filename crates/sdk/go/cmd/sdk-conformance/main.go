@@ -1,14 +1,14 @@
 // Command sdk-conformance is the Go adapter for the shared conformance
 // runner (D-11, §7/§23). It executes the language-neutral vectors from
 // tests/sdk-conformance/ (the §23 canonical workload + the 13 §7 category
-// dirs) and protocol/test-vectors/ against a real aikoql-mcp server through
+// dirs) and protocol/test-vectors/ against a real aikoql server through
 // this SDK, then checks every assert/assert_any/expect_error. The expected
 // results are the vectors themselves — every SDK produces the same
 // transcript.
 //
 // Run through scripts/sdk-conformance.sh, or directly:
 //
-//	go run ./cmd/sdk-conformance -bin <aikoql-mcp> -vectors <dir> -protocol <dir>
+//	go run ./cmd/sdk-conformance -bin <aikoql> -vectors <dir> -protocol <dir>
 package main
 
 import (
@@ -486,7 +486,7 @@ func or(a, b string) string {
 }
 
 func main() {
-	bin := flag.String("bin", "", "path to the aikoql-mcp binary")
+	bin := flag.String("bin", "", "path to the aikoql binary")
 	vectors := flag.String("vectors", "", "tests/sdk-conformance directory")
 	protocol := flag.String("protocol", "", "protocol/test-vectors directory")
 	token := flag.String("token", "conformance", "the --tcp-token TOKEN segment")

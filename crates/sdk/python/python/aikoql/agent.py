@@ -8,7 +8,7 @@ Supports both embedded (PyO3) and server (MCP TCP) modes transparently.
     # A fresh path creates an aikoql-v2 database directory (the default):
     db = Agent.connect("./kb")
 
-    # Server mode (talks to aikoql-mcp over TCP):
+    # Server mode (talks to aikoql over TCP):
     db = Agent.connect("localhost:9090")
 
     # Server mode (tuple):

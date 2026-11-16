@@ -10,8 +10,9 @@ Usage:
   python scripts/bump-version.py NEW_VERSION   # rewrite every owned pin
   python scripts/bump-version.py --check       # exit 1 if any pin drifted
 
-The bump ritual is then: edit the ONE line in Cargo.toml (or let this
-script rewrite it via --source too) -> run this -> the gates. A pin site
+The bump ritual is then: run this with the new version (it rewrites the
+workspace version and the path-dependency versions in Cargo.toml too; do not
+edit Cargo.toml first, the script reads the old version from it) -> the gates. A pin site
 that this script does not know about is protected by check-sdk-compat.sh
 (SDK constants) and release.yml validate-versions (manifests, website).
 
@@ -33,6 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # Every file whose content carries the release version and must move with
 # it. One line per file: (repo-relative path, minimum expected occurrences).
 PINNED = [
+    ("Cargo.toml", 8),  # the workspace version line itself + the 7 path-dependency versions
     ("protocol/compatibility.json", 1),
     (".claude-plugin/plugin.json", 1),
     ("npm-publish/package.json", 1),
@@ -53,6 +55,10 @@ PINNED = [
     ("deploy/helm/aikoql/Chart.yaml", 1),
     ("deploy/helm/aikoql/values.yaml", 1),
 ]
+
+
+# files whose first N occurrences of the version are ours, the rest foreign
+LOCK_LIMIT = {"crates/sdk/typescript/package-lock.json": 2}
 
 
 def current_version() -> str:
@@ -85,11 +91,15 @@ def main() -> None:
         n = text.count(old)
         if n < at_least:
             sys.exit(f"{rel}: expected >= {at_least} pins of {old}, found {n} - add the site to PINNED or fix the drift")
-        text = text.replace(old, new)
+        # a lockfile also carries other packages' versions (json-schema is
+        # 0.4.0): only the leading occurrences belong to this project
+        limit = LOCK_LIMIT.get(rel)
+        text = text.replace(old, new, limit) if limit else text.replace(old, new)
+        n = min(n, limit) if limit else n
         p.write_text(text, encoding="utf-8", newline="")
         changed += n
     print(f"bumped {old} -> {new}: {changed} pin sites across {len(PINNED)} files")
-    print("next: bump Cargo.lock via cargo build, rebuild target/release/aikoql-mcp, run the gates")
+    print("next: bump Cargo.lock via cargo build, rebuild target/release/aikoql, run the gates")
 
 
 def check(old: str) -> None:

@@ -3,7 +3,7 @@
 make_example builds a valid canonical example (design §9 + the T-01
 recon corrections) with its content-derived example_id filled in.
 
-mcp_server spawns the real aikoql-mcp binary on a free port (the SDK
+mcp_server spawns the real aikoql binary on a free port (the SDK
 conftest pattern, CI-15 discipline: mkstemp-reserve then unlink so
 serve auto-creates aikoql-v2, readiness polled not slept, teardown
 removes the store and its audit log). Embedded mode is NOT used for
@@ -31,15 +31,15 @@ _ROOT = Path(__file__).parents[2]  # training/tests -> repo root
 
 
 def find_binary():
-    """The aikoql-mcp debug binary (the SDK conftest's contract)."""
+    """The aikoql debug binary (the SDK conftest's contract)."""
     candidates = [
-        _ROOT / "target" / "debug" / "aikoql-mcp",
-        _ROOT / "target" / "debug" / "aikoql-mcp.exe",
+        _ROOT / "target" / "debug" / "aikoql",
+        _ROOT / "target" / "debug" / "aikoql.exe",
     ]
     for c in candidates:
         if c.exists():
             return str(c)
-    pytest.skip("aikoql-mcp binary not built. Run: cargo build -p aikoql-mcp")
+    pytest.skip("aikoql binary not built. Run: cargo build -p aikoql")
 
 
 def _wait_ready(proc, host, port, errf, timeout=15.0):
@@ -51,14 +51,14 @@ def _wait_ready(proc, host, port, errf, timeout=15.0):
             with open(errf, "r", errors="replace") as f:
                 stderr = f.read()
             raise RuntimeError(
-                f"aikoql-mcp exited early (code {proc.returncode}):\n{stderr}"
+                f"aikoql exited early (code {proc.returncode}):\n{stderr}"
             )
         try:
             with socket.create_connection((host, port), timeout=0.5):
                 return
         except OSError:
             time.sleep(0.1)
-    raise RuntimeError(f"aikoql-mcp did not listen on {host}:{port} within {timeout}s")
+    raise RuntimeError(f"aikoql did not listen on {host}:{port} within {timeout}s")
 
 
 def _purge_stale():
@@ -86,7 +86,7 @@ _purge_stale()
 
 
 def _serve(tcp_tokens):
-    """Spawn a real aikoql-mcp TCP server on a free port with the given
+    """Spawn a real aikoql TCP server on a free port with the given
     token specs (repeated --tcp-token flags accumulate). Yields
     (host, tokens) once ready; fresh store per spawn."""
     fd, db = tempfile.mkstemp(prefix=_PREFIX, suffix=".redb")
@@ -154,7 +154,7 @@ def _serve(tcp_tokens):
 
 @pytest.fixture
 def mcp_server():
-    """A real aikoql-mcp TCP server on a free port, fresh store per test.
+    """A real aikoql TCP server on a free port, fresh store per test.
 
     The server registers the base token as the lookup key (SDK conftest
     pattern): spawn with TOKEN::admin, the client sends the base TOKEN.

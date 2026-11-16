@@ -10,7 +10,7 @@ import time
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 BIN = os.path.abspath(os.environ.get("AIKOQL_BIN") or str(
-    REPO / "target" / "debug" / ("aikoql-mcp.exe" if os.name == "nt" else "aikoql-mcp")))
+    REPO / "target" / "debug" / ("aikoql.exe" if os.name == "nt" else "aikoql")))
 # databases, logs and results go to a work dir, never into the repo
 HERE = pathlib.Path(os.environ.get("AIKOQL_CERT_OUT")
                     or pathlib.Path(tempfile.gettempdir()) / "aikoql-agent-memory-cert")
@@ -26,7 +26,7 @@ def free_port():
 
 
 class Server:
-    """One aikoql-mcp serve on a data dir. `tokens`: TOKEN:TENANT:ROLES[,agent=NAME]."""
+    """One aikoql serve on a data dir. `tokens`: TOKEN:TENANT:ROLES[,agent=NAME]."""
 
     def __init__(self, db, tokens, log, extra=()):
         self.port = free_port()

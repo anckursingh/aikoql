@@ -20,7 +20,7 @@ No database server, no service dependencies. Everything is embedded.
 git clone https://github.com/anckursingh/aikoql.git
 cd aikoql
 cargo build --release
-# binary: target/release/aikoql-mcp(.exe)
+# binary: target/release/aikoql(.exe)
 ```
 
 ## Test
@@ -37,8 +37,8 @@ green fmt + clippy + suite run.
 ## Run from Source
 
 ```bash
-cargo run -p aikoql-mcp -- serve ./kb        # fresh path = aikoql-v2 directory
-cargo run -p aikoql-mcp -- shell :memory:
+cargo run -p aikoql -- serve ./kb        # fresh path = aikoql-v2 directory
+cargo run -p aikoql -- shell :memory:
 ```
 
 Storage is v2-only: `aikoql-v2` is the sole engine (redb/v1 were

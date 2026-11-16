@@ -1813,7 +1813,7 @@ pins failed).
 
 P3-005 (MEDIUM): the server-side rate cap failed a burst at call ~300
 with -32000 ("rate limit exceeded (max 300 calls/min)") and nothing in
-`aikoql-mcp --help` or `serve --help` mentioned the cap or any way to
+`aikoql --help` or `serve --help` mentioned the cap or any way to
 tune it — the knob existed only in config internals, and the root sample
 `aikoql.toml` still carried the pre-T-45 value (120) while the shipped
 default is 300.

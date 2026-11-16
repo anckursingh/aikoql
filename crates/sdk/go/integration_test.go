@@ -1,6 +1,6 @@
 package aikoql
 
-// Integration test against the REAL aikoql-mcp server — the proof that
+// Integration test against the REAL aikoql server — the proof that
 // the Go SDK works as a client of the actual database. Skipped unless
 // AIKOQL_MCP_BIN names the built binary (CI and laptop smoke both set it).
 

@@ -77,119 +77,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "aikoql-benchmarks"
-version = "0.4.0"
-dependencies = [
- "aikoql-compiler",
- "aikoql-graph",
- "aikoql-kernel",
- "aikoql-runtime",
- "aikoql-scheduler",
- "aikoql-storage-v2",
- "aikoql-vector",
- "criterion",
-]
-
-[[package]]
-name = "aikoql-certification"
-version = "0.4.0"
-dependencies = [
- "aikoql-compiler",
- "aikoql-graph",
- "aikoql-kernel",
- "aikoql-runtime",
- "aikoql-storage-v2",
- "serde_json",
-]
-
-[[package]]
-name = "aikoql-clickhouse"
-version = "0.4.0"
-dependencies = [
- "aikoql-kernel",
- "serde_json",
- "ureq 2.12.1",
-]
-
-[[package]]
-name = "aikoql-compiler"
-version = "0.4.0"
-dependencies = [
- "aikoql-kernel",
- "criterion",
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "aikoql-fault-proxy"
-version = "0.4.0"
-dependencies = [
- "aikoql-native",
-]
-
-[[package]]
-name = "aikoql-graph"
-version = "0.4.0"
-dependencies = [
- "aikoql-kernel",
-]
-
-[[package]]
-name = "aikoql-ingestion"
-version = "0.4.0"
-dependencies = [
- "aikoql-graph",
- "aikoql-kernel",
- "aikoql-scheduler",
- "aikoql-storage-v2",
- "criterion",
- "flate2",
- "lopdf",
- "mysql",
- "proc-macro2",
- "quote",
- "rayon",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "syn 2.0.119",
- "tree-sitter",
- "tree-sitter-java",
- "tree-sitter-python",
- "tree-sitter-typescript",
- "ureq 3.4.0",
- "zip 9.1.3",
-]
-
-[[package]]
-name = "aikoql-kernel"
-version = "0.4.0"
-dependencies = [
- "aes-gcm",
- "aikoql-compiler",
- "aikoql-graph",
- "aikoql-runtime",
- "aikoql-scheduler",
- "aikoql-storage-v2",
- "aikoql-vector",
- "argon2",
- "chacha20poly1305",
- "criterion",
- "hmac 0.12.1",
- "proptest",
- "rand 0.8.7",
- "regex",
- "ring",
- "serde",
- "sha2 0.10.9",
- "tokio",
-]
-
-[[package]]
-name = "aikoql-mcp"
-version = "0.4.0"
+name = "aikoql"
+version = "0.5.0"
 dependencies = [
  "aikoql-clickhouse",
  "aikoql-compiler",
@@ -234,8 +123,119 @@ dependencies = [
 ]
 
 [[package]]
+name = "aikoql-benchmarks"
+version = "0.5.0"
+dependencies = [
+ "aikoql-compiler",
+ "aikoql-graph",
+ "aikoql-kernel",
+ "aikoql-runtime",
+ "aikoql-scheduler",
+ "aikoql-storage-v2",
+ "aikoql-vector",
+ "criterion",
+]
+
+[[package]]
+name = "aikoql-certification"
+version = "0.5.0"
+dependencies = [
+ "aikoql-compiler",
+ "aikoql-graph",
+ "aikoql-kernel",
+ "aikoql-runtime",
+ "aikoql-storage-v2",
+ "serde_json",
+]
+
+[[package]]
+name = "aikoql-clickhouse"
+version = "0.5.0"
+dependencies = [
+ "aikoql-kernel",
+ "serde_json",
+ "ureq 2.12.1",
+]
+
+[[package]]
+name = "aikoql-compiler"
+version = "0.5.0"
+dependencies = [
+ "aikoql-kernel",
+ "criterion",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aikoql-fault-proxy"
+version = "0.5.0"
+dependencies = [
+ "aikoql-native",
+]
+
+[[package]]
+name = "aikoql-graph"
+version = "0.5.0"
+dependencies = [
+ "aikoql-kernel",
+]
+
+[[package]]
+name = "aikoql-ingestion"
+version = "0.5.0"
+dependencies = [
+ "aikoql-graph",
+ "aikoql-kernel",
+ "aikoql-scheduler",
+ "aikoql-storage-v2",
+ "criterion",
+ "flate2",
+ "lopdf",
+ "mysql",
+ "proc-macro2",
+ "quote",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "syn 2.0.119",
+ "tree-sitter",
+ "tree-sitter-java",
+ "tree-sitter-python",
+ "tree-sitter-typescript",
+ "ureq 3.4.0",
+ "zip 9.1.3",
+]
+
+[[package]]
+name = "aikoql-kernel"
+version = "0.5.0"
+dependencies = [
+ "aes-gcm",
+ "aikoql-compiler",
+ "aikoql-graph",
+ "aikoql-runtime",
+ "aikoql-scheduler",
+ "aikoql-storage-v2",
+ "aikoql-vector",
+ "argon2",
+ "chacha20poly1305",
+ "criterion",
+ "hmac 0.12.1",
+ "proptest",
+ "rand 0.8.7",
+ "regex",
+ "ring",
+ "serde",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
 name = "aikoql-mongodb"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
  "futures-util",
@@ -245,11 +245,11 @@ dependencies = [
 
 [[package]]
 name = "aikoql-native"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "aikoql-neo4j"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
  "serde",
@@ -259,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-postgres"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
  "postgres",
@@ -267,14 +267,14 @@ dependencies = [
 
 [[package]]
 name = "aikoql-provider-sdk"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
 ]
 
 [[package]]
 name = "aikoql-py"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-reasoning"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
  "aikoql-scheduler",
@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-runtime"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-scheduler"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
  "aikoql-storage-v2",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-sdk"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
  "aikoql-native",
@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-semantic"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
  "aikoql-scheduler",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-sqlite"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
  "rusqlite",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-storage-v2"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
  "proptest",
@@ -374,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-vector"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aikoql-kernel",
  "fast-hnsw",

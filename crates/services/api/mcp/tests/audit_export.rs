@@ -1,5 +1,5 @@
 //! Enterprise audit retention + JSONL export (Task 7). All behavior is
-//! verified through the spawned aikoql-mcp binary: retention rotation
+//! verified through the spawned aikoql binary: retention rotation
 //! rewrites {db}.audit.log at serve start ONLY under a license carrying
 //! audit-export (community mode leaves the log byte-for-byte untouched),
 //! and `audit --export-jsonl PATH` streams the log, denied without the flag.
@@ -93,14 +93,14 @@ fn serve_licensed(db: &Path, log: &Path, retention: Option<&str>) {
 
 /// Run the binary with an enterprise-clean env; capture status + output.
 fn run_bin(args: &[&str], envs: &[(&str, &str)]) -> (ExitStatus, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+    let out = Command::new(env!("CARGO_BIN_EXE_aikoql"))
         .args(args)
         .env_remove("AIKOQL_LICENSE")
         .env_remove("AIKOQL_LICENSE_PUBLIC_KEY")
         .env_remove("AIKOQL_AUDIT_RETENTION_DAYS")
         .envs(envs.iter().copied())
         .output()
-        .expect("run aikoql-mcp");
+        .expect("run aikoql");
     (
         out.status,
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -414,7 +414,7 @@ fn community_backup_parity_with_config_file_session() {
     // resolver path) keeps v0.4.0 behavior — backup succeeds.
     let db = tmp("backup-parity-db");
     let log = tmp("backup-parity-log");
-    let hashed = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+    let hashed = Command::new(env!("CARGO_BIN_EXE_aikoql"))
         .arg("hash-password")
         .arg("cfg-pw")
         .output()

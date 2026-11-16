@@ -7,9 +7,9 @@ Three sections, one result.json:
                (structured_filter, vector_recall, graph) + point_read
                (point_write/transactions measured too: same 6-cell shape
                as the main report)
-  multi_op_txn aikoql-mcp txn_begin/stage×N/commit vs PG
+  multi_op_txn aikoql txn_begin/stage×N/commit vs PG
                BEGIN/INSERT×N/COMMIT, N in {10, 100} — the P5-M10 surface
-  mcp_mode     the full 6-cell column through localhost aikoql-mcp on the
+  mcp_mode     the full 6-cell column through localhost aikoql on the
                same seed-42 dataset as the main report (embedded vs wire)
 
 Usage:
@@ -74,7 +74,7 @@ def scale_run(n_notes, n_ops):
 
 def start_server(db_dir):
     exe = REPO / "target" / "release" / \
-        ("aikoql-mcp.exe" if os.name == "nt" else "aikoql-mcp")
+        ("aikoql.exe" if os.name == "nt" else "aikoql")
     # Bench config: the default 120 calls/min limit is far below ingest rate.
     cfg = db_dir.parent / "aikoql.toml"  # beside the db: the server refuses a pre-existing db dir, and the config must not live inside it
     cfg.write_text("[rate_limit]\nmax_calls_per_minute = 10000000\n")
@@ -84,7 +84,7 @@ def start_server(db_dir):
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(120):
         if proc.poll() is not None:
-            raise RuntimeError("aikoql-mcp exited during startup")
+            raise RuntimeError("aikoql exited during startup")
         try:
             a = Agent.connect(MCP_ADDR, token=TOKEN)
             a.close()
@@ -92,7 +92,7 @@ def start_server(db_dir):
         except Exception:
             time.sleep(0.5)
     proc.terminate()
-    raise RuntimeError("aikoql-mcp did not come up on 9090")
+    raise RuntimeError("aikoql did not come up on 9090")
 
 
 def txn_cell_pair(connect, close, build, n_ops):
@@ -139,7 +139,7 @@ def multi_op_txn(n_ops):
                 return (len(results) == nb and not res.get("deduped", True))
             return op
 
-        print(f"aikoql-mcp txn cell: batch {n_batch} ...", flush=True)
+        print(f"aikoql txn cell: batch {n_batch} ...", flush=True)
         out["aikoql_mcp"][f"txn_{n_batch}"] = txn_cell_pair(
             lambda: client, lambda c: None, build, n_ops)
     # Visibility oracle: the last committed row must read back.
@@ -289,7 +289,7 @@ def mcp_column(ds, server, db_dir, n_ops):
 
         return op
 
-    print("aikoql-mcp column: ingest + 6 cells ...", flush=True)
+    print("aikoql column: ingest + 6 cells ...", flush=True)
     workloads = run_engine(
         connect, lambda c: c.close(),
         [build_read, build_write, build_filter, build_txn,
@@ -298,7 +298,7 @@ def mcp_column(ds, server, db_dir, n_ops):
     rss_kb = psutil.Process(server.pid).memory_info().rss // 1024
     disk = sum(f.stat().st_size for f in db_dir.rglob("*") if f.is_file())
     return {"workloads": workloads, "rss_kb": rss_kb, "disk_bytes": disk,
-            "ingest_s": round(ingest_s, 2), "server": "aikoql-mcp",
+            "ingest_s": round(ingest_s, 2), "server": "aikoql",
             "transport": "localhost TCP", "token": TOKEN}
 
 
@@ -330,9 +330,9 @@ def main():
     result["scale"] = {tag: scale_run(n_notes, n_ops)
                        for n_notes, tag in sizes}
 
-    # (b) + (c) — one aikoql-mcp server instance; the db dir must not
+    # (b) + (c) — one aikoql server instance; the db dir must not
     # pre-exist (S-02 fail-closed — same fix as scale_run).
-    mcp_parent = Path(tempfile.mkdtemp(prefix="aikoql-mcp-bench-"))
+    mcp_parent = Path(tempfile.mkdtemp(prefix="aikoql-bench-"))
     mcp_dir = mcp_parent / "db"
     server = start_server(mcp_dir)
     try:

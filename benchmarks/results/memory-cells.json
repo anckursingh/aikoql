@@ -1,6 +1,6 @@
 {
   "benchmark": "aikoql memory cells (AG-61)",
-  "binary": "aikoql-mcp 0.3.0",
+  "binary": "aikoql 0.3.0",
   "machine": "Darwin arm64",
   "results": {
     "contradiction": {

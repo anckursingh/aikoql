@@ -1,6 +1,6 @@
 //! The storage-backend decision path — v2-only since the launch S-02
 //! decommission (docs/IMPLEMENTATION-PLAN-LAUNCH.md). Every production
-//! opener (aikoql-mcp, the python SDK) routes through `open_engine` here.
+//! opener (aikoql, the python SDK) routes through `open_engine` here.
 //!
 //! ```text
 //! missing path                → fresh aikoql-v2 create (the default)

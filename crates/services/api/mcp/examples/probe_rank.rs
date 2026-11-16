@@ -2,7 +2,7 @@
 //! with tunable fusion weights — no serve, no re-ingest for weight sweeps.
 //!
 //! Usage:
-//!   cargo run -p aikoql-mcp --example probe_rank -- <db> "<task>" <target> [sem_weight] [sem_min]
+//!   cargo run -p aikoql --example probe_rank -- <db> "<task>" <target> [sem_weight] [sem_min]
 //!
 //! Prints the top 15 entities, then the target entity's rank, score, cosine,
 //! and mention count (the components behind its final score).

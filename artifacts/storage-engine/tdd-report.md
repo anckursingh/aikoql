@@ -75,7 +75,7 @@ ADOPT AIKOQL STORAGE ENGINE
 
 10 of 11 workloads faster than redb at 100K (best 2.90×, one loss inside
 the §29 bound), resource bounds held (disk 0.42×, CPU 0.34×, RSS 1.19×
-redb). The verdict is live: `aikoql-mcp` and the Python SDK default to
+redb). The verdict is live: `aikoql` and the Python SDK default to
 `AikoqlStorageEngine` (post-gate §6 wiring, commit e605617), with redb
 reachable via `AIKOQL_BACKEND=redb` / `backend="redb"` and the REC-002
 backup/restore flow as the migration path.

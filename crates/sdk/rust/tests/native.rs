@@ -287,7 +287,7 @@ fn spawn_native(bin: &str, token: &str) -> NativeServer {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn aikoql-mcp with --native-port");
+        .expect("spawn aikoql with --native-port");
     // owned by the guard from the start: a server that never comes up is
     // killed and reaped by its Drop when the assert below panics
     let srv = NativeServer {

@@ -27,14 +27,14 @@ REM ------------------------------------------------------------------
 REM Quality gate: run tests first
 REM ------------------------------------------------------------------
 echo === [0/6] Running tests ===
-cargo test -p aikoql-mcp -- --test-threads=1 2>&1 | findstr /C:"test result"
+cargo test -p aikoql -- --test-threads=1 2>&1 | findstr /C:"test result"
 echo.
 
 REM ------------------------------------------------------------------
 REM Windows (native)
 REM ------------------------------------------------------------------
 echo === [1/6] Building Windows release ===
-cargo build --release -p aikoql-mcp
+cargo build --release -p aikoql
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: Windows build failed
     exit /b 1
@@ -44,19 +44,19 @@ set WIN_OUT=build\windows
 if exist %WIN_OUT% rmdir /s /q %WIN_OUT%
 mkdir %WIN_OUT%
 
-copy /Y target\release\aikoql-mcp.exe %WIN_OUT%\ >nul
+copy /Y target\release\aikoql.exe %WIN_OUT%\ >nul
 copy /Y QUICKSTART.md %WIN_OUT%\ >nul
 copy /Y aikoql.toml %WIN_OUT%\ >nul
 echo %VERSION% > %WIN_OUT%\VERSION
 echo Built: %DATE% %TIME% > %WIN_OUT%\BUILD_INFO.txt
 
 REM Windows checksum
-certutil -hashfile %WIN_OUT%\aikoql-mcp.exe SHA256 | findstr /v "SHA256" | findstr /v "CertUtil" > %WIN_OUT%\aikoql-mcp.exe.sha256
+certutil -hashfile %WIN_OUT%\aikoql.exe SHA256 | findstr /v "SHA256" | findstr /v "CertUtil" > %WIN_OUT%\aikoql.exe.sha256
 
 REM Windows archive
 powershell -Command "Compress-Archive -Path '%WIN_OUT%\*' -DestinationPath 'build\aikoql-windows-x86_64-%VERSION%.zip' -Force"
 
-echo   Windows binary: %WIN_OUT%\aikoql-mcp.exe
+echo   Windows binary: %WIN_OUT%\aikoql.exe
 echo   Windows archive: build\aikoql-windows-x86_64-%VERSION%.zip
 
 REM ------------------------------------------------------------------
@@ -67,7 +67,7 @@ echo === [2/6] Setting up Linux cross-compilation target ===
 rustup target add x86_64-unknown-linux-musl >nul 2>nul
 
 echo === [3/6] Building Linux release (static musl) ===
-cargo build --release --target x86_64-unknown-linux-musl -p aikoql-mcp --config "target.x86_64-unknown-linux-musl.linker = \"rust-lld\""
+cargo build --release --target x86_64-unknown-linux-musl -p aikoql --config "target.x86_64-unknown-linux-musl.linker = \"rust-lld\""
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: Linux build failed
     exit /b 1
@@ -77,14 +77,14 @@ set LINUX_OUT=build\linux
 if exist %LINUX_OUT% rmdir /s /q %LINUX_OUT%
 mkdir %LINUX_OUT%
 
-copy /Y target\x86_64-unknown-linux-musl\release\aikoql-mcp %LINUX_OUT%\ >nul
+copy /Y target\x86_64-unknown-linux-musl\release\aikoql %LINUX_OUT%\ >nul
 copy /Y QUICKSTART.md %LINUX_OUT%\ >nul
 copy /Y aikoql.toml %LINUX_OUT%\ >nul
 echo %VERSION% > %LINUX_OUT%\VERSION
 echo Built: %DATE% %TIME% > %LINUX_OUT%\BUILD_INFO.txt
 
 REM Linux checksum (PowerShell equivalent of sha256sum)
-powershell -Command "$hash = (Get-FileHash '%LINUX_OUT%\aikoql-mcp' -Algorithm SHA256).Hash; $hash | Out-File -FilePath '%LINUX_OUT%\aikoql-mcp.sha256' -Encoding ASCII -NoNewline"
+powershell -Command "$hash = (Get-FileHash '%LINUX_OUT%\aikoql' -Algorithm SHA256).Hash; $hash | Out-File -FilePath '%LINUX_OUT%\aikoql.sha256' -Encoding ASCII -NoNewline"
 
 REM Linux tarball (use tar in Git Bash or PowerShell)
 where tar >nul 2>nul
@@ -96,7 +96,7 @@ if %ERRORLEVEL% EQU 0 (
     echo   Linux archive: build\aikoql-linux-x86_64-musl-%VERSION%.zip ^(zip — install tar for .tar.gz^)
 )
 
-echo   Linux binary: %LINUX_OUT%\aikoql-mcp
+echo   Linux binary: %LINUX_OUT%\aikoql
 
 REM ------------------------------------------------------------------
 REM Summary
@@ -107,15 +107,15 @@ echo   Build Complete — v%VERSION%
 echo ========================================
 echo.
 echo Windows (native x86-64):
-echo   %WIN_OUT%\aikoql-mcp.exe
+echo   %WIN_OUT%\aikoql.exe
 echo   build\aikoql-windows-x86_64-%VERSION%.zip
 echo.
 echo Linux (static musl, no glibc):
-echo   %LINUX_OUT%\aikoql-mcp
+echo   %LINUX_OUT%\aikoql
 echo   build\aikoql-linux-x86_64-musl-%VERSION%.tar.gz
 echo.
 echo Usage:
-echo   aikoql-mcp shell              Interactive shell
-echo   aikoql-mcp                    Start server (default)
-echo   aikoql-mcp --metrics-addr 127.0.0.1:9181 my.db
-echo   aikoql-mcp import --help      Import data
+echo   aikoql shell              Interactive shell
+echo   aikoql                    Start server (default)
+echo   aikoql --metrics-addr 127.0.0.1:9181 my.db
+echo   aikoql import --help      Import data

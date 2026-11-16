@@ -563,7 +563,7 @@ fn a_community_viewer_login_cannot_write_over_rest() {
     let log = std::env::temp_dir().join(format!("aikoql-rbac-{tag}-{}.log", std::process::id()));
     common::register_temp_path(&log);
     let hash = {
-        let out = std::process::Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_aikoql"))
             .args(["hash-password", "view-pw"])
             .output()
             .expect("hash-password");

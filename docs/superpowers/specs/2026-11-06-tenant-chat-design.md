@@ -87,7 +87,7 @@ The owner's constraints (their words, 2026-11-06):
 
 ## Where it lives (builder's call within these bounds)
 
-- Orchestration in Rust inside `aikoql-mcp` (new module beside
+- Orchestration in Rust inside `aikoql` (new module beside
   `api_rest.rs`/`tools/`), using the already-present `ureq` for the model call
   (blocking, with the configured timeout; run off the request thread if the
   server's threading model needs it). No new heavy dependency.

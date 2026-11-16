@@ -61,7 +61,7 @@ impl McpError {
             code: "VERSION_MISMATCH".into(),
             message: format!("server version {server:?} is older than the SDK minimum {MIN}"),
             retryable: false,
-            suggestion: "Upgrade the aikoql-mcp server to a supported version".into(),
+            suggestion: "Upgrade the aikoql server to a supported version".into(),
             leader: None,
         }
     }

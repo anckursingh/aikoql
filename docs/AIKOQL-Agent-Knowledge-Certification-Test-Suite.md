@@ -835,7 +835,7 @@ First empirical slice: 20 engineering tasks (AGENT-001 where-to-implement, AGENT
 | Cost USD/query | 0.0013 | 0.0052 | 0.0052 | **0.0011** |
 | Failed generations | 2 | 0 | 0 | 0 |
 
-\*All four A passes are token-overlap guess passes (e.g. "mcp-tool crate" for the `aikoql-mcp` golden) — under a strict judge A is 0/20; the repo-only agent hallucinates confidently ("British National Corpus").
+\*All four A passes are token-overlap guess passes (e.g. "mcp-tool crate" for the `aikoql` golden) — under a strict judge A is 0/20; the repo-only agent hallucinates confidently ("British National Corpus").
 
 Findings:
 

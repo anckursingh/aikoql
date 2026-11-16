@@ -26,10 +26,10 @@ import type {
 import { Tx } from "./tx.ts";
 
 /**
- * The oldest aikoql-mcp server this SDK will talk to (the ND-12 version
+ * The oldest aikoql server this SDK will talk to (the ND-12 version
  * contract, mirrored from the Go, Python and Rust SDKs).
  */
-export const MIN_SERVER_VERSION = "0.4.0";
+export const MIN_SERVER_VERSION = "0.5.0";
 
 /** The SDK's own package version, advertised as the client identity:
  * read from package.json so the manifest, not a literal, owns it. */
@@ -113,7 +113,7 @@ function parseFrame(line: string): Record<string, unknown> | undefined {
 }
 
 /**
- * One MCP JSON-RPC connection to an aikoql-mcp server. One in-flight call
+ * One MCP JSON-RPC connection to an aikoql server. One in-flight call
  * per connection (a stream holds the connection for its whole life); calls
  * serialize over a promise chain, the single-threaded stand-in for the
  * Rust client's mutex.
@@ -141,7 +141,7 @@ export class Client {
 
   /** Opens a TCP connection ("host:port"). The handshake is separate
    * (initialize) so a pooled client can dial first and authenticate later;
-   * every aikoql-mcp TCP server requires the token. `opts.tls` (Node's
+   * every aikoql TCP server requires the token. `opts.tls` (Node's
    * tls.ConnectionOptions — e.g. `{ ca }` for a private CA; `{}` for the
    * system roots) dials a server started with --tls-cert/--tls-key. */
   static async dial(addr: string, opts: { tls?: ConnectionOptions } = {}): Promise<Client> {

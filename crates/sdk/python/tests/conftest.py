@@ -26,15 +26,15 @@ _ROOT = Path(__file__).parent.parent.parent.parent.parent
 
 
 def find_binary():
-    """The aikoql-mcp debug binary (the CI job builds it before the suite)."""
+    """The aikoql debug binary (the CI job builds it before the suite)."""
     candidates = [
-        _ROOT / "target" / "debug" / "aikoql-mcp",
-        _ROOT / "target" / "debug" / "aikoql-mcp.exe",
+        _ROOT / "target" / "debug" / "aikoql",
+        _ROOT / "target" / "debug" / "aikoql.exe",
     ]
     for c in candidates:
         if c.exists():
             return str(c)
-    pytest.skip("aikoql-mcp binary not built. Run: cargo build -p aikoql-mcp")
+    pytest.skip("aikoql binary not built. Run: cargo build -p aikoql")
 
 
 def _wait_ready(proc, host, port, timeout=15.0):
@@ -49,19 +49,19 @@ def _wait_ready(proc, host, port, timeout=15.0):
         if proc.poll() is not None:
             stderr = proc.stderr.read().decode(errors="replace")
             raise RuntimeError(
-                f"aikoql-mcp exited early (code {proc.returncode}):\n{stderr}"
+                f"aikoql exited early (code {proc.returncode}):\n{stderr}"
             )
         try:
             with socket.create_connection((host, port), timeout=0.5):
                 return
         except OSError:
             time.sleep(0.1)
-    raise RuntimeError(f"aikoql-mcp did not listen on {host}:{port} within {timeout}s")
+    raise RuntimeError(f"aikoql did not listen on {host}:{port} within {timeout}s")
 
 
 @contextmanager
 def restartable_server():
-    """A real aikoql-mcp server whose lifecycle the test controls (§21/§22
+    """A real aikoql server whose lifecycle the test controls (§21/§22
     restart legs): spawn() (re)starts it on a fixed probed port and returns
     the proc; the store dir and its audit log are removed at teardown.
     Shared by the pool and prepared-statement restart legs."""
@@ -150,7 +150,7 @@ def tmp_aikoql():
 
 @pytest.fixture
 def mcp_server():
-    """A real aikoql-mcp TCP server on a free port (the contract target).
+    """A real aikoql TCP server on a free port (the contract target).
 
     CI-15: the S-02 kernel refuses any pre-existing `*.redb` path (legacy
     v1 file — serve exits with a migration message), so the fixture

@@ -188,10 +188,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build release aikoql-mcp + native SDK
+      - name: Build release aikoql + native SDK
         run: |
           set -euo pipefail
-          cargo build --release -p aikoql-mcp
+          cargo build --release -p aikoql
           python -m venv .venv
           .venv/bin/pip install -q "maturin==1.14.1" psutil psycopg neo4j qdrant-client pymongo
           export VIRTUAL_ENV="$PWD/.venv"
@@ -314,21 +314,21 @@ jobs:
       # version + Cargo.lock).
       - uses: Swatinem/rust-cache@v2
       - name: Build release
-        run: cargo build --release -p aikoql-mcp
+        run: cargo build --release -p aikoql
       - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
         run: |
-          .\target\release\aikoql-mcp.exe --version
-          node npm-publish/smoke-mcp.js .\target\release\aikoql-mcp.exe
+          .\target\release\aikoql.exe --version
+          node npm-publish/smoke-mcp.js .\target\release\aikoql.exe
       - name: Generate SHA-256
         run: |
-          $hash = (Get-FileHash -Algorithm SHA256 target/release/aikoql-mcp.exe).Hash.ToLower()
-          "$hash  aikoql-mcp.exe" | Out-File -Encoding ASCII target/release/aikoql-mcp.exe.sha256
+          $hash = (Get-FileHash -Algorithm SHA256 target/release/aikoql.exe).Hash.ToLower()
+          "$hash  aikoql.exe" | Out-File -Encoding ASCII target/release/aikoql.exe.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
-            target/release/aikoql-mcp.exe
-            target/release/aikoql-mcp.exe.sha256
+            target/release/aikoql.exe
+            target/release/aikoql.exe.sha256
 
   # ── Linux glibc binary ──────────────────────────────────────────
   linux-gnu:
@@ -343,20 +343,20 @@ jobs:
       # version + Cargo.lock).
       - uses: Swatinem/rust-cache@v2
       - name: Build release
-        run: cargo build --release -p aikoql-mcp
+        run: cargo build --release -p aikoql
       - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
         run: |
-          target/release/aikoql-mcp --version
-          node npm-publish/smoke-mcp.js target/release/aikoql-mcp
+          target/release/aikoql --version
+          node npm-publish/smoke-mcp.js target/release/aikoql
       - name: Generate SHA-256
         run: |
-          sha256sum target/release/aikoql-mcp | cut -d' ' -f1 > target/release/aikoql-mcp-linux.sha256
+          sha256sum target/release/aikoql | cut -d' ' -f1 > target/release/aikoql-linux.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: linux-gnu
           path: |
-            target/release/aikoql-mcp
-            target/release/aikoql-mcp-linux.sha256
+            target/release/aikoql
+            target/release/aikoql-linux.sha256
 
   # ── Linux musl binary ───────────────────────────────────────────
   # hf-hub is pinned rustls-only (aikoql-semantic), so no openssl-sys enters
@@ -378,17 +378,17 @@ jobs:
         with:
           tool: cross
       - name: Build release (musl)
-        run: cross build --release --target x86_64-unknown-linux-musl -p aikoql-mcp
+        run: cross build --release --target x86_64-unknown-linux-musl -p aikoql
       - name: Generate SHA-256
         run: |
-          sha256sum target/x86_64-unknown-linux-musl/release/aikoql-mcp | cut -d' ' -f1 \
-            > target/x86_64-unknown-linux-musl/release/aikoql-mcp-linux-musl.sha256
+          sha256sum target/x86_64-unknown-linux-musl/release/aikoql | cut -d' ' -f1 \
+            > target/x86_64-unknown-linux-musl/release/aikoql-linux-musl.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: linux-musl
           path: |
-            target/x86_64-unknown-linux-musl/release/aikoql-mcp
-            target/x86_64-unknown-linux-musl/release/aikoql-mcp-linux-musl.sha256
+            target/x86_64-unknown-linux-musl/release/aikoql
+            target/x86_64-unknown-linux-musl/release/aikoql-linux-musl.sha256
 
   # ── macOS Intel binary ──────────────────────────────────────────
   # macos-13 hosted runners are retired (jobs queue forever), so build
@@ -407,17 +407,17 @@ jobs:
       # version + Cargo.lock).
       - uses: Swatinem/rust-cache@v2
       - name: Build release (x86_64)
-        run: cargo build --release --target x86_64-apple-darwin -p aikoql-mcp
+        run: cargo build --release --target x86_64-apple-darwin -p aikoql
       - name: Generate SHA-256
         run: |
-          shasum -a 256 target/x86_64-apple-darwin/release/aikoql-mcp | cut -d' ' -f1 \
-            > target/x86_64-apple-darwin/release/aikoql-mcp-macos.sha256
+          shasum -a 256 target/x86_64-apple-darwin/release/aikoql | cut -d' ' -f1 \
+            > target/x86_64-apple-darwin/release/aikoql-macos.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: macos-intel
           path: |
-            target/x86_64-apple-darwin/release/aikoql-mcp
-            target/x86_64-apple-darwin/release/aikoql-mcp-macos.sha256
+            target/x86_64-apple-darwin/release/aikoql
+            target/x86_64-apple-darwin/release/aikoql-macos.sha256
 
   # ── macOS Apple Silicon binary ──────────────────────────────────
   macos-arm:
@@ -432,21 +432,21 @@ jobs:
       # version + Cargo.lock).
       - uses: Swatinem/rust-cache@v2
       - name: Build release
-        run: cargo build --release -p aikoql-mcp
+        run: cargo build --release -p aikoql
       - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
         run: |
-          target/release/aikoql-mcp --version
-          node npm-publish/smoke-mcp.js target/release/aikoql-mcp
+          target/release/aikoql --version
+          node npm-publish/smoke-mcp.js target/release/aikoql
       - name: Generate SHA-256
         run: |
-          shasum -a 256 target/release/aikoql-mcp | cut -d' ' -f1 \
-            > target/release/aikoql-mcp-macos-arm64.sha256
+          shasum -a 256 target/release/aikoql | cut -d' ' -f1 \
+            > target/release/aikoql-macos-arm64.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: macos-arm
           path: |
-            target/release/aikoql-mcp
-            target/release/aikoql-mcp-macos-arm64.sha256
+            target/release/aikoql
+            target/release/aikoql-macos-arm64.sha256
 
   # ── Docker: one native build per architecture (no qemu emulation) ─
   # Each job pushes an arch-suffixed tag; docker-manifest merges them into
@@ -588,19 +588,19 @@ jobs:
           pattern: '!*.dockerbuild'  # skip buildx state artifacts (build-push-action uploads corrupt blobs; they broke this job on v0.1.18)
       - name: Rename + collect
         run: |
-          cp windows/aikoql-mcp.exe           aikoql-mcp.exe
-          cp windows/aikoql-mcp.exe.sha256    aikoql-mcp.exe.sha256
-          cp linux-gnu/aikoql-mcp             aikoql-mcp-linux
-          cp linux-gnu/aikoql-mcp-linux.sha256 aikoql-mcp-linux.sha256
-          cp linux-musl/aikoql-mcp             aikoql-mcp-linux-musl
-          cp linux-musl/aikoql-mcp-linux-musl.sha256 aikoql-mcp-linux-musl.sha256
-          cp macos-intel/aikoql-mcp            aikoql-mcp-macos
-          cp macos-intel/aikoql-mcp-macos.sha256 aikoql-mcp-macos.sha256
-          cp macos-arm/aikoql-mcp              aikoql-mcp-macos-arm64
-          cp macos-arm/aikoql-mcp-macos-arm64.sha256 aikoql-mcp-macos-arm64.sha256
+          cp windows/aikoql.exe                 aikoql.exe
+          cp windows/aikoql.exe.sha256          aikoql.exe.sha256
+          cp linux-gnu/aikoql                   aikoql-linux
+          cp linux-gnu/aikoql-linux.sha256      aikoql-linux.sha256
+          cp linux-musl/aikoql                  aikoql-linux-musl
+          cp linux-musl/aikoql-linux-musl.sha256 aikoql-linux-musl.sha256
+          cp macos-intel/aikoql                 aikoql-macos
+          cp macos-intel/aikoql-macos.sha256    aikoql-macos.sha256
+          cp macos-arm/aikoql                   aikoql-macos-arm64
+          cp macos-arm/aikoql-macos-arm64.sha256 aikoql-macos-arm64.sha256
       - name: Checksums file
         run: |
-          cat aikoql-mcp-*.sha256 > checksums.txt
+          cat aikoql.exe.sha256 aikoql-linux.sha256 aikoql-linux-musl.sha256 aikoql-macos.sha256 aikoql-macos-arm64.sha256 > checksums.txt
           sha256sum checksums.txt > checksums.txt.sha256
       - name: Skip if the release already exists
         id: existing
@@ -619,16 +619,16 @@ jobs:
         with:
           tag_name: v${{ needs.validate-versions.outputs.version }}
           files: |
-            aikoql-mcp.exe
-            aikoql-mcp.exe.sha256
-            aikoql-mcp-linux
-            aikoql-mcp-linux.sha256
-            aikoql-mcp-linux-musl
-            aikoql-mcp-linux-musl.sha256
-            aikoql-mcp-macos
-            aikoql-mcp-macos.sha256
-            aikoql-mcp-macos-arm64
-            aikoql-mcp-macos-arm64.sha256
+            aikoql.exe
+            aikoql.exe.sha256
+            aikoql-linux
+            aikoql-linux.sha256
+            aikoql-linux-musl
+            aikoql-linux-musl.sha256
+            aikoql-macos
+            aikoql-macos.sha256
+            aikoql-macos-arm64
+            aikoql-macos-arm64.sha256
             checksums.txt
             checksums.txt.sha256
           generate_release_notes: true
@@ -804,19 +804,19 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/aikoql-pkg  # npm pack does not create the --pack-destination dir (v0.1.18 npm job failed on ENOENT)
           npm pack --pack-destination /tmp/aikoql-pkg
-          tarball=$(ls /tmp/aikoql-pkg/aikoql-mcp-*.tgz | head -1)
+          tarball=$(ls /tmp/aikoql-pkg/aikoql-aikoql-*.tgz | head -1)
           clean=$(mktemp -d)
           npm install --prefix "$clean" "$tarball" >/dev/null
           cd "$clean"
-          npx aikoql-mcp --version
-          node "$OLDPWD/smoke-mcp.js" npx aikoql-mcp serve "$clean/db"
+          npx @aikoql/aikoql --version
+          node "$OLDPWD/smoke-mcp.js" npx @aikoql/aikoql serve "$clean/db"
       - name: Publish
         working-directory: npm-publish
         run: |
           set -euo pipefail
-          published="$(npm view aikoql-mcp version 2>/dev/null || true)"
+          published="$(npm view @aikoql/aikoql version 2>/dev/null || true)"
           if [ "$published" = "${{ needs.validate-versions.outputs.version }}" ]; then
-            echo "::notice::npm aikoql-mcp@$published already published — skip (rescue over an existing cut)"
+            echo "::notice::npm @aikoql/aikoql@$published already published — skip (rescue over an existing cut)"
             exit 0
           fi
           npm publish --provenance
@@ -825,7 +825,7 @@ jobs:
 
   # ── TypeScript SDK publish — the client, not the plugin (D-13's
   # @aikoql/client ships as TypeScript source: main = src/index.ts, zero
-  # runtime deps). The npm-publish job above only ships aikoql-mcp, so the
+  # runtime deps). The npm-publish job above only ships aikoql, so the
   # SDK itself needs its own leg. Same OIDC provenance as the plugin; the
   # smoke packs the tarball, installs it into a clean prefix and checks the
   # installed package.json version — the exact file the build-derived
@@ -1057,11 +1057,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Build the release server
-        run: cargo build --release -p aikoql-mcp
+        run: cargo build --release -p aikoql
       # the SDK fault matrices need the debug server + fault proxy (as in
       # ci.yml's SDK jobs) — without them they skip, and certify nothing
       - name: Build the fault-matrix binaries
-        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
+        run: cargo build -p aikoql -p aikoql-fault-proxy
       - name: Install syft for the SBOM leg
         run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
       - name: Certify every SDK
@@ -1088,9 +1088,9 @@ jobs:
           V: ${{ needs.validate-versions.outputs.version }}
         run: |
           set -euo pipefail
-          got="$(npm view aikoql-mcp version)"
-          [ "$got" = "$V" ] || { echo "::error::npm aikoql-mcp version '$got' != tag '$V'"; exit 1; }
-          echo "::notice::npm aikoql-mcp@$got == tag"
+          got="$(npm view @aikoql/aikoql version)"
+          [ "$got" = "$V" ] || { echo "::error::npm aikoql version '$got' != tag '$V'"; exit 1; }
+          echo "::notice::npm @aikoql/aikoql@$got == tag"
       - name: PyPI version == tag
         if: needs.pypi-publish.result == 'success'
         env:

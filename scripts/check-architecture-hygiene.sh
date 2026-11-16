@@ -505,7 +505,7 @@ done
 # (one level short; the workflow expression had never been executed
 # anywhere before the push).
 gs=$(sed -n '/^  go-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF")
-if ! printf '%s\n' "$gs" | has '"$PWD/../../../target/release/aikoql-mcp"'; then
+if ! printf '%s\n' "$gs" | has '"$PWD/../../../target/release/aikoql"'; then
   echo "ARCH: the go-sdk job's AIKOQL_MCP_BIN is not pinned at the workspace-root depth (CI-13)" >&2
   fail=1
 fi
@@ -830,13 +830,14 @@ if grep -q '^  python-sdk:' "$CIWF" && \
 fi
 # workflow test 26 — test_java_sdk_job (D-19, SDK plan §28): the Java
 # SDK's surefire suite (real-server pin + fuzz seed sweep included) must
-# run on every PR.
+# run on every PR (through scripts/mvn-retry.sh, which retries only a Maven
+# Central download failure, never a test failure).
 if ! grep -q '^  java-sdk:' "$CIWF"; then
   echo "ARCH: ci.yml lost the java-sdk job (D-19)" >&2
   fail=1
 fi
 if grep -q '^  java-sdk:' "$CIWF" && \
-   ! sed -n '/^  java-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has 'mvn -B test'; then
+   ! sed -n '/^  java-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | has -- 'mvn-retry.sh" -B test'; then
   echo "ARCH: the java-sdk job lost its surefire suite (D-19)" >&2
   fail=1
 fi

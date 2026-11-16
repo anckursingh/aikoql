@@ -2,7 +2,7 @@
 
 Executes the language-neutral vectors from tests/sdk-conformance/ (the §23
 canonical workload + the 13 §7 category dirs) and protocol/test-vectors/
-against a real aikoql-mcp server through this SDK, then checks every
+against a real aikoql server through this SDK, then checks every
 assert/assert_any/expect_error. The expected results are the vectors
 themselves — every SDK produces the same transcript.
 

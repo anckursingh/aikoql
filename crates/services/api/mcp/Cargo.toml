@@ -1,5 +1,5 @@
 [package]
-name = "aikoql-mcp"
+name = "aikoql"
 description = "Aikoql MCP server: the Knowledge Syscall ABI (MRFC-0011 Class A) over Model Context Protocol stdio transport"
 version.workspace = true
 edition.workspace = true
@@ -73,7 +73,7 @@ embedding-openai = ["aikoql-semantic/embedding-openai"]
 [dev-dependencies]
 # Live-connector certification (MVP-QA-001 Suite D/E): tests seed/update rows
 # through the same drivers the providers use, then assert via the kernel crate
-# directly (aikoql-mcp is a binary crate — no lib API to read state back).
+# directly (aikoql is a binary crate — no lib API to read state back).
 aikoql-kernel = { path = "../../../kernel" }
 aikoql-storage-v2 = { path = "../../../storage/aikoql-v2" }
 postgres = "0.19"

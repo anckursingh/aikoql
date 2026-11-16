@@ -28,7 +28,7 @@ def _size(path):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", required=True, help="host:port of aikoql-mcp")
+    ap.add_argument("--db", required=True, help="host:port of aikoql")
     ap.add_argument("--token", required=True, help="TCP access token")
     ap.add_argument("--out", required=True, help="dataset output directory")
     ap.add_argument("--seed", type=int, default=0)

@@ -29,7 +29,7 @@ fn hex(s: &str) -> Vec<u8> {
 }
 
 fn serve(root: &Path, key: Option<&Path>) -> std::process::Child {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aikoql"));
     cmd.arg("serve")
         .arg(root.join("db"))
         .env_remove("AIKOQL_AUDIT_SIGNING_KEY")
@@ -40,7 +40,7 @@ fn serve(root: &Path, key: Option<&Path>) -> std::process::Child {
     if let Some(k) = key {
         cmd.env("AIKOQL_AUDIT_SIGNING_KEY", k);
     }
-    cmd.spawn().expect("spawn aikoql-mcp serve")
+    cmd.spawn().expect("spawn aikoql serve")
 }
 
 /// initialize, `remembers` remembers (so the journal is non-trivial),

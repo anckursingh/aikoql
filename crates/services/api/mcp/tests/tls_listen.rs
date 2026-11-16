@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 type Tls = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_aikoql-mcp")
+    env!("CARGO_BIN_EXE_aikoql")
 }
 
 fn fixture(name: &str) -> String {
@@ -73,7 +73,7 @@ fn serve(db: &Path, args: &[&str], env: &[(&str, String)]) -> Server {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn aikoql-mcp serve");
+        .expect("spawn aikoql serve");
     Server(child)
 }
 

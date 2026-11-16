@@ -71,7 +71,7 @@ storage stats. The same facts are Prometheus series:
 - `deploy/prometheus/aikoql-alerts.yaml` — Prometheus alert rules over
   the series above (plus kubelet volume stats for disk space). Each
   alert links its section of `docs/RUNBOOKS.md`.
-- `aikoql-mcp restore-drill --archive <URL>` restores the archive into
+- `aikoql restore-drill --archive <URL>` restores the archive into
   a scratch directory, opens and checks the copy, prints a JSON report
   and exits 0 only if every check passed. `docs/RUNBOOKS.md` has a
   CronJob for it; `AikoqlRestoreDrillFailed` fires on its failure.

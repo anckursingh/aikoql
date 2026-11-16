@@ -20,12 +20,12 @@ struct McpClient {
 impl McpClient {
     fn start(db: &PathBuf) -> Self {
         let mut exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        exe.push("../../../../target/debug/aikoql-mcp");
+        exe.push("../../../../target/debug/aikoql");
         #[cfg(windows)]
         exe.set_extension("exe");
         assert!(
             exe.exists(),
-            "aikoql-mcp not built at {:?}; run cargo build first",
+            "aikoql not built at {:?}; run cargo build first",
             exe
         );
         // PRR-4/T-45: keep the load-heavy scenarios (m11 creates 150
@@ -41,7 +41,7 @@ impl McpClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn aikoql-mcp");
+            .expect("spawn aikoql");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         McpClient {

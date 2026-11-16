@@ -4,9 +4,9 @@
 
 **Goal:** Register external databases in `aikoql.toml`, introspect them from Studio, store their schema as versioned KOs, propose and (on approval) publish a domain ontology whose classes map to the physical tables, and optionally import chosen containers — all inside PR #31.
 
-**Architecture:** Providers gain richer introspection; a new `sources/` module in `aikoql-mcp` turns a configured source into `ConnectorMetadata` (existing type, extended), persists it (`aikoql:source*` KOs), and builds an ontology draft (new, in `aikoql-ingestion`) that is published through the existing ontology KO + `MappingEntry` machinery. Studio gets one new panel over four REST routes. No new engine; the IR→proposal code is reused and its class-collapse bug fixed.
+**Architecture:** Providers gain richer introspection; a new `sources/` module in `aikoql` turns a configured source into `ConnectorMetadata` (existing type, extended), persists it (`aikoql:source*` KOs), and builds an ontology draft (new, in `aikoql-ingestion`) that is published through the existing ontology KO + `MappingEntry` machinery. Studio gets one new panel over four REST routes. No new engine; the IR→proposal code is reused and its class-collapse bug fixed.
 
-**Tech Stack:** Rust (`aikoql-ingestion`, `aikoql-mcp`, providers, one new crate `aikoql-clickhouse` on `ureq`), Studio vanilla JS, Node/playwright e2e, Python (`sqlite3` stdlib, to build e2e fixtures).
+**Tech Stack:** Rust (`aikoql-ingestion`, `aikoql`, providers, one new crate `aikoql-clickhouse` on `ureq`), Studio vanilla JS, Node/playwright e2e, Python (`sqlite3` stdlib, to build e2e fixtures).
 
 **Spec:** `docs/superpowers/specs/2026-11-07-source-schema-discovery-design.md` (read it first — its "Verified facts" and "Decisions" bind every task).
 
@@ -14,9 +14,9 @@
 
 - **One PR, #31.** Every task lands on `feature/competitor-clickhouse-restamp`. Retitle the PR in T15. No other branch or PR.
 - TDD RED-first: each task = a RED commit (fails on an *assertion*, never a compile error — add the smallest stub) then the GREEN commit. Trailer on every commit: `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
-- The branch ends with the dogfood re-stamp as the tip: `AIKOQL_BIN=<abs path to a built aikoql-mcp> python scripts/dogfood-review-loop.py full --kb <fresh dir>` (add `--kb` if the plugin holds `./kb`), commit `docs/PR6-TDD-DISPOSITIONS.md`, then `bash scripts/check-disposition-head.sh` must pass.
+- The branch ends with the dogfood re-stamp as the tip: `AIKOQL_BIN=<abs path to a built aikoql> python scripts/dogfood-review-loop.py full --kb <fresh dir>` (add `--kb` if the plugin holds `./kb`), commit `docs/PR6-TDD-DISPOSITIONS.md`, then `bash scripts/check-disposition-head.sh` must pass.
 - **Push once, at the end of T15**, after every gate below ran locally. Never push per task; cancel superseded runs; no re-run/probe pushes (GitHub credit is limited).
-- Gates before the push: `cargo fmt --check`; `cargo clippy --workspace --all-targets -- -D warnings` (zero warnings); `cargo test -p aikoql-mcp -p aikoql-ingestion -p aikoql-postgres -p aikoql-mongodb -p aikoql-neo4j -p aikoql-sqlite -p aikoql-clickhouse --no-fail-fast`; Studio e2e `node tests/e2e/studio/run.js`; every `scripts/check-*.sh`; `python3 scripts/bump-version.py --check`. List anything that could not run locally (live Postgres/Mongo/Neo4j cells if Docker is down, Windows, coverage-floor).
+- Gates before the push: `cargo fmt --check`; `cargo clippy --workspace --all-targets -- -D warnings` (zero warnings); `cargo test -p aikoql -p aikoql-ingestion -p aikoql-postgres -p aikoql-mongodb -p aikoql-neo4j -p aikoql-sqlite -p aikoql-clickhouse --no-fail-fast`; Studio e2e `node tests/e2e/studio/run.js`; every `scripts/check-*.sh`; `python3 scripts/bump-version.py --check`. List anything that could not run locally (live Postgres/Mongo/Neo4j cells if Docker is down, Windows, coverage-floor).
 - **Windows-safe code and tests** (the last PR failed Windows on this): never match OS error *text*, classify by `io::ErrorKind`; build paths with `Path::join`; no `\n`-only assumptions in file fixtures; no hard-coded `/tmp`.
 - Live-database tests are env-gated through `connectors::Live::pg()/mongo()/neo4j()` exactly like ONT-001; register any new gated cell in `tests/gated.toml` (`scripts/check-skip-drift.sh` decides). Cells that need only SQLite always run.
 - **No secret ever reaches a KO, an audit line, a REST response, a log line or an error string.** Connection strings are read from the env var named by `url_env` at call time and passed through the existing `imports.rs::redact_uri/redact_secrets`.
@@ -61,7 +61,7 @@
 ## Task protocol (applies to every task; steps below name only what is specific)
 
 - **S1** Write the listed failing tests (assertions as named). **S2** Run the task's test command; it must FAIL on assertions. **S3** Commit `test(<area>): RED — …`. **S4** Implement the listed signatures. **S5** Run the test command (PASS), `cargo clippy -p <crates> --all-targets -- -D warnings`, `cargo fmt --all`. **S6** Commit `feat(<area>): …`.
-- Test commands: ingestion → `cargo test -p aikoql-ingestion --lib <filter>`; mcp unit → `cargo test -p aikoql-mcp --bin aikoql-mcp -- <filter>`; mcp integration → `cargo test -p aikoql-mcp --test <name>`. PATH: `export PATH="$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:$PATH"`.
+- Test commands: ingestion → `cargo test -p aikoql-ingestion --lib <filter>`; mcp unit → `cargo test -p aikoql --bin aikoql -- <filter>`; mcp integration → `cargo test -p aikoql --test <name>`. PATH: `export PATH="$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:$PATH"`.
 
 ---
 
@@ -73,7 +73,7 @@
 
 - [ ] Tests (ingestion): `class_name_for_container` maps `customers→Customer`, `order_items→OrderItem`, `Categories→Category`, `address→Address` (no stripping "ss"), `2024_sales→T2024Sale`, `user data→UserData`, `a-b→AB`, `""→Thing`; `connector_metadata_to_ir_gives_each_container_its_own_class` (3 containers → `discover_ontology_from_ir(...).classes` names `{Customer, Order, Product}`); `source_kind_is_not_the_class` (no class contains `Table`/`Collection`/`NodeLabel`); the entity `mentions` still say `Table 'customers'…`.
 - [ ] Implement: `type_hint: Some(class_name_for_container(&container.name))`; keep `connector_type`/physical name in `mentions` and in the entity name (`{label}.{container}`), unchanged. Update ONT-001 and the unit test at :312 to the new class names.
-- [ ] Run: `cargo test -p aikoql-ingestion --lib connector_bridge` and `cargo test -p aikoql-mcp --test connector_certification ont001` (live cells skip without DBs; the SQLite-free assertions still run).
+- [ ] Run: `cargo test -p aikoql-ingestion --lib connector_bridge` and `cargo test -p aikoql --test connector_certification ont001` (live cells skip without DBs; the SQLite-free assertions still run).
 - [ ] **Fuzz/adversarial (T1):** `class_name_fuzz_never_panics_and_is_a_valid_identifier` — 20k seeded strings from the hostile pool: no panic; result non-empty, starts alphabetic, contains only alphanumerics, `len() <= input.len() + 1`, deterministic (same input → same output).
 
 ### Task 2: Richer metadata, fingerprint and diff
@@ -246,7 +246,7 @@ KO types (all tenant = `src.tenant`, `Origin::System`, ACL owner `system`): `aik
 **Behaviour:** on open call `GET /api/v1/sources`; one card per source (name, kind, tenant, last snapshot fingerprint + container count, `truncated` badge) with buttons **Discover** (schema only), **Preview ontology**, **Import…** (container checkboxes, hidden unless admin session). Preview shows classes with `New`/`Possible duplicate` badges, mappings, warnings, and per-pair **Merge** checkboxes; **Publish** sends `fingerprints` + `expected_version` + chosen `merges`; a 409 shows "Schema changed — preview again". Every dynamic value through `esc()`; delegated handlers only; no literal `token=`; errors rendered as text. When no `[[sources]]` exist: "No sources configured — see docs/SOURCES.md".
 
 - [ ] Tests: the existing `studio_js_escapes_untrusted_values_before_markup` lint and `studio_handlers_take_data_from_dataset_*` must pass (use `esc(…)` operands or inline `.map(… => '<…').join('')`, as the Ask panel does). E2E (extend `tests/e2e/studio/run.js`; the harness builds two SQLite files with `python3 -c "import sqlite3…"` — `customers`/`orders` and `clients` — and writes two `[[sources]]` plus their env vars into the server's environment): `Data Sources lists both sources`; `Discover shows the container count`; `Preview shows Customer/Order classes, a possible-duplicate for Customer vs clients`; `Publish with a merge makes MATCH Customer return rows from both` (after Import); `a hostile table name is rendered inertly` (a SQLite table named `<img src=x onerror=window.__pwned=1>`); `no CSP violation / console error on the panel`; the existing sweep must still click every control (empty-state buttons must *react*, not be disabled).
-- [ ] Implement; run `cargo build -p aikoql-mcp` before the e2e (assets are embedded).
+- [ ] Implement; run `cargo build -p aikoql` before the e2e (assets are embedded).
 - [ ] **Fuzz/adversarial (T11):** the e2e feeds ten hostile container/column/source names (markup, quotes, `javascript:`, 10 000 chars, RTL) and asserts nothing executes, nothing overflows the layout container, and no CSP/console error appears; keyboard-only operation of Discover → Preview → Publish.
 
 ### Task 12: The production-workflow test
@@ -255,7 +255,7 @@ KO types (all tenant = `src.tenant`, `Origin::System`, ACL owner `system`): `aik
 
 - [ ] One always-on test `sqlite_two_sources_end_to_end`: configure two SQLite sources (`crm` with `customers(id,email)`, `shop` with `clients(id,email_address)`) ⇒ `discover` both ⇒ `snapshot` KOs exist ⇒ `ontology preview` flags `Customer` vs `Client` not merged ⇒ `apply` with a `merges: [["crm.customers","shop.clients"]]` ⇒ `import` both ⇒ `POST /api/v1/aikoql {"query":"MATCH Customer RETURN *"}` returns the rows of both sources ⇒ alter `crm.customers` (new column) ⇒ re-discover shows the diff and the ontology version is unchanged. One gated test `postgres_mongo_neo4j_end_to_end` behind `Live::*` with the same shape using the ONT-001 fixtures (register in `tests/gated.toml` with an `ungated_by` home if the skip-drift gate demands).
 - [ ] Assert at the end that the server log and every response body contain none of the env-var *values* (the DSNs), and that `GET /api/v1/sources` as another tenant returns `[]`.
-- [ ] Run: `cargo test -p aikoql-mcp --test source_discovery`.
+- [ ] Run: `cargo test -p aikoql --test source_discovery`.
 - [ ] **Chaos (T12):** in the always-on test, delete the SQLite file mid-flow ⇒ discover returns a clean 502, state unchanged; run discover/preview/apply/import concurrently from 4 threads ⇒ final ontology and KO counts equal the serial result.
 
 ### Task 13: Adversarial and fuzz capstone

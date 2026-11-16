@@ -9,7 +9,7 @@ API key, no judge: recall_any@k (any evidence session in the top k),
 recall_all@k (all of them) and NDCG@k, k in {5, 10}, over the non-abstention
 questions (ids ending in _abs have no evidence session).
 
-The path measured is the product's: `aikoql-mcp serve` over stdio. Every
+The path measured is the product's: `aikoql serve` over stdio. Every
 user turn of a question's haystack is stored with `memory_store` as a
 private memory of a per-question subject (the kernel ACL isolates the
 questions inside one store); the question runs as `memory_search` for that
@@ -202,7 +202,7 @@ if __name__ == "__main__":
     ap.add_argument("data")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--out")
-    ap.add_argument("--binary", default="target/release/aikoql-mcp")
+    ap.add_argument("--binary", default="target/release/aikoql")
     ap.add_argument("--shards", type=int, default=1)
     ap.add_argument("--shard", type=int, default=0)
     run(ap.parse_args())

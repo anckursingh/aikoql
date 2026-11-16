@@ -16,7 +16,7 @@
 //! $env:AIKOQL_TEST_NEO4J_URI   = "http://localhost:7474"
 //! $env:AIKOQL_TEST_NEO4J_USER  = "neo4j"
 //! $env:AIKOQL_TEST_NEO4J_PASSWORD = "password-dev-only"
-//! cargo test -p aikoql-mcp --test connector_certification -- --nocapture
+//! cargo test -p aikoql --test connector_certification -- --nocapture
 //! ```
 
 use std::path::PathBuf;
@@ -213,7 +213,7 @@ pub fn temp_db(suffix: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// Freshest-built aikoql-mcp binary (same resolution as McpClient::start in
+/// Freshest-built aikoql binary (same resolution as McpClient::start in
 /// mcp_real_world.rs — a stale release binary would silently test old code).
 pub fn binary_path() -> PathBuf {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -226,9 +226,9 @@ pub fn binary_path() -> PathBuf {
         .parent()
         .unwrap();
     let exe = if cfg!(windows) {
-        "aikoql-mcp.exe"
+        "aikoql.exe"
     } else {
-        "aikoql-mcp"
+        "aikoql"
     };
     let release_bin = workspace_root.join("target/release").join(exe);
     let debug_bin = workspace_root.join("target/debug").join(exe);
@@ -245,11 +245,7 @@ pub fn binary_path() -> PathBuf {
         (true, false) => release_bin,
         _ => debug_bin,
     };
-    assert!(
-        bin.exists(),
-        "aikoql-mcp binary not built: {}",
-        bin.display()
-    );
+    assert!(bin.exists(), "aikoql binary not built: {}", bin.display());
     eprintln!("Using binary: {}", bin.display());
     bin
 }
@@ -260,7 +256,7 @@ pub struct ImportOut {
     pub stderr: String,
 }
 
-/// Run `aikoql-mcp <args...>` (args start with the subcommand, e.g.
+/// Run `aikoql <args...>` (args start with the subcommand, e.g.
 /// `["import","postgres",conn_str,db]`); captures stdout+stderr.
 pub fn run_import(args: &[&str]) -> ImportOut {
     let bin = binary_path();
@@ -474,7 +470,7 @@ pub fn scan_type(
 // MCP query client (TDD items 12..13)
 // ---------------------------------------------------------------------------
 
-/// Minimal MCP stdio client — spawns `aikoql-mcp serve <db>`, completes the
+/// Minimal MCP stdio client — spawns `aikoql serve <db>`, completes the
 /// JSON-RPC initialize handshake, and exposes one `call` (tool name + args).
 /// ponytail: a third copy of mcp_real_world/mcp_stdio's private client; those
 /// predate this harness and consolidating them is churn outside the TDD items.

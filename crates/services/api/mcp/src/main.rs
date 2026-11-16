@@ -1,6 +1,6 @@
 #![recursion_limit = "512"]
 #![allow(clippy::too_many_arguments)]
-//! aikoql-mcp — MCP server for the Knowledge Kernel.
+//! aikoql — the AIKOQL server (MCP, REST, native protocol) for the Knowledge Kernel.
 //!
 //! Exposes the MRFC-0011 Class A syscalls as MCP tools over the stdio
 //! transport (newline-delimited JSON-RPC 2.0). `notify` is intentionally not
@@ -257,7 +257,7 @@ fn main() {
 
     // Handle --version and --help before anything else.
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("aikoql-mcp {}", env!("CARGO_PKG_VERSION"));
+        println!("aikoql {}", env!("CARGO_PKG_VERSION"));
         return;
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {

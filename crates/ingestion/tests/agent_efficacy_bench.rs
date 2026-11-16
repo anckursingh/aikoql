@@ -117,7 +117,7 @@ const TASKS: &[Task] = &[
     Task {
         kind: "where",
         question: "Which crate package owns the MCP tool definitions?",
-        golden: "aikoql-mcp",
+        golden: "aikoql",
     },
     Task {
         kind: "why",

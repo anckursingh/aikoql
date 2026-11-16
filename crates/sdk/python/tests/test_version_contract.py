@@ -11,7 +11,7 @@ SDK constant follows (the same self-pinning pattern as test_version_parity).
 The contract lives in docs/version-compatibility.md.
 
 Requires: the package importable (maturin develop or PYTHONPATH) and the
-aikoql-mcp binary built (cargo build -p aikoql-mcp) for the happy path.
+aikoql binary built (cargo build -p aikoql) for the happy path.
 Run: pytest tests/test_version_contract.py -v
 """
 

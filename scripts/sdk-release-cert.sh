@@ -3,7 +3,7 @@
 # conformance, fuzz smoke, real-server integration, install smokes, the
 # example, and the SBOM. ONE script so the sdk-release-cert job in
 # release.yml and a local run certify identically.
-#   Requires: the release server built at target/release/aikoql-mcp, the
+#   Requires: the release server built at target/release/aikoql, the
 #   toolchains on PATH (python3, go, JDK 17 + mvn, node >= 24, rust), and
 #   syft on PATH (the job installs it). The fuzz smokes set the runtime
 #   floor — this is the long pole of the release, not a unit gate.
@@ -11,7 +11,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-BIN="$(realpath "${AIKOQL_MCP_BIN:-$root/target/release/aikoql-mcp}")"
+BIN="$(realpath "${AIKOQL_MCP_BIN:-$root/target/release/aikoql}")"
 [ -x "$BIN" ] || { echo "sdk-release-cert: no release server at $BIN — build it first" >&2; exit 1; }
 export AIKOQL_MCP_BIN="$BIN"
 
@@ -88,12 +88,12 @@ say "6/8 typescript suite + npm install smoke"
 ( cd npm-publish
   mkdir -p /tmp/aikoql-pkg          # npm pack does not create --pack-destination
   npm pack --pack-destination /tmp/aikoql-pkg
-  tarball=$(ls /tmp/aikoql-pkg/aikoql-mcp-*.tgz | head -1)
+  tarball=$(ls /tmp/aikoql-pkg/aikoql-aikoql-*.tgz | head -1)
   clean=$(mktemp -d)
   npm install --prefix "$clean" "$tarball" >/dev/null
   cd "$clean"
-  AIKOQL_BINARY="$BIN" npx aikoql-mcp --version
-  AIKOQL_BINARY="$BIN" node "$OLDPWD/smoke-mcp.js" npx aikoql-mcp serve "$clean/db" )
+  AIKOQL_BINARY="$BIN" npx @aikoql/aikoql --version
+  AIKOQL_BINARY="$BIN" node "$OLDPWD/smoke-mcp.js" npx @aikoql/aikoql serve "$clean/db" )
 done_
 
 # 7. Rust — the real-server suite + the 8 cargo-fuzz smokes (cargo-fuzz was

@@ -2,7 +2,7 @@
 
 Contract version: 1
 
-The machine-readable error surface of `aikoql-mcp`. Every error an agent can
+The machine-readable error surface of `aikoql`. Every error an agent can
 receive is one of the codes below — numbered wire codes on the JSON-RPC
 frame, MRFC-0040 envelope codes inside tool results, kernel display tags as
 message-text prefixes, and one SDK-side code raised client-side.

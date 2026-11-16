@@ -58,8 +58,8 @@ The ingest engine classifies every file:
 ### npm (recommended for MCP clients)
 
 ```bash
-npm install -g aikoql-mcp
-aikoql-mcp --version
+npm install -g @aikoql/aikoql
+aikoql --version
 ```
 
 First run downloads the pinned platform binary from GitHub Releases and
@@ -71,44 +71,44 @@ aikoql ships as a single, self-contained binary. No dependencies, no installers.
 
 **Windows:**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp.exe
-.\aikoql-mcp.exe --help
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql.exe
+.\aikoql.exe --help
 ```
 
 **Linux (static musl — any distro):**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp-linux-musl
-chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql-mcp
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql-linux-musl
+chmod +x aikoql-linux-musl && mv aikoql-linux-musl /usr/local/bin/aikoql
 ```
 
-A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dynamic linking.
+A glibc build (`aikoql-linux`) is also available for distros that prefer dynamic linking.
 
 **macOS (Apple Silicon / Intel):**
 ```bash
 # Apple Silicon
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp-macos-arm64
-chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql-mcp
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql-macos-arm64
+chmod +x aikoql-macos-arm64 && mv aikoql-macos-arm64 /usr/local/bin/aikoql
 
 # Intel
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp-macos
-chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql-mcp
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql-macos
+chmod +x aikoql-macos && mv aikoql-macos /usr/local/bin/aikoql
 ```
 
 ### Docker (multi-arch: amd64 + arm64)
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.4.0
+docker pull ghcr.io/anckursingh/aikoql:0.5.0
 
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.4.0
+  ghcr.io/anckursingh/aikoql:0.5.0
 ```
 
 `AIKOQL_TCP_TOKEN` is required — TCP auth is fail-closed
 (`TOKEN[:TENANT[:ROLES]]`). State lives under the `/data` volume (the
 `aikoql-v2` database directory, models in `/data/models`, agent memory in
-`/data/memory`). Tags: `0.4.0` (pin this), `0.3`, `latest`.
+`/data/memory`). Tags: `0.5.0` (pin this), `0.3`, `latest`.
 
 Without TLS the server binds loopback-only inside the container (plaintext
 bearer tokens never leave it), so published ports don't reach it — probe and
@@ -134,7 +134,7 @@ docker run -d --name aikoql -p 9090:9090 \
   -e AIKOQL_TLS_CERT=/certs/server.pem -e AIKOQL_TLS_KEY=/certs/server.key \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.4.0
+  ghcr.io/anckursingh/aikoql:0.5.0
 ```
 
 Clients connect over TLS (Rust `Client::dial_tls`, Python `tls=`, Go
@@ -152,8 +152,8 @@ stdio from the host, use the npm binary instead. A compose file
 ### Verify
 
 ```bash
-aikoql-mcp --version
-# aikoql-mcp 0.4.0
+aikoql --version
+# aikoql 0.5.0
 ```
 
 ## 5-Second Start
@@ -161,7 +161,7 @@ aikoql-mcp --version
 ### Interactive Shell
 
 ```bash
-aikoql-mcp shell :memory:
+aikoql shell :memory:
 ```
 ```
 aikoql> CREATE Person name == "Alice", role == "Architect"
@@ -181,7 +181,7 @@ Bye.
 ### MCP Server (stdio mode)
 
 ```bash
-aikoql-mcp serve ./my-knowledge
+aikoql serve ./my-knowledge
 ```
 
 Connects via stdin/stdout — perfect for Claude Code, VS Code, and other MCP clients. Add to your MCP config:
@@ -190,7 +190,7 @@ Connects via stdin/stdout — perfect for Claude Code, VS Code, and other MCP cl
 {
   "mcpServers": {
     "aikoql": {
-      "command": "aikoql-mcp",
+      "command": "aikoql",
       "args": ["serve", "./my-knowledge"]
     }
   }
@@ -203,7 +203,7 @@ TCP mode requires at least one auth token (`TOKEN[:TENANT[:ROLE1,ROLE2[,agent=NA
 pass it as `params.token` to MCP `initialize`.
 
 ```bash
-aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token mytoken:acme:admin \
+aikoql serve --listen 127.0.0.1:9090 --tcp-token mytoken:acme:admin \
   --metrics-addr 127.0.0.1:9091 ./my-knowledge
 ```
 
@@ -235,7 +235,7 @@ curl http://127.0.0.1:9091/api/v1/schema
 
 ```bash
 # Open a database (fresh path = aikoql-v2 directory)
-aikoql-mcp shell ./kb
+aikoql shell ./kb
 
 # Create objects
 aikoql> CREATE Employee name == "Alice", dept == "Engineering", salary == 125000
@@ -257,7 +257,7 @@ never downloads models at runtime unless you ask it to. Install the bundled
 model once:
 
 ```bash
-aikoql-mcp model install
+aikoql model install
 ```
 
 or let `serve` fetch it on its first start with `AIKOQL_MODEL_AUTO_INSTALL=1`
@@ -294,7 +294,7 @@ the same MCP wire, so a plain MCP client also works:
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 const client = new Client({ name: 'my-agent', version: '1.0.0' });
-await client.connect(new StdioClientTransport({ command: 'aikoql-mcp', args: ['serve', './kb'] }));
+await client.connect(new StdioClientTransport({ command: 'aikoql', args: ['serve', './kb'] }));
 const result = await client.callTool({ name: 'remember', arguments: { type_name: 'Note', properties: { body: 'Hello' } } });
 ```
 

@@ -270,7 +270,7 @@ kernel = aikoql_py.Kernel.open("./kb.redb")
 # vs
 
 import subprocess, json  # MCP — talks to a server
-proc = subprocess.Popen(["aikoql-mcp", "serve", "./kb.redb"], ...)
+proc = subprocess.Popen(["aikoql", "serve", "./kb.redb"], ...)
 ```
 
 **Fix:** Unify. Ship ONE `aikoql` Python package that supports both modes transparently:

@@ -335,7 +335,7 @@ pub(crate) const DEFAULT_DB_PATH: &str = "./aikoql-v2";
 
 /// Layering: defaults → TOML → env → CLI. `subcmd == Some("serve")` skips
 /// the `serve` token when scanning flags/positionals (mirrors the old main.rs
-/// loop); bare `aikoql-mcp [DB]` still works.
+/// loop); bare `aikoql [DB]` still works.
 pub(crate) fn load(
     args: &[String],
     subcmd: Option<&str>,
@@ -614,7 +614,7 @@ pub(crate) fn load(
     let mut cli_tcp_tokens: Vec<String> = Vec::new();
     let mut i = if subcmd == Some("serve") {
         let Some(idx) = subcmd_idx else {
-            return Err("Usage: aikoql-mcp serve [OPTIONS] [DB]".into());
+            return Err("Usage: aikoql serve [OPTIONS] [DB]".into());
         };
         idx + 2
     } else {
@@ -864,10 +864,7 @@ pub(crate) fn load(
                 None => return Err("--max-connections requires a value".into()),
             },
             _ if args[i].starts_with("--") => {
-                return Err(format!(
-                    "Unknown option: {} (run `aikoql-mcp help`)",
-                    args[i]
-                ));
+                return Err(format!("Unknown option: {} (run `aikoql help`)", args[i]));
             }
             _ => {
                 cfg.db_path = args[i].clone();
@@ -965,7 +962,7 @@ mod tests {
 
     #[test]
     fn defaults_only() {
-        let cfg = load_bare(&argv(&["aikoql-mcp"])).unwrap();
+        let cfg = load_bare(&argv(&["aikoql"])).unwrap();
         assert_eq!(cfg.db_path, DEFAULT_DB_PATH);
         assert!(cfg.listen_addr.is_none());
         assert!(cfg.embedding_provider.is_none());
@@ -992,7 +989,7 @@ model = "mxbai"
 level = "debug"
 "#,
         );
-        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap();
+        let cfg = load_t(&argv(&["aikoql", "--config", &p]), None, None).unwrap();
         assert_eq!(cfg.listen_addr.as_deref(), Some("127.0.0.1:7777"));
         assert_eq!(cfg.tcp_tokens.len(), 2);
         assert_eq!(cfg.db_path, "/data/kb");
@@ -1005,7 +1002,7 @@ level = "debug"
     #[test]
     fn toml_candle_provider_maps_to_default() {
         let p = tmp_toml("[embedding]\nprovider = \"candle\"\n");
-        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap();
+        let cfg = load_t(&argv(&["aikoql", "--config", &p]), None, None).unwrap();
         assert!(cfg.embedding_provider.is_none());
     }
 
@@ -1013,7 +1010,7 @@ level = "debug"
     fn http_and_ollama_providers_map_to_http_adapter() {
         for name in ["http", "ollama"] {
             let p = tmp_toml(&format!("[embedding]\nprovider = \"{name}\"\n"));
-            let cfg = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap();
+            let cfg = load_t(&argv(&["aikoql", "--config", &p]), None, None).unwrap();
             assert_eq!(cfg.embedding_provider.as_deref(), Some("openai"));
         }
     }
@@ -1021,7 +1018,7 @@ level = "debug"
     #[test]
     fn unknown_toml_provider_rejected() {
         let p = tmp_toml("[embedding]\nprovider = \"gemini\"\n");
-        let err = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap_err();
+        let err = load_t(&argv(&["aikoql", "--config", &p]), None, None).unwrap_err();
         assert!(err.contains("candle") && err.contains("http") && err.contains("ollama"));
     }
 
@@ -1029,7 +1026,7 @@ level = "debug"
     fn env_http_provider_maps_to_http_adapter() {
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_EMBEDDING_PROVIDER", "http");
-            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            let r = load(&argv(&["aikoql"]), None, None);
             std::env::remove_var("AIKOQL_EMBEDDING_PROVIDER");
             r
         })
@@ -1040,7 +1037,7 @@ level = "debug"
     #[test]
     fn cli_provider_ollama_maps_and_unknown_rejected() {
         let cfg = load_t(
-            &argv(&["aikoql-mcp", "--embedding-provider", "ollama"]),
+            &argv(&["aikoql", "--embedding-provider", "ollama"]),
             None,
             None,
         )
@@ -1049,7 +1046,7 @@ level = "debug"
         // Unknown values are rejected now — the old loop silently fell back to
         // candle (MVP-008/MVP-009: no silent provider swaps).
         let err = load_t(
-            &argv(&["aikoql-mcp", "--embedding-provider", "gemini"]),
+            &argv(&["aikoql", "--embedding-provider", "gemini"]),
             None,
             None,
         )
@@ -1062,7 +1059,7 @@ level = "debug"
         let p = tmp_toml("[server]\nlisten = \"127.0.0.1:7777\"\n");
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_LISTEN", "127.0.0.1:8888");
-            let r = load(&argv(&["aikoql-mcp", "--config", &p]), None, None);
+            let r = load(&argv(&["aikoql", "--config", &p]), None, None);
             std::env::remove_var("AIKOQL_LISTEN");
             r
         })
@@ -1076,7 +1073,7 @@ level = "debug"
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_LISTEN", "127.0.0.1:8888");
             let r = load(
-                &argv(&["aikoql-mcp", "--config", &p, "--listen", "0.0.0.0:9999"]),
+                &argv(&["aikoql", "--config", &p, "--listen", "0.0.0.0:9999"]),
                 None,
                 None,
             );
@@ -1091,7 +1088,7 @@ level = "debug"
     fn tcp_token_env_sets_single_token() {
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_TCP_TOKEN", "tok:acme:admin");
-            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            let r = load(&argv(&["aikoql"]), None, None);
             std::env::remove_var("AIKOQL_TCP_TOKEN");
             r
         })
@@ -1108,7 +1105,7 @@ level = "debug"
         let p = tmp_toml("[server]\ntcp_tokens = [\"old:acme:viewer\"]\n");
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_TCP_TOKEN", "new:acme:admin");
-            let r = load(&argv(&["aikoql-mcp", "--config", &p]), None, None);
+            let r = load(&argv(&["aikoql", "--config", &p]), None, None);
             std::env::remove_var("AIKOQL_TCP_TOKEN");
             r
         })
@@ -1122,7 +1119,7 @@ level = "debug"
             std::env::set_var("AIKOQL_TCP_TOKEN", "env:acme:admin");
             let r = load(
                 &argv(&[
-                    "aikoql-mcp",
+                    "aikoql",
                     "--config",
                     &p,
                     "--tcp-token",
@@ -1157,7 +1154,7 @@ level = "debug"
         let f = tmp_token_file("  tok:acme:admin \n");
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_TCP_TOKEN_FILE", &f);
-            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            let r = load(&argv(&["aikoql"]), None, None);
             std::env::remove_var("AIKOQL_TCP_TOKEN_FILE");
             r
         })
@@ -1172,7 +1169,7 @@ level = "debug"
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_TCP_TOKEN_FILE", &f);
             std::env::set_var("AIKOQL_TCP_TOKEN", "inline:acme:viewer");
-            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            let r = load(&argv(&["aikoql"]), None, None);
             std::env::remove_var("AIKOQL_TCP_TOKEN_FILE");
             std::env::remove_var("AIKOQL_TCP_TOKEN");
             r
@@ -1189,7 +1186,7 @@ level = "debug"
         let _ = std::fs::remove_file(&f);
         let err = load_with_env(|| {
             std::env::set_var("AIKOQL_TCP_TOKEN_FILE", &f);
-            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            let r = load(&argv(&["aikoql"]), None, None);
             std::env::remove_var("AIKOQL_TCP_TOKEN_FILE");
             r
         })
@@ -1202,7 +1199,7 @@ level = "debug"
         let f = tmp_token_file("   \n");
         let err = load_with_env(|| {
             std::env::set_var("AIKOQL_TCP_TOKEN_FILE", &f);
-            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            let r = load(&argv(&["aikoql"]), None, None);
             std::env::remove_var("AIKOQL_TCP_TOKEN_FILE");
             r
         })
@@ -1214,13 +1211,13 @@ level = "debug"
     #[test]
     fn unknown_toml_key_rejected() {
         let p = tmp_toml("[server]\nbogus_key = 1\n");
-        let err = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap_err();
+        let err = load_t(&argv(&["aikoql", "--config", &p]), None, None).unwrap_err();
         assert!(err.contains("bogus_key"), "got: {err}");
     }
 
     #[test]
     fn encryption_defaults_disabled() {
-        let cfg = load_bare(&argv(&["aikoql-mcp"])).unwrap();
+        let cfg = load_bare(&argv(&["aikoql"])).unwrap();
         assert!(!cfg.encryption.enabled);
         assert_eq!(cfg.encryption.key_path, "./aikoql.key");
         assert!(cfg.encryption.passphrase.is_none());
@@ -1253,7 +1250,7 @@ passphrase = "from-toml"
 employee = ["salary", "ssn"]
 "#,
         );
-        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap();
+        let cfg = load_t(&argv(&["aikoql", "--config", &p]), None, None).unwrap();
         assert!(cfg.encryption.enabled);
         assert_eq!(cfg.encryption.key_path, "/k/kf");
         assert_eq!(cfg.encryption.passphrase.as_deref(), Some("from-toml"));
@@ -1268,7 +1265,7 @@ employee = ["salary", "ssn"]
         let p = tmp_toml("[encryption]\nenabled = true\npassphrase = \"from-toml\"\n");
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_PASSPHRASE", "from-env");
-            let r = load(&argv(&["aikoql-mcp", "--config", &p]), None, None);
+            let r = load(&argv(&["aikoql", "--config", &p]), None, None);
             std::env::remove_var("AIKOQL_PASSPHRASE");
             r
         })
@@ -1281,14 +1278,14 @@ employee = ["salary", "ssn"]
     fn the_log_file_is_configurable_and_defaults_to_beside_the_database() {
         let plain = tmp_toml("[logging]\nlevel = \"info\"\n");
         assert_eq!(
-            load_t(&argv(&["aikoql-mcp", "--config", &plain]), None, None)
+            load_t(&argv(&["aikoql", "--config", &plain]), None, None)
                 .unwrap()
                 .log_file,
             None
         );
         let set = tmp_toml("[logging]\nfile = \"/var/log/aikoql/server.log\"\n");
         assert_eq!(
-            load_t(&argv(&["aikoql-mcp", "--config", &set]), None, None)
+            load_t(&argv(&["aikoql", "--config", &set]), None, None)
                 .unwrap()
                 .log_file
                 .as_deref(),
@@ -1296,7 +1293,7 @@ employee = ["salary", "ssn"]
         );
         let off = tmp_toml("[logging]\nfile = \"off\"\n");
         assert_eq!(
-            load_t(&argv(&["aikoql-mcp", "--config", &off]), None, None)
+            load_t(&argv(&["aikoql", "--config", &off]), None, None)
                 .unwrap()
                 .log_file
                 .as_deref(),
@@ -1305,7 +1302,7 @@ employee = ["salary", "ssn"]
         // env beats the file
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_LOG_FILE", "/env/aikoql.log");
-            let r = load(&argv(&["aikoql-mcp", "--config", &set]), None, None);
+            let r = load(&argv(&["aikoql", "--config", &set]), None, None);
             std::env::remove_var("AIKOQL_LOG_FILE");
             r
         })
@@ -1316,7 +1313,7 @@ employee = ["salary", "ssn"]
     #[test]
     fn bad_log_level_rejected() {
         let p = tmp_toml("[logging]\nlevel = \"verbose\"\n");
-        let err = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap_err();
+        let err = load_t(&argv(&["aikoql", "--config", &p]), None, None).unwrap_err();
         assert!(err.contains("logging.level"), "got: {err}");
     }
 
@@ -1329,13 +1326,7 @@ employee = ["salary", "ssn"]
             std::env::set_var("AIKOQL_DB", "/env/db");
             std::env::set_var("AIKOQL_EMBEDDING_PROVIDER", "openai");
             let r = load(
-                &argv(&[
-                    "aikoql-mcp",
-                    "--config",
-                    &p,
-                    "--metrics-addr",
-                    "127.0.0.1:2000",
-                ]),
+                &argv(&["aikoql", "--config", &p, "--metrics-addr", "127.0.0.1:2000"]),
                 None,
                 None,
             );
@@ -1351,29 +1342,29 @@ employee = ["salary", "ssn"]
 
     #[test]
     fn ingestion_policy_from_toml() {
-        let d = load_bare(&argv(&["aikoql-mcp"])).unwrap().ingestion_policy;
+        let d = load_bare(&argv(&["aikoql"])).unwrap().ingestion_policy;
         assert_eq!(d, aikoql_ingestion::ProcessingPolicy::default());
         let p = tmp_toml(
             "[ingestion]\nmax_pages = 10\nmax_image_dimension = 4000\nenable_ocr = false\nmax_ocr_seconds = 30\n",
         );
-        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap();
+        let cfg = load_t(&argv(&["aikoql", "--config", &p]), None, None).unwrap();
         assert_eq!(cfg.ingestion_policy.max_pages, 10);
         assert_eq!(cfg.ingestion_policy.max_image_dimension, 4000);
         assert!(!cfg.ingestion_policy.enable_ocr);
         assert_eq!(cfg.ingestion_policy.max_ocr_seconds, 30);
         assert_eq!(cfg.ingestion_policy.max_image_count, d.max_image_count);
         let bad = tmp_toml("[ingestion]\nmax_pagez = 10\n");
-        assert!(load_t(&argv(&["aikoql-mcp", "--config", &bad]), None, None).is_err());
+        assert!(load_t(&argv(&["aikoql", "--config", &bad]), None, None).is_err());
         let zero = tmp_toml("[ingestion]\nmax_pages = 0\n");
         assert!(
-            load_t(&argv(&["aikoql-mcp", "--config", &zero]), None, None).is_err(),
+            load_t(&argv(&["aikoql", "--config", &zero]), None, None).is_err(),
             "a zero page limit would refuse every document"
         );
     }
 
     #[test]
     fn chat_config_absent_means_disabled() {
-        assert!(load_bare(&argv(&["aikoql-mcp"])).unwrap().chat.is_none());
+        assert!(load_bare(&argv(&["aikoql"])).unwrap().chat.is_none());
     }
 
     #[test]
@@ -1381,7 +1372,7 @@ employee = ["salary", "ssn"]
         let p = tmp_toml(
             "[chat]\nurl = \"http://127.0.0.1:8080\"\nmodel = \"qwen\"\napi_key_env = \"CHAT_KEY\"\ntimeout_secs = 5\n",
         );
-        let c = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None)
+        let c = load_t(&argv(&["aikoql", "--config", &p]), None, None)
             .unwrap()
             .chat
             .unwrap();
@@ -1390,7 +1381,7 @@ employee = ["salary", "ssn"]
         assert_eq!(c.api_key_env.as_deref(), Some("CHAT_KEY"));
         assert_eq!(c.timeout_secs, 5);
         let d = tmp_toml("[chat]\nurl = \"https://x\"\nmodel = \"m\"\n");
-        let c = load_t(&argv(&["aikoql-mcp", "--config", &d]), None, None)
+        let c = load_t(&argv(&["aikoql", "--config", &d]), None, None)
             .unwrap()
             .chat
             .unwrap();
@@ -1400,7 +1391,7 @@ employee = ["salary", "ssn"]
     #[test]
     fn chat_config_rejects_typo_key() {
         let p = tmp_toml("[chat]\nurl = \"http://x\"\nmodle = \"x\"\n");
-        let e = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap_err();
+        let e = load_t(&argv(&["aikoql", "--config", &p]), None, None).unwrap_err();
         assert!(e.contains("modle"), "error should name the key: {e}");
     }
 
@@ -1413,7 +1404,7 @@ employee = ["salary", "ssn"]
         ] {
             let p = tmp_toml(&format!("[chat]\n{body}"));
             assert!(
-                load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).is_err(),
+                load_t(&argv(&["aikoql", "--config", &p]), None, None).is_err(),
                 "should reject: {body}"
             );
         }
@@ -1421,10 +1412,7 @@ employee = ["salary", "ssn"]
 
     #[test]
     fn sources_absent_means_none() {
-        assert!(load_bare(&argv(&["aikoql-mcp"]))
-            .unwrap()
-            .sources
-            .is_empty());
+        assert!(load_bare(&argv(&["aikoql"])).unwrap().sources.is_empty());
     }
 
     #[test]
@@ -1432,30 +1420,27 @@ employee = ["salary", "ssn"]
         let ok = tmp_toml(
             "[[sources]]\nname = \"crm\"\nkind = \"postgres\"\nurl_env = \"CRM_URL\"\ntenant = \"acme\"\n\n[[sources]]\nname = \"logs\"\nkind = \"mongodb\"\nurl_env = \"LOGS_URI\"\ndatabase = \"logs\"\nsample_limit = 50\n",
         );
-        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &ok]), None, None).unwrap();
+        let cfg = load_t(&argv(&["aikoql", "--config", &ok]), None, None).unwrap();
         assert_eq!(cfg.sources.len(), 2);
         assert_eq!(cfg.sources[0].tenant.as_deref(), Some("acme"));
         assert_eq!(cfg.sources[1].sample_limit, 50);
         let typo = tmp_toml(
             "[[sources]]\nname = \"a\"\nkind = \"sqlite\"\nurl_env = \"X\"\ndatabse = \"d\"\n",
         );
-        let e = load_t(&argv(&["aikoql-mcp", "--config", &typo]), None, None).unwrap_err();
+        let e = load_t(&argv(&["aikoql", "--config", &typo]), None, None).unwrap_err();
         assert!(e.contains("databse"), "{e}");
         let dup = tmp_toml("[[sources]]\nname = \"a\"\nkind = \"sqlite\"\nurl_env = \"X\"\n[[sources]]\nname = \"a\"\nkind = \"sqlite\"\nurl_env = \"Y\"\n");
-        assert!(load_t(&argv(&["aikoql-mcp", "--config", &dup]), None, None).is_err());
+        assert!(load_t(&argv(&["aikoql", "--config", &dup]), None, None).is_err());
     }
 
     #[test]
     fn tool_profile_from_toml_env_and_cli() {
-        assert_eq!(
-            load_bare(&argv(&["aikoql-mcp"])).unwrap().tool_profile,
-            "full"
-        );
+        assert_eq!(load_bare(&argv(&["aikoql"])).unwrap().tool_profile, "full");
         let p = tmp_toml("[server]\ntool_profile = \"core\"\n");
-        let file = argv(&["aikoql-mcp", "--config", &p]);
+        let file = argv(&["aikoql", "--config", &p]);
         assert_eq!(load_t(&file, None, None).unwrap().tool_profile, "core");
         let bad = tmp_toml("[server]\ntool_profile = \"tiny\"\n");
-        assert!(load_t(&argv(&["aikoql-mcp", "--config", &bad]), None, None).is_err());
+        assert!(load_t(&argv(&["aikoql", "--config", &bad]), None, None).is_err());
         let env = |v: &str, args: &[String]| {
             load_with_env(|| {
                 std::env::set_var("AIKOQL_TOOL_PROFILE", v);
@@ -1469,8 +1454,8 @@ employee = ["salary", "ssn"]
             "full",
             "env > TOML"
         );
-        assert!(env("tiny", &argv(&["aikoql-mcp"])).is_err());
-        let cli = argv(&["aikoql-mcp", "--config", &p, "--tool-profile", "full"]);
+        assert!(env("tiny", &argv(&["aikoql"])).is_err());
+        let cli = argv(&["aikoql", "--config", &p, "--tool-profile", "full"]);
         assert_eq!(
             load_t(&cli, None, None).unwrap().tool_profile,
             "full",
@@ -1480,13 +1465,9 @@ employee = ["salary", "ssn"]
 
     #[test]
     fn model_auto_install_from_toml_and_env() {
-        assert!(
-            !load_bare(&argv(&["aikoql-mcp"]))
-                .unwrap()
-                .model_auto_install
-        );
+        assert!(!load_bare(&argv(&["aikoql"])).unwrap().model_auto_install);
         let p = tmp_toml("[embedding]\nauto_install = true\n");
-        let on = argv(&["aikoql-mcp", "--config", &p]);
+        let on = argv(&["aikoql", "--config", &p]);
         assert!(load_t(&on, None, None).unwrap().model_auto_install);
         let env = |v: &str, args: &[String]| {
             load_with_env(|| {
@@ -1499,37 +1480,37 @@ employee = ["salary", "ssn"]
             .model_auto_install
         };
         assert!(!env("0", &on), "env > TOML");
-        assert!(env("true", &argv(&["aikoql-mcp"])));
+        assert!(env("true", &argv(&["aikoql"])));
     }
 
     #[test]
     fn rate_limit_toml_parsed() {
         let p = tmp_toml("[rate_limit]\nenabled = false\nmax_calls_per_minute = 5\n");
-        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap();
+        let cfg = load_t(&argv(&["aikoql", "--config", &p]), None, None).unwrap();
         assert!(!cfg.rate_enabled);
         assert_eq!(cfg.rate_max_calls_per_minute, 5);
     }
 
     #[test]
     fn positional_db_path_still_works() {
-        let cfg = load_bare(&argv(&["aikoql-mcp", "./my-kb"])).unwrap();
+        let cfg = load_bare(&argv(&["aikoql", "./my-kb"])).unwrap();
         assert_eq!(cfg.db_path, "./my-kb");
     }
 
     #[test]
     fn license_path_env_else_data_dir_default() {
-        let cfg = load_bare(&argv(&["aikoql-mcp"])).unwrap();
+        let cfg = load_bare(&argv(&["aikoql"])).unwrap();
         assert_eq!(
             cfg.license_path,
             format!("{DEFAULT_DB_PATH}/.aikoql-license")
         );
         // a positional DB path moves the default next to the database
-        let cfg = load_bare(&argv(&["aikoql-mcp", "/kb/x"])).unwrap();
+        let cfg = load_bare(&argv(&["aikoql", "/kb/x"])).unwrap();
         assert_eq!(cfg.license_path, "/kb/x/.aikoql-license");
         // AIKOQL_LICENSE wins over the default
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_LICENSE", "/lic/a.bin");
-            let r = load(&argv(&["aikoql-mcp", "/kb/x"]), None, None);
+            let r = load(&argv(&["aikoql", "/kb/x"]), None, None);
             std::env::remove_var("AIKOQL_LICENSE");
             r
         })
@@ -1540,14 +1521,12 @@ employee = ["salary", "ssn"]
     #[test]
     fn audit_retention_env_default_parsed_and_invalid_rejected() {
         assert_eq!(
-            load_bare(&argv(&["aikoql-mcp"]))
-                .unwrap()
-                .audit_retention_days,
+            load_bare(&argv(&["aikoql"])).unwrap().audit_retention_days,
             90
         );
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_AUDIT_RETENTION_DAYS", "7");
-            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            let r = load(&argv(&["aikoql"]), None, None);
             std::env::remove_var("AIKOQL_AUDIT_RETENTION_DAYS");
             r
         })
@@ -1556,7 +1535,7 @@ employee = ["salary", "ssn"]
         for bad in ["0", "abc", "-3"] {
             let err = load_with_env(|| {
                 std::env::set_var("AIKOQL_AUDIT_RETENTION_DAYS", bad);
-                let r = load(&argv(&["aikoql-mcp"]), None, None);
+                let r = load(&argv(&["aikoql"]), None, None);
                 std::env::remove_var("AIKOQL_AUDIT_RETENTION_DAYS");
                 r
             })

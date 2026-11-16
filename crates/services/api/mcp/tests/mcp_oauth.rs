@@ -84,7 +84,7 @@ impl Server {
 }
 
 fn spawn(db: PathBuf, port: u16) -> Server {
-    let child = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+    let child = Command::new(env!("CARGO_BIN_EXE_aikoql"))
         .arg("serve")
         .args(["--metrics-addr", &format!("127.0.0.1:{port}")])
         .args(["--tcp-token", "static-tok::admin"])
@@ -94,7 +94,7 @@ fn spawn(db: PathBuf, port: u16) -> Server {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn aikoql-mcp serve");
+        .expect("spawn aikoql serve");
     let deadline = Instant::now() + Duration::from_secs(20);
     while TcpStream::connect(("127.0.0.1", port)).is_err() {
         assert!(Instant::now() < deadline, "server never listened on {port}");

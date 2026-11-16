@@ -9,7 +9,7 @@ Date: 2026-09-11. One page. The blessed integration surface is the MCP server �
 | `crates/sdk/go` (Go) | 222 (1 file) | none | none | none (go.mod, no version) | no | website/docs/sdk/go.md |
 | `crates/sdk/typescript` (TS) | 233 (1 file) | script only — points at `dist/test.js`, **no `dist/` exists** | none | none (package.json 0.1.0, stale vs 0.1.19) | no | QUICKSTART.md:221, examples/hello-agent.ts, website (index.html tabs, docs/sdk/typescript.md) |
 | `crates/sdk/java` (Java) | 1 file | none | none | none (unversioned) | no | QUICKSTART.md:245, website/docs/sdk/java.md |
-| `crates/sdk/python` (Python) | PyO3/maturin | **17 tests** (5 sdk + 8 mcp_client + 4 adapters); mcp_client spawns the real `aikoql-mcp` binary | none | none (no PyPI job; pyproject **0.1.0 stale** vs workspace 0.1.19; crate is `version.workspace` = 0.1.19 — the gap is the manifest only) | **yes** | E2E (SE2-M41: "Python SDK default flipped", full E2E green) |
+| `crates/sdk/python` (Python) | PyO3/maturin | **17 tests** (5 sdk + 8 mcp_client + 4 adapters); mcp_client spawns the real `aikoql` binary | none | none (no PyPI job; pyproject **0.1.0 stale** vs workspace 0.1.19; crate is `version.workspace` = 0.1.19 — the gap is the manifest only) | **yes** | E2E (SE2-M41: "Python SDK default flipped", full E2E green) |
 | `crates/cluster/proxy` | 306 (main.rs, serde_json only) | none | none | none (no packaging) | yes | none (no federation demand anywhere) |
 
 ## Decisions
@@ -57,7 +57,7 @@ Adoption standard met — the evidence bar this doc set:
 
 - **Tests**: 7 unit tests (dial/version/error-envelope/round-trip/push-skip/
   stream) + 2 real-server integration tests (round trip + wrong-token
-  rejection) that spawn the actual `aikoql-mcp` binary.
+  rejection) that spawn the actual `aikoql` binary.
 - **CI**: `go-sdk` job in ci.yml (same shape as python-sdk: build the real
   binary, then `go vet` + `go test` with `AIKOQL_MCP_BIN` armed).
 - **Consumer proof**: `examples/web-service` — an HTTP app over the SDK.

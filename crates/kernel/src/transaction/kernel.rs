@@ -1007,7 +1007,7 @@ impl Kernel {
 
     /// The store under the repository — the encrypted one when encryption is
     /// on — for a server's own reserved `sys/` keys outside the repository
-    /// (aikoql-mcp's OAuth grants under `sys/oauth/`): written through it
+    /// (aikoql's OAuth grants under `sys/oauth/`): written through it
     /// they are encrypted at rest, replicated, backed up and durable like
     /// the knowledge itself. The repository never reads them.
     pub fn system_store(&self) -> Arc<dyn StorageEngine> {

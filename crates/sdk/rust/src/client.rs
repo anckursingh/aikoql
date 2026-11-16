@@ -24,9 +24,9 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tokio_stream::wrappers::ReceiverStream;
 
-/// The oldest aikoql-mcp server this SDK will talk to (the ND-12 version
+/// The oldest aikoql server this SDK will talk to (the ND-12 version
 /// contract, mirrored from the Go and Python SDKs).
-pub const MIN_SERVER_VERSION: &str = "0.4.0";
+pub const MIN_SERVER_VERSION: &str = "0.5.0";
 
 const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -139,7 +139,7 @@ struct Inner {
     tls: Option<Tls>,
 }
 
-/// One MCP JSON-RPC connection to an aikoql-mcp server. Clone shares the
+/// One MCP JSON-RPC connection to an aikoql server. Clone shares the
 /// connection; calls serialize over one mutex (one in-flight call per
 /// connection — a stream holds it for its whole life).
 #[derive(Clone)]
@@ -156,7 +156,7 @@ impl std::fmt::Debug for Client {
 impl Client {
     /// Opens a TCP connection ("host:port"). The handshake is separate
     /// (initialize) so a pooled client can dial first and authenticate
-    /// later; every aikoql-mcp TCP server requires the token.
+    /// later; every aikoql TCP server requires the token.
     pub async fn dial(addr: &str) -> Result<Client, Error> {
         Self::dial_with(addr, None).await
     }

@@ -1,4 +1,4 @@
-//! PROD-7 — `aikoql-mcp restore-drill`: prove the archive restores.
+//! PROD-7 — `aikoql restore-drill`: prove the archive restores.
 //!
 //! A backup that has never been restored is a hope. The drill restores
 //! the archive (`archive::restore`, the same code `pitr` runs) into a
@@ -17,7 +17,7 @@ use serde_json::{json, Value as J};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "Usage: aikoql-mcp restore-drill --archive DIR|s3://BUCKET[/PREFIX] \
+const USAGE: &str = "Usage: aikoql restore-drill --archive DIR|s3://BUCKET[/PREFIX] \
 [--until-seq N | --until-ms UNIX_MS] [--expect-min-seq N] [--report FILE] [--scratch-root DIR]";
 
 struct Opts {

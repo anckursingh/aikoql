@@ -40,7 +40,7 @@ impl Drop for Server {
 fn semantic(tag: &str, auto_install: bool) -> (Server, J) {
     let dir = tmp(tag);
     let port = free_port();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aikoql"));
     cmd.arg("serve")
         .args(["--metrics-addr", &format!("127.0.0.1:{port}")])
         .args(["--model-dir", dir.join("models").to_str().unwrap()])
@@ -54,7 +54,7 @@ fn semantic(tag: &str, auto_install: bool) -> (Server, J) {
     if auto_install {
         cmd.env("AIKOQL_MODEL_AUTO_INSTALL", "1");
     }
-    let srv = Server(cmd.spawn().expect("spawn aikoql-mcp serve"), dir);
+    let srv = Server(cmd.spawn().expect("spawn aikoql serve"), dir);
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut s = loop {
         if let Ok(s) = TcpStream::connect(("127.0.0.1", port)) {

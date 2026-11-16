@@ -20,7 +20,7 @@ Queries run in three places — the shell, the MCP `aikoql` tool, and the SDKs:
 
 ```bash
 # interactive shell
-aikoql-mcp shell ./kb
+aikoql shell ./kb
 aikoql> MATCH note RETURN *
 ```
 

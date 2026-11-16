@@ -1,5 +1,5 @@
 //! Enterprise multi-user store (Task 3; PROD-2: rows of the kernel's system
-//! store, not a SQLite file). aikoql-mcp is a binary crate (no
+//! store, not a SQLite file). aikoql is a binary crate (no
 //! lib target to link), so users.rs is compiled directly into this test
 //! crate for the unit tests; the integration tests spawn the debug binary
 //! with a TEST keypair license via the debug-only AIKOQL_LICENSE_PUBLIC_KEY
@@ -101,7 +101,7 @@ fn roles_of_unknown_sub_none() {
     assert_eq!(store.roles_of("nobody").unwrap(), None);
 }
 
-// --- startup wiring (spawns the aikoql-mcp binary) ---
+// --- startup wiring (spawns the aikoql binary) ---
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;

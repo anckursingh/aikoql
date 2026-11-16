@@ -62,7 +62,7 @@ fi
 # Never part of CI. Exit 77 from the harness = skipped.
 if [ -f tests/e2e/studio/run.js ]; then
   echo "=== studio e2e"
-  cargo build -q -p aikoql-mcp
+  cargo build -q -p aikoql
   node tests/e2e/studio/run.js
   rc=$?
   if [ "$rc" = 0 ]; then echo "--- ok: studio e2e"

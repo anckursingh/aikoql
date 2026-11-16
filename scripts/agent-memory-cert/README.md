@@ -2,17 +2,17 @@
 
 A black-box run of AikoQL **as an agent's memory**, against the eight levels
 of `docs/AIKOQL-Chatbot-Memory-Knowledge-Certification-Test-Suite.md`. It
-drives a real `aikoql-mcp serve` over MCP (the TCP transport an agent uses),
+drives a real `aikoql serve` over MCP (the TCP transport an agent uses),
 with no LLM in the loop. Each check records PASS, FAIL or GAP (the capability
 is not there) and the server's own answer as evidence.
 
 ```bash
-cargo build -p aikoql-mcp
+cargo build -p aikoql
 python scripts/agent-memory-cert/c1_c8.py      # one run -> results.json
 python scripts/agent-memory-cert/repeat.py 5   # five runs -> summary.json
 ```
 
-- `AIKOQL_BIN`: the server binary (default `target/debug/aikoql-mcp`).
+- `AIKOQL_BIN`: the server binary (default `target/debug/aikoql`).
 - `AIKOQL_CERT_OUT`: the work dir for databases, logs and results (default
   `<tmp>/aikoql-agent-memory-cert`). Nothing is written into the repo.
 

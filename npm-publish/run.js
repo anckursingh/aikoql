@@ -14,14 +14,14 @@ const exe = process.platform === 'win32' ? 'aikoql.exe' : 'aikoql';
 const binPath = path.join(BIN_DIR, exe);
 
 const PLATFORM_MAP = {
-  'win32-x64':  'aikoql-mcp.exe',
-  'linux-x64':  'aikoql-mcp-linux',
-  'darwin-x64': 'aikoql-mcp-macos',
-  'darwin-arm64': 'aikoql-mcp-macos-arm64',
+  'win32-x64':  'aikoql.exe',
+  'linux-x64':  'aikoql-linux',
+  'darwin-x64': 'aikoql-macos',
+  'darwin-arm64': 'aikoql-macos-arm64',
 };
 
 function fail(msg) {
-  console.error(`aikoql: ${msg}\nBuild from source: cargo install aikoql-mcp`);
+  console.error(`aikoql: ${msg}\nBuild from source: cargo install --locked --git https://github.com/anckursingh/aikoql aikoql`);
   process.exit(1);
 }
 

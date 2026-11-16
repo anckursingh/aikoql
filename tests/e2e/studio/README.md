@@ -5,10 +5,10 @@ database, free port, bootstrap admin). Run by `scripts/prepush.sh` when a
 browser is available; **not** part of CI.
 
     cd tests/e2e/studio && npm ci      # playwright-core only — uses your system Chrome
-    cargo build -p aikoql-mcp
+    cargo build -p aikoql
     node tests/e2e/studio/run.js       # 0 pass · 1 fail · 77 skipped (reason printed)
 
-Env: `AIKOQL_BIN` (default `target/debug/aikoql-mcp`), `CHROME_BIN`.
+Env: `AIKOQL_BIN` (default `target/debug/aikoql`), `CHROME_BIN`.
 
 Why it exists: the page has no inline handlers, and the CSP is
 `script-src 'self'`. A handler that was missed does not raise an error — the

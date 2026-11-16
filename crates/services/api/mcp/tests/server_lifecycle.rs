@@ -1,7 +1,7 @@
 //! P5-M11 (ND-11) — standalone database server: lifecycle + KOQL protocol.
 //! sv000–011.
 //!
-//! The server is the repo-built `aikoql-mcp` binary (a plain-TCP listener
+//! The server is the repo-built `aikoql` binary (a plain-TCP listener
 //! speaking framed JSON-RPC). The contract (docs/server-contract.md):
 //! KOQL methods ride the same framed transport as MCP behind the same
 //! fail-closed token gate; `shutdown` drains in-flight requests (cancelling
@@ -35,7 +35,7 @@
 //! - sv014 metrics-only serve (S-12): `serve --metrics-addr` with stdin at
 //!   EOF must keep the HTTP surface up instead of exiting clean like stdio
 //!
-//! The binary must be built first: `cargo build --bin aikoql-mcp`
+//! The binary must be built first: `cargo build --bin aikoql`
 //! (cargo test does NOT build bins — the txn_crasher trap).
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -58,12 +58,12 @@ static PORT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn server_bin() -> PathBuf {
     let mut exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    exe.push("../../../../target/debug/aikoql-mcp");
+    exe.push("../../../../target/debug/aikoql");
     #[cfg(windows)]
     exe.set_extension("exe");
     assert!(
         exe.exists(),
-        "aikoql-mcp binary not built at {:?}; run `cargo build --bin aikoql-mcp` first",
+        "aikoql binary not built at {:?}; run `cargo build --bin aikoql` first",
         exe
     );
     exe
@@ -144,7 +144,7 @@ impl Server {
             cmd.arg(e);
         }
         cmd.arg(db).stdout(Stdio::null()).stderr(Stdio::null());
-        let child = cmd.spawn().expect("spawn aikoql-mcp serve");
+        let child = cmd.spawn().expect("spawn aikoql serve");
         Server { child, port }
     }
 
@@ -169,7 +169,7 @@ impl Server {
         for (k, v) in envs {
             cmd.env(k, v);
         }
-        let child = cmd.spawn().expect("spawn aikoql-mcp serve");
+        let child = cmd.spawn().expect("spawn aikoql serve");
         Server { child, port }
     }
 
@@ -966,7 +966,7 @@ fn sv013_both_transports_serve_on_one_server() {
         .arg(&db)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = cmd.spawn().expect("spawn aikoql-mcp serve");
+    let child = cmd.spawn().expect("spawn aikoql serve");
     let mut server = Server {
         child,
         port: mcp_port,

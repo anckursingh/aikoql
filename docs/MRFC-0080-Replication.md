@@ -127,9 +127,9 @@ R2 limits, carried forward:
 
 ## R3a — the replication stream ✅
 
-`aikoql-mcp serve --replicate-listen ADDR --tcp-token T::admin <db>` runs
+`aikoql serve --replicate-listen ADDR --tcp-token T::admin <db>` runs
 the leader side beside any serve mode (stdio included) and turns on log
-retention; `aikoql-mcp follow <standby> --leader ADDR` (token from
+retention; `aikoql follow <standby> --leader ADDR` (token from
 `--token` or `AIKOQL_REPLICATION_TOKEN`) runs the standby.
 
 Wire `aikoql-repl/1` (`crates/services/api/mcp/src/replication.rs`): a
@@ -187,11 +187,11 @@ names its cause.
 1. Confirm the leader is down (a still-running leader keeps accepting
    writes the standby will never see — R4 adds fencing).
 2. Stop `follow` on the standby (it is crash-safe; kill is fine).
-3. `aikoql-mcp serve --replicate-listen ADDR --tcp-token … <standby>` —
+3. `aikoql serve --replicate-listen ADDR --tcp-token … <standby>` —
    the kernel opens over the standby's storage, the indexes resume from
    `<standby>.ckpt`, and new standbys can follow it.
 4. Point clients at the new leader. Bring the old leader back with
-   `aikoql-mcp follow <old-dir> --leader <new-leader>` (R4c: a diverged
+   `aikoql follow <old-dir> --leader <new-leader>` (R4c: a diverged
    tail is detected and replaced automatically) — never restart it as a
    leader.
 
@@ -668,7 +668,7 @@ no test.
 
 `serve --archive DIR|s3://BUCKET[/PREFIX] [--archive-log-ms 5000]
 [--archive-snapshot-secs 3600]` on the leader; restore anywhere with
-`aikoql-mcp pitr --archive URL --to DIR [--until-seq N | --until-ms
+`aikoql pitr --archive URL --to DIR [--until-seq N | --until-ms
 UNIX_MS]`, then `serve DIR`.
 
 **Layout** (`archive.rs`), one directory per replication term:
@@ -865,7 +865,7 @@ by hand.
 ## Archive retention ✅
 
 `serve --archive … --archive-keep N` prunes after each periodic
-snapshot; `aikoql-mcp archive-prune --archive URL --keep N` prunes on
+snapshot; `aikoql archive-prune --archive URL --keep N` prunes on
 demand (`archive::prune`).
 
 - **Kept:** the newest N complete snapshots across terms, ordered by

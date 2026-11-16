@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # AG-62: one-command public trial — the AGENTIC-QUICKSTART Cloudflare-tunnel
 # recipe in one command. Starts a cloudflared quick tunnel to the loopback
-# serve surface, aikoql-mcp under it (AIKOQL_PUBLIC_URL = the tunnel URL),
+# serve surface, aikoql under it (AIKOQL_PUBLIC_URL = the tunnel URL),
 # and prints the connector URL. Ctrl-C tears both down.
 # Usage: public-trial.sh <db-path>
-# Requires: cloudflared on PATH, aikoql-mcp on PATH (or set AIKOQL_MCP_BIN).
+# Requires: cloudflared on PATH, aikoql on PATH (or set AIKOQL_MCP_BIN).
 set -euo pipefail
 
 DB=${1:?usage: public-trial.sh <db-path>}
-BIN=${AIKOQL_MCP_BIN:-aikoql-mcp}
+BIN=${AIKOQL_MCP_BIN:-aikoql}
 
 if ! command -v cloudflared >/dev/null 2>&1; then
   echo "cloudflared not found — install it first (brew install cloudflared, or the Cloudflare site)" >&2

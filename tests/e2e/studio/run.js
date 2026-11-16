@@ -5,7 +5,7 @@
 //
 //   node tests/e2e/studio/run.js
 //
-// Env: AIKOQL_BIN (default target/debug/aikoql-mcp), CHROME_BIN (default: the
+// Env: AIKOQL_BIN (default target/debug/aikoql), CHROME_BIN (default: the
 // usual macOS/Linux locations). Exit 0 = pass, 1 = failure, 77 = skipped (no
 // binary or no browser — the reason is printed).
 //
@@ -21,7 +21,7 @@ const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '../../..');
-const BIN = process.env.AIKOQL_BIN || path.join(ROOT, 'target/debug/aikoql-mcp');
+const BIN = process.env.AIKOQL_BIN || path.join(ROOT, 'target/debug/aikoql');
 const PW = 'e2e-pw-12345';
 const HOSTILE = '<img src=x onerror=window.__pwned=1>';
 
@@ -34,7 +34,7 @@ function findChrome() {
     '/usr/bin/chromium-browser',
   ].filter(Boolean).find(p => fs.existsSync(p));
 }
-if (!fs.existsSync(BIN)) { console.log(`SKIP: no server binary at ${BIN} (cargo build -p aikoql-mcp)`); process.exit(77); }
+if (!fs.existsSync(BIN)) { console.log(`SKIP: no server binary at ${BIN} (cargo build -p aikoql)`); process.exit(77); }
 const CHROME = findChrome();
 if (!CHROME) { console.log('SKIP: no Chrome/Chromium found (set CHROME_BIN)'); process.exit(77); }
 let chromium;

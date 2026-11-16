@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_aikoql-mcp"))
+    PathBuf::from(env!("CARGO_BIN_EXE_aikoql"))
 }
 
 fn tmp(tag: &str) -> PathBuf {
@@ -161,7 +161,7 @@ impl Mcp {
                 Stdio::from(std::fs::File::create(stderr_path(db)).unwrap())
             })
             .spawn()
-            .expect("spawn aikoql-mcp");
+            .expect("spawn aikoql");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let log = child.stderr.take().map(lines);

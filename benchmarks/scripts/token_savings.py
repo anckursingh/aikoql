@@ -75,7 +75,7 @@ def aikoql_retrieve(query: str, proc: subprocess.Popen) -> str:
     proc.stdin.flush()
     line = proc.stdout.readline()
     if not line:
-        raise RuntimeError("aikoql-mcp stdio closed during recall")
+        raise RuntimeError("aikoql stdio closed during recall")
     result = json.loads(line)
     if "error" in result:
         raise RuntimeError(f"recall error: {result['error']}")
@@ -90,7 +90,7 @@ def start_aikoql(corpus_dir: str):
     import os
     import tempfile
 
-    bin_cmd = os.environ.get("AIKOQL_BIN", "npx -y aikoql-mcp").split()
+    bin_cmd = os.environ.get("AIKOQL_BIN", "npx -y @aikoql/aikoql").split()
     # AIKOQL_DB: serve a pre-built db instead of ingesting (big-corpus reruns)
     db = os.environ.get("AIKOQL_DB")
     if db is None:
@@ -156,7 +156,7 @@ def main() -> None:
         result["binary"] = (
             f"local binary: {os.environ['AIKOQL_BIN']}"
             if os.environ.get("AIKOQL_BIN")
-            else "aikoql-mcp (npm, latest)"
+            else "aikoql (npm, latest)"
         )
         proc.terminate()
     else:

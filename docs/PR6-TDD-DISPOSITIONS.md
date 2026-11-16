@@ -226,14 +226,14 @@ follow-up milestones, one commit each, re-stamping this table as they land.
 ## Compiled from kernel state (P1-8 dogfood)
 
 `scripts/dogfood-review-loop.py full` emits this section from the
-project knowledge base (`./kb`, served by the repo's own aikoql-mcp
+project knowledge base (`./kb`, served by the repo's own aikoql
 plugin; machine state lives in the `.state.json` sidecar). The
 findings are Requirement KOs; the dispositions doc is the compiled
 knowledge document; each re-stamp commit below is reconciled via
 the A8 `reconcile` tool against that document.
 
-- knowledge document KOID: `01a1e611ae3f0000000000000000a9c9`
-- reconciled re-stamp commits: 367 (first c1e0a94, last 7577e94)
+- knowledge document KOID: `01a1e66a44720000000000000000a9c9`
+- reconciled re-stamp commits: 372 (first ba8ef3d, last 7577e94)
 - trace answers: `R3-003->finding: R3-003 | R3-005->re-stamping`
 
 The trace pins the requirement leg (the finding is found by query).
@@ -246,12 +246,12 @@ follow-up, not this milestone.
 
 | finding | KOID | disposition | status |
 |---|---|---|---|
-| R3-001 | 01a1e611adfc0000000000000000a9c9 | NOT A FINDING | closed |
-| R3-002 | 01a1e611ae270000000000000000a9c9 | FIXED | closed |
-| R3-003 | 01a1e611ae2c0000000000000000a9c9 | FIXED | closed |
-| R3-004 | 01a1e611ae310000000000000000a9c9 | COVERED | closed |
-| R3-005 | 01a1e611ae360000000000000000a9c9 | FIXED | closed |
-| R2-008 | 01a1e611ae3a0000000000000000a9c9 | CLOSED | closed |
+| R3-001 | 01a1e66a442e0000000000000000a9c9 | NOT A FINDING | closed |
+| R3-002 | 01a1e66a44590000000000000000a9c9 | FIXED | closed |
+| R3-003 | 01a1e66a445e0000000000000000a9c9 | FIXED | closed |
+| R3-004 | 01a1e66a44630000000000000000a9c9 | COVERED | closed |
+| R3-005 | 01a1e66a44670000000000000000a9c9 | FIXED | closed |
+| R2-008 | 01a1e66a446b0000000000000000a9c9 | CLOSED | closed |
 
-compiled-head: c400e40fa8a74f3ea9b2a349bc33a962fc53eefc
+compiled-head: 28cbd5d563de980d00f693805ecf66e73f9b74fe
 <!-- DOGFOOD-COMPILED-END -->

@@ -63,5 +63,5 @@ import aikoql
 aikoql.__version__  # == the Cargo workspace version, pinned by the sdk001 test
 ```
 
-CI runs the full SDK suite (contract tests against the real aikoql-mcp
+CI runs the full SDK suite (contract tests against the real aikoql
 binary) on every push; releases publish to PyPI via trusted publishing.

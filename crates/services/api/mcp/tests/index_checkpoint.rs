@@ -23,7 +23,7 @@ fn serve(root: &Path, log: &str) -> Child {
 
 /// `serve` with the periodic index checkpoint every `secs` seconds.
 fn serve_every(root: &Path, log: &str, secs: &str) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+    Command::new(env!("CARGO_BIN_EXE_aikoql"))
         .args(["serve", root.join("db").to_str().unwrap()])
         .args(["--index-checkpoint-secs", secs])
         .current_dir(root)
@@ -33,7 +33,7 @@ fn serve_every(root: &Path, log: &str, secs: &str) -> Child {
         .stdout(Stdio::piped())
         .stderr(std::fs::File::create(root.join(log)).unwrap())
         .spawn()
-        .expect("spawn aikoql-mcp serve")
+        .expect("spawn aikoql serve")
 }
 
 #[test]

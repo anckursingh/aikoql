@@ -3,7 +3,7 @@ package com.aikoql.client;
 // The Java adapter for the shared conformance runner (D-14, §7/§23). It
 // executes the language-neutral vectors from tests/sdk-conformance/ (the
 // §23 canonical workload + the §7 category dirs) and protocol/test-vectors/
-// against a real aikoql-mcp server through this SDK, then checks every
+// against a real aikoql server through this SDK, then checks every
 // assert/assert_any/expect_error. The expected results are the vectors
 // themselves — every SDK produces the same transcript. Mirrors the Rust
 // adapter (crates/sdk/rust/src/bin/sdk-conformance.rs) arm for arm.
@@ -11,7 +11,7 @@ package com.aikoql.client;
 // Run through scripts/sdk-conformance.sh, or directly:
 //
 //   mvn -q -DskipTests compile && java -cp target/classes \
-//       com.aikoql.client.SdkConformance --bin <aikoql-mcp> \
+//       com.aikoql.client.SdkConformance --bin <aikoql> \
 //       --vectors <dir> --protocol <dir> --token <token>
 
 import java.io.IOException;

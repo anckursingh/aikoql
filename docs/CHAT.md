@@ -134,7 +134,7 @@ python3 scripts/chat-eval.py --url http://127.0.0.1:8098 --user admin \
 ```
 
 26 hand-written questions about `AGENTS.md`, `README.md` and `CHANGELOG.md`
-(ingest them with `aikoql-mcp ingest-dir`), 21 answerable and 5 not. It prints
+(ingest them with `aikoql ingest-dir`), 21 answerable and 5 not. It prints
 the training scorecard's metrics. `scripts/chat-stub.py` is a deterministic
 stand-in model (it declines to write queries and quotes the first retrieved
 fact); the committed `baseline.json` was produced with it and only proves the

@@ -89,7 +89,7 @@ public class AikoqlException extends RuntimeException {
                 "server version " + server + " is older than the SDK minimum "
                         + AikoqlClient.MIN_SERVER_VERSION,
                 false,
-                "Upgrade the aikoql-mcp server to a supported version");
+                "Upgrade the aikoql server to a supported version");
     }
 
     static AikoqlException invalidArgument(String message) {
