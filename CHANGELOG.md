@@ -7,6 +7,8 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-16
+
 ### Renamed: `aikoql-mcp` is now `aikoql` (breaking)
 
 The binary, the cargo package and the npm package are all `aikoql`: `aikoql serve`, `cargo install aikoql`,

@@ -71,13 +71,13 @@ aikoql ships as a single, self-contained binary. No dependencies, no installers.
 
 **Windows:**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql.exe
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql.exe
 .\aikoql.exe --help
 ```
 
 **Linux (static musl — any distro):**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-linux-musl
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql-linux-musl
 chmod +x aikoql-linux-musl && mv aikoql-linux-musl /usr/local/bin/aikoql
 ```
 
@@ -86,29 +86,29 @@ A glibc build (`aikoql-linux`) is also available for distros that prefer dynamic
 **macOS (Apple Silicon / Intel):**
 ```bash
 # Apple Silicon
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-macos-arm64
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql-macos-arm64
 chmod +x aikoql-macos-arm64 && mv aikoql-macos-arm64 /usr/local/bin/aikoql
 
 # Intel
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-macos
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql-macos
 chmod +x aikoql-macos && mv aikoql-macos /usr/local/bin/aikoql
 ```
 
 ### Docker (multi-arch: amd64 + arm64)
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.4.0
+docker pull ghcr.io/anckursingh/aikoql:0.5.0
 
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.4.0
+  ghcr.io/anckursingh/aikoql:0.5.0
 ```
 
 `AIKOQL_TCP_TOKEN` is required — TCP auth is fail-closed
 (`TOKEN[:TENANT[:ROLES]]`). State lives under the `/data` volume (the
 `aikoql-v2` database directory, models in `/data/models`, agent memory in
-`/data/memory`). Tags: `0.4.0` (pin this), `0.3`, `latest`.
+`/data/memory`). Tags: `0.5.0` (pin this), `0.3`, `latest`.
 
 Without TLS the server binds loopback-only inside the container (plaintext
 bearer tokens never leave it), so published ports don't reach it — probe and
@@ -134,7 +134,7 @@ docker run -d --name aikoql -p 9090:9090 \
   -e AIKOQL_TLS_CERT=/certs/server.pem -e AIKOQL_TLS_KEY=/certs/server.key \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.4.0
+  ghcr.io/anckursingh/aikoql:0.5.0
 ```
 
 Clients connect over TLS (Rust `Client::dial_tls`, Python `tls=`, Go
@@ -153,7 +153,7 @@ stdio from the host, use the npm binary instead. A compose file
 
 ```bash
 aikoql --version
-# aikoql 0.4.0
+# aikoql 0.5.0
 ```
 
 ## 5-Second Start

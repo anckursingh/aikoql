@@ -357,7 +357,7 @@ aikoql&gt; MATCH Employee EPISTEMIC verified RETURN *    # only verified knowled
 
 <section id="install">
   <h2>Get Started in 5 Seconds</h2>
-  <p class="lead">Single binary. Zero dependencies. No installers. No install? Run the docker-compose trial with a Cloudflare quick-tunnel — <code>deploy/docker-compose.yml</code> in the repo. Latest release: v0.4.0 — agent tool profiles, recall, memory as knowledge objects, signed audit evidence and dependency security fixes.</p>
+  <p class="lead">Single binary. Zero dependencies. No installers. No install? Run the docker-compose trial with a Cloudflare quick-tunnel — <code>deploy/docker-compose.yml</code> in the repo. Latest release: v0.5.0 — agent tool profiles, recall, memory as knowledge objects, signed audit evidence and dependency security fixes.</p>
   <div class="install-section">
     <h3>Install</h3>
     <div class="tabs">
@@ -370,22 +370,22 @@ aikoql&gt; MATCH Employee EPISTEMIC verified RETURN *    # only verified knowled
     </div>
     <div id="inst-npm"><pre><code>npm install -g aikoql
 aikoql --version</code></pre></div>
-    <div id="inst-windows" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql.exe
+    <div id="inst-windows" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql.exe
 .\aikoql.exe --help</code></pre></div>
-    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-linux-musl
+    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql-linux-musl
 chmod +x aikoql-linux-musl && mv aikoql-linux-musl /usr/local/bin/aikoql
 aikoql --help</code></pre></div>
     <div id="inst-macos" style="display:none"><pre><code># Apple Silicon
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-macos-arm64
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql-macos-arm64
 chmod +x aikoql-macos-arm64 && mv aikoql-macos-arm64 /usr/local/bin/aikoql
 # Intel
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-macos
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.5.0/aikoql-macos
 chmod +x aikoql-macos && mv aikoql-macos /usr/local/bin/aikoql</code></pre></div>
-    <div id="inst-docker" style="display:none"><pre><code>docker pull ghcr.io/anckursingh/aikoql:0.4.0
+    <div id="inst-docker" style="display:none"><pre><code>docker pull ghcr.io/anckursingh/aikoql:0.5.0
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.4.0
+  ghcr.io/anckursingh/aikoql:0.5.0
 docker exec aikoql aikoql --version</code></pre></div>
     <div id="inst-source" style="display:none"><pre><code>git clone https://github.com/anckursingh/aikoql.git
 cd aikoql
