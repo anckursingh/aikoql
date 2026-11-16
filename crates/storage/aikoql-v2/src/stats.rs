@@ -408,3 +408,23 @@ pub struct DbStats {
     pub cache: crate::cache::CacheStats,
     pub control: ControlPlaneStats,
 }
+
+/// Wall ms of a merge that ran: never 0, because 0 means "no merge yet"
+/// (`WriteStats::last_compaction_ms`), and a small merge finishes in under 1 ms.
+pub(crate) fn merge_wall_ms(elapsed: std::time::Duration) -> u64 {
+    (elapsed.as_millis() as u64).max(1)
+}
+
+#[cfg(test)]
+mod merge_wall_ms_tests {
+    use super::merge_wall_ms;
+    use std::time::Duration;
+
+    #[test]
+    fn a_merge_that_ran_never_reads_zero() {
+        assert_eq!(merge_wall_ms(Duration::ZERO), 1);
+        assert_eq!(merge_wall_ms(Duration::from_micros(10)), 1);
+        assert_eq!(merge_wall_ms(Duration::from_micros(999)), 1);
+        assert_eq!(merge_wall_ms(Duration::from_millis(7)), 7);
+    }
+}

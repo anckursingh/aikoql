@@ -3010,9 +3010,10 @@ fn compact_impl(
         .compaction_pending_segments
         .store(0, Ordering::Relaxed);
     wstats.compaction_backlog_bytes.store(0, Ordering::Relaxed);
-    wstats
-        .last_compaction_ms
-        .store(compact_t.elapsed().as_millis() as u64, Ordering::Relaxed);
+    wstats.last_compaction_ms.store(
+        crate::stats::merge_wall_ms(compact_t.elapsed()),
+        Ordering::Relaxed,
+    );
     // P5-M39 — the lock-scope windows (the flush split's mirror): hold
     // = A + C, io = B, publish = C — disjoint slices of the total wall,
     // so hold + io ≤ total holds structurally.
