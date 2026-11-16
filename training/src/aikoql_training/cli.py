@@ -257,7 +257,7 @@ def _parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     def live(cmd):
-        cmd.add_argument("--db", required=True, help="host:port of aikoql-mcp")
+        cmd.add_argument("--db", required=True, help="host:port of aikoql")
         cmd.add_argument("--token", required=True, help="TCP access token")
         cmd.add_argument("--config", help="optional YAML/JSON gate config")
         cmd.add_argument("--database-id", default="acmepay",

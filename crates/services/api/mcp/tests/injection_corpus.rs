@@ -70,7 +70,7 @@ fn ij001_untrusted_content_never_leaves_its_fence() {
     // 300 writes in a few seconds: past the default 300 calls/min limit
     let cfg = root.join("aikoql.toml");
     std::fs::write(&cfg, "[rate_limit]\nenabled = false\n").unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_aikoql"))
         .args(["serve", root.join("db").to_str().unwrap()])
         .args(["--config", cfg.to_str().unwrap()])
         .args(["--memory-dir", root.join("memory").to_str().unwrap()])

@@ -36,7 +36,7 @@ impl Drop for Mcp {
 impl Mcp {
     fn serve(tag: &str, extra: &[&str]) -> Self {
         let db = tmp(tag);
-        let mut child = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_aikoql"))
             .arg("serve")
             .args(extra)
             .arg(&db)
@@ -46,7 +46,7 @@ impl Mcp {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn aikoql-mcp serve");
+            .expect("spawn aikoql serve");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let mut m = Mcp {

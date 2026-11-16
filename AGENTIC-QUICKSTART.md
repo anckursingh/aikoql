@@ -38,7 +38,7 @@ language uses its standard MCP client.
 ## Install
 
 ```bash
-npm i -g aikoql-mcp            # npm launcher (downloads the right binary)
+npm i -g aikoql            # npm launcher (downloads the right binary)
 # or grab the binary from https://github.com/anckursingh/aikoql/releases
 # or Docker: ghcr.io/anckursingh/aikoql:0.4.0  (state under /data volume)
 ```
@@ -52,7 +52,7 @@ they are no longer readable.
 **Claude Code:**
 
 ```bash
-claude mcp add aikoql -- npx -y aikoql-mcp@0.4.0 serve ./kb
+claude mcp add aikoql -- npx -y aikoql@0.4.0 serve ./kb
 ```
 
 (A packaged aikoql plugin also exists for Claude Code — it runs this same
@@ -61,7 +61,7 @@ server, with the knowledge-base path pinned via `userConfig.KB_PATH`.)
 **Codex:**
 
 ```bash
-codex mcp add aikoql -- npx -y aikoql-mcp@0.4.0 serve ./kb
+codex mcp add aikoql -- npx -y aikoql@0.4.0 serve ./kb
 ```
 
 **Anything else** (Cursor, Windsurf, VS Code, custom harnesses) — the
@@ -72,7 +72,7 @@ portable MCP config block, e.g. `.vscode/mcp.json` / `.cursor/mcp.json`:
   "mcpServers": {
     "aikoql": {
       "command": "npx",
-      "args": ["-y", "aikoql-mcp@0.4.0", "serve", "./kb"]
+      "args": ["-y", "aikoql@0.4.0", "serve", "./kb"]
     }
   }
 }
@@ -81,7 +81,7 @@ portable MCP config block, e.g. `.vscode/mcp.json` / `.cursor/mcp.json`:
 **Shared team KB over TCP** (server on a host, many agents/clients):
 
 ```bash
-aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token s3cret:team:admin /data/kb
+aikoql serve --listen 127.0.0.1:9090 --tcp-token s3cret:team:admin /data/kb
 ```
 
 Plaintext TCP is loopback-only — binding a non-loopback address exits 2;
@@ -150,7 +150,7 @@ ingestion, engineering, eval, txn, compliance, admin, programs) and
 the HTTP surface serves `POST /mcp`, authenticated with the same tokens.
 
 ```bash
-aikoql-mcp serve --metrics-addr 127.0.0.1:9091 --tcp-token s3cret:team:admin /data/kb
+aikoql serve --metrics-addr 127.0.0.1:9091 --tcp-token s3cret:team:admin /data/kb
 claude mcp add --transport http aikoql http://127.0.0.1:9091/mcp \
   --header "Authorization: Bearer s3cret"
 ```
@@ -193,7 +193,7 @@ loopback server a public HTTPS URL (no inbound ports, no account):
 ```bash
 cloudflared tunnel --url http://127.0.0.1:9091      # prints https://<random>.trycloudflare.com
 AIKOQL_ADMIN_PASSWORD=… AIKOQL_PUBLIC_URL=https://<random>.trycloudflare.com \
-  aikoql-mcp serve --metrics-addr 127.0.0.1:9091 /tmp/kb
+  aikoql serve --metrics-addr 127.0.0.1:9091 /tmp/kb
 ```
 
 then add the custom connector `https://<random>.trycloudflare.com/mcp` in
@@ -256,7 +256,7 @@ Raw MCP calls shown as JSON; your harness's MCP client wraps them as
 {"name":"agent_memory","arguments":{"agent_id":"claude","key":"last_db","value":"kb","ttl":3600}}
 {"name":"record_experience","arguments":{
   "goal":"wire aikoql into a coding harness",
-  "action":"spawn aikoql-mcp serve over stdio from the harness MCP config",
+  "action":"spawn aikoql serve over stdio from the harness MCP config",
   "outcome":"tools/list visible; remember/aikoql round-trip green",
   "evidence":[{"source_artifact":"AGENTIC-QUICKSTART.md","method":"agent_analysis"}]}}
 {"name":"find_experiences","arguments":{"task":"wire aikoql into a coding harness","limit":5}}

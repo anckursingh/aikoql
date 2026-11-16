@@ -64,7 +64,7 @@ export class McpError extends Error {
       "VERSION_MISMATCH",
       `server version ${JSON.stringify(server)} is older than the SDK minimum ${MIN_SERVER_VERSION}`,
       false,
-      "Upgrade the aikoql-mcp server to a supported version",
+      "Upgrade the aikoql server to a supported version",
     );
   }
 

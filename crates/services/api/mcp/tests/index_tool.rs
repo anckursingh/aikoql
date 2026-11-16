@@ -2,7 +2,7 @@
 //! surface, then a KOQL query through the tool path. RED: the tool does not
 //! exist yet (the call answers "unknown tool: index_create").
 //!
-//! The binary must be built first: `cargo build --bin aikoql-mcp`
+//! The binary must be built first: `cargo build --bin aikoql`
 //! (cargo test does NOT build bins).
 
 use serde_json::{json, Value as J};
@@ -15,12 +15,12 @@ mod common;
 
 fn server_bin() -> PathBuf {
     let mut exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    exe.push("../../../../target/debug/aikoql-mcp");
+    exe.push("../../../../target/debug/aikoql");
     #[cfg(windows)]
     exe.set_extension("exe");
     assert!(
         exe.exists(),
-        "aikoql-mcp binary not built at {:?}; run `cargo build --bin aikoql-mcp` first",
+        "aikoql binary not built at {:?}; run `cargo build --bin aikoql` first",
         exe
     );
     exe
@@ -62,7 +62,7 @@ impl StdioClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn aikoql-mcp");
+            .expect("spawn aikoql");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         StdioClient {

@@ -373,16 +373,16 @@ an external verifier (Python `cryptography`) accepts an exported chain.
 *Gate:* rotate under write load; every object readable after; old KEK
 unusable.
 - *Status (2026-10-31): AG-31 done* — KeyRing (wrapped store data key,
-  generation-safe rotation), `aikoql-mcp key rotate`, the job rotates;
+  generation-safe rotation), `aikoql key rotate`, the job rotates;
   kr001–kr004 + the job test. Found on the way: the derived store key
   (any rotation = an unreadable store), the DEK first-use race, the job's
   hanging shutdown. Passphrase change landed 2026-11-02:
-  `aikoql-mcp key change-passphrase NEW [DB]` re-wraps the master key
+  `aikoql key change-passphrase NEW [DB]` re-wraps the master key
   file under a new passphrase — the master key itself never changes (no
   data key moves), the old passphrase stops opening the database, and
   the ring keeps its passphrase copy in sync so a later rotation still
   wraps under the new one (kr005). DEK re-encryption landed 2026-11-02:
-  `aikoql-mcp key roll-deks [DB]` mints fresh tenant data keys and
+  `aikoql key roll-deks [DB]` mints fresh tenant data keys and
   re-encrypts every encrypted field through the journal (one committed
   version per object — the journal hashes the ciphertext, so this is a
   commit, not a rewrite); both generations persist before the walk
@@ -392,7 +392,7 @@ unusable.
   shortcut: a roll can be re-run but not repeated — a second roll is a
   no-op walk (returns 0); forcing a fresh roll needs a manual reset of
   the DEK rows, which nothing offers yet. Closed 2026-11-02: cloud KMS
-  `install` — `aikoql-mcp key install [DB] [--kms-region R]` wraps the
+  `install` — `aikoql key install [DB] [--kms-region R]` wraps the
   master key under a new AWS KMS CMK (`alias/aikoql/<db>`, envelope
   Encrypt/Decrypt through the kernel's SDK-free `KmsOps` seam; the serve
   binary supplies the aws-sdk-kms implementation) and replaces the key
@@ -592,7 +592,7 @@ for common PaaS — the prerequisite for any hosted offering.
   tunnel to the loopback serve surface, `AIKOQL_PUBLIC_URL` = the tunnel
   URL, a generated admin password when none is set, connector URL printed,
   both processes torn down on exit (gate: `scripts/e2e-public-trial.js`,
-  shimmed cloudflared/aikoql-mcp asserting the wiring — the real-tunnel
+  shimmed cloudflared/aikoql asserting the wiring — the real-tunnel
   path was claude.ai-verified in the OAuth work). The PaaS template is
   `deploy/docker-compose.yml`: the existing image plus a cloudflared
   sidecar sharing its network namespace (`network_mode: service:` — the

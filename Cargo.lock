@@ -77,6 +77,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "aikoql"
+version = "0.4.0"
+dependencies = [
+ "aikoql-clickhouse",
+ "aikoql-compiler",
+ "aikoql-graph",
+ "aikoql-ingestion",
+ "aikoql-kernel",
+ "aikoql-mongodb",
+ "aikoql-native",
+ "aikoql-neo4j",
+ "aikoql-postgres",
+ "aikoql-runtime",
+ "aikoql-scheduler",
+ "aikoql-semantic",
+ "aikoql-sqlite",
+ "aikoql-storage-v2",
+ "aikoql-vector",
+ "argon2",
+ "aws-config",
+ "aws-sdk-kms",
+ "base64 0.22.1",
+ "getrandom 0.2.17",
+ "hmac 0.12.1",
+ "mongodb",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "postgres",
+ "prost",
+ "ring",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "ureq 2.12.1",
+]
+
+[[package]]
 name = "aikoql-benchmarks"
 version = "0.4.0"
 dependencies = [
@@ -185,52 +231,6 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "tokio",
-]
-
-[[package]]
-name = "aikoql-mcp"
-version = "0.4.0"
-dependencies = [
- "aikoql-clickhouse",
- "aikoql-compiler",
- "aikoql-graph",
- "aikoql-ingestion",
- "aikoql-kernel",
- "aikoql-mongodb",
- "aikoql-native",
- "aikoql-neo4j",
- "aikoql-postgres",
- "aikoql-runtime",
- "aikoql-scheduler",
- "aikoql-semantic",
- "aikoql-sqlite",
- "aikoql-storage-v2",
- "aikoql-vector",
- "argon2",
- "aws-config",
- "aws-sdk-kms",
- "base64 0.22.1",
- "getrandom 0.2.17",
- "hmac 0.12.1",
- "mongodb",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry-proto",
- "opentelemetry_sdk",
- "postgres",
- "prost",
- "ring",
- "rusqlite",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "toml",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "ureq 2.12.1",
 ]
 
 [[package]]

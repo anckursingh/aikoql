@@ -23,7 +23,7 @@
     "claude-code"
   ],
   "bin": {
-    "aikoql-mcp": "run.js"
+    "aikoql": "run.js"
   },
   "files": [
     "run.js"

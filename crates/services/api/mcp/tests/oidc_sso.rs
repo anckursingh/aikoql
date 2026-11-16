@@ -540,7 +540,7 @@ fn config_user_admin_login_still_works_in_enterprise() {
     common::register_temp_path(&log);
     // the config user's argon2id hash via the binary's own CLI (no argon2
     // dev-dependency needed)
-    let hashed = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+    let hashed = Command::new(env!("CARGO_BIN_EXE_aikoql"))
         .arg("hash-password")
         .arg("cfg-pw")
         .output()

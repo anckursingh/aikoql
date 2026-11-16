@@ -115,7 +115,7 @@ rotation at startup (`AIKOQL_AUDIT_RETENTION_DAYS`, default 90) and JSONL
 export, both gated on the `audit-export` license flag:
 
 ```bash
-aikoql-mcp audit --export-jsonl PATH [DB]
+aikoql audit --export-jsonl PATH [DB]
 ```
 
 The Studio has an admin-only download button (`GET /api/audit-export`).

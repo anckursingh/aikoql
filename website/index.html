@@ -134,7 +134,7 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
   </div>
   <div class="hero-demo">
     <pre><code><span class="demo-prompt">aikoql&gt;</span> CREATE Note body == "refund policy: 30 days"<br><span class="demo-prompt">aikoql&gt;</span> MATCH Note SIMILAR TO "refund window"<br>          SCORE BM25 USING EMBEDDING RETURN *</code></pre>
-    <p>AGPL-3.0-only · <span class="demo-strong">npm i -g aikoql-mcp</span> · single binary · zero runtime deps</p>
+    <p>AGPL-3.0-only · <span class="demo-strong">npm i -g aikoql</span> · single binary · zero runtime deps</p>
   </div>
 </section>
 
@@ -368,19 +368,19 @@ aikoql&gt; MATCH Employee EPISTEMIC verified RETURN *    # only verified knowled
       <button class="tab" onclick="showInstall('docker',this)">Docker</button>
       <button class="tab" onclick="showInstall('source',this)">From Source</button>
     </div>
-    <div id="inst-npm"><pre><code>npm install -g aikoql-mcp
-aikoql-mcp --version</code></pre></div>
-    <div id="inst-windows" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp.exe
-.\aikoql-mcp.exe --help</code></pre></div>
-    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp-linux-musl
-chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql-mcp
-aikoql-mcp --help</code></pre></div>
+    <div id="inst-npm"><pre><code>npm install -g aikoql
+aikoql --version</code></pre></div>
+    <div id="inst-windows" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql.exe
+.\aikoql.exe --help</code></pre></div>
+    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-linux-musl
+chmod +x aikoql-linux-musl && mv aikoql-linux-musl /usr/local/bin/aikoql
+aikoql --help</code></pre></div>
     <div id="inst-macos" style="display:none"><pre><code># Apple Silicon
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp-macos-arm64
-chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql-mcp
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-macos-arm64
+chmod +x aikoql-macos-arm64 && mv aikoql-macos-arm64 /usr/local/bin/aikoql
 # Intel
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-mcp-macos
-chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql</code></pre></div>
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.4.0/aikoql-macos
+chmod +x aikoql-macos && mv aikoql-macos /usr/local/bin/aikoql</code></pre></div>
     <div id="inst-docker" style="display:none"><pre><code>docker pull ghcr.io/anckursingh/aikoql:0.4.0
 docker run -d --name aikoql \
   -e AIKOQL_TCP_TOKEN=changeme:acme:admin \
@@ -389,15 +389,15 @@ docker run -d --name aikoql \
 docker exec aikoql aikoql --version</code></pre></div>
     <div id="inst-source" style="display:none"><pre><code>git clone https://github.com/anckursingh/aikoql.git
 cd aikoql
-cargo build --release -p aikoql-mcp
-./target/release/aikoql-mcp --help</code></pre></div>
+cargo build --release -p aikoql
+./target/release/aikoql --help</code></pre></div>
   </div>
 
   <h3 style="margin: 28px 0 12px;">Use with Claude Code / MCP Clients</h3>
   <pre><code>{
   "mcpServers": {
     "aikoql": {
-      "command": "aikoql-mcp",
+      "command": "aikoql",
       "args": ["serve", "./my-knowledge"]
     }
   }
@@ -428,7 +428,7 @@ result = db.aikoql("MATCH Note RETURN *")</code></pre></div>
   <div id="inst-ts" style="display:none"><pre><code>import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 const client = new Client({ name: 'my-agent', version: '1.0.0' });
-await client.connect(new StdioClientTransport({ command: 'aikoql-mcp', args: ['serve', './kb'] }));
+await client.connect(new StdioClientTransport({ command: 'aikoql', args: ['serve', './kb'] }));
 const result = await client.callTool({ name: 'remember', arguments: { type_name: 'Note', properties: { body: 'Hello' } } });</code></pre></div>
 </section>
 
@@ -470,7 +470,7 @@ const result = await client.callTool({ name: 'remember', arguments: { type_name:
     <a href="/docs/benchmarks">Benchmarks</a>
     <a href="/docs/development">Development</a>
     <a href="https://github.com/anckursingh/aikoql" target="_blank">GitHub</a>
-    <a href="https://www.npmjs.com/package/aikoql-mcp" target="_blank">npm</a>
+    <a href="https://www.npmjs.com/package/aikoql" target="_blank">npm</a>
     <a href="/docs/guides/programs">Programs-as-KOs</a>
     <a href="/docs/guides/encryption">Encryption</a>
     <a href="/docs/guides/import">Import Data</a>

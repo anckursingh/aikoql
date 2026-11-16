@@ -2,18 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add the enterprise edition to the aikoql-mcp binary: an offline-verified ed25519 license key gating OIDC SSO, multi-user RBAC, and audit retention/export — without changing unlicensed behavior.
+**Goal:** Add the enterprise edition to the aikoql binary: an offline-verified ed25519 license key gating OIDC SSO, multi-user RBAC, and audit retention/export — without changing unlicensed behavior.
 
 **Architecture:** One binary, two tiers. A `license.rs` module verifies the key at startup and exposes a `LicenseState`; a SQLite `users.rs` store becomes authoritative in enterprise mode; a hand-rolled `oidc.rs` (ureq + ring RS256 + PKCE, same style as `s3.rs` SigV4) federates login for Studio and the MCP `/oauth/authorize` flow; `authz.rs` gains a `viewer` role and the capability gate extends to REST writes. Community mode is untouched: no license file ⇒ exactly v0.4.0 behavior.
 
-**Tech Stack:** Rust, ring 0.17 (ed25519 sign/verify, RSA-PKCS1 RS256 verify — already in tree via rustls 0.23), rusqlite (already in tree via aikoql-sqlite; added as a direct dep of aikoql-mcp), ureq, sha2, base64, argon2, serde_json.
+**Tech Stack:** Rust, ring 0.17 (ed25519 sign/verify, RSA-PKCS1 RS256 verify — already in tree via rustls 0.23), rusqlite (already in tree via aikoql-sqlite; added as a direct dep of aikoql), ureq, sha2, base64, argon2, serde_json.
 
 **Spec:** `docs/superpowers/specs/2026-11-03-enterprise-tiers-design.md` — the plan argues from the spec, so the spec travels with it; executors read both.
 
 ## Global Constraints
 
-- One binary (`aikoql-mcp`); all new code in `crates/services/api/mcp` (+ its `tests/`), plus the owner keygen tool in `scripts/license-keygen/`.
-- No new Cargo.lock entries. ring and rusqlite are already locked; rusqlite becomes a direct dependency of aikoql-mcp at the locked version. No new async runtime — the binary is blocking (ureq); the only tokio is the existing current-thread one for the KMS SDK bridge.
+- One binary (`aikoql`); all new code in `crates/services/api/mcp` (+ its `tests/`), plus the owner keygen tool in `scripts/license-keygen/`.
+- No new Cargo.lock entries. ring and rusqlite are already locked; rusqlite becomes a direct dependency of aikoql at the locked version. No new async runtime — the binary is blocking (ureq); the only tokio is the existing current-thread one for the KMS SDK bridge.
 - Unlicensed server must be byte-for-byte v0.4.0 behavior: config users, TCP tokens, password login, tool gating — all unchanged. Invalid/expired license degrades to community mode with a logged warning, never a crash.
 - Env prefix `AIKOQL_` for all new config.
 - TDD RED-first for every task; one milestone = one commit set on one branch; the commit stream ends with the dogfood re-stamp of `docs/PR6-TDD-DISPOSITIONS.md` as the tip (`python scripts/dogfood-review-loop.py full` with `AIKOQL_BIN` set, py3.12 venv with `mcp`).
@@ -106,7 +106,7 @@ git commit -m "feat(enterprise): owner license-keygen tool (ed25519 sign/verify)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p aikoql-mcp --test license`
+Run: `cargo test -p aikoql --test license`
 Expected: FAIL (module/function not defined)
 
 - [ ] **Step 3: Implement `license.rs`**
@@ -115,7 +115,7 @@ ring `UnparsedPublicKey<Ed25519>` verification against `LICENSE_PUBLIC_KEY_B64`;
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p aikoql-mcp --test license`
+Run: `cargo test -p aikoql --test license`
 Expected: PASS (all 6)
 
 - [ ] **Step 5: Wire startup + degradation**
@@ -129,7 +129,7 @@ fn tampered_key_runs_as_community() { /* spawn server with AIKOQL_LICENSE=fake �
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `cargo test -p aikoql-mcp --test license`
+Run: `cargo test -p aikoql --test license`
 Expected: PASS (all)
 
 - [ ] **Step 7: Commit**
@@ -160,7 +160,7 @@ git commit -m "feat(enterprise): offline ed25519 license verification with commu
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p aikoql-mcp --test users`
+Run: `cargo test -p aikoql --test users`
 Expected: FAIL (module not defined)
 
 - [ ] **Step 3: Implement `users.rs`**
@@ -169,7 +169,7 @@ rusqlite; roles serialized as a JSON array in `roles TEXT`; `created_at` RFC 333
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p aikoql-mcp --test users`
+Run: `cargo test -p aikoql --test users`
 Expected: PASS (all 4)
 
 - [ ] **Step 5: Wire startup refuse + parity**
@@ -183,7 +183,7 @@ When `multi_user` is enabled (license or env): open the store in the data dir; i
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `cargo test -p aikoql-mcp --test users`
+Run: `cargo test -p aikoql --test users`
 Expected: PASS (all)
 
 - [ ] **Step 7: Commit**
@@ -214,7 +214,7 @@ git commit -m "feat(enterprise): sqlite user store with bootstrap admin and star
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p aikoql-mcp oidc`
+Run: `cargo test -p aikoql oidc`
 Expected: FAIL (module not defined)
 
 - [ ] **Step 3: Implement `oidc.rs`**
@@ -223,7 +223,7 @@ Blocking ureq calls (the binary has no general async runtime); id_token verifica
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p aikoql-mcp oidc`
+Run: `cargo test -p aikoql oidc`
 Expected: PASS (all 4)
 
 - [ ] **Step 5: Commit**
@@ -256,7 +256,7 @@ git commit -m "feat(enterprise): hand-rolled OIDC client (discovery, JWKS RS256,
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p aikoql-mcp --test oidc_sso`
+Run: `cargo test -p aikoql --test oidc_sso`
 Expected: FAIL (missing behavior)
 
 - [ ] **Step 3: Implement the flow**
@@ -265,7 +265,7 @@ Expected: FAIL (missing behavior)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p aikoql-mcp --test oidc_sso`
+Run: `cargo test -p aikoql --test oidc_sso`
 Expected: PASS (all 6)
 
 - [ ] **Step 5: Commit**
@@ -297,7 +297,7 @@ git commit -m "feat(enterprise): OIDC SSO for Studio and MCP authorize with live
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p aikoql-mcp --test rbac_rest`
+Run: `cargo test -p aikoql --test rbac_rest`
 Expected: FAIL (REST writes currently succeed for any session — the hole)
 
 - [ ] **Step 3: Implement the gate**
@@ -306,7 +306,7 @@ Extend `authz.rs` restricted map with `viewer`; route REST writes through `check
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p aikoql-mcp --test rbac_rest`
+Run: `cargo test -p aikoql --test rbac_rest`
 Expected: PASS (all 5)
 
 - [ ] **Step 5: Commit**
@@ -337,7 +337,7 @@ git commit -m "feat(enterprise): viewer role gates MCP tools and REST writes (cl
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p aikoql-mcp --test audit_export`
+Run: `cargo test -p aikoql --test audit_export`
 Expected: FAIL (no retention/export behavior)
 
 - [ ] **Step 3: Implement retention + export**
@@ -346,7 +346,7 @@ Cutoff computed from RFC 3339 timestamps already in the log; export = streaming 
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p aikoql-mcp --test audit_export`
+Run: `cargo test -p aikoql --test audit_export`
 Expected: PASS (all 4)
 
 - [ ] **Step 5: Commit**
@@ -379,7 +379,7 @@ git commit -m "feat(enterprise): audit retention rotation and gated JSONL export
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p aikoql-mcp --test admin_api`
+Run: `cargo test -p aikoql --test admin_api`
 Expected: FAIL (routes missing)
 
 - [ ] **Step 3: Implement the routes**
@@ -388,7 +388,7 @@ Reuse the existing REST routing/error conventions in `http.rs`/`api_rest.rs`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p aikoql-mcp --test admin_api`
+Run: `cargo test -p aikoql --test admin_api`
 Expected: PASS (all 6)
 
 - [ ] **Step 5: Commit**
@@ -419,7 +419,7 @@ git commit -m "feat(enterprise): admin API for license status and user managemen
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p aikoql-mcp studio`
+Run: `cargo test -p aikoql studio`
 Expected: FAIL (markers missing)
 
 - [ ] **Step 3: Implement the Studio changes**
@@ -428,7 +428,7 @@ Follow the existing embedded-HTML structure and CSS variables in `studio.rs`; wi
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p aikoql-mcp studio`
+Run: `cargo test -p aikoql studio`
 Expected: PASS (all 4)
 
 - [ ] **Step 5: Commit**

@@ -730,7 +730,7 @@ pub(crate) fn run_ingest_dir(
             }
             println!("Stored as knowledge object:");
             println!("  KOID: {}", r.koid.to_hex());
-            println!("\nQuery with: aikoql-mcp shell {} -- then:", db_path);
+            println!("\nQuery with: aikoql shell {} -- then:", db_path);
             println!("  compile_context \"your task\" {} 3000", r.koid.to_hex());
         }
         Err(e) => {

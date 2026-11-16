@@ -51,10 +51,10 @@ fi
 if [[ -z "$BIN" ]]; then
   # Default: relative to the repo root — each arm resolves it against the
   # cwd it sets for its adapter.
-  if [[ -x "$ROOT/target/debug/aikoql-mcp" ]]; then
-    BIN="target/debug/aikoql-mcp"
-  elif [[ -x "$ROOT/target/debug/aikoql-mcp.exe" ]]; then
-    BIN="target/debug/aikoql-mcp.exe"
+  if [[ -x "$ROOT/target/debug/aikoql" ]]; then
+    BIN="target/debug/aikoql"
+  elif [[ -x "$ROOT/target/debug/aikoql.exe" ]]; then
+    BIN="target/debug/aikoql.exe"
   else
     echo "sdk-conformance: no server binary — build it or pass --bin" >&2
     exit 1

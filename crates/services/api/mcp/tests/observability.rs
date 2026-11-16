@@ -262,7 +262,7 @@ fn ag50_every_tool_call_leaves_a_trace_and_counts_on_the_scrape() {
     let collector = Collector::start();
     let root = tmp("obs");
     let metrics_port = free_port();
-    let child = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+    let child = Command::new(env!("CARGO_BIN_EXE_aikoql"))
         .arg("serve")
         .args(["--metrics-addr", &format!("127.0.0.1:{metrics_port}")])
         .args(["--tcp-token", "http-tok::admin"])
@@ -276,7 +276,7 @@ fn ag50_every_tool_call_leaves_a_trace_and_counts_on_the_scrape() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn aikoql-mcp serve");
+        .expect("spawn aikoql serve");
     let _server = Server { child };
 
     // Wait for the metrics listener before the first request.

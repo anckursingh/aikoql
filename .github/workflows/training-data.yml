@@ -76,7 +76,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build the server
-        run: cargo build --bin aikoql-mcp
+        run: cargo build --bin aikoql
       - name: Install
         run: |
           python -m venv .venv
@@ -87,7 +87,7 @@ jobs:
       - name: Corpus regeneration (determinism cell)
         run: |
           printf '[rate_limit]\nenabled = false\n' > "$RUNNER_TEMP/rate.toml"
-          ./target/debug/aikoql-mcp --config "$RUNNER_TEMP/rate.toml" serve \
+          ./target/debug/aikoql --config "$RUNNER_TEMP/rate.toml" serve \
             "$RUNNER_TEMP/kb.redb" \
             --listen 127.0.0.1:18763 --tcp-token ci::admin &
           .venv/bin/python -c "
@@ -116,7 +116,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build the server
-        run: cargo build --bin aikoql-mcp
+        run: cargo build --bin aikoql
       - name: Install
         run: |
           python -m venv .venv
@@ -143,7 +143,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build the server
-        run: cargo build --bin aikoql-mcp
+        run: cargo build --bin aikoql
       - name: Install
         run: |
           python -m venv .venv
@@ -154,7 +154,7 @@ jobs:
       - name: 10K corpus sweep
         run: |
           printf '[rate_limit]\nenabled = false\n' > "$RUNNER_TEMP/rate.toml"
-          ./target/debug/aikoql-mcp --config "$RUNNER_TEMP/rate.toml" serve \
+          ./target/debug/aikoql --config "$RUNNER_TEMP/rate.toml" serve \
             "$RUNNER_TEMP/kb10k.redb" \
             --listen 127.0.0.1:18764 --tcp-token ci::admin &
           .venv/bin/python -c "

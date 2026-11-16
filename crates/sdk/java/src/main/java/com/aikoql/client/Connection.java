@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 
-// One MCP JSON-RPC session to an aikoql-mcp server: newline frames, id
+// One MCP JSON-RPC session to an aikoql server: newline frames, id
 // correlation, the tools/call envelope — the frozen §3.3 semantics (a
 // smaller id is skipped, a larger id is PROTOCOL_ERROR, deadline/aborted
 // reads map to the retryable TIMEOUT, a call on a closed session is

@@ -4,19 +4,19 @@
 
 **Goal:** A tenant-scoped, grounded "Ask" chat in Studio (`POST /api/v1/chat`) that uses any OpenAI-style model endpoint to turn a question into an AikoQL query and to phrase an answer from retrieved facts, refusing whenever the facts do not support it.
 
-**Architecture:** A new `chat` module in `aikoql-mcp` ports the training repo's two-skill protocol (query, answer) and runs: model query → `execute_readonly` (scoped) → retrieval fallback → model answer → server-side grounding check → audit. The model is reached through a `Generate` trait (blocking `ureq` client in production, a stub in tests). Studio gets an Ask panel over the REST route.
+**Architecture:** A new `chat` module in `aikoql` ports the training repo's two-skill protocol (query, answer) and runs: model query → `execute_readonly` (scoped) → retrieval fallback → model answer → server-side grounding check → audit. The model is reached through a `Generate` trait (blocking `ureq` client in production, a stub in tests). Studio gets an Ask panel over the REST route.
 
-**Tech Stack:** Rust (`aikoql-mcp` bin crate, existing `ureq` 2, `serde_json`), Studio vanilla JS (`assets/studio/app.js`, `studio.rs`), Node/playwright e2e (`tests/e2e/studio/run.js`), Python (one fixture-generator script).
+**Tech Stack:** Rust (`aikoql` bin crate, existing `ureq` 2, `serde_json`), Studio vanilla JS (`assets/studio/app.js`, `studio.rs`), Node/playwright e2e (`tests/e2e/studio/run.js`), Python (one fixture-generator script).
 
 **Spec:** `docs/superpowers/specs/2026-11-06-tenant-chat-design.md` (read it, including "Decisions from the builder review").
 
 ## Global Constraints
 
 - TDD RED-first: every RED test is its own commit (it must fail on assertions, not on a compile error — add the smallest stub so it compiles), then the fix commit. One task = one commit set.
-- The branch's tip commit stream ends with the dogfood re-stamp: `AIKOQL_BINARY=target/debug/aikoql-mcp /tmp/aikoql-dogfood-venv/bin/python scripts/dogfood-review-loop.py full`, commit `docs/PR6-TDD-DISPOSITIONS.md`, then `bash scripts/check-disposition-head.sh` must pass.
+- The branch's tip commit stream ends with the dogfood re-stamp: `AIKOQL_BINARY=target/debug/aikoql /tmp/aikoql-dogfood-venv/bin/python scripts/dogfood-review-loop.py full`, commit `docs/PR6-TDD-DISPOSITIONS.md`, then `bash scripts/check-disposition-head.sh` must pass.
 - Never push. Zero `cargo clippy --workspace --all-targets -- -D warnings` warnings; `cargo fmt --check` clean.
 - Commit trailer: `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
-- PATH for cargo: `export PATH="$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:$PATH"`. `aikoql-mcp` is a bin crate: unit tests run with `cargo test -p aikoql-mcp --bin aikoql-mcp <name>`.
+- PATH for cargo: `export PATH="$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:$PATH"`. `aikoql` is a bin crate: unit tests run with `cargo test -p aikoql --bin aikoql <name>`.
 - No new heavy dependency; the model call uses the `ureq` already in `crates/services/api/mcp/Cargo.toml`. No model weights in the repo or binary.
 - No model/LLM is required for anything except chat. With `[chat]` unset, every existing behaviour is unchanged and chat answers "disabled".
 - Prompts are byte-identical to `training/src/aikoql_training/inference.py` (`build_query_prompt`, `build_answer_prompt`); that Python file is the source of truth.
@@ -57,9 +57,9 @@ Failure modes the spec implies that no single task's tests would otherwise exerc
 
 - [ ] **Step 1: Generate the fixture** with `scripts/gen-chat-prompt-fixtures.py` (imports `aikoql_training.inference`, writes `prompts.json` holding `{"query": [{"question", "prompt"}...], "answer": [{"question","statements","prompt"}...]}` for ≥4 inputs including a unicode question and an empty statement list). Run it with the dogfood venv with `pip install -e training` available; commit the JSON.
 - [ ] **Step 2: Write failing tests**: `prompts_equal_the_python_fixtures` (loads `prompts.json` via `include_str!`, asserts both builders produce the exact `prompt` strings); `query_reply_accepts_query_or_refusal` (exactly one set); `query_reply_rejects` (both set, neither set, unknown field `{"query":"x","extra":1}`, duplicate key `{"query":"a","query":"b"}`, non-object, empty, prose-only); `reply_tolerates_prose_and_fence` (`"Sure!\n```json\n{...}\n```"` parses); `answer_reply_cross_constraints` (a refusal has `answer` starting `UNKNOWN:`, empty claims, `grounded=false`; a grounded answer has ≥1 claim; violations are `Err`); `answer_reply_rejects_wrong_types`; a seeded fuzz `parsers_never_panic_on_random_text` (xorshift, 2000 random strings from a token list incl. unbalanced braces, deep nesting 10_000 `{`, NUL, unicode). Mirror the semantics of `training/src/aikoql_training/inference.py` and its tests in `training/tests/test_protocol.py` / `test_protocol_fuzz.py`.
-- [ ] **Step 3: Run RED** `cargo test -p aikoql-mcp --bin aikoql-mcp chat::protocol` — fails on assertions (stub functions return `String::new()` / `Err`). Commit `test(chat): RED — protocol prompts and strict parsers`.
+- [ ] **Step 3: Run RED** `cargo test -p aikoql --bin aikoql chat::protocol` — fails on assertions (stub functions return `String::new()` / `Err`). Commit `test(chat): RED — protocol prompts and strict parsers`.
 - [ ] **Step 4: Implement** the functions in `protocol.rs`: first `{` then `serde_json` streaming parse of the first object with a duplicate-key check (a custom `Deserialize` visitor or a pre-scan), strict field sets, recursion-depth guard (reject, never overflow the stack).
-- [ ] **Step 5: Run GREEN**; `cargo clippy -p aikoql-mcp --all-targets -- -D warnings`; commit `feat(chat): protocol prompts and strict parsers`.
+- [ ] **Step 5: Run GREEN**; `cargo clippy -p aikoql --all-targets -- -D warnings`; commit `feat(chat): protocol prompts and strict parsers`.
 
 ### Task 2: `[chat]` config and the status route
 
@@ -144,7 +144,7 @@ Failure modes the spec implies that no single task's tests would otherwise exerc
 - Disabled (no `[chat]`) → `POST` returns 503 `{"error":"chat is not configured — add a [chat] table to aikoql.toml"}`; error→status mapping extended: `question must be` → 400, `chat is not configured` → 503.
 
 - [ ] **Step 1: Failing tests** — `m10_chat_disabled_is_503_with_guidance`; `m10_status_disabled`; `m10_empty_and_oversize_question_are_400` (also whitespace-only, 2001 chars; a NUL/emoji question is accepted); `m10_tenant_scoped_user_cannot_pick_another_tenant`; `m10_viewer_can_chat_but_unauthenticated_gets_401`; `m10_audit_line_has_ids_and_no_answer_text` (call `tool_chat` with an explicit stub via a `tool_chat_with(k, model, ...)` seam; read the audit file and assert the answer string is absent and the koids present). The `HttpModel` path is covered by Task 5; REST tests use the disabled path and the seam.
-- [ ] **Step 2: RED commit; Step 3: implement; Step 4: GREEN + clippy + the full `cargo test -p aikoql-mcp --no-fail-fast`; commit** `feat(chat): POST /api/v1/chat, status route, audit`.
+- [ ] **Step 2: RED commit; Step 3: implement; Step 4: GREEN + clippy + the full `cargo test -p aikoql --no-fail-fast`; commit** `feat(chat): POST /api/v1/chat, status route, audit`.
 
 ### Task 8: Studio Ask panel
 
@@ -158,7 +158,7 @@ Failure modes the spec implies that no single task's tests would otherwise exerc
 
 - [ ] **Step 1: Failing e2e checks** (extend `run.js`; start a stub OpenAI server in the harness on a free port and pass `[chat]` via a temp `aikoql.toml`/env the e2e server already supports — builder: reuse how the harness sets `AIKOQL_ADMIN_PASSWORD`; if the server only reads `aikoql.toml` from cwd, write one into the harness temp dir): `Ask panel shows the not-configured notice when chat is disabled` (run first against a server without `[chat]`); with the stub: `a grounded answer shows the green badge and its facts`, `a refused answer shows the amber badge`, `a koid link opens the Inspector`, `a hostile answer string is rendered inertly` (the stub returns `<img src=x onerror=...>`), `no CSP violation and no console error on the Ask panel`.
 - [ ] **Step 2: Run e2e RED** (new checks fail on assertions); commit `test(studio): RED — Ask panel e2e`.
-- [ ] **Step 3: Implement** panel + handlers; **Step 4: GREEN** `node tests/e2e/studio/run.js` (49 existing + new all pass) and `cargo test -p aikoql-mcp --bin aikoql-mcp studio`; commit `feat(studio): Ask panel`.
+- [ ] **Step 3: Implement** panel + handlers; **Step 4: GREEN** `node tests/e2e/studio/run.js` (49 existing + new all pass) and `cargo test -p aikoql --bin aikoql studio`; commit `feat(studio): Ask panel`.
 
 ### Task 9: Docs, evaluation harness, dogfood gate, changelog, re-stamp
 
@@ -174,7 +174,7 @@ Failure modes the spec implies that no single task's tests would otherwise exerc
 - [ ] **Step 2:** write the questions and `chat-eval.py`; run it against a scratch server with `[chat]` pointing at a deterministic stub script (`scripts/` or the e2e stub) to produce the committed `baseline.json` labelled `"model": "stub"` (it proves the harness and the refusal path; it is **not** a quality claim).
 - [ ] **Step 3: Dogfood (Studio rule):** start a scratch server (db under the session scratchpad, not `/tmp`), ingest this repo, configure `[chat]` to the stub, open Studio at the Ask panel, ask three real questions about this repo, leave the server running, give the owner the URL and login.
 - [ ] **Step 4: Real-adapter gate (separate, reported, not required to pass):** if the owner supplies a served endpoint or the adapter, run `chat-eval.py` against it and record the numbers in `docs/CHAT.md`; otherwise write "not run — adapter weights not available on this machine" in the final report.
-- [ ] **Step 5:** `CHANGELOG.md` entry; all gates: `cargo fmt --check`, workspace clippy, `cargo test -p aikoql-mcp --no-fail-fast`, `cargo test -p aikoql-ingestion --no-fail-fast`, e2e, `scripts/check-*.sh` (red-archives, skip-drift, strong-claims, test-env-hygiene, shuffle-wiring, architecture-hygiene, disposition-head); add any new gated/skipped cell to `tests/gated.toml` if `check-skip-drift` demands. Re-stamp the dispositions doc as the tip commit.
+- [ ] **Step 5:** `CHANGELOG.md` entry; all gates: `cargo fmt --check`, workspace clippy, `cargo test -p aikoql --no-fail-fast`, `cargo test -p aikoql-ingestion --no-fail-fast`, e2e, `scripts/check-*.sh` (red-archives, skip-drift, strong-claims, test-env-hygiene, shuffle-wiring, architecture-hygiene, disposition-head); add any new gated/skipped cell to `tests/gated.toml` if `check-skip-drift` demands. Re-stamp the dispositions doc as the tip commit.
 
 ## Self-review notes
 

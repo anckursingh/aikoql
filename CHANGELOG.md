@@ -7,6 +7,15 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Renamed: `aikoql-mcp` is now `aikoql` (breaking)
+
+The binary, the cargo package and the npm package are all `aikoql`: `aikoql serve`, `cargo install aikoql`,
+`npx aikoql`. Release assets are `aikoql.exe`, `aikoql-linux`, `aikoql-linux-musl`, `aikoql-macos` and
+`aikoql-macos-arm64` (with `.sha256`). `--version` prints `aikoql <version>`. Unchanged on purpose: the MCP
+`serverInfo.name` (`aikoql-mcp`) and the `aikoql-mcp ready` log lines, which clients and tests match; the
+directory `crates/services/api/mcp`; the environment variables (`AIKOQL_*`). The old npm package `aikoql-mcp`
+stays published at 0.4.0; run `npm deprecate aikoql-mcp "renamed to aikoql"`.
+
 ### Prepared statements: parameters are bound by the server (security fix)
 
 The Python, Go and Java `prepare()/bind()` used to splice JSON-quoted text into the query with a plain

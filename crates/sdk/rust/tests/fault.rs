@@ -109,7 +109,7 @@ fn spawn_server(bin: &str, token: &str) -> Server {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn aikoql-mcp with --native-port");
+            .expect("spawn aikoql with --native-port");
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             if TcpStream::connect(&addr).is_ok() {

@@ -1,9 +1,9 @@
 // AG-62 gate — the one-command public trial (scripts/public-trial.sh)
 // wires the verified Cloudflare-tunnel recipe: a cloudflared quick tunnel
-// to the loopback serve surface, aikoql-mcp started under it with
+// to the loopback serve surface, aikoql started under it with
 // AIKOQL_PUBLIC_URL = the tunnel URL, the connector URL printed, and an
 // admin password generated when none is set.
-// Shims stand in for cloudflared/aikoql-mcp (a real tunnel needs a public
+// Shims stand in for cloudflared/aikoql (a real tunnel needs a public
 // endpoint and a login), so the assertions pin the WIRING, not the tunnel.
 // Usage: node scripts/e2e-public-trial.js
 const { spawn, spawnSync } = require('child_process');
@@ -37,10 +37,10 @@ shim(
     'while true; do sleep 1; done',
   ].join('\n'),
 );
-// aikoql-mcp: record args + the env the script exported, then exit — the
+// aikoql: record args + the env the script exported, then exit — the
 // script should then clean up and exit 0.
 shim(
-  'aikoql-mcp',
+  'aikoql',
   [
     `echo "$@" > "${dir}/serve.args"`,
     `echo "\${AIKOQL_PUBLIC_URL:-}" > "${dir}/public-url"`,
@@ -76,7 +76,7 @@ if (read(`${dir}/cloudflared.args`) !== 'tunnel --url http://127.0.0.1:9091') {
 }
 const serve = read(`${dir}/serve.args`);
 if (serve !== `serve --metrics-addr 127.0.0.1:9091 ${db}`) {
-  fail(`aikoql-mcp got wrong args: ${serve}`);
+  fail(`aikoql got wrong args: ${serve}`);
 }
 if (read(`${dir}/public-url`) !== url) {
   fail(`AIKOQL_PUBLIC_URL not the tunnel URL: ${read(`${dir}/public-url`)}`);

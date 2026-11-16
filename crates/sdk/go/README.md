@@ -12,8 +12,8 @@ defer client.Close()
 //     aikoql.WithTLS(&tls.Config{RootCAs: pool}))
 ```
 
-`DialStdio` spawns and talks to an `aikoql-mcp` binary directly (the docker `-i` contract). The [web-service example](examples/web-service) is the "other application" proof: an HTTP API on top of one pooled client.
+`DialStdio` spawns and talks to an `aikoql` binary directly (the docker `-i` contract). The [web-service example](examples/web-service) is the "other application" proof: an HTTP API on top of one pooled client.
 
-- Tests: `AIKOQL_MCP_BIN=$PWD/target/release/aikoql-mcp go test -v ./...`
+- Tests: `AIKOQL_MCP_BIN=$PWD/target/release/aikoql go test -v ./...`
 - Fuzz smokes (8 targets): `go test -fuzz '^Fuzz' -fuzztime 5s .` (one target at a time)
 - License: AGPL-3.0-only

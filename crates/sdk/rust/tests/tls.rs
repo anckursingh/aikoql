@@ -86,7 +86,7 @@ fn spawn(bin: &str, flag: &str, tag: &str) -> (Server, String) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn aikoql-mcp");
+        .expect("spawn aikoql");
     let srv = Server { child, dir };
     let deadline = Instant::now() + Duration::from_secs(15);
     while TcpStream::connect(&addr).is_err() {

@@ -505,7 +505,7 @@ done
 # (one level short; the workflow expression had never been executed
 # anywhere before the push).
 gs=$(sed -n '/^  go-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF")
-if ! printf '%s\n' "$gs" | has '"$PWD/../../../target/release/aikoql-mcp"'; then
+if ! printf '%s\n' "$gs" | has '"$PWD/../../../target/release/aikoql"'; then
   echo "ARCH: the go-sdk job's AIKOQL_MCP_BIN is not pinned at the workspace-root depth (CI-13)" >&2
   fail=1
 fi

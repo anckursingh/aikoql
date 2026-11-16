@@ -31,7 +31,7 @@ impl Drop for Client {
 
 impl Client {
     fn serve(root: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_aikoql"))
             .arg("serve")
             .arg(root.join("db"))
             .env("AIKOQL_MEMORY_DIR", root.join("memory"))
@@ -40,7 +40,7 @@ impl Client {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn aikoql-mcp serve");
+            .expect("spawn aikoql serve");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let mut c = Client {

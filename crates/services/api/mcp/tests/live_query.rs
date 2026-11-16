@@ -35,10 +35,10 @@ struct Client {
 impl Client {
     fn serve(root: &Path) -> Self {
         let mut exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        exe.push("../../../../target/debug/aikoql-mcp");
+        exe.push("../../../../target/debug/aikoql");
         #[cfg(windows)]
         exe.set_extension("exe");
-        assert!(exe.exists(), "aikoql-mcp not built; run cargo build first");
+        assert!(exe.exists(), "aikoql not built; run cargo build first");
         let mut child = Command::new(&exe)
             // The kernel opens <db> itself — it must not exist yet (an
             // empty dir is "not an aikoql-v2 database").
@@ -49,7 +49,7 @@ impl Client {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn aikoql-mcp serve");
+            .expect("spawn aikoql serve");
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let (tx, rx) = mpsc::channel();

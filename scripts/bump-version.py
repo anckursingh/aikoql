@@ -89,7 +89,7 @@ def main() -> None:
         p.write_text(text, encoding="utf-8", newline="")
         changed += n
     print(f"bumped {old} -> {new}: {changed} pin sites across {len(PINNED)} files")
-    print("next: bump Cargo.lock via cargo build, rebuild target/release/aikoql-mcp, run the gates")
+    print("next: bump Cargo.lock via cargo build, rebuild target/release/aikoql, run the gates")
 
 
 def check(old: str) -> None:

@@ -1,4 +1,4 @@
-//! Enterprise license verification (Task 2). aikoql-mcp is a binary crate
+//! Enterprise license verification (Task 2). aikoql is a binary crate
 //! (no lib target to link), so the module under test is compiled directly
 //! into this test crate. Fixtures are signed with a TEST keypair generated
 //! here (ring) — never the production key, whose private half is off-repo —
@@ -144,7 +144,7 @@ fn production_public_key_is_a_valid_ed25519_key() {
     assert_eq!(pk.len(), 32, "ed25519 public keys are 32 bytes");
 }
 
-// --- startup degradation (spawns the aikoql-mcp binary) ---
+// --- startup degradation (spawns the aikoql binary) ---
 
 /// A license signed by a TEST keypair — the production key rejects it — must
 /// degrade to community mode: the server still starts, /health responds, and

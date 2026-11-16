@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AG-61 — the memory cells long-term-memory benchmarks do not measure.
 
-Driven through `aikoql-mcp serve` over stdio, like longmemeval.py:
+Driven through `aikoql serve` over stdio, like longmemeval.py:
 
 - contradiction: a fact, then a conflicting value for the same key in a
   later conversation (remember_facts). Pass = a Conflict is recorded AND the
@@ -78,7 +78,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--out")
-    ap.add_argument("--binary", default="target/release/aikoql-mcp")
+    ap.add_argument("--binary", default="target/release/aikoql")
     a = ap.parse_args()
     work = tempfile.mkdtemp(prefix="aikoql-cells-")
     m = Mcp(a.binary, os.path.join(work, "db"), os.path.join(work, "memory"))

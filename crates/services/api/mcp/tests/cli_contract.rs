@@ -9,7 +9,7 @@
 //! through the repo-built binary (dogfood rule) — in-process subcommands
 //! that open the db directly like shell/backup (no token, no server).
 //!
-//! The binary must be built first: `cargo build --bin aikoql-mcp`
+//! The binary must be built first: `cargo build --bin aikoql`
 //! (cargo test does NOT build bins).
 
 use serde_json::{json, Value as J};
@@ -29,12 +29,12 @@ fn docs(name: &str) -> String {
 
 fn server_bin() -> PathBuf {
     let mut exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    exe.push("../../../../target/debug/aikoql-mcp");
+    exe.push("../../../../target/debug/aikoql");
     #[cfg(windows)]
     exe.set_extension("exe");
     assert!(
         exe.exists(),
-        "aikoql-mcp binary not built at {:?}; run `cargo build --bin aikoql-mcp` first",
+        "aikoql binary not built at {:?}; run `cargo build --bin aikoql` first",
         exe
     );
     exe
@@ -69,7 +69,7 @@ fn run_bin(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     let out = Command::new(server_bin())
         .args(args)
         .output()
-        .expect("run aikoql-mcp");
+        .expect("run aikoql");
     (
         out.status,
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -112,7 +112,7 @@ impl StdioClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn aikoql-mcp");
+            .expect("spawn aikoql");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         StdioClient {
@@ -374,7 +374,7 @@ fn cl01e_wire_32004_roless_session() {
         .arg("roletok")
         .arg(&db)
         .output()
-        .expect("run aikoql-mcp serve");
+        .expect("run aikoql serve");
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -608,7 +608,7 @@ fn cl04_fresh_shell_default_is_an_honest_v2_directory() {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("spawn aikoql-mcp shell");
+            .expect("spawn aikoql shell");
         let mut si = child.stdin.take().unwrap();
         writeln!(si, "{line}").unwrap();
         drop(si); // EOF — the shell exits

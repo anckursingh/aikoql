@@ -1,5 +1,5 @@
 // Package aikoql is the Go SDK for the AikoQL knowledge database. It
-// speaks MCP JSON-RPC over TCP or stdio to an aikoql-mcp server — the
+// speaks MCP JSON-RPC over TCP or stdio to an aikoql server — the
 // same first-class surface the Python SDK and standard MCP clients use:
 //
 //	ctx := context.Background()
@@ -44,7 +44,7 @@ import (
 	"time"
 )
 
-// MIN_SERVER_VERSION is the oldest aikoql-mcp server this SDK will talk
+// MIN_SERVER_VERSION is the oldest aikoql server this SDK will talk
 // to (the ND-12 version contract, mirrored from the Python SDK; pinned
 // against the workspace version by the go-sdk CI job).
 const MIN_SERVER_VERSION = "0.4.0"
@@ -112,7 +112,7 @@ type transport interface {
 	SetDeadline(t time.Time) error
 }
 
-// Client is one MCP JSON-RPC connection to an aikoql-mcp server.
+// Client is one MCP JSON-RPC connection to an aikoql server.
 type Client struct {
 	tr     transport
 	r      *bufio.Reader
@@ -127,7 +127,7 @@ type Client struct {
 
 // Dial opens a TCP connection to addr ("host:port"). The handshake is
 // separate (Initialize) so a pooled Client can dial first and authenticate
-// later; every aikoql-mcp TCP server requires the token.
+// later; every aikoql TCP server requires the token.
 func Dial(ctx context.Context, addr string, opts ...Option) (*Client, error) {
 	cfg := clientConfig{name: "aikoql-go-sdk", version: Version, dialTimeout: 5 * time.Second}
 	for _, o := range opts {
@@ -574,7 +574,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 		return &McpError{
 			Code:       "VERSION_MISMATCH",
 			Message:    fmt.Sprintf("server version %q is older than the SDK minimum %s", res.ServerInfo.Version, MIN_SERVER_VERSION),
-			Suggestion: "Upgrade the aikoql-mcp server to a supported version",
+			Suggestion: "Upgrade the aikoql server to a supported version",
 		}
 	}
 	return nil

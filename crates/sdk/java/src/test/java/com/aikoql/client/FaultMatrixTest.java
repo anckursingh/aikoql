@@ -48,7 +48,7 @@ import org.junit.jupiter.api.function.Executable;
 class FaultMatrixTest {
 
     private static final String TOKEN = "test-token";
-    private static final String MCP_BIN = bin("aikoql-mcp");
+    private static final String MCP_BIN = bin("aikoql");
     private static final String PROXY_BIN = bin("aikoql-fault-proxy");
 
     private final List<Process> procs = new ArrayList<>();
@@ -57,7 +57,7 @@ class FaultMatrixTest {
     /** The debug binary, or "" (the test skips) — AIKOQL_MCP_BIN names it
      * on CI and the laptop smoke. */
     private static String bin(String name) {
-        String env = System.getenv(name.equals("aikoql-mcp") ? "AIKOQL_MCP_BIN" : "AIKOQL_FAULT_PROXY");
+        String env = System.getenv(name.equals("aikoql") ? "AIKOQL_MCP_BIN" : "AIKOQL_FAULT_PROXY");
         if (env != null && !env.isEmpty()) {
             return env;
         }
@@ -138,7 +138,7 @@ class FaultMatrixTest {
     private String faultEnv(String mode, String... extra) throws Exception {
         // the not-built skip must come before anything is spawned
         if (MCP_BIN.isEmpty() || PROXY_BIN.isEmpty()) {
-            org.junit.jupiter.api.Assumptions.abort("aikoql-mcp/aikoql-fault-proxy not built — real-server fault matrix skipped");
+            org.junit.jupiter.api.Assumptions.abort("aikoql/aikoql-fault-proxy not built — real-server fault matrix skipped");
         }
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
@@ -150,7 +150,7 @@ class FaultMatrixTest {
                         "--listen", "127.0.0.1:" + srvPort,
                         "--tcp-token", TOKEN + "::admin"), srvErr);
                 Process srv = procs.get(procs.size() - 1);
-                waitUp(srvPort, srv, srvErr, "aikoql-mcp");
+                waitUp(srvPort, srv, srvErr, "aikoql");
 
                 int pxPort = freePort();
                 File pxErr = tmpDir.resolve("proxy.err").toFile();
@@ -175,7 +175,7 @@ class FaultMatrixTest {
 
     private Connection dial(String addr) throws Exception {
         if (MCP_BIN.isEmpty() || PROXY_BIN.isEmpty()) {
-            org.junit.jupiter.api.Assumptions.abort("aikoql-mcp/aikoql-fault-proxy not built — real-server fault matrix skipped");
+            org.junit.jupiter.api.Assumptions.abort("aikoql/aikoql-fault-proxy not built — real-server fault matrix skipped");
         }
         Connection c = AikoqlClient.dial(addr).withToken(TOKEN);
         c.initialize(null);

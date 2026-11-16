@@ -42,7 +42,7 @@ function findBin(name: string): string | undefined {
   return fs.existsSync(p) ? p : undefined;
 }
 
-const MCP_BIN = process.env.AIKOQL_MCP_BIN ?? findBin("aikoql-mcp");
+const MCP_BIN = process.env.AIKOQL_MCP_BIN ?? findBin("aikoql");
 const PROXY_BIN = process.env.AIKOQL_FAULT_PROXY ?? findBin("aikoql-fault-proxy");
 
 function requireBins(t: TestContext): boolean {
@@ -97,7 +97,7 @@ async function faultEnv(
         stdio: ["ignore", "ignore", fs.openSync(path.join(dir, "srv.err"), "w")],
         windowsHide: true,
       });
-      await waitUp(srvPort, srv, path.join(dir, "srv.err"), "aikoql-mcp");
+      await waitUp(srvPort, srv, path.join(dir, "srv.err"), "aikoql");
 
       const pxPort = await freePort();
       const errFile = path.join(dir, "proxy.err");

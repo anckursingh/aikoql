@@ -4,17 +4,17 @@ aikoql is a knowledge database with built-in encryption, hybrid vector+text sear
 
 ## 5-Second Start
 
-The binary is named **`aikoql-mcp`**. Install it — pick one:
+The binary is named **`aikoql`**. Install it — pick one:
 
 ```bash
-npm i -g aikoql-mcp   # launcher fetches the right binary for your OS
+npm i -g aikoql   # launcher fetches the right binary for your OS
 # or download from https://github.com/anckursingh/aikoql/releases (SHA-256 files alongside)
 ```
 
 Then see it work immediately — the interactive shell (a real database, in your terminal):
 
 ```bash
-aikoql-mcp shell
+aikoql shell
 # aikoql> CREATE note body == "hello"
 # aikoql> MATCH note RETURN *
 # aikoql> .exit
@@ -22,8 +22,8 @@ aikoql-mcp shell
 
 From there, serve it to agents:
 
-- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql-mcp@0.4.0 serve ./kb`
-- **TCP + Studio UI:** `aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091` → open http://127.0.0.1:9091/studio (no default credentials — set `AIKOQL_ADMIN_PASSWORD` on first start to bootstrap the admin login)
+- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql@0.4.0 serve ./kb`
+- **TCP + Studio UI:** `aikoql serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091` → open http://127.0.0.1:9091/studio (no default credentials — set `AIKOQL_ADMIN_PASSWORD` on first start to bootstrap the admin login)
 
 ## Usage Modes
 
@@ -31,7 +31,7 @@ From there, serve it to agents:
 The MCP server runs over stdin/stdout. Ideal for desktop AI tools (Claude Code, VS Code, etc.) that spawn the binary as a child process.
 
 ```
-aikoql-mcp serve [database_path]
+aikoql serve [database_path]
 ```
 
 A fresh path creates an `aikoql-v2` directory — the only engine since
@@ -42,21 +42,21 @@ one fails closed with an explicit error.
 Accepts multiple MCP client connections over TCP. Requires a token — `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2[,agent=NAME]]]` (repeatable; also `AIKOQL_TCP_TOKEN` env, `AIKOQL_TCP_TOKEN_FILE`, or `tcp_tokens` in `aikoql.toml`). Refuses to start without one — and a bare `TOKEN` (no roles) exits 2, roles are mandatory. A `viewer` token is read-only (read tools, and only `MATCH` through `aikoql`). A token names its agent with an `agent=NAME` entry in the role list (`--tcp-token s3cret:acme:editor,agent=alice`); without one the token is the agent `tcp-agent`. Each named agent is its own principal: its private memories, its `agent_memory` (over TCP `agent_id` is always the token's agent), its audit subject and its own rate budget. Give every agent its own token.
 
 ```
-aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin [database_path]
+aikoql serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin [database_path]
 ```
 
 ### TCP + Metrics (REST API + Studio)
 Starts the HTTP server with REST API, health endpoints, and the Studio web UI:
 
 ```
-aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091 [database_path]
+aikoql serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091 [database_path]
 ```
 
 ### Metrics-Only Mode (Studio UI)
 For local use where you only need the Studio web interface and REST API (no MCP over TCP):
 
 ```
-aikoql-mcp serve --metrics-addr 127.0.0.1:9191
+aikoql serve --metrics-addr 127.0.0.1:9191
 ```
 
 (A fresh `serve` with no path creates the `./aikoql-v2` database directory —
@@ -81,16 +81,16 @@ aikoql includes a built-in web-based Studio for visual knowledge management. No 
 ```bash
 # Start with metrics-addr (any port):
 # Windows:
-aikoql-mcp serve .\kb --metrics-addr 127.0.0.1:9191
+aikoql serve .\kb --metrics-addr 127.0.0.1:9191
 
 # Linux:
-./aikoql-mcp serve ./kb --metrics-addr 127.0.0.1:9191
+./aikoql serve ./kb --metrics-addr 127.0.0.1:9191
 ```
 
 Open **http://127.0.0.1:9191/studio** in your browser. There are no default
 credentials: set `AIKOQL_ADMIN_PASSWORD` on first start to bootstrap an
 admin login, or configure users under `[auth]` in `aikoql.toml` (argon2id
-hashes — `aikoql-mcp hash-password` prints one).
+hashes — `aikoql hash-password` prints one).
 
 ### Studio Panels
 
@@ -190,7 +190,7 @@ key_path = "./aikoql.key"
 employee = ["salary", "ssn"]
 ```
 
-1. Generate the master key: `aikoql-mcp keygen ./aikoql.key` — passphrase comes
+1. Generate the master key: `aikoql keygen ./aikoql.key` — passphrase comes
    from `AIKOQL_PASSPHRASE`, else one is generated and printed once (save it).
 2. Start serve with `AIKOQL_PASSPHRASE` set (or the TOML `passphrase`).
 
@@ -207,7 +207,7 @@ by the master key. **Back up both files together** — the key file alone no
 longer opens the database. Rotate the master key with the server stopped:
 
 ```bash
-AIKOQL_PASSPHRASE=... aikoql-mcp key rotate ./kb
+AIKOQL_PASSPHRASE=... aikoql key rotate ./kb
 ```
 
 Every data key is rewrapped under the new master key (nothing is
@@ -221,27 +221,27 @@ Requires: Rust toolchain (https://rustup.rs). No other dependencies for Windows.
 
 ```bash
 # Windows — fast path (just the MCP server):
-cargo build --release -p aikoql-mcp
-# → target/release/aikoql-mcp.exe
+cargo build --release -p aikoql
+# → target/release/aikoql.exe
 
 # Windows — full build with scripts:
 scripts\build-release.bat
 
 # Linux — native build:
-cargo build --release -p aikoql-mcp
+cargo build --release -p aikoql
 bash scripts/build-release.sh
 
 # Linux — cross-compile from Windows:
 # Requires x86_64-linux-musl-gcc (try WSL Ubuntu for native Linux builds).
 rustup target add x86_64-unknown-linux-musl
-cargo build --release -p aikoql-mcp --target x86_64-unknown-linux-musl
+cargo build --release -p aikoql --target x86_64-unknown-linux-musl
 ```
 
 ### Running Tests
 
 ```bash
 # Unit + integration tests (MCP server):
-cargo test -p aikoql-mcp -- --test-threads=1
+cargo test -p aikoql -- --test-threads=1
 
 # Ingestion pipeline tests (190+ tests):
 cargo test -p aikoql-ingestion
@@ -276,7 +276,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const client = new Client({ name: 'my-agent', version: '1.0.0' });
-await client.connect(new StdioClientTransport({ command: 'aikoql-mcp', args: ['serve', './kb'] }));
+await client.connect(new StdioClientTransport({ command: 'aikoql', args: ['serve', './kb'] }));
 const result = await client.callTool({ name: 'remember', arguments: { type_name: 'note', properties: { body: 'Hello' } } });
 ```
 
@@ -285,7 +285,7 @@ const result = await client.callTool({ name: 'remember', arguments: { type_name:
 First-party zero-dependency SDKs: the Go module and the Java client
 (`com.aikoql.client`) speak the same MCP contract as the TypeScript client —
 see `crates/sdk/` for each and its conformance suite. Any other language:
-run `aikoql-mcp serve` (stdio or TCP with `--tcp-token`) and use the
+run `aikoql serve` (stdio or TCP with `--tcp-token`) and use the
 standard MCP client for that ecosystem.
 
 ## Data Storage
@@ -328,12 +328,12 @@ Remote MCP clients (Claude Code's `--transport http`, other Streamable-HTTP clie
 
 | Platform | Binary | Status |
 |----------|--------|--------|
-| Windows 10/11 | `aikoql-mcp.exe` | ✅ Full (build + Studio + E2E) |
-| Linux x86_64 | `aikoql-mcp-linux` (GNU) / `aikoql-mcp-linux-musl` (static) | ✅ Full (native build or cross-compile) |
-| macOS ARM | `aikoql-mcp-macos-arm64` | ✅ Shipped binary (GitHub Releases) |
-| macOS Intel | `aikoql-mcp-macos` | ✅ Shipped binary (GitHub Releases) |
+| Windows 10/11 | `aikoql.exe` | ✅ Full (build + Studio + E2E) |
+| Linux x86_64 | `aikoql-linux` (GNU) / `aikoql-linux-musl` (static) | ✅ Full (native build or cross-compile) |
+| macOS ARM | `aikoql-macos-arm64` | ✅ Shipped binary (GitHub Releases) |
+| macOS Intel | `aikoql-macos` | ✅ Shipped binary (GitHub Releases) |
 
-Shipped binaries download from `https://github.com/anckursingh/aikoql/releases` (SHA-256 files alongside), or install via `npm i -g aikoql-mcp` — the launcher downloads, verifies, and runs the right binary automatically.
+Shipped binaries download from `https://github.com/anckursingh/aikoql/releases` (SHA-256 files alongside), or install via `npm i -g aikoql` — the launcher downloads, verifies, and runs the right binary automatically.
 
 ## Next Steps
 
@@ -343,4 +343,4 @@ Shipped binaries download from `https://github.com/anckursingh/aikoql/releases` 
 - Read [MRFC-0040](docs/MRFC-0040-Agent-Experience-Improvements.md) — agent runtime improvements
 - Read [IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) — architecture overview
 - Read [MRFC-0020](docs/MRFC-0020-Encryption-Key-Management-Architecture.md) — encryption design
-- Run `aikoql-mcp --help` for all CLI options
+- Run `aikoql --help` for all CLI options

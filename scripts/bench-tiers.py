@@ -9,7 +9,7 @@ Tiers measured HERE (the launch plan's D-20 RED state: no SDK benchmark):
   protocol       raw wire round-trips, NO SDK in the path: the MCP
                  JSON-RPC newline frames + the D-15 §6 native frames
                  (AKQL header + CRC32-IEEE), hand-rolled against the real
-                 aikoql-mcp binary
+                 aikoql binary
   SDK            the python SDK clients: embedded (PyO3 Agent) + MCP
                  (McpClient with a byte-counting socket) — every SDK cell
                  carries the §30 claim: SDK latency, never engine latency
@@ -216,7 +216,7 @@ def native_data(payload):
 
 def start_server(db_dir):
     exe = REPO / "target" / "release" / \
-        ("aikoql-mcp.exe" if os.name == "nt" else "aikoql-mcp")
+        ("aikoql.exe" if os.name == "nt" else "aikoql")
     # scale.py's pattern: the config sits BESIDE the db dir (S-02 refuses a
     # pre-existing db path; the config must not live inside it), and the
     # default 120 calls/min limit is far below bench rate.
@@ -229,7 +229,7 @@ def start_server(db_dir):
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(120):
         if proc.poll() is not None:
-            raise RuntimeError("aikoql-mcp exited during startup")
+            raise RuntimeError("aikoql exited during startup")
         try:
             s = socket.create_connection(MCP_ADDR, timeout=2.0)
             c = McpRaw(s)
@@ -241,7 +241,7 @@ def start_server(db_dir):
         except Exception:
             time.sleep(0.5)
     proc.terminate()
-    raise RuntimeError("aikoql-mcp did not come up on 9090")
+    raise RuntimeError("aikoql did not come up on 9090")
 
 
 # -------------------------------------------------------------------- cells
@@ -545,7 +545,7 @@ def main():
     parent = Path(tempfile.mkdtemp(prefix="aikoql-tiers-"))
     db_dir = parent / "db"
     try:
-        print("starting aikoql-mcp (MCP + native listeners) ...", flush=True)
+        print("starting aikoql (MCP + native listeners) ...", flush=True)
         server, raw, server_info = start_server(db_dir)
 
         print(f"protocol/MCP x{3 * n} ...", flush=True)

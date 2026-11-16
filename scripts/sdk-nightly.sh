@@ -4,7 +4,7 @@
 # cross-language corpus + pool/stream stress + large payloads). ONE script
 # so the sdk-nightly job in benchmark.yml and a local Linux run certify
 # identically.
-#   Requires: the debug binaries at target/debug (aikoql-mcp + the §18
+#   Requires: the debug binaries at target/debug (aikoql + the §18
 #   aikoql-fault-proxy — the job builds both), the toolchains on PATH
 #   (python3, go, JDK 17 + mvn, node >= 24, rust), and — for the rust
 #   engine arm — the nightly toolchain (fuzz/smoke.sh installs it).
@@ -14,9 +14,9 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-BIN="$(realpath "${AIKOQL_MCP_BIN:-$root/target/debug/aikoql-mcp}")"
+BIN="$(realpath "${AIKOQL_MCP_BIN:-$root/target/debug/aikoql}")"
 PROXY="$(realpath "${AIKOQL_FAULT_PROXY:-$root/target/debug/aikoql-fault-proxy}")"
-[ -x "$BIN" ] || { echo "sdk-nightly: no server at $BIN — build it first (cargo build -p aikoql-mcp -p aikoql-fault-proxy)" >&2; exit 1; }
+[ -x "$BIN" ] || { echo "sdk-nightly: no server at $BIN — build it first (cargo build -p aikoql -p aikoql-fault-proxy)" >&2; exit 1; }
 [ -x "$PROXY" ] || { echo "sdk-nightly: no fault proxy at $PROXY — build it first" >&2; exit 1; }
 export AIKOQL_MCP_BIN="$BIN" AIKOQL_FAULT_PROXY="$PROXY"
 

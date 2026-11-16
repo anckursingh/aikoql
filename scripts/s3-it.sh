@@ -49,9 +49,9 @@ wait_up() { for _ in $(seq 1 75); do curl -sf "$1" >/dev/null 2>&1 && return 0; 
 
 run_tests() {
   cd "$root"
-  cargo build -p aikoql-mcp
-  cargo test -p aikoql-mcp --bin aikoql-mcp real_s3 -- --nocapture
-  cargo test -p aikoql-mcp --test replication_failover real_s3 -- --nocapture
+  cargo build -p aikoql
+  cargo test -p aikoql --bin aikoql real_s3 -- --nocapture
+  cargo test -p aikoql --test replication_failover real_s3 -- --nocapture
   echo "s3-it: OK against $1 ($AIKOQL_TEST_S3_ENDPOINT)"
 }
 

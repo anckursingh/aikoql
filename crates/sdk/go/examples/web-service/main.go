@@ -1,8 +1,8 @@
 // Command web-service is the "other application" proof for the Go SDK: a
-// small HTTP API in front of an aikoql-mcp server, exercising remember,
+// small HTTP API in front of an aikoql server, exercising remember,
 // get, query, and health through one pooled Client.
 //
-//	go run . -addr 127.0.0.1:8080 -token s3cret -db ./kb -bin ../target/release/aikoql-mcp
+//	go run . -addr 127.0.0.1:8080 -token s3cret -db ./kb -bin ../target/release/aikoql
 //	curl -X POST localhost:8080/remember -d '{"type_name":"person","properties":{"name":"ada"}}'
 //	curl localhost:8080/query?q=MATCH%20person%20RETURN%20*
 //	curl localhost:8080/health
@@ -25,11 +25,11 @@ import (
 func main() {
 	var (
 		addr        = flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
-		db          = flag.String("db", "./kb", "aikoql-mcp database directory")
+		db          = flag.String("db", "./kb", "aikoql database directory")
 		token       = flag.String("token", "s3cret", "client token (the TOKEN segment of the server spec)")
 		serverToken = flag.String("server-token", "s3cret:acme:admin", "full --tcp-token spec for the spawned server (TOKEN[:TENANT[:ROLE1,ROLE2]])")
-		bin         = flag.String("bin", "", "aikoql-mcp binary to spawn (skip to use an already-running server)")
-		mcp         = flag.String("mcp", "127.0.0.1:9090", "aikoql-mcp --listen address")
+		bin         = flag.String("bin", "", "aikoql binary to spawn (skip to use an already-running server)")
+		mcp         = flag.String("mcp", "127.0.0.1:9090", "aikoql --listen address")
 	)
 	flag.Parse()
 
@@ -126,7 +126,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
 
-// spawn starts an aikoql-mcp server and returns a stop func. Readiness is
+// spawn starts an aikoql server and returns a stop func. Readiness is
 // the server accepting TCP connections.
 func spawn(bin, listen, db, token string) (stop func(), err error) {
 	args := []string{"serve", "--listen", listen, "--tcp-token", token, db}

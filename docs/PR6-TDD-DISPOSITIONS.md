@@ -226,7 +226,7 @@ follow-up milestones, one commit each, re-stamping this table as they land.
 ## Compiled from kernel state (P1-8 dogfood)
 
 `scripts/dogfood-review-loop.py full` emits this section from the
-project knowledge base (`./kb`, served by the repo's own aikoql-mcp
+project knowledge base (`./kb`, served by the repo's own aikoql
 plugin; machine state lives in the `.state.json` sidecar). The
 findings are Requirement KOs; the dispositions doc is the compiled
 knowledge document; each re-stamp commit below is reconciled via

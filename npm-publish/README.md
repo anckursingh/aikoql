@@ -1,4 +1,4 @@
-# aikoql-mcp
+# aikoql
 
 **Persistent, progressive memory for AI agents.** AIKOQL is a knowledge
 database your agents write to and read from — every fact stays durable,
@@ -14,11 +14,11 @@ Release, verifies its SHA-256, and execs it — `npm@X` always runs native
 binary `X`.
 
 ```bash
-npm install -g aikoql-mcp
-aikoql-mcp --version
-aikoql-mcp serve ./kb              # MCP server over stdio
+npm install -g aikoql
+aikoql --version
+aikoql serve ./kb              # MCP server over stdio
 ```
 
-`AIKOQL_BINARY=/path/to/aikoql-mcp` skips the download and runs a local binary (the CI tarball smoke uses this because a PR's version has no Release yet).
+`AIKOQL_BINARY=/path/to/aikoql` skips the download and runs a local binary (the CI tarball smoke uses this because a PR's version has no Release yet).
 
 - License: AGPL-3.0-only

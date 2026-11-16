@@ -14,8 +14,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY benchmarks/ benchmarks/
 
-RUN cargo build -p aikoql-mcp --release \
-    && strip target/release/aikoql-mcp
+RUN cargo build -p aikoql --release \
+    && strip target/release/aikoql
 
 # Stage 2: runtime
 FROM debian:bookworm-slim
@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/aikoql-mcp /usr/local/bin/aikoql
+COPY --from=builder /build/target/release/aikoql /usr/local/bin/aikoql
 COPY aikoql.toml /etc/aikoql/aikoql.toml
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 

@@ -35,7 +35,7 @@ fn ms001_a_memory_is_semantically_searchable_right_after_store() {
     let root = std::env::temp_dir().join(format!("memsem-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_aikoql"))
         .args([
             "serve",
             root.join("db").to_str().unwrap(),

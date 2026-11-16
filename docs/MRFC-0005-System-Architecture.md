@@ -25,7 +25,7 @@ Phase 1 (Trustworthy Memory Substrate) is **complete**. The system ships as an e
 | Storage Kernel | ⚠️ In kernel crate | MVCC ✅, StorageEngine trait ✅, WAL/Recovery/Checkpoint/Buffer/Compression/Encryption: future |
 | Physical Storage | ✅ | redb (durable, embedded), MemoryEngine (test) |
 
-**Active crates (6):** `aikoql-kernel`, `aikoql-graph`, `aikoql-vector`, `aikoql-scheduler`, `aikoql-mcp`, `aikoql-py` (Python SDK).
+**Active crates (6):** `aikoql-kernel`, `aikoql-graph`, `aikoql-vector`, `aikoql-scheduler`, `aikoql`, `aikoql-py` (Python SDK).
 
 **Key architectural pattern:** Kernel defines traits (`StorageEngine`, `VectorIndex`, `TextIndex`, `IndexMaintainerApi`). Engine/Service crates provide implementations behind those traits. The kernel never depends on engine crates at runtime. Tests use dev-dependencies.
 

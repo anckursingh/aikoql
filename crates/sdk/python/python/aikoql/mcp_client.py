@@ -1,6 +1,6 @@
 """Pure Python MCP JSON-RPC client for aikoql (MRFC-0040).
 
-Talks to a aikoql-mcp server over TCP. No native dependencies.
+Talks to a aikoql server over TCP. No native dependencies.
 """
 
 import json
@@ -132,7 +132,7 @@ class Transaction:
 
 
 class McpClient:
-    """JSON-RPC 2.0 client for aikoql-mcp over TCP."""
+    """JSON-RPC 2.0 client for aikoql over TCP."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 9090, token: Optional[str] = None,
                  tls: Optional[ssl.SSLContext] = None):
@@ -339,7 +339,7 @@ class McpClient:
                     f"minimum {MIN_SERVER_VERSION}"
                 ),
                 retryable=False,
-                suggestion="Upgrade the aikoql-mcp server to a supported version",
+                suggestion="Upgrade the aikoql server to a supported version",
             )
         return result
 

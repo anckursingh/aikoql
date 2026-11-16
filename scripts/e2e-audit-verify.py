@@ -9,7 +9,7 @@ per-commit `journal_signatures` chain (each event signs its predecessor's
 signature and its audit hash). Tampered chains must fail.
 
   pip install cryptography
-  python scripts/e2e-audit-verify.py [path/to/aikoql-mcp]
+  python scripts/e2e-audit-verify.py [path/to/aikoql]
 """
 import json
 import os
@@ -23,7 +23,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
 def main():
-    binary = sys.argv[1] if len(sys.argv) > 1 else "target/debug/aikoql-mcp"
+    binary = sys.argv[1] if len(sys.argv) > 1 else "target/debug/aikoql"
     root = tempfile.mkdtemp(prefix="e2e-audit-verify-")
     try:
         key = os.path.join(root, "audit.key")

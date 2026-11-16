@@ -1,6 +1,6 @@
 """Integration tests for the Aikoql Python MCP Client (MRFC-0040).
 
-Requires: aikoql-mcp binary built (cargo build -p aikoql-mcp).
+Requires: aikoql binary built (cargo build -p aikoql).
 Run: pytest tests/test_mcp_client.py -v
 """
 

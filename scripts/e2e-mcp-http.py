@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """MCP over Streamable HTTP with a real client: the official `mcp` SDK's
-streamable_http_client against a real aikoql-mcp server — initialize,
+streamable_http_client against a real aikoql server — initialize,
 tools/list, remember + get, and session termination on close (DELETE).
 Our own tests pin the wire; this proves an independent client agrees.
 
   pip install mcp
-  python scripts/e2e-mcp-http.py [path/to/aikoql-mcp]
+  python scripts/e2e-mcp-http.py [path/to/aikoql]
 """
 import asyncio
 import json
@@ -105,7 +105,7 @@ async def run(url):
 
 
 def main():
-    binary = sys.argv[1] if len(sys.argv) > 1 else "target/debug/aikoql-mcp"
+    binary = sys.argv[1] if len(sys.argv) > 1 else "target/debug/aikoql"
     port = free_port()
     db = tempfile.mkdtemp(prefix="e2e-mcp-http-")
     shutil.rmtree(db)

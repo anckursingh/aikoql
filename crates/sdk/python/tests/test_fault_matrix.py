@@ -76,7 +76,7 @@ def _wait(proc, port, what, stderr_pipe, timeout=15.0):
 def fault_env(mode, *extra):
     """A real server + one fault-proxy instance (one fault mode). The
     port-probe idiom races under parallel legs → 3 spawn attempts."""
-    mcp, proxy = _bin("aikoql-mcp"), _bin("aikoql-fault-proxy")
+    mcp, proxy = _bin("aikoql"), _bin("aikoql-fault-proxy")
     last = None
     for _ in range(3):
         srv = px = None
@@ -89,7 +89,7 @@ def fault_env(mode, *extra):
                  "--listen", f"127.0.0.1:{srv_port}",
                  "--tcp-token", f"{TOKEN}::admin"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            _wait(srv, srv_port, "aikoql-mcp", srv.stderr)
+            _wait(srv, srv_port, "aikoql", srv.stderr)
             px_port = _free_port()
             px = subprocess.Popen(
                 [proxy, "--listen", f"127.0.0.1:{px_port}",

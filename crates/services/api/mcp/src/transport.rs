@@ -387,8 +387,8 @@ pub(crate) fn run_stdio(
     // stderr only: stdout carries MCP protocol frames.
     eprintln!(
         "waiting for an MCP client on stdin/stdout \
-         (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; \
-         for an interactive prompt run: aikoql-mcp shell)"
+         (connect one, e.g. `claude mcp add aikoql -- aikoql serve <db>`; \
+         for an interactive prompt run: aikoql shell)"
     );
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     // AG-12b: server-initiated frames (sampling) leave via this stdout.

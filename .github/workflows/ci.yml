@@ -234,11 +234,11 @@ jobs:
       # CI-05: cargo cache in every build job (default key = OS + rust
       # version + Cargo.lock).
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p aikoql-mcp
+      - run: cargo build --release -p aikoql
       - uses: actions/upload-artifact@v4
         with:
           name: aikoql-linux
-          path: target/release/aikoql-mcp
+          path: target/release/aikoql
 
   # R7 (review round 3): the npm tarball was never smoke-tested in CI — pack
   # it, install it into a clean prefix, and drive a full MCP round-trip
@@ -261,15 +261,15 @@ jobs:
       - name: Pack, clean install, MCP round-trip
         run: |
           set -euo pipefail
-          chmod +x bin/aikoql-mcp
-          export AIKOQL_BINARY="$GITHUB_WORKSPACE/bin/aikoql-mcp"
+          chmod +x bin/aikoql
+          export AIKOQL_BINARY="$GITHUB_WORKSPACE/bin/aikoql"
           tarball=$(cd npm-publish && npm pack --silent)
           tmp=$(mktemp -d)
           cd "$tmp"
           npm init -y >/dev/null 2>&1
           npm install "$GITHUB_WORKSPACE/npm-publish/$tarball" --no-audit --no-fund >/dev/null
-          "$tmp/node_modules/.bin/aikoql-mcp" --version
-          node "$GITHUB_WORKSPACE/npm-publish/smoke-mcp.js" "$tmp/node_modules/.bin/aikoql-mcp"
+          "$tmp/node_modules/.bin/aikoql" --version
+          node "$GITHUB_WORKSPACE/npm-publish/smoke-mcp.js" "$tmp/node_modules/.bin/aikoql"
 
   # E2E dogfood gate (reviewer MVP gate): ingest the checked-out repo, answer
   # the 10 continuity questions over the real MCP surface, then RESTART the
@@ -293,17 +293,17 @@ jobs:
       - name: Ingest → dogfood → restart
         run: |
           set -euo pipefail
-          chmod +x bin/aikoql-mcp
+          chmod +x bin/aikoql
           DB=dogfood.redb
           # crates/ yields the Struct entities the gate asserts, without
           # pulling build artifacts into the corpus. No model is installed
           # here — ingestion degrades to lexical (PRR-3, no downloads).
           # ingest-dir prints "  KOID: <hex>" on stdout; awk '{print $3}' is
           # empty on that line ($1="KOID:", $2=<hex>) — extract by pattern.
-          KOID=$(bin/aikoql-mcp ingest-dir crates "$DB" | sed -n 's/^ *KOID: *//p' | head -1)
+          KOID=$(bin/aikoql ingest-dir crates "$DB" | sed -n 's/^ *KOID: *//p' | head -1)
           [ -n "$KOID" ] || { echo "ingest-dir printed no KOID"; exit 1; }
-          node scripts/e2e-dogfood.js bin/aikoql-mcp "$DB" "$KOID"
-          node scripts/e2e-restart.js bin/aikoql-mcp "$DB"
+          node scripts/e2e-dogfood.js bin/aikoql "$DB" "$KOID"
+          node scripts/e2e-restart.js bin/aikoql "$DB"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -315,9 +315,9 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -q "mcp==2.3.0" "cryptography==50.0.2"
-          python scripts/e2e-mcp-http.py bin/aikoql-mcp
-          python scripts/e2e-mcp-oauth.py bin/aikoql-mcp
-          python scripts/e2e-audit-verify.py bin/aikoql-mcp
+          python scripts/e2e-mcp-http.py bin/aikoql
+          python scripts/e2e-mcp-oauth.py bin/aikoql
+          python scripts/e2e-audit-verify.py bin/aikoql
 
   # MVP-QA-001 GATE-04 (§9.3 decision: connectors ARE in MVP scope): the
   # connector certification suite runs against real databases as GitHub
@@ -382,7 +382,7 @@ jobs:
       # CI-05: cargo cache in every build job (default key = OS + rust
       # version + Cargo.lock).
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p aikoql-mcp --test connector_certification -- --nocapture
+      - run: cargo test -p aikoql --test connector_certification -- --nocapture
         env:
           AIKOQL_TEST_PG_DSN: host=localhost port=5432 user=aikoql password=aikoql-ci dbname=knowledge
           AIKOQL_TEST_PGVECTOR_DSN: host=localhost port=5432 user=aikoql password=aikoql-ci dbname=knowledge
@@ -428,7 +428,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Build server binary (the contract target)
-        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
+        run: cargo build -p aikoql -p aikoql-fault-proxy
       - name: Build native module + run SDK suite
         run: |
           set -euo pipefail
@@ -524,7 +524,7 @@ jobs:
         with:
           go-version: '1.22'
       - name: Build server binary (the contract target)
-        run: cargo build --release -p aikoql-mcp
+        run: cargo build --release -p aikoql
       - name: Vet + unit + real-server integration suite
         run: |
           set -euo pipefail
@@ -532,7 +532,7 @@ jobs:
           go vet ./...
           # crates/sdk/go → three levels up to the workspace-root target
           # (CI's first run caught this one short: ../../target = crates/target).
-          AIKOQL_MCP_BIN="$PWD/../../../target/release/aikoql-mcp" go test -v ./...
+          AIKOQL_MCP_BIN="$PWD/../../../target/release/aikoql" go test -v ./...
 
   # D-19 (SDK plan §28): the three remaining SDKs get the same PR contract
   # shape — build the real server, run the SDK's own suite against it (the
@@ -548,7 +548,7 @@ jobs:
         with:
           node-version: 24
       - name: Build server binary (the contract target)
-        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
+        run: cargo build -p aikoql -p aikoql-fault-proxy
       # fast-check is a devDependency of the SDK package — the fresh runner
       # has no node_modules, and node --test resolves the import from the
       # package's tree (the pushed-head run died on ERR_MODULE_NOT_FOUND).
@@ -559,7 +559,7 @@ jobs:
         run: |
           set -euo pipefail
           cd crates/sdk/typescript
-          AIKOQL_MCP_BIN="$PWD/../../../target/debug/aikoql-mcp" node --test tests/*.test.ts
+          AIKOQL_MCP_BIN="$PWD/../../../target/debug/aikoql" node --test tests/*.test.ts
 
   java-sdk:
     name: Java SDK contract tests
@@ -573,15 +573,15 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Build server binary (the contract target)
-        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
+        run: cargo build -p aikoql -p aikoql-fault-proxy
       - name: Surefire suite (real-server pin + fuzz seed sweep)
         run: |
           set -euo pipefail
           cd crates/sdk/java
           # FaultMatrixTest spawns the fault proxy for every matrix cell —
           # the empty env string surfaced as 13× "Cannot run program \"\""
-          # on the pushed head (the job built only aikoql-mcp until now).
-          AIKOQL_MCP_BIN="$PWD/../../../target/debug/aikoql-mcp" \
+          # on the pushed head (the job built only aikoql until now).
+          AIKOQL_MCP_BIN="$PWD/../../../target/debug/aikoql" \
             AIKOQL_FAULT_PROXY="$PWD/../../../target/debug/aikoql-fault-proxy" \
             mvn -B test
 
@@ -593,11 +593,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build server binary (the contract target)
-        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
+        run: cargo build -p aikoql -p aikoql-fault-proxy
       - name: Suite (conformance + embedded + fault + native + fuzz pins)
         run: |
           set -euo pipefail
-          AIKOQL_MCP_BIN="$PWD/target/debug/aikoql-mcp" cargo test -p aikoql-sdk
+          AIKOQL_MCP_BIN="$PWD/target/debug/aikoql" cargo test -p aikoql-sdk
 
   # D-19 (SDK plan §28): the cross-language §16 golden corpus as ONE gate —
   # the five per-SDK pins plus version parity, so the same-input →

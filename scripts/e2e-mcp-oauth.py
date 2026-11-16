@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MCP over HTTP behind OAuth, with an independent client: the official
 `mcp` SDK's OAuthClientProvider runs the whole client side against a real
-aikoql-mcp server — the 401, protected resource + authorization server
+aikoql server — the 401, protected resource + authorization server
 discovery, dynamic client registration, S256 PKCE, the code exchange — and
 then an MCP session (initialize, tools/list, remember + get). Then the
 server restarts on the same data and port, and the same client reconnects
@@ -10,7 +10,7 @@ The only part scripted here is the person at the browser: the redirect
 handler posts the login form (as signing in on the consent page would).
 
   pip install mcp
-  python scripts/e2e-mcp-oauth.py [path/to/aikoql-mcp]
+  python scripts/e2e-mcp-oauth.py [path/to/aikoql]
 """
 import asyncio
 import json
@@ -131,7 +131,7 @@ def stop(proc):
 
 
 def main():
-    binary = sys.argv[1] if len(sys.argv) > 1 else "target/debug/aikoql-mcp"
+    binary = sys.argv[1] if len(sys.argv) > 1 else "target/debug/aikoql"
     port = free_port()
     db = tempfile.mkdtemp(prefix="e2e-mcp-oauth-")
     shutil.rmtree(db)

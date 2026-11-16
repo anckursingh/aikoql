@@ -143,7 +143,7 @@ seed/generator/schema versions, fail-closed on missing identity
 inputs. Acceptance pinned: two captures of the same immutable state
 produce the same identity (created_at is metadata). RED archived as
 `t-02-snapshot` (13 tests blocked). Live cell green over a spawned
-aikoql-mcp server. Recon added two findings: **embedded
+aikoql server. Recon added two findings: **embedded
 `Agent.health()` is a stub** (journal_seq/audit_hash are MCP-only) and
 **no database identity is exposed** (initialize carries only
 serverInfo) — `database_id` is an explicit operator parameter

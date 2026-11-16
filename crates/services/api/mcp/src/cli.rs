@@ -12,7 +12,7 @@ pub(crate) fn print_usage() {
     println!(concat!(
         "aikoql — Knowledge Database Suite\n",
         "\n",
-        "Usage: aikoql-mcp <COMMAND> [OPTIONS]\n",
+        "Usage: aikoql <COMMAND> [OPTIONS]\n",
         "\n",
         "Commands:\n",
         "  shell [DB]             Interactive aikoql shell (REPL)\n",
@@ -80,22 +80,22 @@ pub(crate) fn print_usage() {
         "  than paced MCP writes.\n",
         "\n",
         "Examples:\n",
-        "  aikoql-mcp shell                           # Interactive shell\n",
-        "  aikoql-mcp shell :memory:                  # In-memory shell\n",
-        "  aikoql-mcp serve                           # Stdio MCP server\n",
-        "  aikoql-mcp serve --listen :9090 --tcp-token s3cret:acme:admin ./kb\n",
-        "  aikoql-mcp serve --listen :9090 --tcp-token s3cret:acme:admin --metrics-addr :9091 ./kb\n",
-        "  aikoql-mcp backup ./kb                # Create backup\n",
-        "  aikoql-mcp restore kb.backup.12345    # Restore backup\n",
-        "  aikoql-mcp audit                           # Compliance report\n",
-        "  aikoql-mcp keygen ./master.key             # Generate key\n",
-        "  aikoql-mcp import 'host=localhost db=mydb'   # Import from PostgreSQL\n",
-        "  aikoql-mcp ingest-dir                        # Ingest CWD (sequential)\n",
-        "  aikoql-mcp ingest-dir ~/my-project            # Ingest specific path\n",
-        "  aikoql-mcp ingest-dir . --parallel            # Parallel ingestion\n",
-        "  aikoql-mcp ingest-dir . --incremental         # Incremental (git-tracked)\n",
-        "  aikoql-mcp report                            # Report on CWD\n",
-        "  aikoql-mcp report ~/my-project                # Report on specific path\n",
+        "  aikoql shell                           # Interactive shell\n",
+        "  aikoql shell :memory:                  # In-memory shell\n",
+        "  aikoql serve                           # Stdio MCP server\n",
+        "  aikoql serve --listen :9090 --tcp-token s3cret:acme:admin ./kb\n",
+        "  aikoql serve --listen :9090 --tcp-token s3cret:acme:admin --metrics-addr :9091 ./kb\n",
+        "  aikoql backup ./kb                # Create backup\n",
+        "  aikoql restore kb.backup.12345    # Restore backup\n",
+        "  aikoql audit                           # Compliance report\n",
+        "  aikoql keygen ./master.key             # Generate key\n",
+        "  aikoql import 'host=localhost db=mydb'   # Import from PostgreSQL\n",
+        "  aikoql ingest-dir                        # Ingest CWD (sequential)\n",
+        "  aikoql ingest-dir ~/my-project            # Ingest specific path\n",
+        "  aikoql ingest-dir . --parallel            # Parallel ingestion\n",
+        "  aikoql ingest-dir . --incremental         # Incremental (git-tracked)\n",
+        "  aikoql report                            # Report on CWD\n",
+        "  aikoql report ~/my-project                # Report on specific path\n",
     ));
 }
 
@@ -110,9 +110,9 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
 
     match subcmd {
         Some("shell") => {
-            // Accept: aikoql-mcp shell [--tenant NAME] [DB_PATH]
+            // Accept: aikoql shell [--tenant NAME] [DB_PATH]
             let Some(idx) = subcmd_idx else {
-                eprintln!("Usage: aikoql-mcp shell [--tenant NAME] [DB_PATH]");
+                eprintln!("Usage: aikoql shell [--tenant NAME] [DB_PATH]");
                 std::process::exit(2);
             };
             let mut db = DEFAULT_DB_PATH;
@@ -139,7 +139,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             true
         }
         Some("follow") => {
-            // MRFC-0080 R3a: aikoql-mcp follow <STANDBY_DIR> --leader ADDR
+            // MRFC-0080 R3a: aikoql follow <STANDBY_DIR> --leader ADDR
             // [--token TOKEN] — the token falls back to
             // AIKOQL_REPLICATION_TOKEN (keeps it out of the process list).
             let tail: Vec<&str> = subcmd_idx
@@ -159,7 +159,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             let token = token.or_else(|| std::env::var("AIKOQL_REPLICATION_TOKEN").ok());
             let (Some(dir), Some(leader), Some(token)) = (dir, leader, token) else {
                 eprintln!(
-                    "Usage: aikoql-mcp follow <STANDBY_DIR> --leader HOST:PORT [--token TOKEN] [--tls-ca CA.pem]\n  (or set AIKOQL_REPLICATION_TOKEN)"
+                    "Usage: aikoql follow <STANDBY_DIR> --leader HOST:PORT [--token TOKEN] [--tls-ca CA.pem]\n  (or set AIKOQL_REPLICATION_TOKEN)"
                 );
                 std::process::exit(2);
             };
@@ -187,7 +187,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             true
         }
         Some("archive-prune") => {
-            // MRFC-0080 R6 retention: aikoql-mcp archive-prune --archive URL --keep N
+            // MRFC-0080 R6 retention: aikoql archive-prune --archive URL --keep N
             let tail: Vec<&str> = subcmd_idx
                 .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
                 .unwrap_or_default();
@@ -202,7 +202,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             }
             let (Some(url), Some(keep)) = (url, keep.filter(|k| *k > 0)) else {
                 eprintln!(
-                    "Usage: aikoql-mcp archive-prune --archive DIR|s3://BUCKET[/PREFIX] --keep N"
+                    "Usage: aikoql archive-prune --archive DIR|s3://BUCKET[/PREFIX] --keep N"
                 );
                 std::process::exit(2);
             };
@@ -226,7 +226,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             std::process::exit(crate::drill::run(&tail));
         }
         Some("pitr") => {
-            // MRFC-0080 R6: aikoql-mcp pitr --archive URL --to DIR
+            // MRFC-0080 R6: aikoql pitr --archive URL --to DIR
             // [--until-seq N | --until-ms UNIX_MS]
             let tail: Vec<&str> = subcmd_idx
                 .map(|i| args.iter().skip(i + 2).map(String::as_str).collect())
@@ -234,7 +234,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             let (mut url, mut to, mut until) = (None, None, crate::archive::Until::Latest);
             let mut it = tail.iter();
             fn usage() -> ! {
-                eprintln!("Usage: aikoql-mcp pitr --archive DIR|s3://BUCKET[/PREFIX] --to DIR [--until-seq N | --until-ms UNIX_MS]");
+                eprintln!("Usage: aikoql pitr --archive DIR|s3://BUCKET[/PREFIX] --to DIR [--until-seq N | --until-ms UNIX_MS]");
                 std::process::exit(2);
             }
             while let Some(a) = it.next() {
@@ -295,7 +295,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             }
             Some("change-passphrase") => {
                 let Some(new) = arg_after2 else {
-                    eprintln!("Usage: aikoql-mcp key change-passphrase NEW_PASSPHRASE [DB_PATH]");
+                    eprintln!("Usage: aikoql key change-passphrase NEW_PASSPHRASE [DB_PATH]");
                     std::process::exit(2);
                 };
                 let db = arg_after3.unwrap_or(DEFAULT_DB_PATH);
@@ -329,7 +329,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 true
             }
             Some("install") => {
-                // AG-31 cloud KMS: aikoql-mcp key install [DB] [--kms-region R]
+                // AG-31 cloud KMS: aikoql key install [DB] [--kms-region R]
                 // (i+3: past "key install" — arg_after2's slot, like rotate)
                 let tail: Vec<&str> = subcmd_idx
                     .map(|i| args.iter().skip(i + 3).map(String::as_str).collect())
@@ -355,10 +355,10 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 true
             }
             _ => {
-                eprintln!("Usage: aikoql-mcp key rotate [DB_PATH]");
-                eprintln!("       aikoql-mcp key change-passphrase NEW_PASSPHRASE [DB_PATH]");
-                eprintln!("       aikoql-mcp key roll-deks [DB_PATH]");
-                eprintln!("       aikoql-mcp key install [DB_PATH] [--kms-region REGION]");
+                eprintln!("Usage: aikoql key rotate [DB_PATH]");
+                eprintln!("       aikoql key change-passphrase NEW_PASSPHRASE [DB_PATH]");
+                eprintln!("       aikoql key roll-deks [DB_PATH]");
+                eprintln!("       aikoql key install [DB_PATH] [--kms-region REGION]");
                 eprintln!("rotate rewraps every data key under a new master key — no data is");
                 eprintln!("re-encrypted — and the old key file no longer opens the database.");
                 eprintln!("change-passphrase re-wraps the master key file under a new passphrase");
@@ -374,7 +374,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         },
         Some("restore") => {
             let backup = arg_after.unwrap_or_else(|| {
-                eprintln!("Usage: aikoql-mcp restore <BACKUP_DIR> [DB_PATH]");
+                eprintln!("Usage: aikoql restore <BACKUP_DIR> [DB_PATH]");
                 std::process::exit(1);
             });
             let target = arg_after2.unwrap_or(DEFAULT_DB_PATH);
@@ -407,7 +407,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         Some("ingest-dir") => {
             let Some(idx) = subcmd_idx else {
                 eprintln!(
-                    "Usage: aikoql-mcp ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR]"
+                    "Usage: aikoql ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR]"
                 );
                 std::process::exit(2);
             };
@@ -444,7 +444,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         }
         Some("model") => {
             let Some(idx) = subcmd_idx else {
-                eprintln!("Usage: aikoql-mcp model install [MODEL_ID] [--model-dir DIR]");
+                eprintln!("Usage: aikoql model install [MODEL_ID] [--model-dir DIR]");
                 std::process::exit(2);
             };
             let tail_args: Vec<&str> = args.iter().skip(idx + 2).map(String::as_str).collect();
@@ -460,7 +460,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     run_model_install(model_id, model_dir);
                 }
                 _ => {
-                    eprintln!("Usage: aikoql-mcp model install [MODEL_ID] [--model-dir DIR]");
+                    eprintln!("Usage: aikoql model install [MODEL_ID] [--model-dir DIR]");
                     eprintln!(
                         "Installs an embedding model into the local store for offline use. The"
                     );
@@ -480,7 +480,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         Some("hash-password") => {
             // P3-M1 (§53): argon2id hash for the [auth].users table.
             let Some(pw) = arg_after else {
-                eprintln!("Usage: aikoql-mcp hash-password <PASSWORD>");
+                eprintln!("Usage: aikoql hash-password <PASSWORD>");
                 eprintln!("Prints an argon2id hash for the [auth].users table in aikoql.toml.");
                 std::process::exit(2);
             };
@@ -498,12 +498,12 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             //   import postgres <conn_str> [--tenant NAME] [--table TABLE] [DB_PATH]
             //   import sqlite <file.db> [--tenant NAME] [--table TABLE] [DB_PATH]
             let Some(idx) = subcmd_idx else {
-                eprintln!("Usage: aikoql-mcp import <SOURCE> [ARGS...]");
+                eprintln!("Usage: aikoql import <SOURCE> [ARGS...]");
                 std::process::exit(2);
             };
             let ti_args: Vec<&str> = args.iter().skip(idx + 2).map(String::as_str).collect();
             if ti_args.is_empty() {
-                eprintln!("Usage: aikoql-mcp import <SOURCE> [ARGS...]");
+                eprintln!("Usage: aikoql import <SOURCE> [ARGS...]");
                 eprintln!("Sources: postgres, pgvector, sqlite, mongodb, neo4j");
                 eprintln!(
                     "  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]"
@@ -580,7 +580,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                         }
                     }
                     let cs = conn_str.unwrap_or_else(|| {
-                        eprintln!("Usage: aikoql-mcp import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [DB_PATH]");
+                        eprintln!("Usage: aikoql import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [DB_PATH]");
                         std::process::exit(1);
                     });
                     run_pg_import(cs, target_db, tenant, table_filter, &run_id, timeout_ms);
@@ -660,7 +660,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                         }
                     }
                     let u = uri.unwrap_or_else(|| {
-                        eprintln!("Usage: aikoql-mcp import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [DB_PATH]");
+                        eprintln!("Usage: aikoql import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [DB_PATH]");
                         std::process::exit(1);
                     });
                     run_neo4j_import(
@@ -743,7 +743,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                         }
                     }
                     let u = uri.unwrap_or_else(|| {
-                        eprintln!("Usage: aikoql-mcp import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [--run-id ID] [DB_PATH]");
+                        eprintln!("Usage: aikoql import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [--run-id ID] [DB_PATH]");
                         std::process::exit(1);
                     });
                     let db = database.unwrap_or_else(|| {
@@ -791,7 +791,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                         }
                     }
                     let sf = source_file.unwrap_or_else(|| {
-                        eprintln!("Usage: aikoql-mcp import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
+                        eprintln!("Usage: aikoql import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
                         std::process::exit(1);
                     });
                     run_sqlite_import(sf, target_db, tenant, table_filter);
@@ -825,7 +825,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         }
         Some("query") => {
             let Some(query) = arg_after else {
-                eprintln!("Usage: aikoql-mcp query <AIKOQL> [DB]");
+                eprintln!("Usage: aikoql query <AIKOQL> [DB]");
                 std::process::exit(2);
             };
             let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
@@ -836,7 +836,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         }
         Some("explain") => {
             let Some(koid) = arg_after else {
-                eprintln!("Usage: aikoql-mcp explain <KOID> [DB]");
+                eprintln!("Usage: aikoql explain <KOID> [DB]");
                 std::process::exit(2);
             };
             let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);

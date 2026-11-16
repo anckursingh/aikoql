@@ -318,7 +318,7 @@ dispositions doc becomes the *compiled output* of that state, and
 prose. The project's own thesis applied to its own TDD workflow.
 
 Wiring: `scripts/dogfood-review-loop.py full` (bootstrap → compile →
-reconcile → trace → emit) runs the repo's own plugin (`npx aikoql-mcp
+reconcile → trace → emit) runs the repo's own plugin (`npx aikoql
 serve ./kb`) over MCP stdio. The 6 findings (R3-001..005 + R2-008) are
 Requirement KOs; the dispositions doc is ingested + compiled to a
 knowledge document; the 13 commits that re-stamped the doc are reconciled

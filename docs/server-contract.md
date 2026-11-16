@@ -1,6 +1,6 @@
 # Server Contract
 
-The aikoql-mcp standalone database server (P5-M11, ND-11): a plain TCP
+The aikoql standalone database server (P5-M11, ND-11): a plain TCP
 listener speaking line-delimited JSON-RPC 2.0, on top of the existing MCP
 transport. One frame per line, `\n`-terminated. PG-wire compatibility is
 explicitly out of scope.
@@ -8,7 +8,7 @@ explicitly out of scope.
 ## Startup
 
 ```
-aikoql-mcp serve <db-path> \
+aikoql serve <db-path> \
   --listen 127.0.0.1:9090 \
   --tcp-token TOKEN[:TENANT[:ROLE1,ROLE2[,agent=NAME]]] \
   [--request-timeout-secs 30] \

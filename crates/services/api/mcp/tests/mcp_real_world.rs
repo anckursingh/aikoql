@@ -136,9 +136,9 @@ impl McpClient {
             .parent()
             .unwrap();
         let exe = if cfg!(windows) {
-            "aikoql-mcp.exe"
+            "aikoql.exe"
         } else {
-            "aikoql-mcp"
+            "aikoql"
         };
         let release_bin = workspace_root.join("target/release").join(exe);
         let debug_bin = workspace_root.join("target/debug").join(exe);

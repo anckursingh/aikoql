@@ -150,7 +150,7 @@ jobs:
         with:
           go-version: '1.22'
       - name: Build server + fault proxy (the suites resolve target/debug)
-        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
+        run: cargo build -p aikoql -p aikoql-fault-proxy
       - name: Run the battery
         run: bash scripts/sdk-nightly.sh
 
@@ -486,7 +486,7 @@ jobs:
   # multi-op txn) lives here — the laptop runs only --quick, the big run is
   # a scheduled/manual job (user directive 2026-09-18). PG is a service
   # container (bench/bench @ 5433, the harness's PG_DSN); the aikoql sides
-  # use the repo's OWN release SDK (maturin develop) and release aikoql-mcp,
+  # use the repo's OWN release SDK (maturin develop) and release aikoql,
   # so the fix under test is what gets measured. The result lands in the
   # uploaded artifact — nothing is committed (P3-M0 rule 6). 360 = the
   # GitHub-hosted job cap; if the 1M section ever needs more, split the
@@ -522,10 +522,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build release aikoql-mcp + native SDK
+      - name: Build release aikoql + native SDK
         run: |
           set -euo pipefail
-          cargo build --release -p aikoql-mcp
+          cargo build --release -p aikoql
           python -m venv .venv
           .venv/bin/pip install -q "maturin==1.14.1" psutil psycopg neo4j qdrant-client
           export VIRTUAL_ENV="$PWD/.venv"

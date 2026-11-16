@@ -87,7 +87,7 @@ done
 
 export AIKOQL_TEST_K8S_API="$api" AIKOQL_TEST_K8S_TOKEN="$token" AIKOQL_TEST_K8S_CA="$work/ca.pem"
 cd "$root"
-cargo build -p aikoql-mcp
-cargo test -p aikoql-mcp --bin aikoql-mcp real_k8s -- --nocapture
-cargo test -p aikoql-mcp --test replication_failover real_k8s -- --nocapture
+cargo build -p aikoql
+cargo test -p aikoql --bin aikoql real_k8s -- --nocapture
+cargo test -p aikoql --test replication_failover real_k8s -- --nocapture
 echo "k8s-it: OK against kube-apiserver $("$bin/kube-apiserver" --version 2>/dev/null | awk '{print $2}') at $api"

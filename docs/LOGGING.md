@@ -1,6 +1,6 @@
 # Server logs
 
-`aikoql-mcp serve` logs to **stderr and to a file**, so what happened is still on disk after a restart,
+`aikoql serve` logs to **stderr and to a file**, so what happened is still on disk after a restart,
 a crash or a closed terminal.
 
 | | |

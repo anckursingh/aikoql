@@ -11,6 +11,6 @@ export AIKOQL_FUZZ_ITERS="${1:-50000}"
 echo "== source discovery fuzz, AIKOQL_FUZZ_ITERS=$AIKOQL_FUZZ_ITERS"
 cargo test -p aikoql-ingestion --release --test source_fuzz
 cargo test -p aikoql-mongodb -p aikoql-neo4j -p aikoql-sqlite -p aikoql-clickhouse
-cargo test -p aikoql-mcp --bin aikoql-mcp -- sources
-cargo test -p aikoql-mcp --test source_hardening --test source_discovery
+cargo test -p aikoql --bin aikoql -- sources
+cargo test -p aikoql --test source_hardening --test source_discovery
 echo "== done (live Postgres/Mongo/Neo4j/ClickHouse cells run when AIKOQL_TEST_* are set)"

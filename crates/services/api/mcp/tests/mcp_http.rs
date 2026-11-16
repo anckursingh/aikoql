@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_aikoql-mcp")
+    env!("CARGO_BIN_EXE_aikoql")
 }
 
 /// A free port, never the same one twice in this process (parallel tests
@@ -87,7 +87,7 @@ fn serve(tag: &str, extra: &[&str]) -> Server {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("spawn aikoql-mcp serve");
+            .expect("spawn aikoql serve");
         // Ready = the server's own "listening" line, logged after bind
         // succeeded. No connect probe: a connect to a not-yet-bound port can
         // reach something that is not this server. The reader keeps draining
@@ -844,7 +844,7 @@ fn h019_http_sampling_capability_does_not_leak_to_the_stdio_transport() {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn aikoql-mcp serve"),
+            .expect("spawn aikoql serve"),
         db,
     );
     let deadline = Instant::now() + Duration::from_secs(20);

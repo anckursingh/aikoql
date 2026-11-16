@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # PR6-F8 (P1-8): the review loop dogfoods MRFC-0070 (docs/ARCHITECT-
 # REVIEW-2026-09.md). Each review finding lives as a Requirement KO in the
-# project knowledge base (./kb, served by the repo's own aikoql-mcp
+# project knowledge base (./kb, served by the repo's own aikoql
 # plugin); every commit that re-stamped the dispositions doc is reconciled
 # against the compiled knowledge document via the A8 reconcile tool; and
 # the dispositions doc carries a compiled section emitted from kernel
@@ -84,7 +84,7 @@ def emit_state(state):
         f"{BEGIN}\n"
         "## Compiled from kernel state (P1-8 dogfood)\n\n"
         "`scripts/dogfood-review-loop.py full` emits this section from the\n"
-        "project knowledge base (`./kb`, served by the repo's own aikoql-mcp\n"
+        "project knowledge base (`./kb`, served by the repo's own aikoql\n"
         "plugin; machine state lives in the `.state.json` sidecar). The\n"
         "findings are Requirement KOs; the dispositions doc is the compiled\n"
         "knowledge document; each re-stamp commit below is reconciled via\n"
@@ -156,7 +156,7 @@ async def run(opts, checks):
     if bin_env:
         command, args = bin_env, ["serve", opts.kb]
     else:
-        command, args = "npx", ["-y", "aikoql-mcp", "serve", opts.kb]
+        command, args = "npx", ["-y", "aikoql", "serve", opts.kb]
     params = StdioServerParameters(
         command=command,
         args=args,

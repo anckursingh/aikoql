@@ -100,7 +100,7 @@ pub fn sign(org: &str, expires: Option<String>, features: &[&str]) -> (Vec<u8>, 
     (pair.public_key().as_ref().to_vec(), envelope.into_bytes())
 }
 
-/// A spawned `aikoql-mcp serve`, hard-killed on drop (a panicked test must
+/// A spawned `aikoql serve`, hard-killed on drop (a panicked test must
 /// not leak the process). `shutdown` kills it without touching the data dir
 /// (a later boot reopens it).
 pub struct Server {
@@ -126,7 +126,7 @@ impl Server {
     }
 }
 
-/// Spawn `aikoql-mcp serve --metrics-addr 127.0.0.1:{port} [extra] <db>`
+/// Spawn `aikoql serve --metrics-addr 127.0.0.1:{port} [extra] <db>`
 /// with a clean enterprise env (license/OIDC/admin vars are removed unless
 /// `envs` re-adds them), stderr into `log`.
 pub fn spawn_server(db: &Path, log: &Path, envs: &[(&str, &str)], extra: &[&str]) -> Server {
@@ -153,7 +153,7 @@ fn spawn_server_inner(
     with_metrics: bool,
 ) -> Server {
     let port = free_port();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aikoql-mcp"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aikoql"));
     cmd.arg("serve");
     if with_metrics {
         cmd.args(["--metrics-addr", &format!("127.0.0.1:{port}")]);
@@ -177,7 +177,7 @@ fn spawn_server_inner(
         .stdout(Stdio::null())
         .stderr(Stdio::from(std::fs::File::create(log).expect("log file")))
         .spawn()
-        .expect("spawn aikoql-mcp serve");
+        .expect("spawn aikoql serve");
     Server {
         child,
         port,

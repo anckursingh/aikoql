@@ -25,7 +25,7 @@ const MCP_BIN =
       ROOT,
       "target",
       "debug",
-      "aikoql-mcp" + (process.platform === "win32" ? ".exe" : ""),
+      "aikoql" + (process.platform === "win32" ? ".exe" : ""),
     );
     return fs.existsSync(p) ? p : undefined;
   })();
@@ -79,7 +79,7 @@ async function liveServer(t: TestContext): Promise<Client> {
         ["serve", path.join(dir, "db.aikoql"), "--listen", `127.0.0.1:${port}`, "--tcp-token", `${TOKEN}::admin`],
         { stdio: ["ignore", "ignore", fs.openSync(errFile, "w")], windowsHide: true },
       );
-      await waitUp(port, srv, errFile, "aikoql-mcp");
+      await waitUp(port, srv, errFile, "aikoql");
       const client = (await Client.dial(`127.0.0.1:${port}`)).withToken(TOKEN);
       await client.initialize();
       t.after(() => {
@@ -107,7 +107,7 @@ type AiTool = {
 
 test("vercel ai: tools meet the ai contract and round-trip a live server", async (t) => {
   if (!MCP_BIN) {
-    t.skip("AIKOQL_MCP_BIN / aikoql-mcp not built — live-server gate skipped");
+    t.skip("AIKOQL_MCP_BIN / aikoql not built — live-server gate skipped");
     return;
   }
   const client = await liveServer(t);

@@ -15,6 +15,6 @@ let secure = Client::dial_tls("db.internal:9090", &tls).await?.with_token("s3cre
 ```
 
 - Embedded: `aikoql_sdk::Kernel::open("kb")` — the same opener the server uses
-- Tests: `AIKOQL_MCP_BIN=$PWD/target/release/aikoql-mcp cargo test -p aikoql-sdk`
+- Tests: `AIKOQL_MCP_BIN=$PWD/target/release/aikoql cargo test -p aikoql-sdk`
 - Fuzz (8 libFuzzer targets): `cd fuzz && cargo fuzz run <target>`
 - License: AGPL-3.0-only

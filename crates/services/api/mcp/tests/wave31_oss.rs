@@ -51,17 +51,17 @@ struct McpClient {
 impl McpClient {
     fn start(db: &PathBuf) -> Self {
         let mut exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        exe.push("../../../../target/debug/aikoql-mcp");
+        exe.push("../../../../target/debug/aikoql");
         #[cfg(windows)]
         exe.set_extension("exe");
-        assert!(exe.exists(), "aikoql-mcp not built at {:?}", exe);
+        assert!(exe.exists(), "aikoql not built at {:?}", exe);
         let mut child = Command::new(&exe)
             .arg(db)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn aikoql-mcp");
+            .expect("spawn aikoql");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         McpClient {
@@ -195,7 +195,7 @@ fn w31_oss_001_time_to_value_flow() {
     // measured — doc note.)
     let t0 = Instant::now();
     let mut exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    exe.push("../../../../target/debug/aikoql-mcp");
+    exe.push("../../../../target/debug/aikoql");
     #[cfg(windows)]
     exe.set_extension("exe");
     leg(
@@ -405,7 +405,7 @@ fn w31_oss_002_onboarding_artifact_laws() {
     let qs = std::fs::read_to_string(&quickstart).unwrap().to_lowercase();
     let coverage: [(&str, &[&str]); 7] = [
         ("install", &["npm i -g", "cargo build"]),
-        ("start", &["aikoql-mcp", "stdio"]),
+        ("start", &["aikoql", "stdio"]),
         ("ingest", &["remember", "document_ingest"]),
         ("query", &["find_similar", "aikoql"]),
         ("add second source", &["multi-source"]),

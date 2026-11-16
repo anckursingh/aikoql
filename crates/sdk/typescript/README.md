@@ -19,5 +19,5 @@ npm install @aikoql/client
 ```
 
 - Runs on Node ≥ 24 (native type-stripping) with a browser-compatible core
-- Tests: `AIKOQL_MCP_BIN=$PWD/target/release/aikoql-mcp node --test tests/`
+- Tests: `AIKOQL_MCP_BIN=$PWD/target/release/aikoql node --test tests/`
 - License: AGPL-3.0-only
