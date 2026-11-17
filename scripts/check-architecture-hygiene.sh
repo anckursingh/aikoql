@@ -754,9 +754,10 @@ fi
 # macos + arm64 macos) and install-check each wheel against the artifact
 # itself before upload: a wheel that cannot be installed or imported
 # fails the release here, not in the wild. macos-13 hosted runners are
-# retired (jobs queue forever), so the mac leg runs on macos-14 and the
+# retired (jobs queue forever) and so is macos-14 (its jobs are cancelled
+# the second they start), so the mac leg runs on macos-latest and the
 # Intel wheel rides maturin's universal2 build (one wheel, both arches).
-if ! grep -qF 'os: [ubuntu-latest, windows-latest, macos-14]' "$REL"; then
+if ! grep -qF 'os: [ubuntu-latest, windows-latest, macos-latest]' "$REL"; then
   echo "ARCH: release.yml lost the 3-OS pypi wheel matrix (D-18)" >&2
   fail=1
 fi

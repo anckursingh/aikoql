@@ -886,10 +886,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 hosted runners are retired (jobs queue forever) — the
-        # Intel mac wheel rides the universal2 build on the arm64 runner
-        # below, so three runners still produce all four wheels.
-        os: [ubuntu-latest, windows-latest, macos-14]
+        # macos-13 hosted runners are retired (jobs queue forever) and so is
+        # macos-14 (a job on it is cancelled in the same second, no runner —
+        # v0.5.0 lost its PyPI publish to that): macos-latest, like the other
+        # mac build jobs. The Intel mac wheel rides the universal2 build on
+        # the arm64 runner below, so three runners still produce all four wheels.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     permissions:
       contents: read
     steps:
@@ -897,7 +899,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           # universal2 needs both apple-darwin targets (the arm64 side is
-          # native on macos-14; the extra target is inert on linux/windows).
+          # native on macos-latest; the extra target is inert on linux/windows).
           targets: x86_64-apple-darwin
       # CI-05: cargo cache in every build job (default key = OS + rust
       # version + Cargo.lock).
@@ -913,7 +915,7 @@ jobs:
           cd crates/sdk/python
           rm -rf dist  # stale wheels (e.g. pre-rename builds) ride the
                         # upload glob and PyPI rejects the batch
-          if [[ "${{ matrix.os }}" == macos-14 ]]; then
+          if [[ "${{ matrix.os }}" == macos-latest ]]; then
             maturin build --release --out dist --target universal2-apple-darwin
           else
             maturin build --release --out dist
