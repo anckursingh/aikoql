@@ -37,6 +37,10 @@ say "2/8 conformance (5 languages + native)"
   /tmp/aikoql-cert-venv/bin/pip install -q "maturin==1.14.1"
   export VIRTUAL_ENV=/tmp/aikoql-cert-venv  # maturin>=1.14: develop without it exits 1 (v0.2.3 release failure)
   /tmp/aikoql-cert-venv/bin/maturin develop --release )
+# The typescript leg imports src/vercel-ai.ts, which needs the devDependency
+# `ai`; a fresh runner has no node_modules (v0.5.0 cert died with
+# ERR_MODULE_NOT_FOUND: 'ai' before this install moved up from step 6).
+( cd crates/sdk/typescript && npm ci )
 for lang in python go rust typescript java; do
   bash scripts/sdk-conformance.sh --language "$lang" --bin "$BIN"
 done
@@ -72,7 +76,7 @@ done_
 #    and the jazzer smokes; real-server integration is the conformance arm.
 say "5/8 java install + jazzer smokes"
 ( cd crates/sdk/java
-  mvn -B -q -Dgpg.skip=true install
+  bash ../../../scripts/mvn-retry.sh -B -q -Dgpg.skip=true install
   bash jazzer-smoke.sh )
 done_
 

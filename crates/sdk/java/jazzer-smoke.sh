@@ -8,9 +8,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-mvn -q test-compile
-mvn -q dependency:get -Dartifact=com.code-intelligence:jazzer:0.24.0
-mvn -q dependency:get -Dartifact=com.code-intelligence:jazzer-api:0.24.0
+# Maven Central rate-limits shared runner IPs (HTTP 429): retry only a download failure.
+MVNR="$PWD/../../../scripts/mvn-retry.sh"
+bash "$MVNR" -q test-compile
+bash "$MVNR" -q dependency:get -Dartifact=com.code-intelligence:jazzer:0.24.0
+bash "$MVNR" -q dependency:get -Dartifact=com.code-intelligence:jazzer-api:0.24.0
 
 if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
     SEP=';'

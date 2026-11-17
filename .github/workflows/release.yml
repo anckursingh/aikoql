@@ -13,6 +13,11 @@ on:
         description: 'Version to release (e.g. 0.1.20). Empty = use the Cargo.toml version.'
         required: false
         default: ''
+      skip_tier3:
+        description: 'Rescue re-dispatch: skip the Tier-3 evidence jobs (no publish job needs them) to save Actions minutes.'
+        type: boolean
+        required: false
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -105,7 +110,7 @@ jobs:
   # gated cells and pinned images included.
   tier3-correctness:
     name: Tier-3 correctness (Linux)
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tier3 != 'true')
     needs: validate-versions
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -122,7 +127,7 @@ jobs:
 
   tier3-correctness-windows:
     name: Tier-3 correctness (Windows)
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tier3 != 'true')
     needs: validate-versions
     runs-on: windows-latest
     timeout-minutes: 180
@@ -139,7 +144,7 @@ jobs:
 
   tier3-coverage:
     name: Tier-3 coverage floor
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tier3 != 'true')
     needs: validate-versions
     runs-on: windows-latest
     timeout-minutes: 120
@@ -159,7 +164,7 @@ jobs:
 
   tier3-scale:
     name: Tier-3 scale certification (100k + MCP + txn)
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tier3 != 'true')
     needs: validate-versions
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -220,7 +225,7 @@ jobs:
 
   tier3-matrix:
     name: Tier-3 competitor matrix + report artifact
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tier3 != 'true')
     needs: validate-versions
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -886,10 +891,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 hosted runners are retired (jobs queue forever) — the
-        # Intel mac wheel rides the universal2 build on the arm64 runner
-        # below, so three runners still produce all four wheels.
-        os: [ubuntu-latest, windows-latest, macos-14]
+        # macos-13 hosted runners are retired (jobs queue forever) and so is
+        # macos-14 (a job on it is cancelled in the same second, no runner —
+        # v0.5.0 lost its PyPI publish to that): macos-latest, like the other
+        # mac build jobs. The Intel mac wheel rides the universal2 build on
+        # the arm64 runner below, so three runners still produce all four wheels.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     permissions:
       contents: read
     steps:
@@ -897,7 +904,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           # universal2 needs both apple-darwin targets (the arm64 side is
-          # native on macos-14; the extra target is inert on linux/windows).
+          # native on macos-latest; the extra target is inert on linux/windows).
           targets: x86_64-apple-darwin
       # CI-05: cargo cache in every build job (default key = OS + rust
       # version + Cargo.lock).
@@ -913,7 +920,7 @@ jobs:
           cd crates/sdk/python
           rm -rf dist  # stale wheels (e.g. pre-rename builds) ride the
                         # upload glob and PyPI rejects the batch
-          if [[ "${{ matrix.os }}" == macos-14 ]]; then
+          if [[ "${{ matrix.os }}" == macos-latest ]]; then
             maturin build --release --out dist --target universal2-apple-darwin
           else
             maturin build --release --out dist
