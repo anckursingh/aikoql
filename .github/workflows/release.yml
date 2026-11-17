@@ -13,6 +13,11 @@ on:
         description: 'Version to release (e.g. 0.1.20). Empty = use the Cargo.toml version.'
         required: false
         default: ''
+      skip_tier3:
+        description: 'Rescue re-dispatch: skip the Tier-3 evidence jobs (no publish job needs them) to save Actions minutes.'
+        type: boolean
+        required: false
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -105,7 +110,7 @@ jobs:
   # gated cells and pinned images included.
   tier3-correctness:
     name: Tier-3 correctness (Linux)
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tier3 != 'true')
     needs: validate-versions
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -122,7 +127,7 @@ jobs:
 
   tier3-correctness-windows:
     name: Tier-3 correctness (Windows)
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tier3 != 'true')
     needs: validate-versions
     runs-on: windows-latest
     timeout-minutes: 180
@@ -139,7 +144,7 @@ jobs:
 
   tier3-coverage:
     name: Tier-3 coverage floor
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tier3 != 'true')
     needs: validate-versions
     runs-on: windows-latest
     timeout-minutes: 120
@@ -159,7 +164,7 @@ jobs:
 
   tier3-scale:
     name: Tier-3 scale certification (100k + MCP + txn)
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tier3 != 'true')
     needs: validate-versions
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -220,7 +225,7 @@ jobs:
 
   tier3-matrix:
     name: Tier-3 competitor matrix + report artifact
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tier3 != 'true')
     needs: validate-versions
     runs-on: ubuntu-latest
     timeout-minutes: 360
