@@ -76,7 +76,7 @@ done_
 #    and the jazzer smokes; real-server integration is the conformance arm.
 say "5/8 java install + jazzer smokes"
 ( cd crates/sdk/java
-  mvn -B -q -Dgpg.skip=true install
+  bash ../../../scripts/mvn-retry.sh -B -q -Dgpg.skip=true install
   bash jazzer-smoke.sh )
 done_
 

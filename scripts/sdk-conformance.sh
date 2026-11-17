@@ -128,7 +128,7 @@ case "$LANGUAGE" in
     [[ "$JBIN" = /* || "$JBIN" = [A-Za-z]:* ]] || JBIN="$ROOT/$JBIN"
     [[ "$VECTORS_J" = /* || "$VECTORS_J" = [A-Za-z]:* ]] || VECTORS_J="$ROOT/$VECTORS_J"
     [[ "$PROTOCOL_J" = /* || "$PROTOCOL_J" = [A-Za-z]:* ]] || PROTOCOL_J="$ROOT/$PROTOCOL_J"
-    mvn -q -DskipTests compile
+    bash "$ROOT/scripts/mvn-retry.sh" -q -DskipTests compile
     exec java -cp target/classes com.aikoql.client.SdkConformance \
       --bin "$JBIN" --vectors "$VECTORS_J" --protocol "$PROTOCOL_J" --token "$TOKEN" ;;
 esac

@@ -41,7 +41,7 @@ say "1/6 cross-language corpus"
 ( cd crates/sdk/go && go test -run TestCorpusPin . )
 ( cd crates/sdk/python && "$VIRTUAL_ENV/bin/python" -m pytest tests/test_corpus_pin.py -q )
 ( cd crates/sdk/typescript && node --test tests/corpus-pin.test.ts )
-( cd crates/sdk/java && mvn -B test -Dtest=CorpusPinTest )
+( cd crates/sdk/java && bash ../../../scripts/mvn-retry.sh -B test -Dtest=CorpusPinTest )
 cargo test -p aikoql-sdk --test fuzz_corpus_pin
 done_
 
