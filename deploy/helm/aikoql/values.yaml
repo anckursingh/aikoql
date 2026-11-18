@@ -8,7 +8,7 @@
 
 image:
   repository: aikoql
-  tag: "0.5.1"
+  tag: "0.5.2"
   pullPolicy: IfNotPresent
 
 # the bearer for /mcp AND the standby's replication token (admin role).

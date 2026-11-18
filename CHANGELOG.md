@@ -5,7 +5,7 @@ Format: <https://keepachangelog.com/>-inspired, but terser. This file starts
 at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 (`git log v0.1.0..v0.1.19`).
 
-## [Unreleased]
+## [0.5.2] - 2026-11-18
 
 ### `compile_context` answers a new question about 2.8 times faster on a large project
 
