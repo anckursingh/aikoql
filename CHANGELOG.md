@@ -7,6 +7,13 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### `compile_context` answers a new question about 2.8 times faster on a large project
+
+Profiling a 13,000-entity index showed about 89% of a new question's time in the keyword scorer, which split and
+lowercased every entity's text once per task word even when nothing could match. It now rules out the no-match case
+with one substring check first; scores are unchanged (a seeded test compares it with the full scorer). Median for a
+new question on AIKOQL's own source: 366 ms to 129 ms (without the embedding model).
+
 ### The knowledge base `ingest-dir` builds is now usable by the agent that asks for it
 
 Found by using AIKOQL as the code graph of its own projects. (1) `ingest-dir` stored everything under the
