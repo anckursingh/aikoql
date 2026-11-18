@@ -32,7 +32,9 @@ content); to recall it call `memory_search`. Store decisions and their reasons, 
 result.
 
 **Say what it cannot do.** It finds names and relationships and cannot tell you details that are only in the
-code body (a constant, an ordering of steps): read the function for those. On a small project (a few dozen
-files) grep plus a file read may already be cheap; measured on a 15-file repository it still used about 80%
-fewer tokens for "where is X / how does Y work" questions (4 questions, one run), so treat that as a guide, not a
-promise.
+code body (a constant, an ordering of steps): read the function for those. Measured on AIKOQL's own source
+(13,000 code entities, 40 generated questions, one run): the right function was in the answer 85% of the time
+(65% with the embedding model off), and an answer cost about 700 tokens against about 27,000 for the raw output of
+a grep for the same words. A lookup takes well under a second (about 0.1 s repeated, 0.6 s for a new question on
+that size). Treat these as a guide, not a promise: the questions come from doc comments, the grep baseline is
+crude, and a small project (a few dozen files) is already cheap to grep.

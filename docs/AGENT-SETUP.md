@@ -26,10 +26,12 @@ Paste this to your agent:
 3. **Index the project.** `npx -y @aikoql/aikoql@X.Y.Z ingest-dir . ./.aikoql/kb --incremental`
    - It reads Rust, Python and TypeScript source and Markdown; it prints a line `KOID: <hex>`. **Keep that value**:
      it names the project's knowledge snapshot and you pass it to `compile_context`.
-   - It can be slow on the first run (roughly a second per code entity with the embedding model, minutes for a
-     small project): run it in the background and carry on. Without the model it still works, with keyword
-     matching only. `aikoql model install` fetches the model once; it improves matching for questions phrased in
-     your own words.
+   - Time (release build, Apple silicon, `--parallel`): a 15-file project took 6 seconds; the 546-file engine source
+     (13,000 code entities) took about 8 minutes with the embedding model and about 90 seconds without it. Run the
+     first index in the background and carry on; after that `--incremental` only re-reads what changed.
+   - The embedding model is worth having on a large project: on that same source the right function was in the
+     answer 85% of the time with it and 65% without. `aikoql model install` fetches it once. Without it the index
+     still works, with keyword matching only.
 4. **Verify.** Restart the agent so it loads the server, then call the MCP tool `health`. Then call
    `compile_context` with `{"koid": "<KOID>", "task": "<a question about this project>", "token_budget": 800,
    "include_package": false}`: you should get markdown naming real functions and files.
@@ -59,10 +61,12 @@ content); to recall it call `memory_search`. Store decisions and their reasons, 
 result.
 
 **Say what it cannot do.** It finds names and relationships and cannot tell you details that are only in the
-code body (a constant, an ordering of steps): read the function for those. On a small project (a few dozen
-files) grep plus a file read may already be cheap; measured on a 15-file repository it still used about 80%
-fewer tokens for "where is X / how does Y work" questions (4 questions, one run), so treat that as a guide, not a
-promise.
+code body (a constant, an ordering of steps): read the function for those. Measured on AIKOQL's own source
+(13,000 code entities, 40 generated questions, one run): the right function was in the answer 85% of the time
+(65% with the embedding model off), and an answer cost about 700 tokens against about 27,000 for the raw output of
+a grep for the same words. A lookup takes well under a second (about 0.1 s repeated, 0.6 s for a new question on
+that size). Treat these as a guide, not a promise: the questions come from doc comments, the grep baseline is
+crude, and a small project (a few dozen files) is already cheap to grep.
 
 ## Troubleshooting
 

@@ -1,0 +1,263 @@
+{
+  "meta": {
+    "binary": "aikoql 0.5.0",
+    "repo": "/Users/pukku/coding/aikoql/.claude/worktrees/agent-kb",
+    "subdir": "crates",
+    "questions": 40,
+    "seed": 1,
+    "budget_tokens": 800,
+    "token_estimate": "bytes/4",
+    "machine": "arm64 Darwin",
+    "date": "2026-11-18"
+  },
+  "results": [
+    {
+      "config": "embed",
+      "ingest_s": 465.84,
+      "koid": "01a1edec38dc0000000000000000a9c9",
+      "disk_mb": 178.5,
+      "entities": 13089,
+      "files": 746,
+      "relationships": 18821,
+      "embedded": "none",
+      "embed_s": 0.0,
+      "server_start_ms": 506,
+      "first_query_ms": 1346,
+      "warm_median_ms": 707,
+      "warm_p95_ms": 1164,
+      "warm_max_ms": 2225,
+      "questions": 40,
+      "hit_rate": 0.85,
+      "mrr": 0.654,
+      "hit_at_3": 0.775,
+      "answer_tokens_median": 708,
+      "grep_tokens_median": 27529,
+      "grep_found_file": 1.0
+    },
+    {
+      "config": "noembed",
+      "ingest_s": 88.33,
+      "koid": "01a1edee46d50000000000000000a9c9",
+      "disk_mb": 61.6,
+      "entities": 13089,
+      "files": 746,
+      "relationships": 18821,
+      "embedded": "none",
+      "embed_s": 0.0,
+      "server_start_ms": 232,
+      "first_query_ms": 1147,
+      "warm_median_ms": 635,
+      "warm_p95_ms": 1083,
+      "warm_max_ms": 2139,
+      "questions": 40,
+      "hit_rate": 0.65,
+      "mrr": 0.456,
+      "hit_at_3": 0.525,
+      "answer_tokens_median": 722,
+      "grep_tokens_median": 27529,
+      "grep_found_file": 1.0
+    }
+  ],
+  "questions": [
+    {
+      "name": "a_deployed_deny_policy_blocks_the_action_itself",
+      "file": "crates/kernel/src/transaction/kernel.rs",
+      "question": "ENF enforced advisory binds even object owner admin covers creates lifts forgotten never reaches across tenants"
+    },
+    {
+      "name": "active_ontology",
+      "file": "crates/services/api/mcp/src/http.rs",
+      "question": "compiler uses one Studio shows newest manual untenanted KO else newest auto discovered one"
+    },
+    {
+      "name": "ag23b2_binding_change_reembeds_existing_kos",
+      "file": "crates/engines/semantic/src/lib.rs",
+      "question": "re type migrates catch up re embeds anything whose stored model bound one"
+    },
+    {
+      "name": "allow",
+      "file": "crates/kernel/src/knowledge/kom.rs",
+      "question": "Enable closed world validation only listed properties permitted KO properties block"
+    },
+    {
+      "name": "arith_values",
+      "file": "crates/kernel/src/knowledge/kom.rs",
+      "question": "Arithmetic evaluation apply op two Value MRFC Phase C9"
+    },
+    {
+      "name": "attach_semantic",
+      "file": "crates/kernel/src/transaction/kernel.rs",
+      "question": "block existing KO mutating ONLY field device eval N2"
+    },
+    {
+      "name": "auth003_session_expiry_rejects_after_ttl",
+      "file": "crates/services/api/mcp/src/tests.rs",
+      "question": "RED sessions carry configured validate token enforces every already expired"
+    },
+    {
+      "name": "auto_proposals_from_stale",
+      "file": "crates/ingestion/src/reconciliation_workflow.rs",
+      "question": "Generate reconcile report entities"
+    },
+    {
+      "name": "aws_targets_are_virtual_hosted",
+      "file": "crates/services/api/mcp/src/s3.rs",
+      "question": "endpoint bucket host signed path key alone bucket root list signs"
+    },
+    {
+      "name": "b_pages",
+      "file": "crates/services/api/mcp/src/api_rest.rs",
+      "question": "Every number under page page number key JSON tree"
+    },
+    {
+      "name": "block_entries",
+      "file": "crates/storage/aikoql-v2/src/segment.rs",
+      "question": "Decode data full scans version walks streaming iterator compaction"
+    },
+    {
+      "name": "block_entry_count",
+      "file": "crates/storage/aikoql-v2/src/segment.rs",
+      "question": "SE2 M32 per placement validation structural check within range recovery"
+    },
+    {
+      "name": "call_tool",
+      "file": "crates/sdk/rust/src/client.rs",
+      "question": "Calls any registered MCP name returns data payload escape hatch tools without typed wrapper here"
+    },
+    {
+      "name": "capacity",
+      "file": "crates/engines/vector/src/lib.rs",
+      "question": "allocator hint AG carried newly created shards"
+    },
+    {
+      "name": "compactor_loop",
+      "file": "crates/storage/aikoql-v2/src/db.rs",
+      "question": "P3 M8 background committer thread pattern wait kick re evaluate SAME trigger gates write path used scan fresh more flushes may have landed since kick merging them too always correct keep merging until gates longer hold"
+    },
+    {
+      "name": "conform",
+      "file": "crates/kernel/src/knowledge/ontology.rs",
+      "question": "Rename physical properties canonical ontology names per MappingEntry"
+    },
+    {
+      "name": "decode_payload",
+      "file": "crates/storage/aikoql-v2/src/wal.rs",
+      "question": "op entries frame Vec collecting wrapper over walk"
+    },
+    {
+      "name": "del_rel_index",
+      "file": "crates/kernel/src/storage/repository.rs",
+      "question": "Remove both outbound inbound entries one edge"
+    },
+    {
+      "name": "engine_fence",
+      "file": "crates/services/api/mcp/src/node.rs",
+      "question": "own reason has one"
+    },
+    {
+      "name": "eq_selectivity",
+      "file": "crates/runtime/src/cbo.rs",
+      "question": "uniform match fraction predicate distinct stats information property never seen node boolean branch single property"
+    },
+    {
+      "name": "has_identity",
+      "file": "crates/storage/aikoql-v2/src/memtable.rs",
+      "question": "SE2 M34 any carrying entry flush writes v4 blocks iff true rid rows alone stay v2 byte identical M9"
+    },
+    {
+      "name": "image_nodes",
+      "file": "crates/ingestion/src/ast.rs",
+      "question": "PR DocumentImage become asset backed"
+    },
+    {
+      "name": "inject_for_session",
+      "file": "crates/services/api/mcp/src/session.rs",
+      "question": "Dispatch trust mode stdio fills absent TCP forces"
+    },
+    {
+      "name": "is_ambiguous",
+      "file": "crates/ingestion/src/resolution.rs",
+      "question": "Determine top candidates scores too close"
+    },
+    {
+      "name": "is_read_only",
+      "file": "crates/providers/postgres/src/lib.rs",
+      "question": "Whether session SHOW transaction"
+    },
+    {
+      "name": "kr_job_shutdown_returns_promptly",
+      "file": "crates/engines/scheduler/src/key_rotation.rs",
+      "question": "AG started used hang really rotates master key file changes each interval"
+    },
+    {
+      "name": "log_file_path",
+      "file": "crates/services/api/mcp/src/observability.rs",
+      "question": "Where server goes logging AIKOQL default next database db server off empty turns off leaves stderr only"
+    },
+    {
+      "name": "met004_storage_admin_tools_exist_and_are_operator_gated",
+      "file": "crates/services/api/mcp/src/tests.rs",
+      "question": "RED surface catalog must list stats compact checkpoint capability gate admits only"
+    },
+    {
+      "name": "mime_from_extension",
+      "file": "crates/ingestion/src/asset_store.rs",
+      "question": "type file name images every extractable document type"
+    },
+    {
+      "name": "open_with_config",
+      "file": "crates/storage/aikoql-v2/src/engine.rs",
+      "question": "explicit memory limit knobs memtable bytes block cache bytes live here configurable memory"
+    },
+    {
+      "name": "out_of_order_seqs_and_replace_match_the_flat_map_semantics",
+      "file": "crates/storage/aikoql-v2/src/memtable.rs",
+      "question": "M31 P0 mtr004 accepted ANY key seq re apply same seq REPLACED chain shape must keep both arrivals binary search their place"
+    },
+    {
+      "name": "replay",
+      "file": "crates/services/api/mcp/src/archive.rs",
+      "question": "Apply frames logs ascending db up goal"
+    },
+    {
+      "name": "resolve_placement",
+      "file": "crates/storage/aikoql-v2/src/db.rs",
+      "question": "SE2 M32 local replica spec created replicas carry Memtable birth flush compaction move"
+    },
+    {
+      "name": "stamp_document_id",
+      "file": "crates/ingestion/src/markdown.rs",
+      "question": "fragment leg builds candidates None so merge dedupes name instead splitting shared names"
+    },
+    {
+      "name": "tool_register_schema",
+      "file": "crates/services/api/mcp/src/tools/constraints.rs",
+      "question": "P3 M5 follow up constraint bearing MRFC"
+    },
+    {
+      "name": "valid_at",
+      "file": "crates/kernel/src/knowledge/kom.rs",
+      "question": "True millis falls inside validity interval"
+    },
+    {
+      "name": "verify_install",
+      "file": "crates/engines/semantic/src/provider.rs",
+      "question": "R6 installed model against manifest before loading"
+    },
+    {
+      "name": "with_scorer",
+      "file": "crates/ingestion/src/boundary.rs",
+      "question": "Attach optional transformer HLD"
+    },
+    {
+      "name": "write_memory_file",
+      "file": "crates/services/api/mcp/src/tools/memory.rs",
+      "question": "view md index line"
+    },
+    {
+      "name": "write_native_frame",
+      "file": "crates/services/api/mcp/src/native.rs",
+      "question": "Sends one response FLAG RESPONSE request id echoed back invariant every response references exactly one request"
+    }
+  ]
+}

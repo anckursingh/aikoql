@@ -1,0 +1,143 @@
+{
+  "meta": {
+    "binary": "aikoql 0.5.0",
+    "repo": "/Users/pukku/coding/aikoql-cloud",
+    "subdir": "crates",
+    "questions": 16,
+    "seed": 1,
+    "budget_tokens": 800,
+    "token_estimate": "bytes/4",
+    "machine": "arm64 Darwin",
+    "date": "2026-11-18"
+  },
+  "results": [
+    {
+      "config": "embed",
+      "ingest_s": 6.3,
+      "koid": "01a1ede51b640000000000000000a9c9",
+      "disk_mb": 2.4,
+      "entities": 181,
+      "files": 15,
+      "relationships": 241,
+      "embedded": "none",
+      "embed_s": 0.0,
+      "server_start_ms": 193,
+      "first_query_ms": 41,
+      "warm_median_ms": 31,
+      "warm_p95_ms": 36,
+      "warm_max_ms": 37,
+      "questions": 16,
+      "hit_rate": 0.75,
+      "mrr": 0.75,
+      "hit_at_3": 0.75,
+      "answer_tokens_median": 796,
+      "grep_tokens_median": 4077,
+      "grep_found_file": 1.0
+    },
+    {
+      "config": "noembed",
+      "ingest_s": 0.96,
+      "koid": "01a1ede522500000000000000000a9c9",
+      "disk_mb": 0.7,
+      "entities": 181,
+      "files": 15,
+      "relationships": 241,
+      "embedded": "none",
+      "embed_s": 0.0,
+      "server_start_ms": 23,
+      "first_query_ms": 14,
+      "warm_median_ms": 5,
+      "warm_p95_ms": 9,
+      "warm_max_ms": 12,
+      "questions": 16,
+      "hit_rate": 0.75,
+      "mrr": 0.641,
+      "hit_at_3": 0.688,
+      "answer_tokens_median": 874,
+      "grep_tokens_median": 4077,
+      "grep_found_file": 1.0
+    }
+  ],
+  "questions": [
+    {
+      "name": "api_for",
+      "file": "crates/substrate-kube/src/lib.rs",
+      "question": "one object manifest cluster scoped has namespace"
+    },
+    {
+      "name": "apply",
+      "file": "crates/provisioner/src/substrate.rs",
+      "question": "Create update objects server side semantics"
+    },
+    {
+      "name": "decide",
+      "file": "crates/provisioner/src/policy.rs",
+      "question": "idle secs now minus project last authenticated request health checks usage poll do count engine reports field"
+    },
+    {
+      "name": "decommission",
+      "file": "crates/provisioner/src/service.rs",
+      "question": "Snapshot delete project objects"
+    },
+    {
+      "name": "delete",
+      "file": "crates/provisioner/src/service.rs",
+      "question": "customer deleting their own project snapshot kept"
+    },
+    {
+      "name": "delete_namespace",
+      "file": "crates/provisioner/src/substrate.rs",
+      "question": "everything project missing success"
+    },
+    {
+      "name": "fuzz_accepted_names_are_dns_labels",
+      "file": "crates/provisioner/src/slug.rs",
+      "question": "Seeded whatever input name valid label namespace valid short Kubernetes name"
+    },
+    {
+      "name": "fuzz_more_idleness_is_never_milder",
+      "file": "crates/provisioner/src/policy.rs",
+      "question": "Seeded free project decision monotone"
+    },
+    {
+      "name": "history",
+      "file": "crates/provisioner/src/service.rs",
+      "question": "Every state project ever put order"
+    },
+    {
+      "name": "is_free",
+      "file": "crates/provisioner/src/plan.rs",
+      "question": "project only kind idle policy may stop delete"
+    },
+    {
+      "name": "map_err",
+      "file": "crates/substrate-kube/src/lib.rs",
+      "question": "found API server rejecting request plain failure everything else network TLS auth plumbing cluster unavailable"
+    },
+    {
+      "name": "render",
+      "file": "crates/provisioner/src/manifest.rs",
+      "question": "All objects one project namespace first"
+    },
+    {
+      "name": "scale",
+      "file": "crates/provisioner/src/substrate.rs",
+      "question": "Set replica count project StatefulSet"
+    },
+    {
+      "name": "snapshot",
+      "file": "crates/provisioner/src/substrate.rs",
+      "question": "project volume region object storage"
+    },
+    {
+      "name": "sweep",
+      "file": "crates/provisioner/src/service.rs",
+      "question": "Apply idle policy one project report what decided"
+    },
+    {
+      "name": "validate",
+      "file": "crates/substrate-kube/src/lib.rs",
+      "question": "Ask API server objects schema admission without storing them"
+    }
+  ]
+}
