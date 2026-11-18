@@ -7,6 +7,8 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-18
+
 ### Server paths named by a network caller stay inside the server's directories (security fix)
 
 The memory tools (`memory_search`, `memory_store`, `memory_update`, `memory_delete`) accepted a caller-chosen

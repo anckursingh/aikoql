@@ -1,6 +1,6 @@
 {
   "name": "@aikoql/aikoql",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Persistent, progressive agent memory for AI agents — encrypted hybrid vector+text knowledge database with an MCP server (recall, compile-context, knowledge CRUD, aikoql queries).",
   "license": "AGPL-3.0-only",
   "author": {
