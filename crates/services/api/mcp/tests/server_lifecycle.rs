@@ -802,6 +802,64 @@ fn sv010_hard_kill_loses_no_acked_write() {
     let _ = std::fs::remove_file(&park);
 }
 
+// --- sv010b — a network session cannot name server paths outside the server's directories ---
+
+#[test]
+fn sv010b_a_network_token_cannot_reach_server_paths_outside_its_directories() {
+    // the database in a directory of its own, so "next to the database" excludes `out`
+    let home = std::env::temp_dir().join(format!("aikoql-sv010b-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let db = home.join("kb");
+    let out = std::env::temp_dir().join(format!("aikoql-sv010b-outside-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(
+        out.join("planted.md"),
+        "---\nname: planted\ndescription: should never be read over the network\ntype: project\n---\nbody\n",
+    )
+    .unwrap();
+    let mut server = Server::spawn(&db, &["tok1:tenA:admin"], &[]);
+    let mut c = Client::new(server.port(), "tok1");
+    let out_s = out.to_str().unwrap();
+    // an admin token, a real TCP session: every path tool refuses the outside directory
+    for (tool, args) in [
+        (
+            "memory_search",
+            json!({"query": "planted", "memory_dir": out_s}),
+        ),
+        (
+            "memory_store",
+            json!({"name": "pwned", "description": "d", "content": "c", "memory_dir": out_s}),
+        ),
+        (
+            "memory_update",
+            json!({"name": "planted", "content": "changed", "memory_dir": out_s}),
+        ),
+        (
+            "memory_delete",
+            json!({"name": "planted", "memory_dir": out_s}),
+        ),
+        ("verify_backup", json!({"backup": out_s})),
+        ("restore", json!({"backup": out_s})),
+    ] {
+        let r = c.call("tools/call", json!({"name": tool, "arguments": args}));
+        assert!(r.to_string().contains("outside"), "{tool} must refuse: {r}");
+        assert!(
+            !r.to_string().contains("should never be read"),
+            "{tool} leaked: {r}"
+        );
+    }
+    // nothing was written, changed or deleted out there
+    assert!(!out.join("pwned.md").exists());
+    let kept = std::fs::read_to_string(out.join("planted.md")).unwrap();
+    assert!(kept.contains("body") && !kept.contains("changed"));
+    c.call("shutdown", json!({}));
+    server.stop("sv010b server");
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
 // --- sv011 — the MCP transaction tools (P5-M10 deferral) ---------------------------------
 
 #[test]

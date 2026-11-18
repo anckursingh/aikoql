@@ -20,6 +20,7 @@ mod aws_kms;
 mod chat;
 mod cli;
 mod config;
+mod confine;
 mod derived_ids;
 mod dispatcher;
 mod drill;

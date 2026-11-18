@@ -32,7 +32,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 license = "AGPL-3.0-only"
 repository = "https://github.com/anckursingh/aikoql"
@@ -43,13 +43,13 @@ repository = "https://github.com/anckursingh/aikoql"
 # `{ workspace = true }`; the path is dropped from the packaged manifest.
 # Keep the version in lock-step with [workspace.package] (L-26 bump list).
 [workspace.dependencies]
-aikoql-native = { path = "crates/protocol/native", version = "0.5.0" }
-aikoql-kernel = { path = "crates/kernel", version = "0.5.0" }
-aikoql-storage-v2 = { path = "crates/storage/aikoql-v2", version = "0.5.0" }
-aikoql-vector = { path = "crates/engines/vector", version = "0.5.0" }
-aikoql-scheduler = { path = "crates/engines/scheduler", version = "0.5.0" }
-aikoql-compiler = { path = "crates/compiler", version = "0.5.0" }
-aikoql-runtime = { path = "crates/runtime", version = "0.5.0" }
+aikoql-native = { path = "crates/protocol/native", version = "0.5.1" }
+aikoql-kernel = { path = "crates/kernel", version = "0.5.1" }
+aikoql-storage-v2 = { path = "crates/storage/aikoql-v2", version = "0.5.1" }
+aikoql-vector = { path = "crates/engines/vector", version = "0.5.1" }
+aikoql-scheduler = { path = "crates/engines/scheduler", version = "0.5.1" }
+aikoql-compiler = { path = "crates/compiler", version = "0.5.1" }
+aikoql-runtime = { path = "crates/runtime", version = "0.5.1" }
 
 [profile.dev]
 # Faster incremental builds for the conformance loop.

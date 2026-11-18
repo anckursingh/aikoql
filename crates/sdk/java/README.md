@@ -16,7 +16,7 @@ ResultSet rows = conn.query("MATCH person RETURN *");
 <dependency>
   <groupId>com.aikoql</groupId>
   <artifactId>aikoql-client</artifactId>
-  <version>0.5.0</version>
+  <version>0.5.1</version>
 </dependency>
 ```
 

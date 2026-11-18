@@ -152,6 +152,29 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
 
 // ---- Memory Tools (MRFC-0070) ------------------------------------------
 
+/// The directory the server itself serves memories from.
+fn configured_memory_dir() -> String {
+    MEMORY_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| "./memory".into())
+}
+
+/// The memory directory for this call. A local (stdio) caller may name any
+/// directory; a network caller (the session forces `confine_paths`) may only
+/// name one inside the server's own memory directory.
+pub(crate) fn memory_dir_for(args: &J) -> Result<String, String> {
+    let dir = resolve_memory_dir(args);
+    if !crate::confine::is_confined(args) {
+        return Ok(dir);
+    }
+    match args.get("memory_dir").and_then(|v| v.as_str()) {
+        None => Ok(dir),
+        Some(req) => crate::confine::within(std::path::Path::new(&configured_memory_dir()), req)
+            .map(|p| p.to_string_lossy().into_owned()),
+    }
+}
+
 pub(crate) fn resolve_memory_dir(args: &J) -> String {
     args.get("memory_dir")
         .and_then(|v| v.as_str())
@@ -205,7 +228,7 @@ fn search_memory_files(args: &J) -> Result<J, String> {
         .get("max_results")
         .and_then(|v| v.as_u64())
         .unwrap_or(10) as usize;
-    let dir = resolve_memory_dir(args);
+    let dir = memory_dir_for(args)?;
 
     let mut results: Vec<J> = Vec::new();
     let fence = Fence::new();
@@ -636,14 +659,8 @@ pub(crate) fn tool_memory_store(k: &Kernel, args: &J) -> Result<J, String> {
         args.get("trust").and_then(|v| v.as_str()),
     )?;
     let trust = ko["trust"].as_str().unwrap_or("undeclared");
-    let filepath = write_memory_file(
-        &resolve_memory_dir(args),
-        name,
-        description,
-        mtype,
-        content,
-        trust,
-    )?;
+    let dir = memory_dir_for(args)?;
+    let filepath = write_memory_file(&dir, name, description, mtype, content, trust)?;
     Ok(json!({
         "stored": true,
         "name": name,
@@ -659,7 +676,7 @@ pub(crate) fn tool_memory_store(k: &Kernel, args: &J) -> Result<J, String> {
 /// from the knowledge base (else the file, for a not-yet-imported one).
 pub(crate) fn tool_memory_update(k: &Kernel, args: &J) -> Result<J, String> {
     let name = slug(args)?;
-    let dir = resolve_memory_dir(args);
+    let dir = memory_dir_for(args)?;
     let filepath = std::path::PathBuf::from(&dir).join(format!("{name}.md"));
     let (cur_desc, cur_content, cur_type, cur_trust) = match memory_ko(k, args, name)? {
         Some(ko) => (
@@ -721,7 +738,7 @@ pub(crate) fn tool_memory_update(k: &Kernel, args: &J) -> Result<J, String> {
 
 pub(crate) fn tool_memory_delete(k: &Kernel, args: &J) -> Result<J, String> {
     let name = slug(args)?;
-    let dir = resolve_memory_dir(args);
+    let dir = memory_dir_for(args)?;
     let filename = format!("{}.md", name);
     let filepath = std::path::PathBuf::from(&dir).join(&filename);
     let ko = memory_ko(k, args, name)?;
