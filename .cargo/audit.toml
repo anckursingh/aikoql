@@ -15,4 +15,12 @@ ignore = [
   "RUSTSEC-2026-0368", # extract() creates symlinks pointing outside the destination
   "RUSTSEC-2026-0369", # extract() applies permissions through symlinks
   "RUSTSEC-2026-0429", # extract() aborts the process on a symlink entry with a large declared size
+  # Four more on the same zip 7.2.0 (published 2026-10-17/22, in the advisory database from 2026-11-17). The
+  # engine's own document ingestion reads Office files with zip 9.1.3 (crates/ingestion, a different crate in the
+  # lockfile, above every fixed version), so tenant-supplied documents never touch 7.2.0. Through candle-core only
+  # the model loader reads archives (.pth/.npz, in memory), and aikoql loads safetensors only:
+  "RUSTSEC-2026-0545", # AES entries returned without checking the authentication code (no encrypted archive is read)
+  "RUSTSEC-2026-0546", # ZipArchive::extract can write outside the destination through symlink targets (never extracts)
+  "RUSTSEC-2026-0547", # legacy Shrink/Reduce/Implode decoders preallocate the declared size (no such entry is read)
+  "RUSTSEC-2026-0548", # ZipStreamReader extracts under local-header names (the streaming reader is not used)
 ]
