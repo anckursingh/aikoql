@@ -976,6 +976,8 @@ fn is_id_token(chunk: &str) -> bool {
 /// lowercases every chunk per task word. Any credit needs the word's first
 /// four chars (or the whole word, if shorter) inside the lowercased text, so
 /// one `contains` per word rules out the common case at a fraction of the cost.
+// shortcut: lowercasing the whole text can differ from lowercasing one part (Greek final sigma), so such a word may
+// miss the exit and be scored as 0.0 only if it also fails the full scorer's own test; revisit if non-Latin names matter.
 fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
     let lower = text.to_lowercase();
     let can_match = task_words.iter().any(|w| {

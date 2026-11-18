@@ -13,7 +13,8 @@ Paste this to your agent:
 
 ## Part A: set up (do this once per project)
 
-1. **Check first.** Is an `aikoql` MCP server already configured for this agent? If yes, skip to step 4.
+1. **Check first.** Is an `aikoql` MCP server already configured for this agent? If yes, skip step 2. Then check that this project is
+   indexed (its KOID is in your notes, or ask the server); if it is not, do step 3. Step 4 needs that KOID.
    Needs Node 18+ (`node --version`) for `npx`. You need **aikoql 0.5.2 or newer** (earlier versions index the
    project but the agent cannot read it back); `npm view @aikoql/aikoql version` shows the latest.
 2. **Wire the MCP server** with your harness's own mechanism, pinned to that version (replace `X.Y.Z`):
@@ -64,7 +65,7 @@ result.
 code body (a constant, an ordering of steps): read the function for those. Measured on AIKOQL's own source
 (13,000 code entities, 40 generated questions, one run): the right function was in the answer 85% of the time
 (65% with the embedding model off), and an answer cost about 700 tokens against about 27,000 for the raw output of
-a grep for the same words. A lookup takes well under a second (about 0.1 s repeated, 0.6 s for a new question on
+a grep for the same words. A lookup takes well under a second (about 0.1 s repeated, 0.3 s for a new question on
 that size). Treat these as a guide, not a promise: the questions come from doc comments, the grep baseline is
 crude, and a small project (a few dozen files) is already cheap to grep.
 

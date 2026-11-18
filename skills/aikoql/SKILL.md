@@ -35,6 +35,6 @@ result.
 code body (a constant, an ordering of steps): read the function for those. Measured on AIKOQL's own source
 (13,000 code entities, 40 generated questions, one run): the right function was in the answer 85% of the time
 (65% with the embedding model off), and an answer cost about 700 tokens against about 27,000 for the raw output of
-a grep for the same words. A lookup takes well under a second (about 0.1 s repeated, 0.6 s for a new question on
+a grep for the same words. A lookup takes well under a second (about 0.1 s repeated, 0.3 s for a new question on
 that size). Treat these as a guide, not a promise: the questions come from doc comments, the grep baseline is
 crude, and a small project (a few dozen files) is already cheap to grep.

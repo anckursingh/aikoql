@@ -7,12 +7,14 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [0.5.2] - 2026-11-18
 
-### `compile_context` answers a new question about 2.8 times faster on a large project
+### `compile_context` answers a new question about 2.4 times faster on a large project
 
-Profiling a 13,000-entity index showed about 89% of a new question's time in the keyword scorer, which split and
-lowercased every entity's text once per task word even when nothing could match. It now rules out the no-match case
-with one substring check first; scores are unchanged (a seeded test compares it with the full scorer). Median for a
-new question on AIKOQL's own source: 366 ms to 129 ms (without the embedding model).
+Profiling a 13,000-entity index put almost all of a new question's time in the ranking code, which split and
+lowercased every entity's text once per task word even when nothing could match. A cheap substring check now rules
+out the no-match case first. Rankings are unchanged: a seeded test compares it with the full scorer, and the
+code-knowledge-base benchmark gives identical hit rate, top-3 and MRR before and after (0.85 / 0.78 / 0.65 with the
+embedding model, 0.65 / 0.53 / 0.46 without). Median per question on AIKOQL's own source, 0.5.0 to 0.5.2: 707 ms to
+334 ms with embeddings, 635 ms to 265 ms without. Results: `benchmarks/results/code-kb/`.
 
 ### The knowledge base `ingest-dir` builds is now usable by the agent that asks for it
 
