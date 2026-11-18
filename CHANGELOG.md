@@ -16,7 +16,12 @@ protocol, REST) a caller could list and read `*.md` files in any directory the s
 force `confine_paths`: a `memory_dir` must resolve inside the server's own memory directory, and a backup path
 inside the database's directory, `..`, absolute paths elsewhere and symlinks that lead out included. The refusal
 names the path and never echoes file contents. A local stdio server is its own trust boundary and keeps naming any
-directory. Checked: the other tools that take names or hosts (`document_ingest`, `reconcile`, the connector tools and
+directory. This includes REST: every REST call is a network call, even on loopback, so a local REST user who
+passed `memory_dir` outside the memory directory now gets a refusal (use stdio, or point `AIKOQL_MEMORY_DIR` at it).
+Residual: the check and the later file operation are separate steps, so another process with write access to those
+directories could race a symlink in between; nothing in the engine creates links, so in a hosted pod this is not
+reachable through the API, but self-hosted operators must keep the memory and database directories unwritable by
+other OS users. Checked: the other tools that take names or hosts (`document_ingest`, `reconcile`, the connector tools and
 the `sources` endpoints) either never touch the server's disk by a caller-supplied path or take their addresses from
 the operator's config, not from the caller.
 

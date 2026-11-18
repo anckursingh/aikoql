@@ -7,6 +7,15 @@
 //! (see `session.rs`) and these helpers refuse anything that resolves outside
 //! the base directory, symlinks included.
 
+//! **Residual, documented:** `within` checks a path and the caller then uses it, two
+//! separate steps, so a concurrent process with write access to the base directory
+//! could swap a path component for a symlink in between. Nothing in this engine
+//! creates links (checked: no `symlink` or `hard_link` call outside tests), and in a
+//! hosted pod the engine is the only writer, so the race is not reachable through the
+//! API. A self-hosted operator must keep the memory and database directories
+//! unwritable by other OS users. Race-proof opening (`openat2`, or the cap-std crate)
+//! is the follow-up for deployments with another writer.
+
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
