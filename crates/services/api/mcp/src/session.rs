@@ -217,6 +217,9 @@ pub(crate) fn reject_empty_tenant(args: &J) -> Result<(), String> {
 /// session then hit ACCESS_DENIED on its own KOs).
 fn fill_identity(a: &mut J, session: &McpSession, forced: bool) {
     if forced {
+        // a network caller never names a server path outside the server's own
+        // directories (see confine.rs); the client cannot switch this off
+        a["confine_paths"] = json!(true);
         a["subject"] = json!(session.agent_id);
         // MEM-AGENT: an agent-scoped call (agent_memory) acts as the token's
         // agent; naming another agent cannot reach that agent's memory
@@ -486,6 +489,34 @@ mod tests {
         s.trust_mode = TrustMode::Stdio;
         let f = inject_for_session(&args, &s);
         assert_eq!(f["subject"], "mallory");
+    }
+
+    #[test]
+    fn a_network_session_forces_path_confinement_and_stdio_does_not() {
+        let mut s = McpSession {
+            trust_mode: TrustMode::Tcp,
+            tool_groups: Default::default(),
+            agent_id: "tcp-agent".into(),
+            roles: vec!["admin".into()],
+            ..Default::default()
+        };
+        // a client cannot switch confinement off, or leave it unset
+        for sent in [
+            json!({}),
+            json!({"confine_paths": false}),
+            json!({"confine_paths": "no"}),
+        ] {
+            assert_eq!(
+                inject_for_session(&sent, &s)["confine_paths"],
+                json!(true),
+                "{sent}"
+            );
+        }
+        // the local stdio process is its own trust boundary: nothing is added
+        s.trust_mode = TrustMode::Stdio;
+        assert!(inject_for_session(&json!({}), &s)
+            .get("confine_paths")
+            .is_none());
     }
 
     #[test]

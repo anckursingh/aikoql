@@ -7,6 +7,20 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### Server paths named by a network caller stay inside the server's directories (security fix)
+
+The memory tools (`memory_search`, `memory_store`, `memory_update`, `memory_delete`) accepted a caller-chosen
+`memory_dir`, and `verify_backup` and `restore` accepted any backup path: over the network (TCP, HTTP MCP, native
+protocol, REST) a caller could list and read `*.md` files in any directory the server process could read, write
+`<name>.md` into any directory it could write, and verify or restore a backup from anywhere. Network sessions now
+force `confine_paths`: a `memory_dir` must resolve inside the server's own memory directory, and a backup path
+inside the database's directory, `..`, absolute paths elsewhere and symlinks that lead out included. The refusal
+names the path and never echoes file contents. A local stdio server is its own trust boundary and keeps naming any
+directory. Checked: the other tools that take names or hosts (`document_ingest`, `reconcile`, the connector tools and
+the `sources` endpoints) either never touch the server's disk by a caller-supplied path or take their addresses from
+the operator's config, not from the caller.
+
+
 ## [0.5.0] - 2026-11-16
 
 ### Renamed: `aikoql-mcp` is now `aikoql` (breaking)

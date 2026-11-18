@@ -901,6 +901,11 @@ fn with_principal(
     token: Option<&str>,
     sessions: &Mutex<HashMap<String, crate::HttpSession>>,
 ) -> J {
+    // REST is a network surface: the server, not the body, decides this
+    if !a.is_object() {
+        a = json!({});
+    }
+    a["confine_paths"] = json!(true);
     if let Some(tok) = token {
         let sessions = sessions.lock().unwrap(); // justified: Mutex poison is unrecoverable
         if let Some(s) = sessions.get(tok) {
@@ -1777,6 +1782,22 @@ mod tests {
         // Unknown token → body untouched.
         let a = with_principal(json!({"subject": "hacker"}), Some("bogus"), &sessions);
         assert_eq!(a["subject"], "hacker");
+    }
+
+    #[test]
+    fn every_rest_call_is_a_network_call_and_confines_server_paths() {
+        let sessions = Mutex::new(HashMap::new());
+        for body in [
+            json!({}),
+            json!({"confine_paths": false}),
+            json!({"memory_dir": "/etc"}),
+        ] {
+            // with no token, an unknown token: the flag is set by the server regardless
+            let a = with_principal(body.clone(), None, &sessions);
+            assert_eq!(a["confine_paths"], json!(true), "{body}");
+            let a = with_principal(body, Some("bogus"), &sessions);
+            assert_eq!(a["confine_paths"], json!(true));
+        }
     }
 
     // ---- Over-limit documents are processed batch by batch ----------------

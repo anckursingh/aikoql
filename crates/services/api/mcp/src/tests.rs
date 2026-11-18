@@ -1930,3 +1930,111 @@ fn aikoql_tool_binds_named_params_without_letting_them_change_the_query() {
     )
     .is_err()); // unused parameter
 }
+
+// ---- Server paths named by a network caller stay inside the server's own directories ----
+
+fn outside_dir(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("aikoql-outside-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("note.md"),
+        "---\nname: note\ndescription: planted\ntype: project\n---\nsecret body\n",
+    )
+    .unwrap();
+    d
+}
+
+#[test]
+fn a_network_caller_cannot_search_memory_files_outside_the_memory_dir() {
+    let k = seed_docs("conf-search");
+    let out = outside_dir("search");
+    let args = serde_json::json!({"query": "planted", "memory_dir": out.to_str().unwrap(), "subject": "t", "roles": ["admin"]});
+    // a local (stdio) caller keeps the feature
+    let local =
+        crate::tools::tool_memory_search(&k, &args).expect("stdio may name its own directory");
+    assert!(local.to_string().contains("planted"), "{local}");
+    // a network caller does not
+    let mut net = args.clone();
+    net["confine_paths"] = serde_json::json!(true);
+    let e = crate::tools::tool_memory_search(&k, &net).expect_err("outside the memory dir");
+    assert!(e.contains("outside"), "{e}");
+    assert!(!e.contains("planted") && !e.contains("secret body"));
+    let _ = std::fs::remove_dir_all(out);
+}
+
+#[test]
+fn a_network_caller_cannot_write_memory_files_outside_the_memory_dir() {
+    let k = seed_docs("conf-store");
+    let out = outside_dir("store");
+    for dir in [
+        out.to_str().unwrap().to_string(),
+        "../escape".to_string(),
+        "/tmp".to_string(),
+    ] {
+        let args = serde_json::json!({"name": "pwned", "description": "d", "content": "c", "memory_dir": dir,
+            "subject": "t", "roles": ["admin"], "confine_paths": true});
+        let e = crate::tools::tool_memory_store(&k, &args).expect_err(&dir);
+        assert!(e.contains("outside"), "{dir}: {e}");
+    }
+    assert!(!out.join("pwned.md").exists());
+    assert!(!std::path::Path::new("../escape/pwned.md").exists());
+    let _ = std::fs::remove_dir_all(out);
+}
+
+#[test]
+fn a_network_caller_cannot_update_or_delete_memory_files_outside_the_memory_dir() {
+    let k = seed_docs("conf-upd");
+    let out = outside_dir("upd");
+    let base = serde_json::json!({"name": "note", "memory_dir": out.to_str().unwrap(),
+        "subject": "t", "roles": ["admin"], "confine_paths": true});
+    let mut upd = base.clone();
+    upd["content"] = serde_json::json!("changed");
+    assert!(crate::tools::tool_memory_update(&k, &upd)
+        .expect_err("update")
+        .contains("outside"));
+    assert!(crate::tools::tool_memory_delete(&k, &base)
+        .expect_err("delete")
+        .contains("outside"));
+    assert!(out.join("note.md").exists(), "the file must be untouched");
+    assert!(std::fs::read_to_string(out.join("note.md"))
+        .unwrap()
+        .contains("secret body"));
+    let _ = std::fs::remove_dir_all(out);
+}
+
+#[test]
+fn a_network_caller_cannot_verify_a_backup_outside_the_database_directory() {
+    let out = outside_dir("bk");
+    std::fs::write(
+        out.join("meta.json"),
+        "{\"journal_seq\": 7, \"object_count\": 3}",
+    )
+    .unwrap();
+    let db = std::env::temp_dir().join(format!("aikoql-db-{}/kb", std::process::id()));
+    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let args = serde_json::json!({"backup": out.to_str().unwrap()});
+    // local: the path is read (it fails later, on the missing snapshot marker, not on confinement)
+    let local = crate::tools::tool_verify_backup(&args, db.to_str().unwrap()).unwrap_err();
+    assert!(!local.contains("outside"), "{local}");
+    let mut net = args.clone();
+    net["confine_paths"] = serde_json::json!(true);
+    let e = crate::tools::tool_verify_backup(&net, db.to_str().unwrap()).expect_err("outside");
+    assert!(e.contains("outside"), "{e}");
+    let _ = std::fs::remove_dir_all(out);
+    let _ = std::fs::remove_dir_all(db.parent().unwrap());
+}
+
+#[test]
+fn a_network_caller_cannot_restore_from_a_directory_outside_the_database_directory() {
+    let out = outside_dir("restore");
+    std::fs::write(out.join("meta.json"), "{\"journal_seq\": 7}").unwrap();
+    let db = std::env::temp_dir().join(format!("aikoql-dbr-{}/kb", std::process::id()));
+    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let net = serde_json::json!({"backup": out.to_str().unwrap(), "confine_paths": true});
+    // refused before the storage admin is even consulted
+    let e = crate::tools::tool_restore(&net, None, db.to_str().unwrap()).expect_err("outside");
+    assert!(e.contains("outside"), "{e}");
+    let _ = std::fs::remove_dir_all(out);
+    let _ = std::fs::remove_dir_all(db.parent().unwrap());
+}

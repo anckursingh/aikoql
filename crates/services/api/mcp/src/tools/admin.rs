@@ -164,12 +164,30 @@ fn resolve_backup_arg(backup: &str, db_path: &str) -> std::path::PathBuf {
     }
 }
 
+/// `resolve_backup_arg`, plus: a network caller (the session forces
+/// `confine_paths`) may only name a backup next to the database file, the same
+/// directory `backup` writes to and `list_backups` scans.
+fn resolve_backup_confined(
+    args: &J,
+    backup: &str,
+    db_path: &str,
+) -> Result<std::path::PathBuf, String> {
+    let resolved = resolve_backup_arg(backup, db_path);
+    if crate::confine::is_confined(args) {
+        let dir = std::path::Path::new(db_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        crate::confine::within(dir, &resolved.to_string_lossy())?;
+    }
+    Ok(resolved)
+}
+
 pub(crate) fn tool_verify_backup(args: &J, db_path: &str) -> Result<J, String> {
     let backup_arg = args
         .get("backup")
         .and_then(|b| b.as_str())
         .ok_or("missing argument: backup")?;
-    let backup = resolve_backup_arg(backup_arg, db_path);
+    let backup = resolve_backup_confined(args, backup_arg, db_path)?;
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup.display()))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
@@ -284,7 +302,7 @@ pub(crate) fn tool_restore(
         .get("backup")
         .and_then(|b| b.as_str())
         .ok_or("missing argument: backup")?;
-    let backup = resolve_backup_arg(backup_arg, db_path);
+    let backup = resolve_backup_confined(args, backup_arg, db_path)?;
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup.display()))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
