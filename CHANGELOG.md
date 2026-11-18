@@ -5,7 +5,29 @@ Format: <https://keepachangelog.com/>-inspired, but terser. This file starts
 at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 (`git log v0.1.0..v0.1.19`).
 
-## [Unreleased]
+## [0.5.2] - 2026-11-18
+
+### `compile_context` answers a new question about 2.4 times faster on a large project
+
+Profiling a 13,000-entity index put almost all of a new question's time in the ranking code, which split and
+lowercased every entity's text once per task word even when nothing could match. A cheap substring check now rules
+out the no-match case first. Rankings are unchanged: a seeded test compares it with the full scorer, and the
+code-knowledge-base benchmark gives identical hit rate, top-3 and MRR before and after (0.85 / 0.78 / 0.65 with the
+embedding model, 0.65 / 0.53 / 0.46 without). Median per question on AIKOQL's own source, 0.5.0 to 0.5.2: 707 ms to
+334 ms with embeddings, 635 ms to 265 ms without. Results: `benchmarks/results/code-kb/`.
+
+### The knowledge base `ingest-dir` builds is now usable by the agent that asks for it
+
+Found by using AIKOQL as the code graph of its own projects. (1) `ingest-dir` stored everything under the
+identity `ingest-dir`, while an MCP session runs as `mcp-agent`, so the first `compile_context` answered
+`ACCESS_DENIED` and `find_similar` returned nothing: the ingested knowledge is now owned by `mcp-agent`.
+Knowledge ingested by an earlier version stays owned by `ingest-dir`: re-run `ingest-dir` into a fresh directory.
+(2) `compile_context` returned the useful markdown plus a structured `package` about three times its size:
+`include_package: false` returns only the markdown (the default is unchanged). (3) The hint printed after
+`ingest-dir` told you to run `compile_context` in `aikoql shell`, which only takes AikoQL queries: it now names the MCP
+tool. New: `docs/AGENT-SETUP.md`, a guide any coding agent can follow to install, wire and index AIKOQL and use it
+to look code up instead of grepping (the same usage rules ship as the plugin skill `skills/aikoql`).
+
 
 ## [0.5.1] - 2026-11-18
 

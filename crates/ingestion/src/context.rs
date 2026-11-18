@@ -971,7 +971,28 @@ fn is_id_token(chunk: &str) -> bool {
 
 /// Score a text against task keywords. Each exact token match adds 1.0,
 /// partial (shared-prefix ≥4 chars) match adds 0.3.
+///
+/// Almost every entity matches nothing, and the full scorer splits and
+/// lowercases every chunk per task word. Any credit needs the word's first
+/// four chars (or the whole word, if shorter) inside the lowercased text, so
+/// one `contains` per word rules out the common case at a fraction of the cost.
+// shortcut: lowercasing the whole text can differ from lowercasing one part (Greek final sigma), so such a word may
+// miss the exit and be scored as 0.0 only if it also fails the full scorer's own test; revisit if non-Latin names matter.
 fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
+    let lower = text.to_lowercase();
+    let can_match = task_words.iter().any(|w| {
+        w.len() >= 3
+            && !STOPWORDS.contains(w)
+            && lower.contains(w.char_indices().nth(4).map_or(*w, |(i, _)| &w[..i]))
+    });
+    if can_match {
+        keyword_score_full(text, task_words)
+    } else {
+        0.0
+    }
+}
+
+fn keyword_score_full(text: &str, task_words: &[&str]) -> f32 {
     let mut score: f32 = 0.0;
     for &word in task_words {
         if word.len() < 3 || STOPWORDS.contains(&word) {
@@ -1681,6 +1702,55 @@ mod tests {
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
         );
+    }
+
+    #[test]
+    fn keyword_score_fast_path_equals_full_scorer() {
+        // Seeded fuzz: the cheap "no task word can match" exit must never
+        // change a score. Words mix camelCase, snake_case, ids and prefixes.
+        let vocab = [
+            "TimeoutPolicy",
+            "timeout",
+            "policies",
+            "cust0042",
+            "customer",
+            "ledger_entry",
+            "validate",
+            "validation",
+            "log",
+            "catalog",
+            "the",
+            "of",
+            "Ünïcode",
+            "straße",
+            "fn",
+            "compile_context",
+            "ContextPackage",
+            "idle",
+            "decommission",
+        ];
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for _ in 0..5000 {
+            let text: Vec<&str> = (0..1 + next() % 6)
+                .map(|_| vocab[(next() % vocab.len() as u64) as usize])
+                .collect();
+            let text = text.join(if next() % 2 == 0 { " " } else { "  " });
+            let words: Vec<String> = (0..1 + next() % 4)
+                .map(|_| vocab[(next() % vocab.len() as u64) as usize].to_lowercase())
+                .collect();
+            let words: Vec<&str> = words.iter().map(String::as_str).collect();
+            assert_eq!(
+                keyword_score(&text, &words),
+                keyword_score_full(&text, &words),
+                "text={text:?} words={words:?}"
+            );
+        }
     }
 
     #[test]

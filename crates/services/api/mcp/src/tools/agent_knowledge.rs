@@ -110,16 +110,25 @@ pub(crate) fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Resul
         md.push_str(&section);
     }
 
-    let pkg_json = serde_json::to_value(&pkg).map_err(|e| format!("serialize package: {}", e))?;
-    Ok(serde_json::json!({
+    let mut out = serde_json::json!({
         "context_markdown": md,
-        "package": pkg_json,
         "koid": hex,
         "task": task,
         "token_budget": token_budget,
         "semantic": semantic_ran,
         "experiences": experience_json,
-    }))
+    });
+    // the structured package is about three times the size of the markdown and an
+    // agent reading the markdown does not need it: `include_package: false` leaves it out
+    if args
+        .get("include_package")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+    {
+        out["package"] =
+            serde_json::to_value(&pkg).map_err(|e| format!("serialize package: {}", e))?;
+    }
+    Ok(out)
 }
 
 /// Cosine similarity of every stored entity embedding against the task
