@@ -226,7 +226,7 @@ pub(crate) fn run_ingest_dir(
             std::process::exit(1);
         }
     };
-    let subj = Subject::with_roles("ingest-dir", &["admin"]);
+    let subj = Subject::with_roles(INGEST_OWNER, &["admin"]);
 
     // Facts attach to every entity they reference.
     let mut facts_by_entity: HashMap<&str, Vec<String>> = HashMap::new();
@@ -321,7 +321,7 @@ pub(crate) fn run_ingest_dir(
             ent.name
         );
         let security = SecurityDescriptor {
-            owner: "ingest-dir".into(),
+            owner: INGEST_OWNER.into(),
             acl: vec![],
             classification: None,
         };
@@ -415,7 +415,7 @@ pub(crate) fn run_ingest_dir(
             tags: vec!["ingest-dir".into(), "auto".into()],
             valid_from: None,
             security: Some(SecurityDescriptor {
-                owner: "ingest-dir".into(),
+                owner: INGEST_OWNER.into(),
                 acl: vec![],
                 classification: None,
             }),
@@ -462,7 +462,7 @@ pub(crate) fn run_ingest_dir(
                     tags: vec!["ingest-dir".into(), "auto".into()],
                     valid_from: None,
                     security: Some(SecurityDescriptor {
-                        owner: "ingest-dir".into(),
+                        owner: INGEST_OWNER.into(),
                         acl: vec![],
                         classification: None,
                     }),
@@ -665,7 +665,7 @@ pub(crate) fn run_ingest_dir(
         path
     );
     let security = SecurityDescriptor {
-        owner: "ingest-dir".into(),
+        owner: INGEST_OWNER.into(),
         acl: vec![],
         classification: None,
     };
@@ -730,8 +730,13 @@ pub(crate) fn run_ingest_dir(
             }
             println!("Stored as knowledge object:");
             println!("  KOID: {}", r.koid.to_hex());
-            println!("\nQuery with: aikoql shell {} -- then:", db_path);
-            println!("  compile_context \"your task\" {} 3000", r.koid.to_hex());
+            println!("\nAsk it through MCP (the shell takes only AikoQL queries): serve this directory with");
+            println!("  aikoql serve {}", db_path);
+            println!("and call the MCP tool compile_context with:");
+            println!(
+                "  {{\"koid\": \"{}\", \"task\": \"your task\", \"token_budget\": 800, \"include_package\": false}}",
+                r.koid.to_hex()
+            );
         }
         Err(e) => {
             eprintln!("Warning: could not store KO: {}", e);
@@ -739,6 +744,11 @@ pub(crate) fn run_ingest_dir(
         }
     }
 }
+/// Who owns what `ingest-dir` stores: the identity a local MCP session runs as
+/// (`mcp-agent`), so the agent that asks for the knowledge can read it. (It used to
+/// be `ingest-dir`: everything was stored and nothing was readable by the agent.)
+const INGEST_OWNER: &str = "mcp-agent";
+
 /// Properties for the `aikoql:ingested-directory` snapshot KO — the KB's
 /// manifest record for a repo. KB-009: `source_revision` is a first-class
 /// column (queryable without deserializing ir_json), stamped only when the

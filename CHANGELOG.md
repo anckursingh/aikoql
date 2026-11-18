@@ -7,6 +7,19 @@ at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 
 ## [Unreleased]
 
+### The knowledge base `ingest-dir` builds is now usable by the agent that asks for it
+
+Found by using AIKOQL as the code graph of its own projects. (1) `ingest-dir` stored everything under the
+identity `ingest-dir`, while an MCP session runs as `mcp-agent`, so the first `compile_context` answered
+`ACCESS_DENIED` and `find_similar` returned nothing: the ingested knowledge is now owned by `mcp-agent`.
+Knowledge ingested by an earlier version stays owned by `ingest-dir`: re-run `ingest-dir` into a fresh directory.
+(2) `compile_context` returned the useful markdown plus a structured `package` about three times its size:
+`include_package: false` returns only the markdown (the default is unchanged). (3) The hint printed after
+`ingest-dir` told you to run `compile_context` in `aikoql shell`, which only takes AikoQL queries: it now names the MCP
+tool. New: `docs/AGENT-SETUP.md`, a guide any coding agent can follow to install, wire and index AIKOQL and use it
+to look code up instead of grepping (the same usage rules ship as the plugin skill `skills/aikoql`).
+
+
 ## [0.5.1] - 2026-11-18
 
 ### Server paths named by a network caller stay inside the server's directories (security fix)
